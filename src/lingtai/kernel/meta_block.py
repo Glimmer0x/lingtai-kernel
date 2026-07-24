@@ -60,6 +60,7 @@ from .config import (
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias == FORCED_REBUILD_RATIO
     CONTEXT_PRESSURE_RECOVERY_TARGET,
+    SYSTEM_PROMPT_PRESSURE_RATIO,
 )
 from .i18n import t as _t
 from .reminders.context_pressure import (
@@ -267,6 +268,11 @@ TOOL_META_CONTEXT_KEY = "context"
 TOOL_META_CONTEXT_PENDING_KEY = "_tool_meta_context"
 TOOL_META_CONTEXT_EVENT_PENDING_KEY = "_tool_meta_context_event"
 TOOL_META_CONTEXT_REBUILD_KEY = "rebuild"
+
+# Rendered system-prompt size pressure warning — a stable, non-colliding key
+# alongside ``rebuild``/``molt`` under ``agent_meta.agent_state.context``. See
+# :func:`build_system_prompt_pressure_context`.
+TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY = "system_prompt"
 
 # Cache-miss budget guard — the two compact numeric fields surfaced under
 # ``agent_meta.agent_state.context`` alongside the ``molt`` warning when the current-session
@@ -1012,6 +1018,96 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     )
 
 
+def _rendered_system_prompt_tokens(agent) -> int | None:
+    """Return the exact rendered-system-prompt-only token count, or ``None``.
+
+    Reuses the same lazily-refreshed decomposition :func:`_current_context_usage`
+    relies on (``SessionManager._system_prompt_tokens``, populated by
+    ``count_tokens(self._build_system_prompt_fn())`` — the kernel's actual
+    provider-aware token counter over exactly the joined rendered system-prompt
+    text, batched and non-batched builders included since
+    ``build_system_prompt`` joins ``build_system_prompt_batches``'s segments).
+    Deliberately excludes ``_tools_tokens`` (tool schemas) and history — this is
+    the system-prompt body alone. Returns ``None`` when no session exists or the
+    decomposition cannot be refreshed, so callers omit rather than guess.
+    """
+    session = getattr(agent, "_session", None)
+    if session is None:
+        return None
+    if getattr(session, "_token_decomp_dirty", True):
+        try:
+            session._update_token_decomposition()
+        except Exception:
+            pass
+    if getattr(session, "_token_decomp_dirty", True):
+        return None
+    tokens = getattr(session, "_system_prompt_tokens", None)
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0:
+        return None
+    return tokens
+
+
+def render_system_prompt_pressure_context(tokens: int | None, window: int | None) -> str | None:
+    """Pure renderer for the rendered-system-prompt-size warning, or ``None``.
+
+    Owns the whole decision + bounded message: strictly above
+    :data:`SYSTEM_PROMPT_PRESSURE_RATIO` (45%) of ``window``, the rendered
+    system prompt ALONE is warned as oversized; at or below — or when either
+    input is missing/non-positive (invalid/zero omission, never guessed or
+    divided by zero) — returns ``None``. Never embeds or repeats the prompt
+    body itself; only bounded numeric/percentage state and a fixed
+    progressive-disclosure instruction. Shared verbatim by the main-agent
+    wrapper (:func:`build_system_prompt_pressure_context`, which resolves its
+    own prompt tokens/window and delegates here) and any daemon-local caller
+    that resolves its own prompt tokens/window against its own resolved window.
+    """
+    if not isinstance(tokens, int) or isinstance(tokens, bool) or tokens <= 0:
+        return None
+    if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
+        return None
+    ratio = tokens / window
+    if ratio <= SYSTEM_PROMPT_PRESSURE_RATIO:
+        return None
+    percentage = round(ratio * 100, 1)
+    return (
+        f"system prompt is {tokens} tokens ({percentage}% of the {window}-token "
+        "effective context window), above the "
+        f"{int(SYSTEM_PROMPT_PRESSURE_RATIO * 100)}% threshold. Apply progressive "
+        "disclosure: reorganize pad and lingtai so the system prompt keeps only "
+        "active essentials — route completed/duplicate task state to knowledge, "
+        "reusable procedures to skills, and identity-shaping lessons to lingtai. "
+        "Do not paste or repeat the system prompt body here."
+    )
+
+
+def build_system_prompt_pressure_context(agent) -> str | None:
+    """Return the rendered-system-prompt-size warning, or ``None``.
+
+    Deterministic current-state projection (not an event, not a Nudge): strictly
+    above :data:`SYSTEM_PROMPT_PRESSURE_RATIO` (45%) of the effective context
+    window, the rendered system prompt ALONE (never conversation history or tool
+    results) is warned as oversized; at or below, ``None`` (no warning). Routed
+    to ``agent_meta.agent_state.context.system_prompt`` alongside ``rebuild``/
+    ``molt`` — a distinct, non-colliding key.
+
+    Resolves this agent's own prompt-token count
+    (:func:`_rendered_system_prompt_tokens`) and effective context window
+    (:func:`_session_context_window` — the SAME provider-snapshot-first,
+    configured/live-fallback precedence already used by session token
+    telemetry: latest provider-round snapshot's ``context_window``, then
+    configured ``context_limit``, then the live ``chat.context_window()``),
+    then delegates the strict->45%/invalid/zero decision and bounded message to
+    the pure :func:`render_system_prompt_pressure_context` renderer.
+
+    The warning instructs progressive disclosure — reorganizing ``pad`` and
+    ``lingtai`` so only active essentials stay resident in the prompt — and
+    never embeds or repeats the prompt body itself.
+    """
+    tokens = _rendered_system_prompt_tokens(agent)
+    window = _session_context_window(agent)
+    return render_system_prompt_pressure_context(tokens, window if window > 0 else None)
+
+
 def build_context_overflow_warning(agent) -> str | None:
     """Return the persistent post-forced-rebuild overflow warning, or ``None``.
 
@@ -1609,6 +1705,7 @@ def build_meta(agent) -> dict:
                 "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
                 "cache_miss_budget": int,     # present only when the budget guard is tripped
                 "cache_miss_tokens": int,     # present only when the budget guard is tripped
+                "system_prompt": str,         # present only when rendered system prompt > 45% of window
             },
             "_tool_meta_context_event": {...},# transient; deduped current-molt emission event
             "current_tool_result_chars": dict,# total + top formal tool results >1000 chars
@@ -1712,6 +1809,20 @@ def build_meta(agent) -> dict:
             ]
         else:
             meta[TOOL_META_CONTEXT_PENDING_KEY] = budget_ctx
+
+    # Rendered system-prompt size pressure — its own non-colliding key
+    # (``system_prompt``), never overwriting ``rebuild``/``molt``. Deterministic
+    # current-state projection: present only while strictly above the 45%
+    # threshold, absent otherwise; no merging with the other context lines.
+    system_prompt_warning = build_system_prompt_pressure_context(agent)
+    if system_prompt_warning:
+        existing = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
+        if isinstance(existing, dict):
+            existing[TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY] = system_prompt_warning
+        else:
+            meta[TOOL_META_CONTEXT_PENDING_KEY] = {
+                TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY: system_prompt_warning
+            }
 
     tool_meta_token_usage = build_tool_meta_token_usage(agent)
     if tool_meta_token_usage:

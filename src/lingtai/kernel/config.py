@@ -72,6 +72,15 @@ MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate 
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
 
+# Rendered system-prompt size pressure — kernel-fixed, distinct from the
+# CONTEXT_PRESSURE_* family above (which measures system + tools + history
+# against the window). This ratio gates a warning on the rendered system
+# prompt ALONE against the effective context window: strictly above this
+# fraction, `_meta.agent_meta.agent_state.context.system_prompt` carries a
+# bounded progressive-disclosure warning; at or below, it is omitted. See
+# `meta_block.build_system_prompt_pressure_context`.
+SYSTEM_PROMPT_PRESSURE_RATIO = 0.45
+
 # Hidden runtime housekeeping: an agent that remains IDLE for this long is moved
 # to ASLEEP. This is deliberately kernel-fixed and not surfaced in init.json,
 # prompts, status, or tool metadata.

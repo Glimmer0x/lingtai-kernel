@@ -630,6 +630,54 @@ def test_daemon_context_countdown_enters_ticks_and_resets():
     assert not state.compact_due
 
 
+def test_daemon_meta_state_system_prompt_warning_is_local_not_parent():
+    """_DaemonMetaState counts its own local system_prompt once via the kernel
+    count_tokens() and carries context.system_prompt only while ITS OWN
+    resolved window is strictly above the 45% threshold — independent of any
+    parent-scale window, and never invented from a shrinking/absent prompt."""
+    from lingtai.kernel.token_counter import count_tokens
+
+    long_prompt = "You are a daemon worker. " * 400
+    prompt_tokens = count_tokens(long_prompt)
+    assert prompt_tokens > 0
+
+    # A tiny daemon-local window (barely above the prompt's own token count)
+    # puts this daemon's own ratio well above 45% — independent of any
+    # parent-scale window, which would swamp the same prompt to a low ratio.
+    small_window = prompt_tokens + 10
+    session = MagicMock(context_window=lambda: small_window)
+    state = daemon_tool._DaemonMetaState(
+        "em", "run", max_turns=10, context_window=small_window, system_prompt=long_prompt,
+    )
+    state.note_response(LLMResponse(usage=UsageMetadata(input_tokens=1, output_tokens=1)), session)
+    context = state.snapshot(session)["context"]
+    assert "system_prompt" in context
+    assert str(prompt_tokens) in context["system_prompt"]
+    assert str(small_window) in context["system_prompt"]
+
+    # The identical prompt against a large (parent-scale) window drops well
+    # below 45%, so the same daemon state omits the key entirely.
+    large_window = prompt_tokens * 100
+    large_session = MagicMock(context_window=lambda: large_window)
+    large_state = daemon_tool._DaemonMetaState(
+        "em2", "run2", max_turns=10, context_window=large_window, system_prompt=long_prompt,
+    )
+    large_state.note_response(
+        LLMResponse(usage=UsageMetadata(input_tokens=1, output_tokens=1)), large_session,
+    )
+    assert "system_prompt" not in large_state.snapshot(large_session)["context"]
+
+    # No system_prompt supplied at construction -> no local prompt tokens ->
+    # never invented, regardless of window.
+    no_prompt_state = daemon_tool._DaemonMetaState(
+        "em3", "run3", max_turns=10, context_window=small_window,
+    )
+    no_prompt_state.note_response(
+        LLMResponse(usage=UsageMetadata(input_tokens=1, output_tokens=1)), session,
+    )
+    assert "system_prompt" not in no_prompt_state.snapshot(session)["context"]
+
+
 def test_daemon_mechanical_compact_recovers_bounded_and_terminal_on_failure(tmp_path, monkeypatch):
     """End-to-end: value=1 still gets one ordinary send (no off-by-one), and
     only the response to that send gets mechanically compacted, retaining

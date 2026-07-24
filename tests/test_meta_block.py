@@ -21,6 +21,8 @@ from lingtai.kernel.meta_block import (
     build_meta_readme,
     build_context_rebuild_hint,
     build_molt_context,
+    build_system_prompt_pressure_context,
+    render_system_prompt_pressure_context,
     build_notification_payload,
     build_synthetic_meta_envelope,
     build_tool_meta_token_usage,
@@ -4545,6 +4547,158 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
     assert "forces a rebuild at the 1.0 hard boundary" in hint
     assert "meta_guidance" in hint
     assert build_context_rebuild_hint(SimpleNamespace(_intrinsics=set()), 0.90) is None
+
+
+# ---------------------------------------------------------------------------
+# Rendered system-prompt size pressure warning — agent_meta.agent_state.context.
+# system_prompt, strictly > SYSTEM_PROMPT_PRESSURE_RATIO (45%) of the effective
+# context window. Distinct key from rebuild/molt; never merged with them.
+#
+# test_prompt.py::test_batches_byte_identical_to_string already proves the
+# normal/batched rendering paths produce byte-identical text, so both share the
+# same count_tokens() input by construction; that invariant is not re-proven
+# here.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tokens, window, expect_warning",
+    [
+        (44, 100, False),   # 44% — below
+        (45, 100, False),   # exactly 45% — inclusive omit
+        (46, 100, True),    # 46% — strictly above
+        (None, 100, False),  # unresolvable token count
+        (90, 0, False),      # unresolvable window
+        (90, None, False),   # window omitted entirely
+        (0, 100, False),     # zero tokens -> no ratio
+        (90, True, False),   # bool is not a valid int window (bool is an int subclass)
+    ],
+)
+def test_render_system_prompt_pressure_context_boundary_and_invalid_metrics(
+    tokens, window, expect_warning
+):
+    """The shared pure renderer owns the strict->45% decision, the invalid/zero
+    omission (unresolvable or non-positive tokens/window never guessed), and the
+    bounded, prompt-body-free message in one place."""
+    warning = render_system_prompt_pressure_context(tokens, window)
+    if expect_warning:
+        assert warning is not None
+        assert str(tokens) in warning
+        assert str(window) in warning
+        assert "45%" in warning
+        assert "progressive disclosure" in warning.lower()
+        assert "pad" in warning and "lingtai" in warning
+        # Bounded, current-state-only text: no prose-length prompt body echoed.
+        assert len(warning) < 600
+        assert "```" not in warning
+    else:
+        assert warning is None
+
+
+def _prompt_pressure_agent(*, tokens, window, dirty=False, snapshot_window=None):
+    """Minimal agent/session stand-in for build_system_prompt_pressure_context.
+
+    Mirrors the real SessionManager surface build_meta's helpers already read:
+    ``_token_decomp_dirty`` / ``_system_prompt_tokens`` on the session, and
+    ``_config.context_limit`` as the configured-fallback window source. When
+    ``snapshot_window`` is given, ``latest_token_usage_snapshot`` reports it —
+    exercising the provider-snapshot-first precedence in
+    ``_session_context_window`` ahead of the configured fallback.
+    """
+    session = SimpleNamespace(
+        _token_decomp_dirty=dirty,
+        _system_prompt_tokens=tokens,
+    )
+    if snapshot_window is not None:
+        session.latest_token_usage_snapshot = lambda: {"context_window": snapshot_window}
+    config = SimpleNamespace(
+        context_limit=window, time_awareness=True, timezone_awareness=True
+    )
+    return SimpleNamespace(_session=session, _config=config)
+
+
+def test_build_system_prompt_pressure_context_prefers_provider_snapshot_window():
+    """build_system_prompt_pressure_context must resolve its window through
+    _session_context_window — the SAME provider-snapshot-first precedence
+    session token telemetry uses — not call the raw configured/live fallback
+    directly. A conflicting configured context_limit must lose to a present
+    provider-round snapshot window."""
+    # Configured window (200) would put 90 tokens at 45% (no warning); the
+    # latest provider snapshot's window (100) puts it at 90% (warning). The
+    # snapshot must win.
+    agent = _prompt_pressure_agent(tokens=90, window=200, snapshot_window=100)
+    warning = build_system_prompt_pressure_context(agent)
+    assert warning is not None
+    assert "100" in warning
+    assert "200" not in warning
+
+    # No snapshot -> falls back to the configured window as before.
+    agent_no_snapshot = _prompt_pressure_agent(tokens=90, window=100)
+    warning_fallback = build_system_prompt_pressure_context(agent_no_snapshot)
+    assert warning_fallback is not None
+    assert "100" in warning_fallback
+
+
+def test_build_system_prompt_pressure_context_omits_without_session_or_dirty_decomp():
+    assert build_system_prompt_pressure_context(SimpleNamespace()) is None
+    dirty_agent = _prompt_pressure_agent(tokens=90, window=100, dirty=True)
+    assert build_system_prompt_pressure_context(dirty_agent) is None
+
+
+def test_build_meta_and_tool_executor_route_system_prompt_under_own_key():
+    """build_meta routes the warning to its own transit key (never overwriting
+    rebuild/molt/cache-miss-budget lines), _attach_tool_block promotes it into
+    agent_meta.agent_state.context without collision and pops the transit key,
+    and dropping at/below the threshold on a later build carries no key at all."""
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
+
+    agent = _prompt_pressure_agent(tokens=90, window=100)
+    agent._intrinsics = set()
+    agent.get_token_usage = lambda: {}
+    meta = build_meta(agent)
+    ctx = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    assert meta_block.TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY in ctx
+    assert "rebuild" not in ctx or ctx.get("rebuild") != ctx[meta_block.TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY]
+
+    executor = ToolExecutor(
+        dispatch_fn=lambda name, args: {},
+        make_tool_result_fn=lambda name, result, **kw: result,
+        guard=LoopGuard(max_total_calls=50),
+        working_dir="/tmp",
+        max_result_chars=_DEFAULT_MAX_RESULT_CHARS,
+    )
+    executor._pending_meta_by_call_id["tc1"] = dict(meta)
+    result = {"ok": True}
+    tool_meta = executor._attach_tool_block(result, tool_call_id="tc1", elapsed_ms=5)
+    context = tool_meta["_agent_pending"]["agent_state"]["context"]
+    assert meta_block.TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY in context
+    assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in tool_meta
+
+    # At/below the threshold, build_meta carries no system_prompt key at all.
+    agent._session._system_prompt_tokens = 45
+    meta_low = build_meta(agent)
+    ctx_low = meta_low.get(meta_block.TOOL_META_CONTEXT_PENDING_KEY)
+    if ctx_low is not None:
+        assert meta_block.TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY not in ctx_low
+
+
+def test_system_prompt_warning_persists_across_successive_snapshots_then_clears():
+    """Deterministic current-state projection: present on every latest snapshot
+    while strictly above threshold; gone the moment a fresh build drops at/below
+    it. No repeat interval, dismissal, or history growth — just current state."""
+    agent = _prompt_pressure_agent(tokens=90, window=100)
+    agent._intrinsics = set()
+    agent.get_token_usage = lambda: {}
+
+    first = build_system_prompt_pressure_context(agent)
+    second = build_system_prompt_pressure_context(agent)
+    assert first is not None and second is not None
+    assert first == second  # stable current-state text, not a growing log
+
+    # Prompt shrinks (or window grows) below threshold on the next build.
+    agent._session._system_prompt_tokens = 40
+    assert build_system_prompt_pressure_context(agent) is None
 
 
 # ---------------------------------------------------------------------------
