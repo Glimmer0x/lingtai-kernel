@@ -10,6 +10,8 @@ from __future__ import annotations
 import inspect
 import json
 import multiprocessing
+import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -369,6 +371,48 @@ class TestAtomicCoreRedCounterexamples:
 
         store = PosixNotificationStoreAdapter(workdir)
         assert store.snapshot(_allow_all)["system"]["count"] == 4
+
+    def test_posix_lock_preserves_acquisition_error(self, tmp_path, monkeypatch):
+        if os.name != "posix":
+            pytest.skip("POSIX flock adapter is unavailable")
+        from lingtai.adapters.posix import notification_store_lock as lock_module
+
+        calls = []
+
+        def fail_acquire(_fileno, operation):
+            calls.append(operation)
+            if operation == lock_module.fcntl.LOCK_EX:
+                raise OSError("acquisition failed")
+
+        monkeypatch.setattr(lock_module.fcntl, "flock", fail_acquire)
+        lock = lock_module.PosixNotificationStoreLockAdapter()
+        with pytest.raises(OSError, match="acquisition failed"):
+            with lock.exclusive(tmp_path):
+                pytest.fail("mutation body ran without the process lock")
+        assert calls == [lock_module.fcntl.LOCK_EX]
+
+    def test_windows_lock_preserves_acquisition_error(self, tmp_path, monkeypatch):
+        from lingtai.adapters.windows.notification_store_lock import (
+            WindowsNotificationStoreLockAdapter,
+        )
+
+        calls = []
+        fake_msvcrt = SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2)
+
+        def fail_acquire(_fileno, operation, _size):
+            calls.append(operation)
+            if operation == fake_msvcrt.LK_NBLCK:
+                raise OSError(5, "acquisition failed")
+
+        fake_msvcrt.locking = fail_acquire
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        lock = WindowsNotificationStoreLockAdapter()
+        with pytest.raises(OSError, match="acquisition failed"):
+            with lock.exclusive(tmp_path):
+                pytest.fail("mutation body ran without the process lock")
+        assert calls == [fake_msvcrt.LK_NBLCK]
 
     def test_concurrent_ack_unions_use_atomic_family_seven(self, tmp_path):
         store = _posix_store(tmp_path / "ack-unions")

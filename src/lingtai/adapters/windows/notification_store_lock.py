@@ -20,6 +20,7 @@ class WindowsNotificationStoreLockAdapter:
 
         notification_dir.mkdir(parents=True, exist_ok=True)
         handle = open(notification_dir / _LOCK_FILE, "a+b")
+        locked = False
         try:
             if handle.seek(0, 2) == 0:
                 handle.write(b"\0")
@@ -28,6 +29,7 @@ class WindowsNotificationStoreLockAdapter:
             while True:
                 try:
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    locked = True
                     break
                 except OSError as exc:
                     if getattr(exc, "winerror", None) != 33 and exc.errno not in {
@@ -39,7 +41,8 @@ class WindowsNotificationStoreLockAdapter:
             yield
         finally:
             try:
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                if locked:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             finally:
                 handle.close()

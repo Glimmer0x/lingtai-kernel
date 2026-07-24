@@ -73,8 +73,8 @@ Persistent protocol state is the existing `.notification/<channel>.json` plus
 `.notification/large_result_acks.json`. The adapter holds its workdir, an
 in-process mutex, and a platform-selected mutation lock. Native adapters lock
 `.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
-(`src/lingtai/adapters/posix/notification_store_lock.py:1-24`,
-`src/lingtai/adapters/windows/notification_store_lock.py:1-45`). Lock-file
+(`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,
+`src/lingtai/adapters/windows/notification_store_lock.py:1-48`). Lock-file
 existence is not authority; OS lock ownership serializes complete mutation
 transactions and releases on process death. Core retains delivered fingerprints
 and policy state on the agent, not in the adapter.

@@ -16,9 +16,14 @@ class PosixNotificationStoreLockAdapter:
     def exclusive(self, notification_dir: Path):
         notification_dir.mkdir(parents=True, exist_ok=True)
         handle = open(notification_dir / _LOCK_FILE, "a+b")
+        locked = False
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            locked = True
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            handle.close()
+            try:
+                if locked:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
