@@ -6,13 +6,18 @@ related_files:
   - src/lingtai/kernel/notification_store/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/notification_store/__init__.py
+  - src/lingtai/kernel/notification_store/_mutation_lock.py
+  - src/lingtai/adapters/notification_store_lock.py
   - src/lingtai/adapters/posix/notification_store.py
+  - src/lingtai/adapters/posix/notification_store_lock.py
+  - src/lingtai/adapters/windows/notification_store_lock.py
   - src/lingtai/kernel/notifications.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/agent.py
   - src/lingtai/cli.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/server.py
+  - src/lingtai/tools/daemon/supervisor_runtime.py
   - tests/_notification_store_helpers.py
   - tests/test_notification_store.py
 maintenance: |
@@ -67,20 +72,26 @@ fingerprint tuple means the exact delivered version. Channel mutators return
 
 ## Adapters
 
-`PosixNotificationStoreAdapter` is the production adapter. One composed instance
-owns in-process serialization for channel and acknowledgement mutations. Agent,
-CLI, and Telegram server composition roots construct it and inject the Port.
-External LICC/direct `mcp.*` producers keep the same filesystem path and envelope.
+`PosixNotificationStoreAdapter` is the production filesystem adapter. Each
+instance owns an in-process mutex and composes the selected native
+`NotificationMutationLockPort`; together they serialize channel and
+acknowledgement mutations across threads and independently composed processes.
+The selector provides `flock` on POSIX and byte-range locking on Windows. Agent,
+CLI, daemon supervisor, and Telegram server composition roots construct the Store
+adapter. External LICC/direct `mcp.*` producers keep the same filesystem path and
+envelope.
 
 ## Contract rules
 
 - Snapshot and fingerprint skip missing, malformed, or unreadable entries and
   apply the live Core allow-predicate; fingerprints are sorted SHA-256 entries of
   filename, byte size, and bytes, not mtime.
-- Publish is atomic sibling-temp replacement. Clear returns `False` only for
+- Publish is atomic sibling-temp replacement. Publish and clear hold the Store's
+  in-process and cross-process mutation locks. Clear returns `False` only for
   absence; other clear and write errors propagate unless a Core best-effort
   wrapper explicitly preserves legacy suppression.
-- Compare-update reads payload and version under Store serialization. Only
+- Compare-update reads payload and version under the same whole-transaction
+  cross-process Store serialization. Only
   `FileNotFoundError` is absence; every other read error propagates. Readable
   malformed/non-dict JSON retains its version and presents `{}` to Core, so it
   cannot satisfy expected absence.
@@ -90,23 +101,29 @@ External LICC/direct `mcp.*` producers keep the same filesystem path and envelop
   report the resulting version and actual clear outcome, while `value` carries
   all Core response/log policy evidence.
 - Ack load preserves legacy best effort: absent, malformed, or unreadable state
-  yields an empty set. Atomic ack update holds one Store lock across that same
-  read, one pure Core set mutation, and store-or-clear. `changed=False` performs
+  yields an empty set. Atomic ack update holds the same in-process and
+  cross-process Store locks across that read, one pure Core set mutation, and
+  store-or-clear. `changed=False` performs
   no write. Non-empty write failures propagate. Empty-set clear preserves legacy
   best effort by swallowing every unlink `OSError`; typed `changed/value`
   evidence still returns, with `changed=False` when no unlink succeeds.
 - Core acknowledgement union and purge MUST use family 7, never split family 6
-  read from a later write. System, nudge, and Telegram mutations decide from the
-  current payload inside compare-update; force uses `UNCONDITIONAL`, while
-  non-force dismiss uses the delivered fingerprint entry including explicit
-  absence.
+  read from a later write. System, nudge, Telegram, and daemon-terminal mutations
+  decide from the current payload inside compare-update; force uses
+  `UNCONDITIONAL`, while non-force dismiss uses the delivered fingerprint entry
+  including explicit absence.
+- `.notification/.store.lock` is coordination metadata, not notification state or
+  authority. POSIX and Windows adapters MUST use native OS locks whose ownership,
+  not file existence, defines exclusion and whose release follows process death.
+  Snapshot and fingerprint continue to expose only allowed JSON channel files.
 
 ## Contract tests
 
 Shared conformance covers the seven-family surface, expected absence versus
 unconditional updates, malformed/unreadable/error behavior, typed policy values,
-atomic concurrent channel updates, atomic acknowledgement union/purge, required
-injection, outer composition, stale dismiss refusal, unrelated-event survival,
+atomic same-process and spawned-process channel updates, atomic acknowledgement
+union/purge, required injection, outer composition, stale dismiss refusal,
+unrelated-event survival,
 nudge updates, and Telegram current-mirror clearing. Production adapter tests
 must use only an explicitly authorized persistent scratch path when deletion is
 separately authorized.

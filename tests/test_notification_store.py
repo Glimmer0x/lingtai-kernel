@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import multiprocessing
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +47,21 @@ def _allow_all(_channel: str) -> bool:
 def _posix_store(workdir: Path) -> PosixNotificationStoreAdapter:
     workdir.mkdir(parents=True, exist_ok=True)
     return PosixNotificationStoreAdapter(workdir)
+
+
+def _process_increment_channel(workdir: str, barrier) -> None:
+    store = PosixNotificationStoreAdapter(Path(workdir))
+    barrier.wait(timeout=30)
+
+    def increment(current: dict):
+        # Widen the read/modify/write race between independently composed
+        # Store instances without blocking inside the process lock itself.
+        time.sleep(0.1)
+        return ({"count": int(current.get("count", 0)) + 1}, True, None)
+
+    result = store.compare_update_channel("system", UNCONDITIONAL, increment)
+    if not result.applied:
+        raise RuntimeError(f"channel increment was not applied: {result!r}")
 
 
 @pytest.fixture(params=("fake", "posix"))
@@ -328,6 +345,30 @@ class TestAtomicCoreRedCounterexamples:
             thread.join(timeout=5)
             assert not thread.is_alive()
         assert store.snapshot(_allow_all)["system"]["count"] == 12
+
+    def test_real_adapter_cross_process_channel_updates_are_serialized(self, tmp_path):
+        workdir = tmp_path / "channel-process-concurrency"
+        workdir.mkdir()
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(5)
+        processes = [
+            context.Process(
+                target=_process_increment_channel,
+                args=(str(workdir), barrier),
+            )
+            for _ in range(4)
+        ]
+
+        for process in processes:
+            process.start()
+        barrier.wait(timeout=30)
+        for process in processes:
+            process.join(timeout=30)
+        assert all(not process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0, 0, 0, 0]
+
+        store = PosixNotificationStoreAdapter(workdir)
+        assert store.snapshot(_allow_all)["system"]["count"] == 4
 
     def test_concurrent_ack_unions_use_atomic_family_seven(self, tmp_path):
         store = _posix_store(tmp_path / "ack-unions")

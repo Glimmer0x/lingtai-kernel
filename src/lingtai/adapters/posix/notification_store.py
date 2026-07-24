@@ -5,11 +5,13 @@ It provides atomic file replacement and Store-owned mutation serialization.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import threading
 from pathlib import Path
 
+from lingtai.adapters.notification_store_lock import select_notification_store_lock
 from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.notification_store import (
     AllowPredicate,
@@ -22,6 +24,9 @@ from lingtai.kernel.notification_store import (
     UpdateAckRefsResult,
     _applied_result,
     _conflict_result,
+)
+from lingtai.kernel.notification_store._mutation_lock import (
+    NotificationMutationLockPort,
 )
 
 _LARGE_RESULT_ACK_FILE = "large_result_acks.json"
@@ -60,10 +65,22 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
     One composed instance owns serialization; Core supplies channel policy.
     """
 
-    def __init__(self, workdir: Path):
+    def __init__(
+        self,
+        workdir: Path,
+        mutation_lock: NotificationMutationLockPort | None = None,
+    ):
         self._workdir = Path(workdir)
         self._lock = threading.Lock()
+        self._mutation_lock = mutation_lock or select_notification_store_lock()
 
+    @contextlib.contextmanager
+    def _exclusive_mutation(self):
+        # The thread lock prevents same-process lock re-entry while the native
+        # lock serializes independently composed producer/supervisor processes.
+        with self._lock:
+            with self._mutation_lock.exclusive(_notification_dir(self._workdir)):
+                yield
 
     def snapshot(self, allow_channel: AllowPredicate) -> dict[str, object]:
         notif_dir = _notification_dir(self._workdir)
@@ -108,13 +125,13 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
         notif_dir = _notification_dir(self._workdir)
         notif_dir.mkdir(exist_ok=True)
         target = _channel_path(self._workdir, channel)
-        with self._lock:
+        with self._exclusive_mutation():
             atomic_write_json(target, payload, ensure_ascii=False, indent=None)
 
 
     def clear(self, channel: str) -> bool:
         target = _channel_path(self._workdir, channel)
-        with self._lock:
+        with self._exclusive_mutation():
             try:
                 target.unlink()
             except FileNotFoundError:
@@ -130,7 +147,7 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
     ) -> CompareUpdateResult:
         target = _channel_path(self._workdir, channel)
 
-        with self._lock:
+        with self._exclusive_mutation():
             current_payload: dict = {}
             current_version: list | None = None
             try:
@@ -221,7 +238,7 @@ class PosixNotificationStoreAdapter(NotificationStorePort):
         self, pure_core_set_mutator: PureAckMutator
     ) -> UpdateAckRefsResult:
         ack_path = _ack_path(self._workdir)
-        with self._lock:
+        with self._exclusive_mutation():
             current = self.load_ack_refs()
             refs, requested_change, value = pure_core_set_mutator(set(current))
             if not requested_change:
