@@ -35,14 +35,14 @@ socket transport lives outside this package and is selected only by `setup()`.
 ## Components
 
 - `BrowserManager`, `setup()`, `get_schema()` — model-facing route, registration, and lazy composition (`src/lingtai/tools/browser/__init__.py:38-108`).
-- `BrowserEngine` — per-Agent orchestration for target validation, fetch/extract, provenance, pagination, bounded links, and typed results (`src/lingtai/tools/browser/core.py:115-302`).
-- `BrowserPort`, `ResolvedTarget`, `TransportResponse` — Core-owned outbound boundary and values (`src/lingtai/tools/browser/port.py:14-57`).
-- `resolve_and_check()` and redirect helpers — scheme, userinfo, malformed URL, DNS-answer and SSRF policy (`src/lingtai/tools/browser/netpolicy.py:43-211`).
-- `fetch()` — bounded one-hop Port calls and manual redirect loop (`src/lingtai/tools/browser/fetcher.py:56-129`).
-- `extract_html()` / `extract_plain_text()` — deterministic blocks and links using the stdlib parser (`src/lingtai/tools/browser/extractor.py:117-159`).
+- `BrowserEngine` — per-Agent orchestration for target validation, deadline-aware fetch/extract, provenance, pagination, bounded links, and typed results (`src/lingtai/tools/browser/core.py:116-339`).
+- `BrowserPort`, `ResolvedTarget`, `TransportResponse`, `TransportError` — Core-owned outbound boundary, remaining DNS deadline, and typed Adapter errors (`src/lingtai/tools/browser/port.py:14-64`).
+- `resolve_and_check()` and redirect helpers — scheme, userinfo, malformed URL, deadline-aware DNS-answer and SSRF policy (`src/lingtai/tools/browser/netpolicy.py:43-224`).
+- `fetch()` — one end-to-end-deadline bounded one-hop Port call and manual redirect loop (`src/lingtai/tools/browser/fetcher.py:56-136`).
+- `extract_html()` / `extract_plain_text()` — declared-codec decoding plus deterministic semantic/container blocks and links using the stdlib parser (`src/lingtai/tools/browser/extractor.py:145-220`).
 - `CursorCodec` / `paginate_blocks()` — HMAC snapshot/mode cursors and lossless bounded pages (`src/lingtai/tools/browser/cursor.py:22-143`).
-- `InMemorySnapshotStore` / `RefStore` — bounded per-Agent LRU snapshots and link refs (`src/lingtai/tools/browser/snapshots.py:33-83`, `src/lingtai/tools/browser/refstore.py:8-37`).
-- `VettedHttpTransport` — outside production Adapter for pinned HTTP(S) requests (`src/lingtai/adapters/browser_transport.py:17-112`).
+- `InMemorySnapshotStore` / `RefStore` — bounded per-Agent LRU snapshots and independently evictable refs; snapshot links retain full canonical targets (`src/lingtai/tools/browser/snapshots.py:33-86`, `src/lingtai/tools/browser/refstore.py:8-37`).
+- `VettedHttpTransport` — outside production Adapter for pinned HTTP(S) requests and single-in-flight bounded DNS lookup (`src/lingtai/adapters/browser_transport.py:17-165`).
 
 ## Connections
 
@@ -64,8 +64,11 @@ owns all browser promises, including the Port and manual behavior.
 ## State
 
 `BrowserEngine` owns an HMAC key, bounded snapshot LRU, bounded link-reference
-store, and fixed fetch policy for one Agent/process/task lifetime. No module
-mutable state, filesystem snapshot, cookie jar, credential, cache, or
+store, and fixed fetch policy for one Agent/process/task lifetime. Snapshot link
+items retain a full canonical target plus bounded display fields; `_success`
+re-mints refs from those targets because the RefStore may evict independently.
+The production Adapter owns only its lock-guarded single in-flight resolver job;
+no module mutable state, filesystem snapshot, cookie jar, credential, cache, or
 cross-Agent ref/cursor state exists. Agent refresh/reconstruction makes a new
 engine and invalidates old refs and cursors.
 

@@ -1,6 +1,7 @@
 """Static browse use case: policy, fetch, extraction, refs, cursors and state."""
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -80,6 +81,7 @@ _MESSAGES = {
     "MULTICAST_BLOCKED": "The destination is not a public address.",
     "UNPARSEABLE_IP": "The destination address is invalid.",
     "DNS_RESOLUTION_FAILED": "The public destination could not be resolved.",
+    "DNS_RESOLUTION_TIMEOUT": "The public destination DNS lookup exceeded the fetch deadline.",
     "REDIRECT_MISSING_LOCATION": "The server returned a redirect without a destination.",
     "TOO_MANY_REDIRECTS": "The redirect limit was reached.",
     "TOO_MANY_CONNECTIONS": "The connection limit was reached.",
@@ -180,9 +182,10 @@ class BrowserEngine:
             if returned_chars + link_chars > MAX_RETURNED_LINK_CHARS:
                 truncated = True
                 break
-            # The reference retains the full canonical URL; only returned fields
-            # participate in the aggregate payload budget.
-            links.append(LinkItem(self.refs.add_link_ref(extracted_link.url), text, url))
+            # The snapshot retains the full canonical target; only returned
+            # fields participate in the aggregate payload budget.  Refs are
+            # minted at response time so continuation can repair evicted refs.
+            links.append(LinkItem("", text, url, extracted_link.url))
             returned_chars += link_chars
         return links, truncated
 
@@ -201,19 +204,20 @@ class BrowserEngine:
             )
         except FetchError as exc:
             raise BrowserFailure(exc.stage, exc.error_code, retryable=exc.retryable, http_status=exc.http_status) from None
-        content_type = _content_type(fetched.headers)
+        content_type, charset, content_warnings = _content_metadata(fetched.headers)
         extract_started = time.monotonic()
         if content_type in {"text/html", "application/xhtml+xml"}:
-            extracted = extract_html(fetched.body, base_url=fetched.final_url)
+            extracted = extract_html(fetched.body, base_url=fetched.final_url, charset=charset)
         elif content_type == "text/plain":
-            extracted = extract_plain_text(fetched.body)
+            extracted = extract_plain_text(fetched.body, charset=charset)
         else:
             raise BrowserFailure("extract", "CONTENT_TYPE_UNSUPPORTED", http_status=fetched.http_status)
         extract_ms = max(0, int((time.monotonic() - extract_started) * 1000))
         if not extracted.blocks:
             raise BrowserFailure("extract", "NO_TEXT_BLOCKS", http_status=fetched.http_status)
         links, links_truncated = self._bounded_links(extracted.links)
-        warnings = list(extracted.warnings)
+        warnings = list(content_warnings)
+        warnings.extend(item for item in extracted.warnings if item not in warnings)
         if links_truncated and LINKS_TRUNCATED_WARNING not in warnings:
             warnings.append(LINKS_TRUNCATED_WARNING)
         snapshot = self.snapshots.put(
@@ -277,6 +281,13 @@ class BrowserEngine:
             next_cursor = self.cursor.encode(
                 CursorPayload(snapshot.snapshot_id, snapshot.extract_mode, page.next_index, page.next_char_offset)
             )
+        # A snapshot is immutable, while RefStore is an independently bounded
+        # LRU.  Re-mint from each full canonical target for every response so a
+        # continuation never emits a ref that was evicted between responses.
+        emitted_links = [
+            LinkItem(self.refs.add_link_ref(link.target or link.url), link.text, link.url, link.target or link.url)
+            for link in snapshot.links
+        ]
         return {
             "status": "ok",
             "request_id": request_id,
@@ -292,7 +303,7 @@ class BrowserEngine:
             "render_reason": "static_http_get",
             "redirect_chain": list(snapshot.redirect_chain),
             "blocks": [{"id": b.id, "kind": b.kind, "text": b.text} for b in page.blocks],
-            "links": [{"ref": l.ref, "text": l.text, "url": l.url} for l in snapshot.links],
+            "links": [{"ref": l.ref, "text": l.text, "url": l.url} for l in emitted_links],
             "partial": page.has_more,
             "returned_chars": sum(len(b.text) for b in page.blocks),
             "next_cursor": next_cursor,
@@ -302,8 +313,37 @@ class BrowserEngine:
         }
 
 
+_CHARSET_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,39}$")
+
+
+def _content_metadata(headers: Mapping[str, str]) -> tuple[str, str | None, list[str]]:
+    raw_value = next((str(value) for key, value in headers.items() if str(key).lower() == "content-type"), "text/plain")
+    value_truncated = len(raw_value) > 512
+    raw_value = raw_value[:512]
+    parts = raw_value.split(";", 33)
+    media = parts[0].strip().lower() or "text/plain"
+    charset: str | None = None
+    warnings: list[str] = ["MALFORMED_CHARSET_FALLBACK"] if value_truncated else []
+    for parameter in parts[1:]:
+        name, separator, value = parameter.strip().partition("=")
+        if name.lower() != "charset":
+            continue
+        if charset is not None:
+            warnings.append("MALFORMED_CHARSET_FALLBACK")
+            continue
+        if not separator:
+            warnings.append("MALFORMED_CHARSET_FALLBACK")
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            value = value[1:-1]
+        if not value or not _CHARSET_TOKEN.fullmatch(value):
+            warnings.append("MALFORMED_CHARSET_FALLBACK")
+        else:
+            charset = value
+    return media, charset, list(dict.fromkeys(warnings))
+
+
 def _content_type(headers: Mapping[str, str]) -> str:
-    for key, value in headers.items():
-        if str(key).lower() == "content-type":
-            return str(value).split(";", 1)[0].strip().lower() or "text/plain"
-    return "text/plain"
+    """Return the media type while retaining the historical helper shape."""
+    return _content_metadata(headers)[0]

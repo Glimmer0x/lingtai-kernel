@@ -12,9 +12,5 @@ related_files:
 maintenance: |
   English glossary for the browser tool package (lingtai.tools.browser); the
   English body stays empty. Update the zh/wen mappings in lockstep whenever
-  browser identifiers or user-facing concepts change. Body policy: maintain
-  only a minimal term mapping plus at most one or two sentences of naming
-  rationale; do not translate or duplicate the tool schema, parameters, action
-  behavior, manual, contract, or anatomy.
-  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
+  browser identifiers or user-facing concepts change. Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

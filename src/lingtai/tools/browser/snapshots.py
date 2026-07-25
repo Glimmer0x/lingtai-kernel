@@ -14,6 +14,9 @@ class LinkItem:
     ref: str
     text: str
     url: str
+    # Full canonical target is the source of truth; ``url`` is display-only.
+    # Refs are minted again when any success response is emitted.
+    target: str = ""
 
 
 @dataclass(frozen=True, slots=True)

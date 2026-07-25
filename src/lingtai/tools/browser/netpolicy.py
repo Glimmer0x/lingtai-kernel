@@ -5,7 +5,7 @@ import ipaddress
 import posixpath
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
+from typing import Optional, Protocol, Sequence, cast
 
 from .port import ResolvedTarget, TransportError
 
@@ -37,7 +37,15 @@ class ParsedURL:
     explicit_port: bool = False
 
 
-Resolver = Callable[[str], Sequence[str]]
+class _LegacyResolver(Protocol):
+    def __call__(self, hostname: str) -> Sequence[str]: ...
+
+
+class _TimedResolver(Protocol):
+    def __call__(self, hostname: str, *, timeout_s: float) -> Sequence[str]: ...
+
+
+Resolver = _LegacyResolver | _TimedResolver
 
 
 def _parse(url: object) -> ParsedURL:
@@ -132,8 +140,18 @@ def is_unsafe_ip(value: object) -> Optional[str]:
     return None
 
 
-def resolve_and_check(url: str, resolver: Resolver | None = None) -> ResolvedTarget:
-    """Parse, resolve, and validate one target before every Port request."""
+def resolve_and_check(
+    url: str,
+    resolver: Resolver | None = None,
+    *,
+    timeout_s: float | None = None,
+) -> ResolvedTarget:
+    """Parse, resolve, and validate one target before every Port request.
+
+    ``timeout_s`` is the remaining Core-owned fetch deadline.  It is passed
+    through the Port boundary so an Adapter cannot perform an unbounded DNS
+    operation before the request timeout starts.
+    """
     parsed = _parse(url)
     if parsed.hostname in _LOCAL_NAMES:
         raise PolicyViolation("LOOPBACK_BLOCKED")
@@ -149,7 +167,12 @@ def resolve_and_check(url: str, resolver: Resolver | None = None) -> ResolvedTar
             raise PolicyViolation(detail)
         return ResolvedTarget(parsed.hostname, parsed.port, parsed.scheme, (str(literal),))
     try:
-        answers = tuple(str(item) for item in resolver(parsed.hostname))  # type: ignore[misc]
+        if timeout_s is None:
+            legacy_resolver = cast(_LegacyResolver, resolver)
+            answers = tuple(str(item) for item in legacy_resolver(parsed.hostname))
+        else:
+            timed_resolver = cast(_TimedResolver, resolver)
+            answers = tuple(str(item) for item in timed_resolver(parsed.hostname, timeout_s=timeout_s))
     except TransportError:
         raise
     except PolicyViolation:

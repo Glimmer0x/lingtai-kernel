@@ -17,7 +17,7 @@ class FakeBrowserPort:
     def __post_init__(self):
         self.calls: list[tuple[str, ResolvedTarget]] = []
 
-    def resolve(self, hostname: str):
+    def resolve(self, hostname: str, *, timeout_s: float):
         return ("93.184.216.34",)
 
     def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):

@@ -12,9 +12,6 @@ related_files:
 maintenance: |
   Classical-Chinese glossary for the browser tool package; keep a distinct,
   minimal mapping of immutable identifiers and update it with zh/en files.
-  Body policy: maintain only a minimal term mapping plus at most one or two
-  sentences of naming rationale; do not translate or duplicate the tool schema,
-  parameters, action behavior, manual, contract, or anatomy.
   Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **名相对照**

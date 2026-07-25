@@ -1,7 +1,8 @@
 """Deterministic browser Core policy, redirect, cap and state edge cases."""
 from __future__ import annotations
 
-from lingtai.tools.browser.core import BrowserEngine
+from lingtai.tools.browser.core import BrowserEngine, _content_metadata
+from lingtai.tools.browser.extractor import extract_html, extract_plain_text
 from lingtai.tools.browser.port import ResolvedTarget, TransportError, TransportResponse
 from lingtai.tools.browser.refstore import RefStore
 from lingtai.tools.browser.snapshots import InMemorySnapshotStore
@@ -12,7 +13,7 @@ class StaticTextPort:
         self.body = body
         self.calls: list[str] = []
 
-    def resolve(self, hostname: str):
+    def resolve(self, hostname: str, *, timeout_s: float):
         return ("93.184.216.34",)
 
     def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
@@ -25,7 +26,7 @@ class RedirectPort:
         self.redirect_to = redirect_to
         self.calls: list[str] = []
 
-    def resolve(self, hostname: str):
+    def resolve(self, hostname: str, *, timeout_s: float):
         return ("93.184.216.34",)
 
     def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
@@ -54,7 +55,7 @@ def test_safe_redirect_preserves_requested_and_final_provenance():
 
 def test_output_cap_splits_blocks_without_overflow():
     class LongPort:
-        def resolve(self, hostname: str):
+        def resolve(self, hostname: str, *, timeout_s: float):
             return ("93.184.216.34",)
 
         def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
@@ -70,7 +71,7 @@ def test_output_cap_splits_blocks_without_overflow():
 
 def test_http_failures_are_typed_and_retryable_only_when_transient():
     class ErrorPort:
-        def resolve(self, hostname: str):
+        def resolve(self, hostname: str, *, timeout_s: float):
             return ("93.184.216.34",)
 
         def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
@@ -91,7 +92,7 @@ def test_link_ref_eviction_is_loud_and_never_refetches():
 
 def test_dns_transport_error_preserves_stage_and_retryability():
     class DnsErrorPort:
-        def resolve(self, hostname: str):
+        def resolve(self, hostname: str, *, timeout_s: float):
             raise TransportError("dns", "DNS_RESOLUTION_FAILED", retryable=True)
 
     result = BrowserEngine(DnsErrorPort()).handle({"url": "https://public.example/dns"})
@@ -169,7 +170,7 @@ def test_returned_links_have_fixed_aggregate_budget_and_full_ref_urls():
         def __init__(self):
             self.calls: list[str] = []
 
-        def resolve(self, hostname: str):
+        def resolve(self, hostname: str, *, timeout_s: float):
             return ("93.184.216.34",)
 
         def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
@@ -189,3 +190,114 @@ def test_returned_links_have_fixed_aggregate_budget_and_full_ref_urls():
     followed = engine.handle({"link_ref": first["ref"]})
     assert followed["status"] == "ok"
     assert len(followed["requested_url"]) > len(first["url"])
+
+
+def test_container_text_is_visible_once_in_dom_order_and_skips_noncontent():
+    document = extract_html(
+        b"""<html><body><main>before <div>container-before <section>nested <span>phrase</span></section> container-after</div>
+        <h2>Heading <span>two</span></h2><p>Paragraph <span>visible</span></p>
+        <ul><li>Item <span>one</span></li></ul><pre>code line</pre>
+        <script>secret-script</script><nav>secret-nav</nav><footer>secret-footer</footer>
+        </main></body></html>""",
+        base_url="https://public.example/page",
+    )
+    texts = [block.text for block in document.blocks]
+    joined = " | ".join(texts)
+    for phrase in ("before", "container-before", "nested phrase", "container-after", "Heading two", "Paragraph visible", "Item one", "code line"):
+        assert texts.count(phrase) == 1
+    assert joined.index("container-before") < joined.index("nested phrase") < joined.index("container-after")
+    assert "secret-script" not in joined
+    assert "secret-nav" not in joined
+    assert "secret-footer" not in joined
+    assert {block.kind for block in document.blocks} >= {"heading", "paragraph", "list_item", "code"}
+
+    title_document = extract_html(
+        b"<head><title>visible title</title><script><title>secret title</title></script></head>"
+        b"<body><p>body</p></body>",
+        base_url="https://public.example/page",
+    )
+    assert title_document.title == "visible title"
+    assert "secret title" not in title_document.title
+
+
+def test_nested_block_frames_preserve_semantic_parent_dom_order():
+    blockquote = extract_html(
+        b"<blockquote>before<p>child</p>after</blockquote>",
+        base_url="https://public.example/page",
+    )
+    assert [block.text for block in blockquote.blocks] == ["before", "child", "after"]
+    assert [block.text for block in blockquote.blocks].count("child") == 1
+
+    semantic_parent = extract_html(
+        b"<h2>before<div>child</div>after</h2>",
+        base_url="https://public.example/page",
+    )
+    assert [block.text for block in semantic_parent.blocks] == ["before", "child", "after"]
+    assert [block.kind for block in semantic_parent.blocks] == ["heading", "paragraph", "heading"]
+
+
+def test_declared_multibyte_charset_replaces_with_declared_codec():
+    document = extract_plain_text(b"\x82\xa0\x82", charset="shift_jis")
+    assert document.blocks[0].text == "\u3042\ufffd"
+    assert document.warnings == ["CHARSET_DECODE_ERROR_REPLACED"]
+
+
+def test_non_text_codec_alias_uses_utf8_replacement_fallback():
+    document = extract_plain_text(b"caf\xff", charset="base64_codec")
+    assert document.blocks[0].text == "caf\ufffd"
+    assert document.warnings == ["UNSUPPORTED_CHARSET_FALLBACK"]
+
+
+def test_declared_charset_and_safe_fallback_warnings_are_deterministic():
+    html = extract_html("<main><p>caf\u00e9</p></main>".encode("iso-8859-1"), base_url="https://public.example", charset="iso-8859-1")
+    assert html.blocks[0].text == "café"
+    assert "UNSUPPORTED_CHARSET_FALLBACK" not in html.warnings
+    unsupported = extract_plain_text(b"caf\xff", charset="not-a-real-codec")
+    assert "UNSUPPORTED_CHARSET_FALLBACK" in unsupported.warnings
+    assert "\ufffd" in unsupported.blocks[0].text
+    media, charset, warnings = _content_metadata({"Content-Type": "text/plain; charset=\"bad name\""})
+    assert (media, charset) == ("text/plain", None)
+    assert warnings == ["MALFORMED_CHARSET_FALLBACK"]
+
+
+def test_continuation_refreshes_all_snapshot_link_refs_after_eviction():
+    class CursorLinksPort:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def resolve(self, hostname: str, *, timeout_s: float):
+            return ("93.184.216.34",)
+
+        def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
+            self.calls.append(url)
+            body = (
+                b"<html><body><p>abcdefghijk</p>"
+                b"<a href='/one'>one</a><a href='/two'>two</a></body></html>"
+            )
+            return TransportResponse(200, {"Content-Type": "text/html"}, body, False, url)
+
+    refs = RefStore(max_refs=2)
+    port = CursorLinksPort()
+    engine = BrowserEngine(port, refs=refs)
+    first = engine.handle({"url": "https://public.example/page", "max_chars": 3})
+    assert first["status"] == "ok"
+    assert first["next_cursor"]
+    assert len(first["links"]) == 2
+    refs.add_link_ref("https://public.example/unrelated-1")
+    refs.add_link_ref("https://public.example/unrelated-2")
+    assert all(refs.resolve_link_ref(link["ref"]) is None for link in first["links"])
+
+    continued = engine.handle(
+        {
+            "url": "https://public.example/page",
+            "cursor": first["next_cursor"],
+            "max_chars": 3,
+        }
+    )
+    assert continued["status"] == "ok"
+    assert len(port.calls) == 1
+    assert all(refs.resolve_link_ref(link["ref"]) for link in continued["links"])
+    for link in continued["links"]:
+        followed = engine.handle({"link_ref": link["ref"]})
+        assert followed["status"] == "ok"
+        assert followed["requested_url"].endswith(("/one", "/two"))

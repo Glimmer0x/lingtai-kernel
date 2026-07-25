@@ -1,6 +1,7 @@
 """Bounded redirect-following orchestration for Browser Core."""
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Mapping
@@ -55,24 +56,31 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 
 def fetch(port: BrowserPort, url: str, *, limits: FetchLimits, resolver=None) -> FetchResult:
     """Perform static GETs, validating DNS and redirects before every hop."""
-    if limits.max_bytes < 1 or limits.max_redirects < 0 or limits.max_connections < 1 or limits.timeout_s <= 0:
+    if limits.max_bytes < 1 or limits.max_redirects < 0 or limits.max_connections < 1 or not math.isfinite(limits.timeout_s) or limits.timeout_s <= 0:
         raise FetchError("policy", "INVALID_FETCH_LIMITS")
     requested_url = url
     current_url = url
     redirects: list[str] = []
     start = time.monotonic()
+    deadline = start + limits.timeout_s
     connections = 0
     resolve = resolver or port.resolve
 
     for hop in range(limits.max_redirects + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise FetchError("connect", "FETCH_TIMEOUT", retryable=True)
         try:
             parsed = netpolicy._parse(current_url)
-            resolved = netpolicy.resolve_and_check(current_url, resolve)
+            # Resolution is part of the same end-to-end deadline as connect,
+            # redirect, and body-read time.  The Port owns how it enforces the
+            # bounded wait; Core only supplies the remaining budget.
+            resolved = netpolicy.resolve_and_check(current_url, resolve, timeout_s=remaining)
         except TransportError as exc:
             raise FetchError(exc.stage, exc.error_code, retryable=exc.retryable) from None
         except netpolicy.PolicyViolation as exc:
             raise FetchError("policy", exc.error_code) from None
-        remaining = limits.timeout_s - (time.monotonic() - start)
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise FetchError("connect", "FETCH_TIMEOUT", retryable=True)
         if connections >= limits.max_connections:

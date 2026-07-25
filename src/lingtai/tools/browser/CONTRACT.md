@@ -1,6 +1,6 @@
 ---
 name: browser
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/browser/ANATOMY.md
@@ -57,12 +57,15 @@ robots, credential, proxy, or hidden fallback behavior.
 ## Port
 
 `BrowserPort` is a Core-owned technology-neutral outbound Port. `resolve`
-returns every address answer for a hostname. Core rejects unsafe answers before
+returns every address answer for a hostname and accepts the remaining
+end-to-end `timeout_s` supplied by Core. Core rejects unsafe answers before
 calling `request`; the Adapter receives the exact `ResolvedTarget` and must
 connect to one vetted IP without resolving again. `request` is one bounded GET,
-with `max_bytes` in bytes and `timeout_s` in seconds, and never follows a
-redirect. Calls are one-shot and have no cancellation, cookie, credential, or
-persistent-client state in this slice.
+with `max_bytes` in bytes and the remaining `timeout_s` in seconds, and never
+follows a redirect. Calls are one-shot and have no cancellation, cookie,
+credential, or persistent-client state in this slice. A retryable
+`DNS_RESOLUTION_TIMEOUT` is distinct from DNS failure when the bounded resolver
+wait expires.
 
 ## Adapters
 
@@ -80,19 +83,30 @@ inject a fake Port.
   metadata/CGNAT/6to4 addresses, and any unsafe DNS answer fail before connect.
 - Every redirect is resolved, SSRF-checked, and pinned before the next hop;
   redirects are capped and 4xx/5xx never become success. 429 and 5xx failures
-  are retryable; ordinary client failures are not.
+  are retryable; ordinary client failures are not. DNS resolution, each
+  redirect hop, connect, and body read all consume one 15-second end-to-end
+  deadline; the stdlib Adapter permits at most one in-flight resolver lookup
+  per transport instance and does not queue unbounded work.
 - Download bytes, redirects, connections, timeout, extracted page size, link
   count, snapshot count, and reference count are bounded by fixed capability
   policy. Returned links are capped at 256 items and 24,000 characters total
   across returned link text plus URL fields (with 512-character text and
   2,048-character URL slices); exceeding either cap emits `LINKS_TRUNCATED`.
-  Each returned link reference retains its full canonical URL. `max_chars` is an
+  The snapshot link target retains the full canonical URL; each returned ref is
+  re-minted from it on every success response. `max_chars` is an
   actual integer in `[1, 100000]` and limits block text only; oversized blocks
   split losslessly at deterministic character offsets and do not consume the
   link budget.
 - Cursor HMAC keys, snapshots, and link references live only for this Agent and
   process/task lifetime. Bounded LRU eviction fails loudly with a typed stale
-  cursor/reference error; it never refetches or substitutes another snapshot.
+  cursor/reference error; continuation re-mints its links from the snapshot's
+  canonical targets without refetching or substituting another snapshot.
+- HTML and plain-text decoding honors a bounded, declared Content-Type charset
+  using Python text codecs only. UTF-8 is the default; malformed, unsupported,
+  and decoding-error declarations fall back deterministically with stable
+  warnings. Container-only `div`, `article`, `section`, `main`, and `body`
+  text is emitted once in DOM order while semantic block kinds and skip-tag
+  exclusions remain meaningful.
 - Refresh or Agent reconstruction creates new state and invalidates old cursors
   and references. No filesystem snapshots, persistence, sessions, cookies,
   uploads, credentials, dynamic rendering, PDF, search, or configuration flags
@@ -103,10 +117,13 @@ inject a fake Port.
 `tests/test_browser_capability.py` covers schema, fake-Port policy/fetch,
 extraction, provenance, source hashing, links, cursor continuation, stale state,
 error sanitation, manual routing, and the real Agent registration/prompt gate.
+`tests/test_browser_policy_cursor_edges.py` covers DOM-order containers,
+declared charset fallback, and ref refresh after independent LRU eviction.
 `tests/test_browser_transport.py` covers socket-level vetted-IP pinning,
-Host/SNI preservation, proxy-environment isolation, and bounded transport
-errors. The shared fake-Port tests use no live network; the adapter tests use
-only hermetic local sockets or mocked resolver/socket seams.
+body truncation, DNS failure/timeout/empty answers, Host/SNI preservation,
+proxy-environment isolation, and bounded transport errors. The shared fake-Port
+tests use no live network; the adapter tests use only hermetic local sockets or
+mocked resolver/socket seams.
 
 ## Maintenance
 

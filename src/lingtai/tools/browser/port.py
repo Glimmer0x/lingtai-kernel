@@ -34,16 +34,17 @@ class TransportResponse:
 class BrowserPort(Protocol):
     """Outbound browser boundary used by :class:`BrowserEngine`.
 
-    ``resolve`` returns all address answers for a hostname.  Core rejects the
-    entire answer set if any address is unsafe.  ``request`` receives that exact
-    vetted set and the Adapter must connect to one of those addresses without a
-    second DNS lookup.  Calls are stateless one-shot GETs with a finite timeout
-    in seconds and a hard byte limit; cookies, authorization, uploads and
+    ``resolve`` returns every address answer for a hostname and accepts the
+    caller's remaining end-to-end deadline.  Core rejects the entire answer
+    set if any address is unsafe.  ``request`` receives that exact vetted set
+    and the Adapter must connect to one of those addresses without a second
+    DNS lookup.  Calls are stateless one-shot GETs with a finite timeout in
+    seconds and a hard byte limit; cookies, authorization, uploads and
     persistent connections are outside this contract.
     """
 
-    def resolve(self, hostname: str) -> Sequence[str]:
-        """Return every current address answer for ``hostname``."""
+    def resolve(self, hostname: str, *, timeout_s: float) -> Sequence[str]:
+        """Return every current address answer before ``timeout_s`` expires."""
 
     def request(
         self,

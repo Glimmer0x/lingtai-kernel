@@ -12,9 +12,6 @@ related_files:
 maintenance: |
   简体中文 glossary for the browser tool package; keep a minimal mapping of
   immutable browser identifiers and update it with the English and wen files.
-  Body policy: maintain only a minimal term mapping plus at most one or two
-  sentences of naming rationale; do not translate or duplicate the tool schema,
-  parameters, action behavior, manual, contract, or anatomy.
   Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 **术语对照**

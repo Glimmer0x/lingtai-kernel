@@ -77,7 +77,9 @@
     //
     // Entries below are either:
     //   1. Overrides for default-on capabilities (shell, skills here).
-    //   2. Opt-in capabilities not in the default set (vision, web_search).
+    //   2. Opt-in capabilities not in the default set (vision, browser,
+    //      web_search). Browser reads caller-named public pages; web_search
+    //      remains an independent discovery-only capability.
     // -------------------------------------------------------
     "capabilities": {
       // --- Shell access (override) ---
@@ -97,6 +99,10 @@
       // --- Vision (opt-in) ---
       // Providers: "minimax", "anthropic", "openai", "gemini", "local" (no API key).
       "vision": { "provider": "minimax", "api_key_env": "MINIMAX_API_KEY" },
+
+      // --- Browser (opt-in) ---
+      // Static, browse/manual-only public-page reads; web_search is independent.
+      "browser": {},
 
       // --- Web search (opt-in) ---
       // Providers: "minimax", "anthropic", "openai", "gemini", "duckduckgo" (no API key).
