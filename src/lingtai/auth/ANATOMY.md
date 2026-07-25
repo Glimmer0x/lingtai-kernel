@@ -7,7 +7,7 @@ related_files:
   - src/lingtai/auth/codex_account_source.py
   - src/lingtai/llm/_register.py
   - src/lingtai/llm/openai/ANATOMY.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

@@ -25,7 +25,7 @@ related_files:
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/CONTRACT.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep parent/child anatomy links bidirectional. Code is the structural source of

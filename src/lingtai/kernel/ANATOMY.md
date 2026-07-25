@@ -78,7 +78,7 @@ related_files:
   - src/lingtai/kernel/trace_redaction.py
   - src/lingtai/kernel/types.py
   - src/lingtai/kernel/workdir.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

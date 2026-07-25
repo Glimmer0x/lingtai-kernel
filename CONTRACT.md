@@ -3,6 +3,7 @@ name: component-contract-convention
 contract_version: 4
 related_files:
   - ANATOMY.md
+  - ENVIRONMENT_VARIABLES.md
   - GLOSSARY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
@@ -103,6 +104,11 @@ contracts are governed only when this file lists them as children.
 describes where code is and how it is composed; this contract defines how a
 layer may be used and what it promises. They cross-link instead of duplicating
 each other's content.
+
+[`ENVIRONMENT_VARIABLES.md`](ENVIRONMENT_VARIABLES.md) is the single canonical
+registry for environment names and their configuration behavior. Route
+enumeration and per-variable detail there; this contract does not duplicate its
+table.
 
 [`GLOSSARY.md`](GLOSSARY.md) is a sibling root governance document for
 distributed tool glossaries. It owns model-facing alias/localized-name guidance

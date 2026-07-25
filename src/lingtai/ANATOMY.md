@@ -23,7 +23,7 @@ related_files:
   - src/lingtai/init_schema.py
   - src/lingtai/intrinsic_skills/__init__.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/mcp_catalog.json

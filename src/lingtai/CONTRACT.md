@@ -14,7 +14,7 @@ related_files:
   - src/lingtai/kernel/nudge/ANATOMY.md
   - src/lingtai/kernel/nudge/__init__.py
   - src/lingtai/kernel/nudge/init_config.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
   - tests/test_init_reader.py
   - tests/test_cli.py
   - tests/test_deep_refresh.py

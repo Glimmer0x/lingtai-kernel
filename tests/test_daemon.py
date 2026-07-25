@@ -3532,7 +3532,6 @@ def test_claude_code_env_strips_auth_overrides(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "stale-claude-code-oauth")
     # A detached execution child may have restored selected parent credentials;
     # that transport fact must not override the runner's established policy.
-    monkeypatch.setenv("LINGTAI_DAEMON_CREDENTIALS_RESTORED", "1")
     monkeypatch.setenv("PATH", "/usr/bin:/bin")  # sentinel non-stripped var
     monkeypatch.setenv("HOME", "/tmp/home")
 

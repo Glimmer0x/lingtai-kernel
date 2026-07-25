@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/kernel/tool_glossary.py
   - tests/test_prompt_catalog.py
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

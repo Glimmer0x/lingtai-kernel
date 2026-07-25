@@ -583,7 +583,7 @@ not inspect or terminate a detached supervisor or its backend child. Explicit
 `daemon(action="reclaim")` is the only parent control that requests run
 cancellation. `daemon(action="ask")` uses the run-local control spool and is
 accepted only while durable state is running. The ownership transition is
-unconditional; `LINGTAI_DAEMON_DETACHED_SUPERVISOR` is not a production gate.
+unconditional; detached supervision is not gated behind a production flag.
 
 ## Acceptance Gate
 

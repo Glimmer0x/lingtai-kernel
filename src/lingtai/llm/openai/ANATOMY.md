@@ -23,7 +23,7 @@ related_files:
   - tests/test_codex_native_multiaccount.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_mimo_responses_compaction.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

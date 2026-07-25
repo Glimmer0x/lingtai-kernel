@@ -18,7 +18,7 @@ related_files:
   - src/lingtai/kernel/mail_transport/ANATOMY.md
   - src/lingtai/kernel/services/ANATOMY.md
   - tests/test_mcp_closed_resource_restart.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
   - tests/test_mcp_structured_result.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
