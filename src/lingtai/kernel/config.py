@@ -1,6 +1,8 @@
-"""Agent configuration — injected at construction, not read from files."""
+"""Agent configuration, runtime constants, and environment-backed policy helpers."""
 from __future__ import annotations
 
+import math
+import os
 from dataclasses import dataclass, field
 
 
@@ -71,6 +73,28 @@ CONTEXT_PRESSURE_RECOVERY_TARGET = MOLT_NOTICE_THRESHOLD  # 0.75
 MOLT_PRESSURE_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 MOLT_URGENCY_THRESHOLD = MOLT_NOTICE_THRESHOLD  # legacy alias; not a separate stage
 DEFAULT_SOUL_DELAY_SECONDS = 999999999.0
+
+# Rendered system-prompt size pressure — distinct from the CONTEXT_PRESSURE_*
+# family above (which measures system + tools + history against the window).
+# This ratio gates a warning on the rendered system prompt ALONE against the
+# effective context window. It is deliberately read at snapshot-render time so
+# the main agent and daemon share live process-environment behavior.
+DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO = 0.4
+SYSTEM_PROMPT_PRESSURE_RATIO_ENV = "LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO"
+
+
+def system_prompt_pressure_ratio() -> float:
+    """Return the valid current environment ratio, or the default."""
+    raw = os.environ.get(SYSTEM_PROMPT_PRESSURE_RATIO_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO
+    if not math.isfinite(value) or not 0 < value < 1:
+        return DEFAULT_SYSTEM_PROMPT_PRESSURE_RATIO
+    return value
 
 # Hidden runtime housekeeping: an agent that remains IDLE for this long is moved
 # to ASLEEP. This is deliberately kernel-fixed and not surfaced in init.json,

@@ -36,7 +36,11 @@ from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.tool_executor import ToolExecutor
-from lingtai.kernel.meta_block import attach_daemon_agent_meta
+from lingtai.kernel.meta_block import (
+    attach_daemon_agent_meta,
+    render_system_prompt_pressure_context,
+)
+from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
 from lingtai.adapters.posix.process_identity import (
@@ -183,13 +187,29 @@ class _DaemonMetaState:
     parent agent's session, notification store, or token ledger.  The output
     uses the canonical token/context field vocabulary; ``attach_daemon_agent_meta``
     owns the envelope and latest-carrier semantics.
+
+    ``context.system_prompt`` mirrors the main-agent rendered-system-prompt-size
+    warning (``meta_block.render_system_prompt_pressure_context``) but scoped
+    entirely to this daemon's own local prompt/window: never the parent's.
     """
 
-    def __init__(self, em_id: str, run_id: str, *, max_turns: int, context_window: int = 0):
+    def __init__(
+        self,
+        em_id: str,
+        run_id: str,
+        *,
+        max_turns: int,
+        context_window: int = 0,
+        system_prompt: str | None = None,
+    ):
         self.em_id = em_id
         self.run_id = run_id
         self.max_turns = max_turns
         self.context_window = context_window if isinstance(context_window, int) and context_window > 0 else 0
+        # Counted once here (never recomputed in snapshot()) via the same
+        # kernel count_tokens() the main-agent path uses, over this daemon's
+        # own already-built local system_prompt text.
+        self.system_prompt_tokens = count_tokens(system_prompt) if system_prompt else 0
         self.rounds = 0
         self.tool_calls_this_round = 0
         self.tool_calls_total = 0
@@ -291,6 +311,15 @@ class _DaemonMetaState:
         if self.context_window > 0:
             context["context_window"] = self.context_window
             context["context_usage"] = round(context_tokens / self.context_window, 5)
+            # This daemon's own resolved window is the ruler — never the
+            # parent's. Unknown/zero prompt tokens or window omit (never
+            # invented); the shared pure renderer owns the strict effective-
+            # threshold decision and reads the environment for this snapshot.
+            system_prompt_warning = render_system_prompt_pressure_context(
+                self.system_prompt_tokens, self.context_window
+            )
+            if system_prompt_warning:
+                context["system_prompt"] = system_prompt_warning
         if self.warning_active:
             remaining = self.compact_countdown or DAEMON_CONTEXT_COUNTDOWN_ROUNDS
             context["warning"] = DAEMON_CONTEXT_WARNING.format(remaining=remaining)
@@ -2793,6 +2822,7 @@ class DaemonManager:
             getattr(run_dir, "run_id", em_id),
             max_turns=effective_max_turns,
             context_window=context_window,
+            system_prompt=system_prompt,
         )
         compact_batch_allowed = False
         compact_reset_accepted = False

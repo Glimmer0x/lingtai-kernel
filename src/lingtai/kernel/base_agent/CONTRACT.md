@@ -4,6 +4,10 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/config.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - tests/test_meta_block.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/process_match.py
@@ -181,6 +185,13 @@ Clause IDs are stable; each rule composes the linked normative source.
    full-lifecycle counterpart and none is mutually `accepted` until both
    repositories' contract revisions cross-reference each other. This clause
    MUST NOT be marked accepted unilaterally.
+9. `agent-runtime.system-prompt-pressure.v1` — Main-agent runtime metadata
+   and daemon-local metadata use the shared `kernel/meta_block.py` renderer,
+   which reads `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` on each snapshot with a
+   default of `0.4`; invalid values fall back to that default. The warning is
+   emitted only for strictly greater rendered-prompt/window ratios with valid
+   metrics, remains bounded and prompt-body-free, and preserves each caller's
+   existing effective-window precedence and local isolation.
 
 ## Contract tests
 

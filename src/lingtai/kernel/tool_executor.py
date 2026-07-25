@@ -20,6 +20,7 @@ from .meta_block import (
     TOOL_META_CONTEXT_REBUILD_KEY,
     TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
     TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
+    TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY,
     TOOL_META_TOKEN_USAGE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     TOOL_META_CURRENT_TIME_KEY,
@@ -446,7 +447,8 @@ class ToolExecutor:
             # Current context guidance — captured for the final agent_state.
             # build_meta stashes it under a transit key; the same transit
             # sub-object carries the 85% manual rebuild hint, the sustained-pressure
-            # molt warning, and the cache-miss budget guard fields.
+            # molt warning, the cache-miss budget guard fields, and the rendered
+            # system-prompt size warning (own key, never merged into molt).
             candidate_context = pending.pop(TOOL_META_CONTEXT_PENDING_KEY, None)
             if isinstance(candidate_context, dict):
                 promoted_context = {}
@@ -455,6 +457,7 @@ class ToolExecutor:
                     "molt",
                     TOOL_META_CONTEXT_CACHE_MISS_BUDGET_KEY,
                     TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY,
+                    TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY,
                 ):
                     if context_key in candidate_context and candidate_context[context_key]:
                         promoted_context[context_key] = candidate_context[context_key]
