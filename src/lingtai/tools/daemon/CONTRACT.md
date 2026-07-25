@@ -363,7 +363,7 @@ carries under its own `agent_state.context.system_prompt`, but derived
 entirely from this daemon's own local state. `_DaemonMetaState` counts this
 daemon's already-built local rendered system prompt exactly once, at
 construction, via the kernel `count_tokens()`. The key is present only while
-that local prompt-token count is strictly above 45% of THIS daemon's own
+that local prompt-token count is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of THIS daemon's own
 currently-resolved context window (never the parent's window, never a
 comparison against parent-scale state), and is omitted whenever the local
 prompt tokens or window are unknown/zero. It never repeats or embeds the
@@ -597,7 +597,7 @@ change must prove all applicable items:
    the latest snapshot is current, and the exact warning is present on every
    round whose current context usage is >=90% and absent below that threshold.
    `agent_state.context.system_prompt` is present only while this daemon's own
-   local rendered-prompt tokens are strictly above 45% of this daemon's own
+   local rendered-prompt tokens are strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of this daemon's own
    resolved window, and is derived from local state only — never the parent's.
 3. `compact(action="manual")` is read-only; `action` is required, omission is
    refused without state change, and explicit `compact(action="run", _reason="...")`
@@ -654,7 +654,7 @@ Re-check this contract when touching:
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
 | LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
-| `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly >45% of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |
+| `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |
 | `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
 

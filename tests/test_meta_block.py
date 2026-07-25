@@ -4551,7 +4551,7 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
 # ---------------------------------------------------------------------------
 # Rendered system-prompt size pressure warning — agent_meta.agent_state.context.
-# system_prompt, strictly > SYSTEM_PROMPT_PRESSURE_RATIO (45%) of the effective
+# system_prompt, strictly > the effective environment threshold (default 40%) of the effective
 # context window. Distinct key from rebuild/molt; never merged with them.
 #
 # test_prompt.py::test_batches_byte_identical_to_string already proves the
@@ -4562,30 +4562,41 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
 
 @pytest.mark.parametrize(
-    "tokens, window, expect_warning",
+    "env_value, tokens, window, expect_warning, expected_threshold",
     [
-        (44, 100, False),   # 44% — below
-        (45, 100, False),   # exactly 45% — inclusive omit
-        (46, 100, True),    # 46% — strictly above
-        (None, 100, False),  # unresolvable token count
-        (90, 0, False),      # unresolvable window
-        (90, None, False),   # window omitted entirely
-        (0, 100, False),     # zero tokens -> no ratio
-        (90, True, False),   # bool is not a valid int window (bool is an int subclass)
+        (None, 39, 100, False, "40"),       # default, below
+        (None, 40, 100, False, "40"),       # default, strict equality
+        (None, 41, 100, True, "40"),        # default, strictly above
+        ("0.25", 25, 100, False, "25"),    # custom, strict equality
+        ("0.25", 26, 100, True, "25"),     # custom, strictly above
+        ("", 41, 100, True, "40"),          # blank falls back
+        ("nan", 41, 100, True, "40"),       # non-finite falls back
+        ("0", 41, 100, True, "40"),         # non-positive falls back
+        ("1", 41, 100, True, "40"),         # >=1 falls back
+        ("not-a-number", 41, 100, True, "40"),  # non-numeric falls back
+        (None, None, 100, False, None),      # unresolvable token count
+        (None, 90, 0, False, None),          # unresolvable window
+        (None, 90, None, False, None),       # window omitted entirely
+        (None, 0, 100, False, None),         # zero tokens -> no ratio
+        (None, 90, True, False, None),       # bool is not a valid int window
     ],
 )
 def test_render_system_prompt_pressure_context_boundary_and_invalid_metrics(
-    tokens, window, expect_warning
+    monkeypatch, env_value, tokens, window, expect_warning, expected_threshold
 ):
-    """The shared pure renderer owns the strict->45% decision, the invalid/zero
+    """The shared pure renderer owns the strict-threshold decision, the invalid/zero
     omission (unresolvable or non-positive tokens/window never guessed), and the
     bounded, prompt-body-free message in one place."""
+    if env_value is None:
+        monkeypatch.delenv("LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO", raising=False)
+    else:
+        monkeypatch.setenv("LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO", env_value)
     warning = render_system_prompt_pressure_context(tokens, window)
     if expect_warning:
         assert warning is not None
         assert str(tokens) in warning
         assert str(window) in warning
-        assert "45%" in warning
+        assert f"{expected_threshold}% threshold" in warning
         assert "progressive disclosure" in warning.lower()
         assert "pad" in warning and "lingtai" in warning
         # Bounded, current-state-only text: no prose-length prompt body echoed.
@@ -4623,7 +4634,7 @@ def test_build_system_prompt_pressure_context_prefers_provider_snapshot_window()
     session token telemetry uses — not call the raw configured/live fallback
     directly. A conflicting configured context_limit must lose to a present
     provider-round snapshot window."""
-    # Configured window (200) would put 90 tokens at 45% (no warning); the
+    # Configured window (200) would put 90 tokens at 40% (no warning); the
     # latest provider snapshot's window (100) puts it at 90% (warning). The
     # snapshot must win.
     agent = _prompt_pressure_agent(tokens=90, window=200, snapshot_window=100)
@@ -4676,7 +4687,7 @@ def test_build_meta_and_tool_executor_route_system_prompt_under_own_key():
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in tool_meta
 
     # At/below the threshold, build_meta carries no system_prompt key at all.
-    agent._session._system_prompt_tokens = 45
+    agent._session._system_prompt_tokens = 40
     meta_low = build_meta(agent)
     ctx_low = meta_low.get(meta_block.TOOL_META_CONTEXT_PENDING_KEY)
     if ctx_low is not None:

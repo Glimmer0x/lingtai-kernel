@@ -633,7 +633,7 @@ def test_daemon_context_countdown_enters_ticks_and_resets():
 def test_daemon_meta_state_system_prompt_warning_is_local_not_parent():
     """_DaemonMetaState counts its own local system_prompt once via the kernel
     count_tokens() and carries context.system_prompt only while ITS OWN
-    resolved window is strictly above the 45% threshold — independent of any
+    resolved window is strictly above the effective threshold (default 40%) — independent of any
     parent-scale window, and never invented from a shrinking/absent prompt."""
     from lingtai.kernel.token_counter import count_tokens
 
@@ -642,7 +642,7 @@ def test_daemon_meta_state_system_prompt_warning_is_local_not_parent():
     assert prompt_tokens > 0
 
     # A tiny daemon-local window (barely above the prompt's own token count)
-    # puts this daemon's own ratio well above 45% — independent of any
+    # puts this daemon's own ratio well above the default 40% — independent of any
     # parent-scale window, which would swamp the same prompt to a low ratio.
     small_window = prompt_tokens + 10
     session = MagicMock(context_window=lambda: small_window)
@@ -656,7 +656,7 @@ def test_daemon_meta_state_system_prompt_warning_is_local_not_parent():
     assert str(small_window) in context["system_prompt"]
 
     # The identical prompt against a large (parent-scale) window drops well
-    # below 45%, so the same daemon state omits the key entirely.
+    # below the default 40%, so the same daemon state omits the key entirely.
     large_window = prompt_tokens * 100
     large_session = MagicMock(context_window=lambda: large_window)
     large_state = daemon_tool._DaemonMetaState(

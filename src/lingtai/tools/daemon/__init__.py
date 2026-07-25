@@ -313,7 +313,8 @@ class _DaemonMetaState:
             context["context_usage"] = round(context_tokens / self.context_window, 5)
             # This daemon's own resolved window is the ruler — never the
             # parent's. Unknown/zero prompt tokens or window omit (never
-            # invented); the shared pure renderer owns the strict >45% decision.
+            # invented); the shared pure renderer owns the strict effective-
+            # threshold decision and reads the environment for this snapshot.
             system_prompt_warning = render_system_prompt_pressure_context(
                 self.system_prompt_tokens, self.context_window
             )

@@ -60,7 +60,7 @@ from .config import (
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias == FORCED_REBUILD_RATIO
     CONTEXT_PRESSURE_RECOVERY_TARGET,
-    SYSTEM_PROMPT_PRESSURE_RATIO,
+    system_prompt_pressure_ratio,
 )
 from .i18n import t as _t
 from .reminders.context_pressure import (
@@ -1050,8 +1050,8 @@ def _rendered_system_prompt_tokens(agent) -> int | None:
 def render_system_prompt_pressure_context(tokens: int | None, window: int | None) -> str | None:
     """Pure renderer for the rendered-system-prompt-size warning, or ``None``.
 
-    Owns the whole decision + bounded message: strictly above
-    :data:`SYSTEM_PROMPT_PRESSURE_RATIO` (45%) of ``window``, the rendered
+    Owns the whole decision + bounded message: strictly above the effective
+    environment threshold (default 40%) of ``window``, the rendered
     system prompt ALONE is warned as oversized; at or below — or when either
     input is missing/non-positive (invalid/zero omission, never guessed or
     divided by zero) — returns ``None``. Never embeds or repeats the prompt
@@ -1065,14 +1065,16 @@ def render_system_prompt_pressure_context(tokens: int | None, window: int | None
         return None
     if not isinstance(window, int) or isinstance(window, bool) or window <= 0:
         return None
+    threshold = system_prompt_pressure_ratio()
     ratio = tokens / window
-    if ratio <= SYSTEM_PROMPT_PRESSURE_RATIO:
+    if ratio <= threshold:
         return None
     percentage = round(ratio * 100, 1)
+    threshold_percentage = threshold * 100
     return (
         f"system prompt is {tokens} tokens ({percentage}% of the {window}-token "
         "effective context window), above the "
-        f"{int(SYSTEM_PROMPT_PRESSURE_RATIO * 100)}% threshold. Apply progressive "
+        f"{threshold_percentage:g}% threshold. Apply progressive "
         "disclosure: reorganize pad and lingtai so the system prompt keeps only "
         "active essentials — route completed/duplicate task state to knowledge, "
         "reusable procedures to skills, and identity-shaping lessons to lingtai. "
@@ -1084,8 +1086,8 @@ def build_system_prompt_pressure_context(agent) -> str | None:
     """Return the rendered-system-prompt-size warning, or ``None``.
 
     Deterministic current-state projection (not an event, not a Nudge): strictly
-    above :data:`SYSTEM_PROMPT_PRESSURE_RATIO` (45%) of the effective context
-    window, the rendered system prompt ALONE (never conversation history or tool
+    above the effective environment threshold (default 40%) of the effective
+    context window, the rendered system prompt ALONE (never conversation history or tool
     results) is warned as oversized; at or below, ``None`` (no warning). Routed
     to ``agent_meta.agent_state.context.system_prompt`` alongside ``rebuild``/
     ``molt`` — a distinct, non-colliding key.
@@ -1096,7 +1098,7 @@ def build_system_prompt_pressure_context(agent) -> str | None:
     configured/live-fallback precedence already used by session token
     telemetry: latest provider-round snapshot's ``context_window``, then
     configured ``context_limit``, then the live ``chat.context_window()``),
-    then delegates the strict->45%/invalid/zero decision and bounded message to
+    then delegates the strict-threshold/invalid/zero decision and bounded message to
     the pure :func:`render_system_prompt_pressure_context` renderer.
 
     The warning instructs progressive disclosure — reorganizing ``pad`` and
@@ -1705,7 +1707,7 @@ def build_meta(agent) -> dict:
                 "molt": str,                  # sustained-pressure and/or cache-miss-budget reminder
                 "cache_miss_budget": int,     # present only when the budget guard is tripped
                 "cache_miss_tokens": int,     # present only when the budget guard is tripped
-                "system_prompt": str,         # present only when rendered system prompt > 45% of window
+                "system_prompt": str,         # present only when rendered system prompt > effective env threshold
             },
             "_tool_meta_context_event": {...},# transient; deduped current-molt emission event
             "current_tool_result_chars": dict,# total + top formal tool results >1000 chars
@@ -1812,8 +1814,9 @@ def build_meta(agent) -> dict:
 
     # Rendered system-prompt size pressure — its own non-colliding key
     # (``system_prompt``), never overwriting ``rebuild``/``molt``. Deterministic
-    # current-state projection: present only while strictly above the 45%
-    # threshold, absent otherwise; no merging with the other context lines.
+    # current-state projection: present only while strictly above the effective
+    # environment threshold (default 40%); absent otherwise, with no merging
+    # into the other context lines.
     system_prompt_warning = build_system_prompt_pressure_context(agent)
     if system_prompt_warning:
         existing = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
