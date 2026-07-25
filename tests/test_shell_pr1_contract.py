@@ -237,6 +237,19 @@ def test_windows_selector_modules_are_real_adapter_composition_points(monkeypatc
     assert isinstance(lock_selector.select_shell_state_lock(), WindowsShellStateLockAdapter)
 
 
+def test_unsupported_os_name_fails_loud_not_with_name_error(monkeypatch):
+    import lingtai.adapters.shell_process as process_selector
+    import lingtai.adapters.shell_state_lock as lock_selector
+
+    monkeypatch.setattr(process_selector.os, "name", "java")
+    with pytest.raises(NotImplementedError, match="unsupported on 'java'"):
+        process_selector.select_shell_async_process()
+
+    monkeypatch.setattr(lock_selector.os, "name", "java")
+    with pytest.raises(NotImplementedError, match="unsupported on 'java'"):
+        lock_selector.select_shell_state_lock()
+
+
 def test_windows_resume_uses_retained_process_handle_not_a_missing_thread(monkeypatch):
     import lingtai.adapters.windows.powershell_process as process_adapter
 
