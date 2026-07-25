@@ -4128,15 +4128,6 @@ class DaemonManager:
                 "preset_handlers": preset_handlers,
             })
 
-        cancel_event = threading.Event()
-        # Separate event so the watchdog can distinguish timeout from manual
-        # reclaim. Watchdog sets BOTH on timeout; reclaim sets only cancel_event.
-        # The run loop checks timeout_event first to call mark_timeout vs
-        # mark_cancelled.
-        timeout_event = threading.Event()
-        pool = ThreadPoolExecutor(max_workers=len(tasks))
-        self._pools.append((pool, cancel_event))
-
         ids = []
         group_id = DaemonRunDir.new_group_id()
         parent_addr = self._agent._working_dir.name
@@ -4211,8 +4202,6 @@ class DaemonManager:
             # Detached ownership is unconditional. The supervisor reconstructs
             # preset/MCP/skills from this run's validated, redacted durable
             # specification; no future or CLI process remains in the parent.
-            detach_eligible = True
-
             try:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
@@ -4245,90 +4234,35 @@ class DaemonManager:
                 run_dir.mark_failed(e)
                 return {"status": "error", "message": str(e)}
 
-            if detach_eligible:
-                self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
-                effective_llm = resolved["llm"] if resolved else self._implicit_parent_preset_llm()
-                try:
-                    self._spawn_detached_lingtai_run(
-                        run_dir,
-                        task=spec["task"],
-                        tools=spec["tools"],
-                        max_turns=effective_max_turns,
-                        timeout_s=effective_timeout,
-                        group_id=group_id,
-                        effective_llm=effective_llm,
-                        context_token_limit=spec.get("context_token_limit"),
-                        prompt=self._task_first_prompt(spec),
-                        mcp=task_mcp_regs,
-                        preset_name=resolved["name"] if resolved else None,
-                        preset_llm=resolved["llm"] if resolved else None,
-                        preset_capabilities=resolved["capabilities"] if resolved else None,
-                    )
-                except Exception as e:
-                    run_dir.mark_failed(e)
-                    return {"status": "error", "message": str(e)}
-                self._emanations[em_id] = {
-                    "detached": True,
-                    "task": spec["task"],
-                    "start_time": time.time(),
-                    "timeout_s": effective_timeout,
-                    "run_dir": run_dir,
-                    "backend": "lingtai",
-                }
-                continue
-
-            future = pool.submit(
-                self._run_emanation,
-                em_id, run_dir, schemas, dispatch,
-                spec["task"], cancel_event, timeout_event,
-                resolved["llm"] if resolved else None,
-                effective_max_turns,
-                task_mcp_clients,
-                spec.get("context_token_limit"),
-            )
-            future.add_done_callback(
-                lambda f, eid=em_id, task=spec["task"]:
-                    self._on_emanation_done(eid, task, f)
-            )
+            self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
+            effective_llm = resolved["llm"] if resolved else self._implicit_parent_preset_llm()
+            try:
+                self._spawn_detached_lingtai_run(
+                    run_dir,
+                    task=spec["task"],
+                    tools=spec["tools"],
+                    max_turns=effective_max_turns,
+                    timeout_s=effective_timeout,
+                    group_id=group_id,
+                    effective_llm=effective_llm,
+                    context_token_limit=spec.get("context_token_limit"),
+                    prompt=self._task_first_prompt(spec),
+                    mcp=task_mcp_regs,
+                    preset_name=resolved["name"] if resolved else None,
+                    preset_llm=resolved["llm"] if resolved else None,
+                    preset_capabilities=resolved["capabilities"] if resolved else None,
+                )
+            except Exception as e:
+                run_dir.mark_failed(e)
+                return {"status": "error", "message": str(e)}
             self._emanations[em_id] = {
-                "future": future,
+                "detached": True,
                 "task": spec["task"],
                 "start_time": time.time(),
-                "cancel_event": cancel_event,
-                "timeout_event": timeout_event,
-                # Per-batch timeout actually applied (may differ from the
-                # manager default when the caller overrode it). Recorded so
-                # _on_emanation_done classifies the terminal state and logs
-                # against the real deadline, not self._timeout.
                 "timeout_s": effective_timeout,
-                "followup_buffer": "",
-                "followup_lock": threading.Lock(),
                 "run_dir": run_dir,
+                "backend": "lingtai",
             }
-
-        # Start watchdog — sets timeout_event AND cancel_event when timer fires.
-        # The lingtai backend spawns no CLI procs, so cli_group_id stays None;
-        # the watchdog only flips the cancel/timeout events for the run loops.
-        watchdog = threading.Thread(
-            target=self._watchdog,
-            args=(cancel_event, timeout_event, effective_timeout),
-            daemon=True,
-        )
-        watchdog.start()
-        # When every IN-PROCESS future in this batch finishes, signal cancel
-        # so the watchdog returns instead of waking later to do work.
-        # Detached entries have no future (their supervisor process owns its
-        # own deadline enforcement independently — see
-        # lingtai.tools.daemon.supervisor_runtime) and are excluded here.
-        in_process_futures = [
-            self._emanations[eid]["future"] for eid in ids
-            if "future" in self._emanations[eid]
-        ]
-        self._arm_batch_done_cancel(in_process_futures, cancel_event)
-        if not in_process_futures:
-            # Every task in this batch detached — nothing for this batch's
-            # in-process watchdog/cancel_event to ever observe finishing.
-            cancel_event.set()
 
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks),
                   tasks=[{"task": s["task"][:80], "tools": s["tools"]} for s in tasks])
@@ -4391,11 +4325,6 @@ class DaemonManager:
                 mcp_catalog=task_mcp_catalog,
                 mcp_regs=task_mcp_regs,
             ))
-
-        cancel_event = threading.Event()
-        timeout_event = threading.Event()
-        pool = ThreadPoolExecutor(max_workers=len(tasks))
-        self._pools.append((pool, cancel_event))
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
@@ -4590,40 +4519,13 @@ class DaemonManager:
                 "ask_future": None,
             }
 
-        # Detached supervisors enforce their own deadlines.  Do not retain an
-        # empty parent pool or start a parent watchdog for a batch whose entries
-        # have no futures.
-        if all(self._emanations[eid].get("detached") for eid in ids):
-            pool.shutdown(wait=False)
-            self._pools = [(p, c) for p, c in self._pools if p is not pool]
-            self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
-                      tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
-            return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                    "group_id": group_id, "backend": backend,
-                    "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
-
-        # Start watchdog — scoped to this batch's CLI procs (group_id) so an
-        # earlier batch's timeout can never kill this one's subprocesses.
-        watchdog = threading.Thread(
-            target=self._watchdog,
-            args=(cancel_event, timeout_event, effective_timeout),
-            kwargs={"cli_group_id": group_id},
-            daemon=True,
-        )
-        watchdog.start()
-        # When every future in this batch finishes, signal cancel so the
-        # watchdog returns instead of waking later to do work.
-        self._arm_batch_done_cancel(
-            [self._emanations[eid]["future"] for eid in ids],
-            cancel_event,
-        )
-
+        # Detached supervisors enforce their own deadlines; every entry above
+        # is detached, so there is no parent pool or watchdog to run here.
         self._log("daemon_emanate", ids=ids, group_id=group_id, count=len(tasks), backend=backend,
-                  tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])}
-                         for s in tasks])
-
+                  tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
-                "group_id": group_id, "backend": backend}
+                "group_id": group_id, "backend": backend,
+                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
 
     @staticmethod
     def _truncate_list_string(value: object, limit: int = 500) -> object:
