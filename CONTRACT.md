@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/browser/CONTRACT.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/kernel/migrate/CONTRACT.md

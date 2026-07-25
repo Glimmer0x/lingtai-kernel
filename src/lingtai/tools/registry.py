@@ -93,6 +93,7 @@ BUILTIN_TOOLS: dict[str, str] = {
     "grep": "lingtai.tools.grep",
     "vision": "lingtai.tools.vision",
     "web_search": "lingtai.tools.web_search",
+    "browser": "lingtai.tools.browser",
 }
 
 # Group names that expand to multiple capabilities.
@@ -318,6 +319,7 @@ def get_all_providers() -> dict[str, dict]:
         "file": "lingtai.tools.read",
         "shell": "lingtai.tools.bash",
         "web_search": "lingtai.tools.web_search",
+        "browser": "lingtai.tools.browser",
         "knowledge": "lingtai.tools.knowledge",
         "skills": "lingtai.tools.skills",
         "vision": "lingtai.tools.vision",

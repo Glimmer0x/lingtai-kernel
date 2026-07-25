@@ -4,6 +4,8 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/browser/ANATOMY.md
+  - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
   - src/lingtai/tools/i18n/__init__.py
@@ -42,7 +44,9 @@ composes them.
 **Tool sub-packages:** `email/`, `system/`, `psyche/`, `soul/`, `notification/`
 (the five mandatory intrinsics); canonical `shell` (retained `bash/` implementation), `knowledge/`, `skills/`, `avatar/`,
 `daemon/`, `mcp/`, `read/`, `write/`, `edit/`, `glob/`, `grep/` (always-on
-floor); `vision/`, `web_search/` (opt-in). `avatar/` registers one tool,
+floor); `vision/`, `web_search/`, `browser/` (opt-in). `browser/` is a
+static public-page Core/Port with its concrete pinned transport outside this
+package; `avatar/` registers one tool,
 `avatar`, dispatched by `action` (`spawn`\|`rules`\|`manual`).
 
 ## Connections
@@ -55,8 +59,9 @@ floor); `vision/`, `web_search/` (opt-in). `avatar/` registers one tool,
   tools.
 - **→ `lingtai` (lazy only)** — a handful of tools reach `lingtai` services
   (`daemon` → MCP clients / presets / llm.service; `mcp` → `mcp_registry`;
-  `vision`/`web_search` → provider services) but **only** via imports inside
-  `setup()`/handlers, never at module top. `import tools` must not import
+  `vision`/`web_search` → provider services; browser selects its outer pinned
+  Adapter but **only** via imports inside `setup()`/handlers, never at module
+  top. `import tools` must not import
   `lingtai`.
 
 ## Import DAG
@@ -71,12 +76,14 @@ lazy-only, keeping import-time acyclicity.
 
 No mutable runtime state lives in this package root. Per-tool persistent state
 (mailbox, jobs, daemons, knowledge, `.library`, `.notification`) is documented in
-each tool's own `ANATOMY.md` and `CONTRACT.md`.
+each tool's own `ANATOMY.md` and `CONTRACT.md`. The opt-in `browser` instead
+owns bounded ephemeral per-Agent snapshots, cursors, and link references; it
+writes no filesystem or cross-Agent state.
 
 ## Notes
 
 - Membership in `registry.INTRINSICS` is the mandatory-include mechanism for the
   five intrinsics — the `BaseAgent._wire_intrinsics` loop is unconditional.
-- `CORE_DEFAULTS` is the always-on floor; `vision`/`web_search` stay opt-in.
+- `CORE_DEFAULTS` is the always-on floor; `vision`/`web_search`/`browser` stay opt-in.
 - Each `tools/<name>/` carries `__init__.py` (+ submodules), `ANATOMY.md`,
   `CONTRACT.md`, and an optional `manual/`.
