@@ -4,6 +4,7 @@ related_files:
   - CODE_OF_CONDUCT.md
   - CONTRACT.md
   - CONTRIBUTING.md
+  - ENVIRONMENT_VARIABLES.md
   - GLOSSARY.md
   - MANIFEST.in
   - README.md
@@ -25,7 +26,6 @@ related_files:
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - tests/test_architecture_documents.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 maintenance: |
   This file is both the repository-root anatomy and the normative
   anatomy-of-anatomy for the distributed code navigation system. Keep
@@ -192,6 +192,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
 - [`ANATOMY.md`](ANATOMY.md) — this repository map and anatomy-of-anatomy.
 - [`CONTRACT.md`](CONTRACT.md) — the distributed code interface definition root
   and contract-of-contract.
+- [`ENVIRONMENT_VARIABLES.md`](ENVIRONMENT_VARIABLES.md) — the canonical
+  environment-variable registry; use it for enumeration and per-variable
+  behavior rather than duplicating a table here.
 - [`docs.yaml`](docs.yaml) — the canonical, machine-readable all-doc
   metadata contract and authoring template; validated by
   [`scripts/check_docs_governance.py`](scripts/check_docs_governance.py)

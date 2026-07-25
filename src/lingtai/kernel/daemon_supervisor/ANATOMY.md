@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/tools/daemon/supervisor_runtime.py
   - src/lingtai/adapters/posix/process_identity.py
   - src/lingtai/tools/daemon/manual/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep

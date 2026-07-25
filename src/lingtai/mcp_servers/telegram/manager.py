@@ -3068,9 +3068,10 @@ class TelegramManager:
         ``_TASK_CARD_TEXT_LIMIT`` budget governs that reasoning-excerpt
         shrinkage only; it is not a guarantee that the whole render stays under
         the limit.  Fixed per-row scaffolding is unbounded in the number of
-        rows, so an extreme operator-set ``LINGTAI_TASK_CARD_MAX_TOOL_ROWS`` can
-        still produce a render above the budget (and above Telegram's transport
-        limit).  See ``_format_rows_task_card_text``.
+        rows, so many selected rows can still produce a render above the budget
+        (and above Telegram's transport limit).  The durable ``/taskcard N``
+        control bounds the latest API-call groups to 1-10; it does not truncate
+        fixed row scaffolding.  See ``_format_rows_task_card_text``.
         """
         if rows is None:
             return cls._format_scalar_task_card_text(tool, action, reasoning)

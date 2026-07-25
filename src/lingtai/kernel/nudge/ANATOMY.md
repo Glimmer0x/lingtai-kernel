@@ -15,7 +15,7 @@ related_files:
   - src/lingtai/CONTRACT.md
   - tests/test_nudge_prompts.py
   - tests/test_kernel_version_nudge.py
-  - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -79,7 +79,7 @@ invalid values fail safe to defaults and are diagnostic-only.
 Parent: `src/lingtai/kernel/ANATOMY.md`. The Nudge policy composes with the
 ordinary notification Core; it does not own or duplicate Notification wire
 injection. Detailed environment semantics route to
-`src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md`.
+`ENVIRONMENT_VARIABLES.md`.
 
 ## State
 

@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/mcp/glossary-en.md
   - src/lingtai/tools/mcp/glossary-zh.md
   - src/lingtai/tools/mcp/glossary-wen.md
+  - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
