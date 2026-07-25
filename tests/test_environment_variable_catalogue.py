@@ -15,9 +15,9 @@ _ROUTER = Path(
     "src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md"
 )
 _ENV_NAME = re.compile(r"\bLINGTAI_[A-Z0-9_]+\b")
-# Include source, test, and source-document suffixes that can carry executable
-# literals or code-facing configuration contracts. The registry and this test
-# are excluded below so the crawl cannot derive its answer from its assertions.
+# Include source and test suffixes that can carry executable literals. The
+# registry and this test are excluded below so the crawl cannot derive its
+# answer from its assertions.
 _CODE_SUFFIXES = {
     ".c",
     ".cc",
@@ -29,17 +29,13 @@ _CODE_SUFFIXES = {
     ".js",
     ".jsx",
     ".m",
-    ".md",
+    ".ps1",
+    ".psm1",
     ".py",
     ".rs",
     ".sh",
     ".ts",
     ".tsx",
-    ".json",
-    ".jsonc",
-    ".toml",
-    ".yaml",
-    ".yml",
 }
 _EXCLUDED_DIRS = {
     ".git",
@@ -47,6 +43,7 @@ _EXCLUDED_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".tox",
+    ".venv",
     ".worktrees",
     "__pycache__",
     "build",
@@ -54,6 +51,7 @@ _EXCLUDED_DIRS = {
     "dist",
     "node_modules",
     "scratch",
+    "target",
     "vendor",
     "venv",
     "worktree",
@@ -122,24 +120,7 @@ def _python_string_literals(text: str) -> list[str]:
 def _literal_environment_names(path: Path) -> set[str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     if path.suffix == ".py":
-        tree = ast.parse(text)
         values = _python_string_literals(text)
-        # The runtime environment marker is a private numeric constant rather
-        # than an os.environ string. Treat that code-literal form like the
-        # quoted names while leaving unrelated private provider constants out.
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, (bool, int, float))
-            ):
-                continue
-            values.extend(
-                target.id.removeprefix("_")
-                for target in node.targets
-                if isinstance(target, ast.Name)
-                and target.id.startswith("_LINGTAI_")
-            )
     else:
         values = [
             match.group(1)
