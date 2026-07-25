@@ -132,19 +132,11 @@ class DetachedDaemonExecutionHost:
         # Reconstruct the ordinary host tool floor through the same registry
         # setup used by the parent manager.  No full Agent/workdir lease is
         # constructed in this process.
-        from lingtai.tools.daemon import EMANATION_BLACKLIST, _ToolCollector
-        from lingtai.tools.registry import BUILTIN_TOOLS, canonical_capability_name, setup_capability
+        from lingtai.tools.daemon import _ToolCollector
+        from lingtai.tools.registry import BUILTIN_TOOLS, setup_capability
         collector = _ToolCollector(self._agent)
-        names = set()
-        for name in manifest.get("tools", []):
-            name = canonical_capability_name(name)
-            if name in EMANATION_BLACKLIST:
-                continue
-            names.add(name)
+        expanded = DaemonManager._expand_requested_tools(self, manifest.get("tools", []))
         from lingtai.tools.registry import _GROUPS
-        expanded = set()
-        for name in names:
-            expanded.update(_GROUPS.get(name, [name]))
         if expanded.intersection(_GROUPS.get("file", ())):
             # File handlers dereference the agent-shaped host's injected
             # FileIOService at execution time. Mirror ordinary Agent
