@@ -1,7 +1,7 @@
 ---
 name: vision-contract
 tool: vision
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -17,23 +17,45 @@ If direct setup is absent, unsupported, or fails, setup still registers the tool
 and preserves a read-only `action="manual"` route. It never changes provider or
 automatically invokes MCP.
 
-## Scope and registry
+## Public schema and registry
 
-The schema has optional `image_path`, `question`, and `action`; `action` is
-`analyze` by default or `manual`. Manual works without `image_path`; analyze
-requires it and resolves relative paths against the agent working directory.
+The raw tool schema is a closed object with exactly `action` and `input`, both
+required. `action` is `analyze` or `manual`; `input` is an action-specific closed
+object. The `analyze input` branch requires `image_path: string` and a required
+nullable `question: string | null`; the `manual input` branch is exactly empty.
+The strict nullable `question` representation allows providers to omit a
+semantic optional value by sending `null`; the handler removes null (and accepts
+direct-call omission) before applying the historical default
+`Describe what you see in this image.`. `BaseAgent` adds only optional root
+`reasoning` to the final Agent-facing schema; it is metadata, not nested input.
+
+Canonical calls are:
+
+```text
+vision(action="analyze", input={"image_path": "photo.png", "question": null}, reasoning="inspect the image")
+vision(action="manual", input={}, reasoning="load the read-only procedure")
+```
+
+Flat root `image_path`/`question`, action-only calls, unknown root keys, unknown
+input keys, and mismatched action/input branches are rejected by the handler
+before image/provider work. Manual works without an image and never starts a
+backend, inspects settings for behavior, or invokes MCP. Relative image paths
+resolve against the agent working directory.
 
 `PROVIDERS["providers"]` is exactly: `gemini`, `anthropic`, `openai`,
 `openrouter`, `custom`, `deepseek`, `minimax`, `mimo`, `glm`, `zhipu`, `grok`,
 `qwen`, `kimi`, `codex`, `codex-pool`, `codex_pool`, `claude-code`, and
 `claude_code`. The local mlx-vlm pseudo-provider remains available only through
 explicit `add_capability(..., provider="local")` opt-in and is intentionally not
-advertised to wizards/check-caps. Claude Code is manual-only; Codex aliases use
-native Codex Responses; MiniMax uses the Anthropic route. OpenRouter and custom
+advertised to wizards/check-caps.
+
+Claude Code is manual-only;
+Codex aliases use native Codex Responses; MiniMax uses the Anthropic route.
+OpenRouter and custom
 deliberately try the current OpenAI-compatible model/endpoint/credential without
 preflighting image support; other compatible aliases use the current
 OpenAI/Anthropic identity. A real request failure is returned as a sanitized
-vision tool error that points to `vision(action="manual")` for explicit
+vision tool error that points to `vision(action="manual", input={})` for explicit
 alternatives, without silently switching model/provider or invoking MCP.
 
 ## Current identity and wires
@@ -71,13 +93,24 @@ URL/max tokens: blank/auto resolves to its current Chat Completions route, which
 constructs without headers/wire kwargs, while an active unsupported wire remains
 manual-only.
 
-## Tool behavior
+## Tool behavior and settings evidence
 
-Success is `{status: "ok", analysis: text}`. Manual success is
-`{status: "ok", action: "manual", manual: body}`; missing manual is degraded.
-Missing image, empty response, setup failure, and request failure are structured
-errors pointing to `vision(action="manual")`. Exception messages are never
-returned; failures may include only the provider and exception type.
+Success is `{status: "ok", analysis: text, current_setting: {...}}`. Manual success
+is `{status: "ok", action: "manual", manual: body, current_setting: {...}}`;
+missing manual is degraded with the same diagnostic. Missing image, empty response,
+setup failure, request failure, malformed/unknown input, and unknown action are
+structured errors with `current_setting` and (where applicable) a pointer to
+`vision(action="manual", input={})`. Exception messages are never returned; failures may
+include only the provider and exception type.
+
+Every handler call rereads `settings/vision.json` through the shared settings
+reader before validation or behavior. Missing is normal; exact `{"schema_version": 1}`
+is a valid metadata-only v1 snapshot. A valid snapshot is diagnostic-only and
+cannot choose a provider/model/credential, enable a route, or alter defaults.
+Malformed, unstable, non-regular, or oversized settings are reported as
+`current_setting.source == "settings_error"` while existing behavior remains
+unchanged. The revision/hash and source therefore prove hot rereads without
+making the placeholder a configuration mechanism.
 
 ## Invariants and tests
 

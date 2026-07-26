@@ -20,7 +20,11 @@ it does not discover, install, start, or invoke a backend.
 
 ## Route behavior and failures
 
-For OpenRouter and custom OpenAI-compatible presets, `vision(action="analyze")`
+The canonical calls are `vision(action="analyze", input={"image_path":
+"photo.png", "question": null}, reasoning="inspect the image")` and
+`vision(action="manual", input={}, reasoning="load the read-only procedure")`.
+The nullable question preserves the historical default when it is null or omitted.
+For OpenRouter and custom OpenAI-compatible presets, the analyze call
 first tries the current endpoint, model, and credential. It does not reject the
 route merely because downstream image support cannot be known in advance. Any
 direct setup or request failure returns a sanitized vision tool result that
@@ -44,6 +48,17 @@ present, report that no discoverable vision method is available.
 An optional MCP or other skill may be described by that preset manual, but it
 is always an explicit operator/agent action. This manual never auto-loads or
 auto-invokes MCP.
+
+## Settings evidence
+
+The handler rereads the Agent-owned `settings/vision.json` file on every call.
+The only valid v1 content is exactly `{"schema_version": 1}`; it is a metadata-only
+placeholder and never selects a route or changes defaults. The result's
+`current_setting` reports the source, revision/hash, and the next-call change hint.
+Missing settings are normal. Invalid, unstable, non-regular, or oversized settings
+are reported as `settings_error` evidence while the direct/manual behavior remains
+unchanged. Do not treat this diagnostic as permission to invent a provider, model,
+credential, or fallback.
 
 ## Safety
 

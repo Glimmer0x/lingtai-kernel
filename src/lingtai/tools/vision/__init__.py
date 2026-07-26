@@ -15,7 +15,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from importlib import resources
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
+
+from lingtai.tools._settings import current_setting, read_settings
 
 
 if TYPE_CHECKING:
@@ -27,7 +29,7 @@ def _setup_failure(provider: str, exc: BaseException) -> str:
     """Build explicit manual guidance without exposing exception contents."""
     return (
         f"Direct vision setup failed for provider {provider!r} "
-        f"({type(exc).__name__}); use vision(action='manual')."
+        f"({type(exc).__name__}); use vision(action='manual', input={{}})."
     )
 
 
@@ -125,30 +127,68 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict:
+    """Return the raw, closed action/input schema owned by this tool.
+
+    ``BaseAgent`` adds the optional root ``reasoning`` property when it builds
+    the model-facing schema.  Keeping it out of this raw schema is deliberate:
+    reasoning is metadata, never an action input.
+    """
     return {
         "type": "object",
         "properties": {
-            "image_path": {"type": "string", "description": 'Path to the image file'},
-            "question": {
-                "type": "string",
-                "description": 'Question about the image',
-                "default": "Describe this image.",
-            },
             "action": {
                 "type": "string",
                 "enum": ["analyze", "manual"],
-                "default": "analyze",
                 "description": (
-                    "analyze performs the direct request; OpenRouter/custom try the "
-                    "current OpenAI-compatible route even when downstream image "
-                    "support is unknown. On real failure the sanitized tool result "
-                    "points to manual, which returns bundled read-only alternatives."
+                    "Required operation: analyze the image or return the read-only manual."
                 ),
             },
+            "input": {
+                "description": "Strict action-specific vision input.",
+                "anyOf": [
+                    {
+                        "title": "analyze input",
+                        "type": "object",
+                        "properties": {
+                            "image_path": {
+                                "type": "string",
+                                "description": "Path to the image file.",
+                            },
+                            "question": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "Question about the image, or null for the "
+                                    "existing default description."
+                                ),
+                            },
+                        },
+                        # Strict providers require semantically optional fields to
+                        # be required nullable properties.  The handler treats
+                        # null (and direct-call omission) as the old default.
+                        "required": ["image_path", "question"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "title": "manual input",
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                ],
+            },
         },
-        "required": [],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
 
+
+_ACTION_INPUT_FIELDS = {
+    "analyze": {"image_path", "question"},
+    "manual": set(),
+}
+_ALLOWED_ROOT_FIELDS = {"action", "input", "reasoning", "_reasoning"}
+_DEFAULT_QUESTION = "Describe what you see in this image."
 
 
 class VisionManager:
@@ -164,42 +204,131 @@ class VisionManager:
         self._vision_service = vision_service
         self._manual_reason = manual_reason
 
+    def _diagnostic(self) -> dict[str, Any]:
+        """Read the Agent-owned placeholder settings for this call only."""
+        snapshot = read_settings(self._agent, "vision")
+        return current_setting(snapshot, "vision")
+
+    @staticmethod
+    def _with_setting(result: dict[str, Any], diagnostic: dict[str, Any]) -> dict[str, Any]:
+        result["current_setting"] = diagnostic
+        return result
+
+    def _manual_result(self, diagnostic: dict[str, Any]) -> dict:
+        """Return bundled guidance without config, a backend, or MCP."""
+        try:
+            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
+            return self._with_setting(
+                {"status": "degraded", "action": "manual", "manual": "", "error": "vision manual missing"},
+                diagnostic,
+            )
+        return self._with_setting(
+            {"status": "ok", "action": "manual", "manual": body}, diagnostic
+        )
+
     def handle(self, args: dict) -> dict:
-        if args.get("action", "analyze") == "manual":
-            return self.manual()
+        """Dispatch one strict action/input call after one settings reread.
+
+        The schema is model-facing validation, not an authorization boundary;
+        repeat the root/branch correspondence checks here before touching an
+        image or provider.  ToolExecutor removes public ``reasoning`` and
+        supplies internal ``_reasoning``; both are accepted metadata keys only.
+        """
+        diagnostic = self._diagnostic()
+        raw = dict(args) if isinstance(args, Mapping) else {}
+
+        unknown = set(raw) - _ALLOWED_ROOT_FIELDS
+        if unknown:
+            return self._with_setting(
+                {"status": "error", "message": "unsupported vision argument"}, diagnostic
+            )
+
+        action = raw.get("action")
+        if not isinstance(action, str) or action not in _ACTION_INPUT_FIELDS:
+            return self._with_setting(
+                {
+                    "status": "error",
+                    "message": "action must be one of analyze or manual",
+                },
+                diagnostic,
+            )
+
+        action_input = raw.get("input")
+        if not isinstance(action_input, Mapping):
+            return self._with_setting(
+                {"status": "error", "message": "input must be an object"}, diagnostic
+            )
+        action_args = dict(action_input)
+        if set(action_args) - _ACTION_INPUT_FIELDS[action]:
+            return self._with_setting(
+                {"status": "error", "message": "unsupported vision input field"}, diagnostic
+            )
+
+        if action == "manual":
+            return self._manual_result(diagnostic)
+
+        image_path = action_args.get("image_path", "")
+        if not isinstance(image_path, str):
+            return self._with_setting(
+                {"status": "error", "message": "image_path must be a string"}, diagnostic
+            )
+        question = action_args.get("question")
+        if question is not None and not isinstance(question, str):
+            return self._with_setting(
+                {"status": "error", "message": "question must be a string or null"}, diagnostic
+            )
+        # Strict schemas encode this optional field as required nullable.  Direct
+        # calls may omit it; null and omission preserve the historical default.
+        if question is None:
+            question = _DEFAULT_QUESTION
+
         if self._vision_service is None:
-            return {"status": "error", "message": self._manual_reason or "Direct vision is unavailable; call vision(action='manual')."}
-        image_path = args.get("image_path", "")
-        question = args.get("question", "Describe what you see in this image.")
+            return self._with_setting(
+                {
+                    "status": "error",
+                    "message": self._manual_reason or "Direct vision is unavailable; call vision(action='manual', input={}).",
+                },
+                diagnostic,
+            )
 
         if not image_path:
-            return {"status": "error", "message": "Provide image_path"}
+            return self._with_setting(
+                {"status": "error", "message": "Provide image_path"}, diagnostic
+            )
 
         path = Path(image_path)
         if not path.is_absolute():
             path = self._agent._working_dir / path
 
         if not path.is_file():
-            return {"status": "error", "message": f"Image file not found: {path}"}
+            return self._with_setting(
+                {"status": "error", "message": f"Image file not found: {path}"}, diagnostic
+            )
 
         try:
             analysis = self._vision_service.analyze_image(str(path), prompt=question)
             if not analysis:
-                return {
-                    "status": "error",
-                    "message": "Vision analysis returned no response.",
-                }
-            return {"status": "ok", "analysis": analysis}
+                return self._with_setting(
+                    {
+                        "status": "error",
+                        "message": "Vision analysis returned no response.",
+                    },
+                    diagnostic,
+                )
+            return self._with_setting({"status": "ok", "analysis": analysis}, diagnostic)
         except Exception as e:
-            return {"status": "error", "message": f"Vision analysis failed ({type(e).__name__}). Call vision(action='manual') for the explicit manual route."}
+            return self._with_setting(
+                {
+                    "status": "error",
+                    "message": f"Vision analysis failed ({type(e).__name__}). Call vision(action='manual', input={{}}) for the explicit manual route.",
+                },
+                diagnostic,
+            )
 
     def manual(self) -> dict:
-        """Return only bundled guidance; never inspect config or invoke a backend."""
-        try:
-            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
-            return {"status": "degraded", "action": "manual", "manual": "", "error": "vision manual missing"}
-        return {"status": "ok", "action": "manual", "manual": body}
+        """Return only bundled guidance; reread diagnostics, never behavior config."""
+        return self._manual_result(self._diagnostic())
 
 
 def setup(
@@ -300,11 +429,11 @@ def setup(
                 if cap_max_tokens is not None:
                     svc_kwargs["max_tokens"] = cap_max_tokens
                 if wire_api is None:
-                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={})."
                 elif not llm_model:
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}})."
                 elif not api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}})."
                 else:
                     try:
                         vision_service = OpenAIVisionService(**svc_kwargs)
@@ -322,16 +451,16 @@ def setup(
                 if cap_max_tokens is not None:
                     svc_kwargs["max_tokens"] = cap_max_tokens
                 if not llm_model:
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}})."
                 elif not api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}})."
                 else:
                     try:
                         vision_service = AnthropicVisionService(**svc_kwargs)
                     except Exception as exc:
                         manual_reason = _setup_failure(provider, exc)
             else:
-                manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual')."
+                manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual', input={{}})."
         else:
             if provider_key in _CODEX_FAMILY:
                 # Codex vision is a standalone Responses request. It may share
@@ -366,7 +495,7 @@ def setup(
                 if explicit_token_path:
                     kwargs["token_path"] = explicit_token_path
                 if not kwargs.get("model"):
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}})."
                 elif codex_route == "direct":
                     # A whitespace-only explicit ``token_path`` is not an identity;
                     # normalize both it and the inherited bucket path once so the
@@ -378,7 +507,7 @@ def setup(
                     if token_path:
                         kwargs["token_path"] = token_path
                     else:
-                        manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual')."
+                        manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={})."
                 else:
                     # Pool route (bucket has no nonblank ``codex_auth_path``).
                     # WeightedAccountSource selects an account from the pool file
@@ -408,7 +537,7 @@ def setup(
                         except NoCandidateError:
                             pass
                     if not kwargs.get("token_path"):
-                        manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual')."
+                        manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual', input={})."
                 kwargs.pop("api_compat", None)
                 kwargs.pop("base_url", None)
                 if codex_base_url:
@@ -452,11 +581,11 @@ def setup(
                 if service_provider == "mimo" and same_provider and active_base_url:
                     kwargs.setdefault("base_url", active_base_url)
                 if service_provider in {"openai", "mimo"} and wire_api is None:
-                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={})."
                 elif service_provider == "mimo" and wire_api != "chat_completions":
-                    manual_reason = "The active MiMo wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active MiMo wire is not implemented by the direct vision service; use vision(action='manual', input={})."
                 if service_provider in {"openai", "mimo"} and active_compat == "anthropic":
-                    manual_reason = "The active preset uses an Anthropic wire that this vision route cannot safely adapt; use vision(action='manual')."
+                    manual_reason = "The active preset uses an Anthropic wire that this vision route cannot safely adapt; use vision(action='manual', input={})."
                     vision_service = None
                 if service_provider == "anthropic" and active_headers:
                     kwargs.setdefault("default_headers", active_headers)
@@ -473,9 +602,9 @@ def setup(
                     kwargs.pop("wire_api", None)
                 resolved_api_key = api_key or active_api_key
                 if service_provider not in {"codex", "local"} and not kwargs.get("model"):
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}})."
                 elif service_provider not in {"codex", "local"} and not resolved_api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}})."
                 # Dedicated vision services do not consume the LLM adapter's
                 # transport selector.
                 kwargs.pop("api_compat", None)
@@ -493,7 +622,7 @@ def setup(
                     except Exception as exc:
                         manual_reason = _setup_failure(provider, exc)
     elif vision_service is None:
-        manual_reason = "No direct vision provider was configured; use vision(action='manual')."
+        manual_reason = "No direct vision provider was configured; use vision(action='manual', input={})."
 
     mgr = VisionManager(agent, vision_service=vision_service, manual_reason=manual_reason)
     agent.add_tool("vision", schema=get_schema(), handler=mgr.handle, description=get_description(), glossary_package=__package__)
