@@ -113,10 +113,12 @@ def test_prompt_batches_and_canonical_description(tmp_path):
         batches = agent._build_system_prompt_batches()
         joined = "\n\n".join(batch for batch in batches if batch)
         assert prompt == joined
+        description = get_description()
         assert "### edit" in prompt
-        assert "action='edit'" in prompt
-        assert "nested input" in prompt
-        assert "omit action for the legacy" not in prompt
+        assert description in prompt
+        assert "action='edit'" in description
+        assert "nested input" in description
+        assert "omit action for the legacy" not in description
         assert "action='edit'" in joined
     finally:
         agent.stop(timeout=1.0)
