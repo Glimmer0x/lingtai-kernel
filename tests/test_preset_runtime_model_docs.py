@@ -266,7 +266,7 @@ def test_kernel_prompt_does_not_claim_substrate_mirror_is_freely_editable():
 # 8. The raw-init writer list is scoped, not falsely exhaustive: boot/refresh
 #    reader paths are read-only, explicit preset activation remains a writer,
 #    and the list explicitly disclaims being a repository-wide inventory,
-#    anchoring the soul(action="config")/soul(action="voice") counter-example
+#    anchoring the soul(action="config", input={...})/soul(action="voice", input={}) counter-example
 #    to the real persist functions.
 # ---------------------------------------------------------------------------
 
@@ -291,8 +291,8 @@ def test_substrate_reference_writer_list_disclaims_repo_wide_exhaustivity():
 
 def test_substrate_reference_soul_example_anchors_to_actual_persist_functions():
     text = _read(SUBSTRATE_REFERENCE)
-    assert 'soul(action="config")' in text
-    assert 'soul(action="voice")' in text
+    assert 'soul(action="config", input={"delay_seconds": 300})' in text
+    assert 'soul(action="voice", input={})' in text
     assert "_persist_soul_config" in text
     assert "_persist_soul_voice" in text
 

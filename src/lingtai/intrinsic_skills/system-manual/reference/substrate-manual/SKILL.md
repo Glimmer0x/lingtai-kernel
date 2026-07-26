@@ -373,8 +373,8 @@ raw operator-owned init.json
   above — it is not a repository-wide inventory of every raw-`init.json`
   writer.** Other owner-local features persist their own settings to raw
   `init.json` outside this lifecycle; document those under their owning
-  tool/manual, not here. For example, `soul(action="config")` and
-  `soul(action="voice")` persist `manifest.soul.*` (delay,
+  tool/manual, not here. For example, `soul(action="config", input={"delay_seconds": 300})` and
+  `soul(action="voice", input={})` persist `manifest.soul.*` (delay,
   consultation_past_count, voice, voice_prompt) directly to the agent's own
   `init.json` via `tools/soul/config.py`'s `_persist_soul_config` /
   `_persist_soul_voice`, independent of boot/refresh/preset-swap.

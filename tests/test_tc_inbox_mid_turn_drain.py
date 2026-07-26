@@ -72,7 +72,7 @@ def _mail_pair(notif_id: str, body: str = "test") -> InvoluntaryToolCall:
 
 def _soul_pair(fire_id: str, voice: str = "v") -> InvoluntaryToolCall:
     """Build a coalescing+replace_in_history soul.flow pair."""
-    call = ToolCallBlock(id=fire_id, name="soul", args={"action": "flow"})
+    call = ToolCallBlock(id=fire_id, name="soul", args={"action": "flow", "input": {}})
     result = ToolResultBlock(id=fire_id, name="soul", content={"voice": voice})
     return InvoluntaryToolCall(
         call=call, result=result,

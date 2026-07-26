@@ -19,7 +19,7 @@ from tests._agent_presence_helpers import make_test_presence_store
 
 def _make_item(source: str, voice: str = "v", coalesce: bool = False) -> InvoluntaryToolCall:
     tc_id = f"tc_{int(time.time())}_{source}"
-    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
+    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow", "input": {}})
     result = ToolResultBlock(id=tc_id, name="soul", content={"voice": voice})
     return InvoluntaryToolCall(
         call=call, result=result,
@@ -138,7 +138,7 @@ class TestDrainTCInbox:
         call_block = entries[-2].content[0]
         result_block = entries[-1].content[0]
         assert call_block.name == "soul"
-        assert call_block.args == {"action": "flow"}
+        assert call_block.args == {"action": "flow", "input": {}}
         assert result_block.id == call_block.id
         assert result_block.content["voice"] == "my voice"
         # Queue is empty after drain.
@@ -181,7 +181,7 @@ class TestDrainTCInbox:
 
 def _make_replace_item(source: str, voice: str = "v") -> InvoluntaryToolCall:
     tc_id = f"tc_{int(time.time() * 1000)}_{source}"
-    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
+    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow", "input": {}})
     result = ToolResultBlock(id=tc_id, name="soul", content={"voice": voice})
     return InvoluntaryToolCall(
         call=call, result=result,

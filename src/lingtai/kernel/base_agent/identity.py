@@ -97,7 +97,7 @@ def _build_manifest(agent) -> dict:
     }
     # Custom voice prompt is only meaningful when voice == "custom".
     # Surface it so /kanban (and any consumer reading .agent.json)
-    # can show the active prompt without calling soul(action='voice').
+    # can show the active prompt without calling soul(action='voice', input={}).
     if data["soul_voice"] == "custom":
         data["soul_voice_prompt"] = getattr(agent._config, "soul_voice_prompt", "") or ""
     if agent._mail_service is not None and agent._mail_service.address:

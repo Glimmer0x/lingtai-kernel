@@ -9,7 +9,7 @@ Dismissal is atomic on the ``notification`` tool:
 * ``notification(action="dismiss_event", event_id=..., [channel="system"])``,
 * ``notification(action="dismiss_ref", ref_id=..., [channel="system"])``.
 
-The ``soul(action="dismiss")`` convenience alias still routes through the same
+The ``soul(action="dismiss", input={})`` convenience alias still routes through the same
 shared helper with ``invoked_by="soul"``. Generic dismiss clears one
 ``.notification/<channel>.json`` file while preserving producer-specific state
 semantics.
@@ -174,7 +174,7 @@ def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
-    res = soul.handle(agent, {"action": "dismiss"})
+    res = soul.handle(agent, {"action": "dismiss", "input": {}})
 
     assert res["status"] == "ok"
     assert res["channel"] == "soul"

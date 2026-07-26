@@ -40,7 +40,7 @@ TOP_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 # belong to the retained test/maintenance migration surface.
 DEPRECATED_TOP_FIELDS: set[str] = {
     # "soul" / "soul_file" — retired in v0.7.6. The soul-flow voice is
-    # now owned by the agent via soul(action='voice') and stored under
+    # now owned by the agent via soul(action='voice', input={}) and stored under
     # manifest.soul.{voice,voice_prompt}.
     "soul", "soul_file",
 }

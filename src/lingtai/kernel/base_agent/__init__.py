@@ -711,7 +711,7 @@ class BaseAgent:
         self._soul_oneshot = False    # True during pending inquiry
         self._soul_timer: threading.Timer | None = None
         # Held while a soul flow consultation fire is running. Voluntary
-        # soul(action='flow') calls try-acquire non-blocking — if held,
+        # soul(action='flow', input={}) calls try-acquire non-blocking — if held,
         # the call is rejected with "soul flow ongoing".
         self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0

@@ -603,7 +603,7 @@ def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None)
 
     if not tc_id:
         tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
-    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
+    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow", "input": {}})
 
     # Strip the thinking block from the wire payload — it inflates tokens
     # without adding readable signal at the consumption site (the agent

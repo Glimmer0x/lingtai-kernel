@@ -15,7 +15,7 @@ CONSULTATION_PAST_COUNT_MIN = 0
 CONSULTATION_PAST_COUNT_MAX = 5
 
 # Built-in voice profile names. The agent can switch between these or set
-# a custom prompt via soul(action='voice'). Order here = order shown in
+# a custom prompt via soul(action='voice', input={}). Order here = order shown in
 # the read response.
 SOUL_VOICE_BUILTINS = ("inner", "observer")
 # Cap on agent-supplied custom voice prompts. Comfortable budget — the

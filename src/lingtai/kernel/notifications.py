@@ -480,7 +480,7 @@ def dismiss_channel(
 
     Used by the standalone ``notification`` tool's atomic dismiss verbs
     (``dismiss_channel``/``dismiss_event``/``dismiss_ref``, all with
-    ``invoked_by="notification"``) and the ``soul(action="dismiss")``
+    ``invoked_by="notification"``) and the ``soul(action="dismiss", input={})``
     convenience alias.
 
     Generic dismiss clears only the notification surface; producer-owned state

@@ -18,7 +18,7 @@ import time
 
 
 # Environment gate for soul flow. Soul flow (both the wall-clock timer and
-# voluntary ``soul(action='flow')`` calls) is OPT-IN and default DISABLED.
+# voluntary ``soul(action='flow', input={})`` calls) is OPT-IN and default DISABLED.
 # This replaces the old "trust a giant delay_seconds sentinel" approach — a
 # large delay only muted the *timer* while the *voluntary* path stayed live
 # and could loop against the sleep gate. The env var gates both paths
@@ -34,7 +34,7 @@ def _soul_flow_enabled() -> bool:
     Set ``LINGTAI_SOUL_FLOW_ENABLED`` to one of ``1``/``true``/``yes``/``on``
     (case-insensitive) to enable periodic + voluntary past-self consultation.
     Unset, empty, or any other value disables BOTH the wall-clock timer and
-    voluntary ``soul(action='flow')``. ``inquiry``/``config``/``voice``/
+    voluntary ``soul(action='flow', input={})``. ``inquiry``/``config``/``voice``/
     ``dismiss`` remain available regardless. See the ``soul-manual`` skill.
 
     ``delay_seconds`` is only the cadence *after* this env opt-in; it is NOT
