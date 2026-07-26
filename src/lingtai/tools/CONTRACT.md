@@ -40,6 +40,33 @@ There is no fourth public metadata block. Existing tools retain their current
 explicit schemas until a scoped migration changes their code, tests, manual, and
 contract together.
 
+### A-priori summary transition
+
+The shared kernel summary predicate uses the presence of the `input` key as the
+mode discriminator. A canonical call requests a summary only when `input` is a
+Mapping/object and `input.summary` is exactly the boolean `true`; once `input` is
+present, root `summary` is ignored and is never a fallback, even when `input` is
+malformed, missing `summary`, or carries a false/non-boolean value. No truthy
+coercion, flattening, or argument mutation is permitted. A call with no `input`
+key remains in legacy mode and requests only when root `summary` is exactly
+`true`.
+
+This is a transitional compatibility rule, not a second public schema: migrated
+capabilities that support a-priori summary advertise that flag only as nested
+`input.summary`, while unmigrated legacy advertisers retain their root flag until
+their own vertical migration. Tool errors continue to bypass summarization. The
+raw result is durably recorded before either nested or legacy summary control is
+applied; generated, refusal, and fail-closed no-gateway replacements are
+model-visible substitutes with the
+existing raw locator and metadata.
+
+The root-summary branch may be removed only in the commit that migrates the last
+currently legacy root-summary advertiser (including shell's historical `bash`
+rolling alias and daemon), and only after a registry-wide test proves that no
+provider-facing schema advertises root `summary`, no migrated handler accepts
+flat fields, and no supported pending legacy call relies on the root shape. Until
+that final removal gate, root lookup is permitted solely when `input` is absent.
+
 ## Port
 
 The provider-neutral boundary is the final `FunctionSchema` assembled by the

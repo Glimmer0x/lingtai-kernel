@@ -36,6 +36,7 @@ Safety properties:
 from __future__ import annotations
 
 import datetime as _dt
+from collections.abc import Mapping
 from typing import Any, Callable
 
 from .meta_block import formal_tool_result_content, formal_tool_result_visible_len
@@ -147,15 +148,21 @@ def is_apriori_summary(content: Any) -> bool:
     )
 
 
-def summary_requested(args: dict | None) -> bool:
-    """Return True iff the normalized tool args opt into a-priori summary.
+def summary_requested(args: Mapping | None) -> bool:
+    """Return True iff tool args opt into a-priori summary.
 
-    The flag is the boolean ``summary`` field on the tool call. Anything other
-    than a literal ``True`` (missing, ``False``, ``None``, truthy-but-not-True)
-    preserves current behavior exactly.
+    The presence of ``input`` selects canonical mode: only a Mapping-valued
+    ``input`` whose ``summary`` is exactly ``True`` requests summarization.
+    Root ``summary`` is ignored in canonical mode, including when ``input`` is
+    malformed or its nested flag is absent/invalid. When ``input`` is absent,
+    legacy mode reads only root ``summary``. Both modes require identity with
+    the boolean singleton ``True``; no truthy coercion is performed.
     """
-    if not isinstance(args, dict):
+    if not isinstance(args, Mapping):
         return False
+    if "input" in args:
+        payload = args["input"]
+        return isinstance(payload, Mapping) and payload.get("summary") is True
     return args.get("summary") is True
 
 
@@ -395,13 +402,19 @@ def maybe_summarize_result(
     and BEFORE the result is turned into the model-visible wire message.
 
     Contract:
+    - Summary control is canonical-first: when ``input`` is present, only
+      ``input.summary is True`` on a Mapping payload requests; root ``summary``
+      is never inspected or used as fallback. When ``input`` is absent, legacy
+      calls use root ``summary is True``. This exact-boolean discriminator is
+      applied without flattening or mutating the original args.
     - ``summary != true`` → returns *result* unchanged (current behavior).
     - ``summary == true`` but no ``summarizer_fn`` wired (e.g. service without a
       one-shot generate gateway) → **fails closed**: returns a summary-layer
       error (with the raw-retrieval locator), NOT the raw result. ``summary=true``
       is a request to keep the raw out of context; honoring it must not depend on
       whether a summarizer happens to be configured. The raw is already durably
-      logged before this point, so it remains retrievable by ``tool_call_id``.
+      logged before either the legacy or canonical predicate is applied, so it
+      remains retrievable by ``tool_call_id``.
     - Already an a-priori summary (defensive) → returned unchanged.
     - Error results (the tool itself failed) are NOT summarized: the agent needs
       the exact error text to recover. Returned unchanged.

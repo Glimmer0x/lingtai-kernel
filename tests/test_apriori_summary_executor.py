@@ -21,10 +21,12 @@ from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.tool_result_summary import (
     APRIORI_SUMMARY_CAP,
     APRIORI_SUMMARY_MARKER,
+    summary_requested,
 )
 
 
-def _make_executor(*, dispatch_fn, summarizer_fn, events, tmp_path):
+def _make_executor(*, dispatch_fn, summarizer_fn, events, tmp_path,
+                   parallel_safe_tools=None):
     """Construct a ToolExecutor that records durable log events into *events*."""
 
     def logger_fn(event_type, **fields):
@@ -43,6 +45,7 @@ def _make_executor(*, dispatch_fn, summarizer_fn, events, tmp_path):
         logger_fn=logger_fn,
         working_dir=tmp_path,
         summarizer_fn=summarizer_fn,
+        parallel_safe_tools=parallel_safe_tools or set(),
     )
 
 
@@ -64,6 +67,14 @@ def _event_fields(events, event_type):
     for et, fields in events:
         if et == event_type:
             return fields
+    return None
+
+
+def _event_index(events, event_type, *, tool_call_id):
+    """Return the first matching event index for ordering assertions."""
+    for index, (et, fields) in enumerate(events):
+        if et == event_type and fields.get("tool_call_id") == tool_call_id:
+            return index
     return None
 
 
@@ -161,6 +172,274 @@ def test_summary_true_under_cap_replaces_with_summary_and_preserves_raw(tmp_path
     assert gen["tool_call_id"] == "t3"
     assert gen["tool_name"] == "bash"
     assert "RAWSECRET" not in str(gen)
+
+
+def test_summary_requested_uses_input_presence_precedence_and_exact_bool():
+    """Canonical input wins; only a literal bool True opts in."""
+    assert summary_requested({"summary": True}) is True  # legacy compatibility
+    assert summary_requested({"input": {"summary": True}, "summary": False}) is True
+
+    # Once input is present, root summary is never a fallback, including when
+    # nested summary is absent, false, malformed, or input is not an object.
+    nested_values = [False, 1, "true", None, {}, []]
+    for nested in nested_values:
+        assert summary_requested({"input": {"summary": nested}, "summary": True}) is False
+    assert summary_requested({"input": {}, "summary": True}) is False
+    for malformed_input in (None, [], "payload", 1):
+        assert summary_requested({"input": malformed_input, "summary": True}) is False
+
+    # Legacy mode has the same exact-boolean rule and does not mutate args.
+    for root in (False, 1, "true", None, {}, []):
+        assert summary_requested({"summary": root}) is False
+    original = {"input": {"summary": True}, "summary": "ignored"}
+    snapshot = {"input": dict(original["input"]), "summary": original["summary"]}
+    assert summary_requested(original) is True
+    assert original == snapshot
+
+
+def test_nested_summary_true_serial_preserves_reasoning_and_raw_first(tmp_path):
+    raw = {"stdout": "NESTED-SERIAL-RAW"}
+    nested_input = {"command": "echo nested", "summary": True}
+    call_args = {
+        "input": nested_input,
+        "summary": False,  # root is ignored in canonical mode
+        "reasoning": "Retain the nested serial marker",
+    }
+    seen = {}
+    events = []
+
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+        seen["prompt"] = user_prompt
+        return "NESTED-SERIAL-SUMMARY"
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute(
+        [ToolCall(name="bash", args=call_args, id="nested-serial")]
+    )
+
+    content = _wire_content(results[0])
+    assert content["artifact"] == APRIORI_SUMMARY_MARKER
+    assert content["generated_summary"] == "NESTED-SERIAL-SUMMARY"
+    assert "Retain the nested serial marker" in seen["prompt"]
+    assert nested_input == {"command": "echo nested", "summary": True}
+
+    raw_index = _event_index(events, "tool_result", tool_call_id="nested-serial")
+    generated_index = _event_index(
+        events, "apriori_summary_generated", tool_call_id="nested-serial"
+    )
+    visible_index = _event_index(
+        events, "tool_result_model_visible", tool_call_id="nested-serial"
+    )
+    assert raw_index is not None and generated_index is not None and visible_index is not None
+    assert raw_index < generated_index < visible_index
+    raw_event = events[raw_index][1]
+    assert "NESTED-SERIAL-RAW" in str(raw_event["result"])
+    assert "NESTED-SERIAL-SUMMARY" not in str(raw_event["result"])
+    assert raw_event["tool_args"]["_reasoning"] == "Retain the nested serial marker"
+
+
+def test_nested_summary_true_parallel_path_preserves_raw_before_each_replacement(tmp_path):
+    raw_by_id = {
+        "nested-parallel-1": {"stdout": "NESTED-PARALLEL-RAW-1"},
+        "nested-parallel-2": {"stdout": "NESTED-PARALLEL-RAW-2"},
+    }
+    events = []
+    seen = []
+
+    def dispatch(tc):
+        return raw_by_id[tc.id]
+
+    def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+        seen.append((tool_call_id, user_prompt))
+        return f"NESTED-PARALLEL-SUMMARY-{tool_call_id}"
+
+    ex = _make_executor(
+        dispatch_fn=dispatch,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+        parallel_safe_tools={"bash", "grep"},
+    )
+    results, _, _ = ex.execute([
+        ToolCall(
+            name="bash",
+            args={"input": {"command": "one", "summary": True},
+                  "reasoning": "Keep parallel result one"},
+            id="nested-parallel-1",
+        ),
+        ToolCall(
+            name="grep",
+            args={"input": {"pattern": "two", "summary": True},
+                  "reasoning": "Keep parallel result two"},
+            id="nested-parallel-2",
+        ),
+    ])
+
+    assert len(seen) == 2
+    for result_msg, call_id in zip(results, ("nested-parallel-1", "nested-parallel-2")):
+        content = _wire_content(result_msg)
+        assert content["artifact"] == APRIORI_SUMMARY_MARKER
+        assert content["generated_summary"] == f"NESTED-PARALLEL-SUMMARY-{call_id}"
+        raw_index = _event_index(events, "tool_result", tool_call_id=call_id)
+        generated_index = _event_index(
+            events, "apriori_summary_generated", tool_call_id=call_id
+        )
+        visible_index = _event_index(
+            events, "tool_result_model_visible", tool_call_id=call_id
+        )
+        assert raw_index is not None and generated_index is not None and visible_index is not None
+        assert raw_index < generated_index < visible_index
+        raw_event = events[raw_index][1]
+        suffix = call_id.rsplit("-", 1)[-1]
+        assert f"NESTED-PARALLEL-RAW-{suffix}" in str(raw_event["result"])
+        assert f"NESTED-PARALLEL-SUMMARY-{call_id}" not in str(raw_event["result"])
+
+
+def test_nested_false_absent_and_malformed_ignore_root_true_in_executor(tmp_path):
+    cases = [
+        ("nested-false", {"summary": False}),
+        ("nested-absent", {}),
+        ("nested-one", {"summary": 1}),
+        ("nested-string", {"summary": "true"}),
+        ("nested-null", {"summary": None}),
+        ("nested-object", {"summary": {"truthy": True}}),
+        ("nested-list", {"summary": [True]}),
+        ("input-null", None),
+        ("input-list", []),
+        ("input-string", "payload"),
+    ]
+    for call_id, nested_input in cases:
+        events = []
+        called = []
+        raw = {"stdout": f"RAW-{call_id}"}
+
+        def summarizer(system_prompt, user_prompt, tool_name, tool_call_id):
+            called.append(tool_call_id)
+            return "SHOULD NOT RUN"
+
+        ex = _make_executor(
+            dispatch_fn=lambda tc, raw=raw: raw,
+            summarizer_fn=summarizer,
+            events=events,
+            tmp_path=tmp_path,
+        )
+        results, _, _ = ex.execute([
+            ToolCall(
+                name="grep",
+                args={"input": nested_input, "summary": True},
+                id=call_id,
+            )
+        ])
+        content = _wire_content(results[0])
+        assert "SHOULD NOT RUN" not in str(content)
+        assert "RAW-" + call_id in str(content)
+        assert not (isinstance(content, dict) and content.get("artifact") == APRIORI_SUMMARY_MARKER)
+        assert called == []
+
+
+def test_nested_summary_true_cap_refusal_logs_raw_before_replacement(tmp_path):
+    raw = {"stdout": "NESTED-CAP-RAW-" + "z" * (APRIORI_SUMMARY_CAP + 100)}
+    called = []
+    events = []
+
+    def summarizer(*args):
+        called.append(args)
+        return "SHOULD NOT RUN"
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute([
+        ToolCall(
+            name="read",
+            args={"input": {"file_path": "/big", "summary": True},
+                  "reasoning": "Avoid oversized raw"},
+            id="nested-cap",
+        )
+    ])
+    content = _wire_content(results[0])
+    assert called == []
+    assert content["summary_kind"] == "apriori_cap_refused"
+    assert "NESTED-CAP-RAW" not in str(content)
+    raw_index = _event_index(events, "tool_result", tool_call_id="nested-cap")
+    refusal_index = _event_index(
+        events, "apriori_summary_cap_refused", tool_call_id="nested-cap"
+    )
+    visible_index = _event_index(
+        events, "tool_result_model_visible", tool_call_id="nested-cap"
+    )
+    assert raw_index is not None and refusal_index is not None and visible_index is not None
+    assert raw_index < refusal_index < visible_index
+    assert "NESTED-CAP-RAW" in str(events[raw_index][1]["result"])
+
+
+def test_nested_summary_true_without_gateway_fails_closed_after_raw_log(tmp_path):
+    raw = {"stdout": "NESTED-NOGATEWAY-RAW"}
+    events = []
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=None,
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute([
+        ToolCall(
+            name="bash",
+            args={"input": {"command": "echo no gateway", "summary": True}},
+            id="nested-no-gateway",
+        )
+    ])
+    content = _wire_content(results[0])
+    assert content["summary_kind"] == "apriori_error"
+    assert "NESTED-NOGATEWAY-RAW" not in str(content)
+    raw_index = _event_index(events, "tool_result", tool_call_id="nested-no-gateway")
+    error_index = _event_index(
+        events, "apriori_summary_no_summarizer", tool_call_id="nested-no-gateway"
+    )
+    visible_index = _event_index(
+        events, "tool_result_model_visible", tool_call_id="nested-no-gateway"
+    )
+    assert raw_index is not None and error_index is not None and visible_index is not None
+    assert raw_index < error_index < visible_index
+    assert "NESTED-NOGATEWAY-RAW" in str(events[raw_index][1]["result"])
+
+
+def test_nested_summary_true_preserves_tool_error_bypass(tmp_path):
+    raw = {"status": "error", "message": "EXACT-TOOL-ERROR"}
+    called = []
+    events = []
+
+    def summarizer(*args):
+        called.append(args)
+        return "SHOULD NOT RUN"
+
+    ex = _make_executor(
+        dispatch_fn=lambda tc: raw,
+        summarizer_fn=summarizer,
+        events=events,
+        tmp_path=tmp_path,
+    )
+    results, _, _ = ex.execute([
+        ToolCall(
+            name="grep",
+            args={"input": {"pattern": "error", "summary": True}},
+            id="nested-error",
+        )
+    ])
+    content = _wire_content(results[0])
+    assert content["status"] == "error"
+    assert "EXACT-TOOL-ERROR" in str(content)
+    assert called == []
+    assert _event_index(events, "tool_result", tool_call_id="nested-error") is not None
+    assert _event_index(events, "apriori_summary_generated", tool_call_id="nested-error") is None
 
 
 def test_summary_true_over_cap_refuses_without_llm_and_hides_raw(tmp_path):
