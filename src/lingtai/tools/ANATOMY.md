@@ -1,7 +1,9 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
@@ -22,6 +24,8 @@ capability names and lazy adapters.
 
 ## Components
 
+- `CONTRACT.md` — future canonical model-facing tool call contract and explicit
+  per-tool migration boundary.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:40-359`).
@@ -43,9 +47,11 @@ one-way configuration input alias and is never emitted as a public name.
 ## Composition
 
 The parent [`src/lingtai/ANATOMY.md`](../ANATOMY.md) owns Agent composition.
-The paired web Contract owns behavior; its Anatomy and the internal browser
-Anatomy provide reciprocal progressive disclosure. Other tool packages retain
-their own public names and manuals.
+The paired tools Contract owns the future canonical `action` / `input` /
+`reasoning` public call shape and migration boundary. The web Contract specializes
+that promise for the first real implementation; its Anatomy and the internal
+browser Anatomy provide progressive disclosure. Other tool packages retain their
+existing public shapes until explicitly migrated.
 
 ## State
 

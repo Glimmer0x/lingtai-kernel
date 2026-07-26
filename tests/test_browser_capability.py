@@ -73,10 +73,16 @@ def test_web_browse_vertical_slice(tmp_path):
         assert "web" in agent._tool_handlers
         schemas = agent._build_tool_schemas()
         web_schema = next(schema for schema in schemas if schema.name == "web")
-        assert set(web_schema.parameters["properties"]) == set(get_schema()["properties"]) | {"reasoning"}
+        assert set(web_schema.parameters["properties"]) == {"action", "input", "reasoning"}
+        assert web_schema.parameters["required"] == ["action", "input"]
+        assert web_schema.parameters["additionalProperties"] is False
+        assert all(
+            "reasoning" not in branch["properties"] and "_reasoning" not in branch["properties"]
+            for branch in web_schema.parameters["properties"]["input"]["anyOf"]
+        )
         first = agent._tool_handlers["web"]({
             "action": "browse",
-            "parameters": {
+            "input": {
                 "url": "https://public.example/page",
                 "link_ref": None,
                 "cursor": None,
@@ -95,7 +101,7 @@ def test_web_browse_vertical_slice(tmp_path):
 
         second = agent._tool_handlers["web"]({
             "action": "browse",
-            "parameters": {
+            "input": {
                 "url": "https://public.example/page",
                 "link_ref": None,
                 "cursor": first["next_cursor"],
@@ -113,7 +119,7 @@ def test_web_browse_vertical_slice(tmp_path):
         link_ref = first["links"][0]["ref"]
         followed = agent._tool_handlers["web"]({
             "action": "browse",
-            "parameters": {
+            "input": {
                 "url": None,
                 "link_ref": link_ref,
                 "cursor": None,
@@ -124,7 +130,11 @@ def test_web_browse_vertical_slice(tmp_path):
         assert followed["status"] == "ok"
         assert followed["requested_url"] == "https://public.example/next"
 
-        manual = agent._tool_handlers["web"]({"action": "manual", "parameters": {}})
+        manual = agent._tool_handlers["web"]({
+            "action": "manual",
+            "input": {},
+            "_reasoning": "normalized by ToolExecutor",
+        })
         assert manual["status"] == "ok"
         assert manual["action"] == "manual"
         assert len(port.calls) == calls_after_first + 1
@@ -132,14 +142,14 @@ def test_web_browse_vertical_slice(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_web_action_parameters_search_to_link_ref_browse(tmp_path):
+def test_web_action_input_search_to_link_ref_browse(tmp_path):
     search = FakeSearch()
     port = FakeBrowserPort({
         "https://public.example/page": b"<html><body><p>Provider-shaped page</p></body></html>",
     })
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="web-action-parameters",
+        agent_name="web-action-input",
         working_dir=tmp_path,
         capabilities={
             "web": {
@@ -160,15 +170,15 @@ def test_web_action_parameters_search_to_link_ref_browse(tmp_path):
     )
     try:
         handler = agent._tool_handlers["web"]
-        manual = handler({"action": "manual", "parameters": {}})
+        manual = handler({"action": "manual", "input": {}})
         assert manual["status"] == "ok"
-        found = handler({"action": "search", "parameters": {"query": "mission interval"}})
+        found = handler({"action": "search", "input": {"query": "mission interval"}})
         assert found["status"] == "ok"
         assert search.queries == ["mission interval"]
         link_ref = found["results"][0]["link_ref"]
         browsed = handler({
             "action": "browse",
-            "parameters": {
+            "input": {
                 "url": None,
                 "link_ref": link_ref,
                 "cursor": None,
@@ -178,10 +188,13 @@ def test_web_action_parameters_search_to_link_ref_browse(tmp_path):
         })
         assert browsed["status"] == "ok"
         assert browsed["requested_url"] == "https://public.example/page"
-        flat = handler({"action": "search", "parameters": {}, "query": "legacy flat"})
+        flat = handler({"action": "search", "input": {}, "query": "legacy flat"})
         assert flat["error_code"] == "INVALID_ARGUMENT"
-        engine = handler({"action": "manual", "parameters": {"engine": "duckduckgo"}})
+        engine = handler({"action": "manual", "input": {"engine": "duckduckgo"}})
         assert engine["error_code"] == "INVALID_ARGUMENT"
+        for legacy_key in ("parameters", "parameter"):
+            legacy = handler({"action": "manual", legacy_key: {}})
+            assert legacy["error_code"] == "INVALID_ARGUMENT"
     finally:
         agent.stop(timeout=1.0)
 
@@ -223,14 +236,14 @@ def test_browser_policy_and_cursor_failures_are_typed_and_sanitized():
     assert stale["error_code"] == "CURSOR_MALFORMED"
 
 
-def test_web_schema_includes_strict_action_parameters():
+def test_web_schema_includes_strict_action_input():
     schema = get_schema()
     assert schema["properties"]["action"]["enum"] == ["search", "browse", "manual"]
-    assert schema["required"] == ["action", "parameters"]
+    assert schema["required"] == ["action", "input"]
     assert schema["additionalProperties"] is False
-    branches = schema["properties"]["parameters"]["anyOf"]
+    branches = schema["properties"]["input"]["anyOf"]
     assert [branch["title"] for branch in branches] == [
-        "search parameters", "browse parameters", "manual parameters",
+        "search input", "browse input", "manual input",
     ]
     for branch in branches:
         assert branch["additionalProperties"] is False

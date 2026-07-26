@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
@@ -51,8 +52,10 @@ transport. Agent manual installation maps this retained package's `manual/` to
 The parent [`src/lingtai/tools/ANATOMY.md`](../ANATOMY.md) owns capability
 registry composition. The internal browse child
 [`src/lingtai/tools/browser/ANATOMY.md`](../browser/ANATOMY.md) owns static-page
-structure but has no public registration. The paired
-[`CONTRACT.md`](CONTRACT.md) owns the unified interface promise.
+structure but has no public registration. The shared
+[`src/lingtai/tools/CONTRACT.md`](../CONTRACT.md) owns the future canonical public
+call shape. The paired [`CONTRACT.md`](CONTRACT.md) specializes
+that promise for web's actions, behavior, and evidence.
 
 ## State
 

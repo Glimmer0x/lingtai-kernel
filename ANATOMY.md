@@ -21,6 +21,7 @@ related_files:
   - scripts/lib/release_manifest.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/CONTRACT.md
+  - src/lingtai/tools/ANATOMY.md
   - src/lingtai/init.jsonc
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/kernel/ANATOMY.md

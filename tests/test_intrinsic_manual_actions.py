@@ -78,7 +78,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
-        "web": ("web", lambda: web_manager.handle({"action": "manual", "parameters": {}})),
+        "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
         "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),
         "edit": ("file-manual", lambda: agent.handlers["edit"]({"action": "manual"})),
         "glob": ("file-manual", lambda: agent.handlers["glob"]({"action": "manual"})),
@@ -127,8 +127,8 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert shell_tool.get_schema()["required"] == []
     assert psyche_tool.get_schema()["required"] == ["action"]
     web_schema = web_tool.get_schema()
-    assert web_schema["required"] == ["action", "parameters"]
-    assert len(web_schema["properties"]["parameters"]["anyOf"]) == 3
+    assert web_schema["required"] == ["action", "input"]
+    assert len(web_schema["properties"]["input"]["anyOf"]) == 3
     for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
         assert module.get_schema()["required"] == []
 

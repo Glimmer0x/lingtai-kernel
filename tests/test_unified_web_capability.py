@@ -62,7 +62,7 @@ def test_search_link_ref_browse_uses_same_agent_state(tmp_path):
     search = _Search()
     port = _Port()
     manager = setup(agent, search_service=search, browser_port=port)
-    result = manager.handle({"action": "search", "parameters": {"query": "question"}})
+    result = manager.handle({"action": "search", "input": {"query": "question"}})
     assert result["status"] == "ok"
     assert result["action"] == "search"
     assert result["count"] == 1
@@ -70,7 +70,7 @@ def test_search_link_ref_browse_uses_same_agent_state(tmp_path):
     assert not port.requests
     browsed = manager.handle({
         "action": "browse",
-        "parameters": {
+        "input": {
             "url": None,
             "link_ref": result["results"][0]["link_ref"],
             "cursor": None,
@@ -91,19 +91,19 @@ def test_settings_are_strict_reread_and_do_not_mutate_environment(tmp_path):
     settings = tmp_path / "settings" / "web.json"
     settings.parent.mkdir()
     settings.write_text(json.dumps({"schema_version": 1, "search": {"engine": "not-admitted"}}))
-    failure = manager.handle({"action": "search", "parameters": {"query": "x"}})
+    failure = manager.handle({"action": "search", "input": {"query": "x"}})
     assert failure["status"] == "failed"
     assert failure["current_setting"]["source"] == "settings_error"
     assert failure["current_setting"]["engine"] is None
     before = dict(os.environ)
     rejected = manager.handle({
         "action": "search",
-        "parameters": {"query": "x", "engine": "duckduckgo"},
+        "input": {"query": "x", "engine": "duckduckgo"},
     })
     assert rejected["error_code"] == "INVALID_ARGUMENT"
     assert dict(os.environ) == before
     settings.write_text(json.dumps({"schema_version": 1, "search": {"engine": "duckduckgo"}}))
-    success = manager.handle({"action": "search", "parameters": {"query": "x"}})
+    success = manager.handle({"action": "search", "input": {"query": "x"}})
     assert success["status"] == "ok"
     assert success["current_setting"]["source"] == "settings/web.json"
     assert success["current_setting"]["settings_revision"]
@@ -114,7 +114,7 @@ def test_missing_and_operator_defaults_report_the_computed_source(tmp_path, monk
     monkeypatch.delenv(missing_env, raising=False)
     built_agent = _Agent(tmp_path / "built")
     built = setup(built_agent, browser_port=_Port())
-    built_result = built.handle({"action": "search", "parameters": {"query": ""}})
+    built_result = built.handle({"action": "search", "input": {"query": ""}})
     assert built_result["current_setting"]["source"] == "built_in_default"
     assert built_result["current_setting"]["engine"] == "duckduckgo"
 
@@ -125,7 +125,7 @@ def test_missing_and_operator_defaults_report_the_computed_source(tmp_path, monk
         api_key_env=missing_env,
         browser_port=_Port(),
     )
-    result = operator.handle({"action": "search", "parameters": {"query": "question"}})
+    result = operator.handle({"action": "search", "input": {"query": "question"}})
     assert result["error_code"] == "SEARCH_ENGINE_UNAVAILABLE"
     assert result["current_setting"]["source"] == "operator_default"
     statuses = result["current_setting"]["available_engines"]
@@ -140,7 +140,7 @@ def test_settings_v1_rejects_boolean_and_float_schema_versions(tmp_path):
     settings.parent.mkdir()
     for version in (True, 1.0):
         settings.write_text(json.dumps({"schema_version": version, "search": {"engine": "duckduckgo"}}))
-        result = manager.handle({"action": "search", "parameters": {"query": "question"}})
+        result = manager.handle({"action": "search", "input": {"query": "question"}})
         assert result["error_code"] == "WEB_SETTINGS_INVALID"
         assert result["current_setting"]["engine"] is None
 
@@ -152,11 +152,11 @@ def test_invalid_settings_keep_manual_and_browse_usable(tmp_path):
     settings = tmp_path / "settings" / "web.json"
     settings.parent.mkdir()
     settings.write_text("{not-json")
-    manual = manager.handle({"action": "manual", "parameters": {}})
+    manual = manager.handle({"action": "manual", "input": {}})
     assert manual["action"] == "manual"
     browsed = manager.handle({
         "action": "browse",
-        "parameters": {
+        "input": {
             "url": "https://example.test",
             "link_ref": None,
             "cursor": None,
@@ -188,7 +188,7 @@ def test_lazy_initialization_failure_updates_availability_truth(tmp_path, monkey
         api_key=secret,
         browser_port=_Port(),
     )
-    result = manager.handle({"action": "search", "parameters": {"query": "question"}})
+    result = manager.handle({"action": "search", "input": {"query": "question"}})
     assert result["error_code"] == "SEARCH_ENGINE_UNAVAILABLE"
     statuses = result["current_setting"]["available_engine_status"]
     assert statuses == {"gemini": "initialization_failed"}
@@ -218,7 +218,7 @@ def test_search_caps_an_unbounded_provider_iterable(tmp_path):
             return results()
 
     manager = setup(_Agent(tmp_path), search_service=GeneratorSearch(), browser_port=_Port())
-    result = manager.handle({"action": "search", "parameters": {"query": "question"}})
+    result = manager.handle({"action": "search", "input": {"query": "question"}})
     assert result["status"] == "ok"
     assert result["count"] == 20
     assert len(result["results"]) == 20

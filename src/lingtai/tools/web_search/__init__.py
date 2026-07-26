@@ -26,7 +26,7 @@ PROVIDERS = {
     "fallback_on_inherit": "duckduckgo",
 }
 
-_ACTION_PARAMETERS = {
+_ACTION_INPUT_FIELDS = {
     "search": {"query"},
     "browse": {"url", "link_ref", "cursor", "extract", "max_chars"},
     "manual": set(),
@@ -35,10 +35,11 @@ _ACTION_PARAMETERS = {
 
 def get_description(lang: str = "en") -> str:
     return (
-        "Unified web capability. Use web(action='search', parameters={'query': '...'}) "
-        "for current discovery, then web(action='browse', parameters={'link_ref': '...'}) "
-        "for a known result. Use web(action='manual', parameters={}) for the procedure "
-        "and settings guidance."
+        "Unified web capability. Use web(action='search', input={'query': '...'}, "
+        "reasoning='discover current sources') for current discovery, then "
+        "web(action='browse', input={'link_ref': '...'}, reasoning='read the "
+        "selected source') for a known result. Use web(action='manual', input={}, "
+        "reasoning='load web guidance') for the procedure and settings guidance."
     )
 
 
@@ -51,11 +52,14 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                 "enum": ["search", "browse", "manual"],
                 "description": "Required operation: search, browse, or manual.",
             },
-            "parameters": {
-                "description": "Strict action-specific parameters; the selected action is validated again at dispatch.",
+            "input": {
+                "description": (
+                    "Strict action-specific input; the selected action is validated "
+                    "again at dispatch."
+                ),
                 "anyOf": [
                     {
-                        "title": "search parameters",
+                        "title": "search input",
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "Search query."},
@@ -64,7 +68,7 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                         "additionalProperties": False,
                     },
                     {
-                        "title": "browse parameters",
+                        "title": "browse input",
                         "type": "object",
                         "properties": {
                             "url": {
@@ -95,7 +99,7 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                         "additionalProperties": False,
                     },
                     {
-                        "title": "manual parameters",
+                        "title": "manual input",
                         "type": "object",
                         "properties": {},
                         "required": [],
@@ -104,7 +108,7 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                 ],
             },
         },
-        "required": ["action", "parameters"],
+        "required": ["action", "input"],
         "additionalProperties": False,
     }
 
@@ -276,21 +280,24 @@ class WebManager:
     def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
         raw = dict(args or {})
         action = raw.get("action")
-        if action not in _ACTION_PARAMETERS:
+        if action not in _ACTION_INPUT_FIELDS:
             _, snapshot, diagnostic = self._resolve()
             return self._failure("unknown", snapshot, diagnostic, "ACTION_REQUIRED", "action must be one of search, browse, or manual")
-        unknown = set(raw) - {"action", "parameters", "reasoning"}
+        # Public ``reasoning`` stays top-level in the Agent schema. ToolExecutor
+        # strips that public field and preserves it internally as ``_reasoning``
+        # before invoking capability handlers.
+        unknown = set(raw) - {"action", "input", "reasoning", "_reasoning"}
         if unknown:
             _, snapshot, diagnostic = self._resolve()
             return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web argument")
-        parameters = raw.get("parameters")
-        if not isinstance(parameters, Mapping):
+        action_input = raw.get("input")
+        if not isinstance(action_input, Mapping):
             _, snapshot, diagnostic = self._resolve()
-            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "parameters must be an object")
-        action_args = dict(parameters)
-        if set(action_args) - _ACTION_PARAMETERS[action]:
+            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "input must be an object")
+        action_args = dict(action_input)
+        if set(action_args) - _ACTION_INPUT_FIELDS[action]:
             _, snapshot, diagnostic = self._resolve()
-            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web parameter")
+            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web input field")
         # Strict OpenAI schemas express optional fields as required nullable
         # properties.  Null means absent to the internal action handlers.
         dispatch_args = {"action": action, **{key: value for key, value in action_args.items() if value is not None}}

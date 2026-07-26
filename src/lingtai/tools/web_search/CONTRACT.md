@@ -1,9 +1,10 @@
 ---
 name: web
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/manual/SKILL.md
@@ -34,7 +35,9 @@ URL or a search/browse reference through the same BrowserEngine state. Manual
 returns the installed web-manual without provider construction or network I/O.
 All success and failure envelopes include `action` and a bounded secret-free
 `current_setting` block. Explicit `engine` and irrelevant action fields fail
-loudly; kernel-injected `reasoning` is ignored.
+loudly. In the final Agent schema, public `reasoning` is a top-level block;
+ToolExecutor preserves it only as internal `_reasoning` metadata, which does not
+enter action input or change dispatch.
 
 ## Port
 
@@ -56,8 +59,12 @@ remain in force.
 
 - The public name is `web`; no browser or web_search registry, schema, prompt,
   check-caps, catalog, or installed manual entry exists.
-- `action` and nested `parameters` are required. `action` is one of
-  `search`, `browse`, or `manual`; `parameters` uses strict action-specific
+- `web` is the first wire-tested implementation of the shared future tool
+  contract in `src/lingtai/tools/CONTRACT.md`: the final model-facing root is
+  exactly `action`, `input`, and `reasoning`. There is no public `parameters`,
+  `parameter`, or other compatibility alias; `_reasoning` is internal only.
+- `action` and nested `input` are required by the capability schema. `action` is
+  one of `search`, `browse`, or `manual`; `input` uses strict action-specific
   object branches. Each branch is closed, every declared branch field is
   required, and browse optionals use JSON null, matching OpenAI strict-object
   conventions.
@@ -72,7 +79,7 @@ remain in force.
   oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong schema.
   Diagnostics contain source, selected engine/null, bounded available statuses,
   revision/hash, and the exact change hint `Edit settings/web.json; changes apply
-  on the next web call; use web(action='manual', parameters={}) for schema.`;
+  on the next web call; use web(action='manual', input={}, reasoning='load web guidance') for schema.`;
   secrets and absolute
   paths never appear.
 - Search results are bounded `{title,url,snippet,link_ref}` objects with count
@@ -87,8 +94,10 @@ opaque dependency identity, schema/prompt/catalog uniqueness, lazy provider
 construction, settings file states and revision changes, explicit argument
 rejection, environment immutability, search-to-browse continuation, and manual
 operation with invalid settings. Existing browser Core/Port and SearchService
-contract tests remain applicable. A real fresh Agent startup must inspect
-resident/batched prompts, tool schemas, and live chat tools.
+contract tests remain applicable. A real fresh Agent startup must prove exactly
+`action` / `input` / `reasoning` at the root, no reasoning field in nested input
+branches, internal `_reasoning` dispatch, resident/batched prompts, and both Chat
+and Responses tool wires.
 
 ## Maintenance
 

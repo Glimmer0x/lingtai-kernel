@@ -18,7 +18,10 @@ from typing import Any, Mapping
 MAX_SETTINGS_BYTES = 64 * 1024
 _ENGINE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-CHANGE_HINT = "Edit settings/web.json; changes apply on the next web call; use web(action='manual', parameters={}) for schema."
+CHANGE_HINT = (
+    "Edit settings/web.json; changes apply on the next web call; use "
+    "web(action='manual', input={}, reasoning='load web guidance') for schema."
+)
 
 
 def valid_engine_name(value: Any) -> bool:
