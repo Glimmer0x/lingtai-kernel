@@ -1,10 +1,11 @@
 ---
 name: knowledge-contract
 tool: knowledge
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/knowledge/manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -61,7 +62,7 @@ The two capabilities are structurally isomorphic but physically separate:
 | Root directory | `<agent>/.library/{intrinsic,custom}/` | `<agent>/knowledge/` |
 | Manifest file | `SKILL.md` | `KNOWLEDGE.md` |
 | Tool name | `skills` | `knowledge` |
-| Tool surface | `info` | `info` |
+| Tool surface | `info`, `manual` | `info`, `manual` with required nested `input: {}` |
 | Prompt section | protected `skills` (YAML catalog) | protected `knowledge` (YAML catalog) |
 | Extra path sources | `manifest.capabilities.skills.paths` | none — strictly per-agent |
 | Visibility | portable / shareable | private / agent-owned |
@@ -74,18 +75,42 @@ does not leak into the public skill catalog.
 
 ## Tool surface
 
-The schema requires `action` and accepts exactly one action:
+The model-facing schema is a closed object with required root `action` and
+`input` properties. `input.anyOf` contains exactly two strict empty-object
+branches titled `info input` and `manual input`; the root rejects flat payload
+fields and any other properties. BaseAgent adds the root-only `reasoning`
+property to the model-facing schema. Direct handlers may receive either
+`reasoning` or executor-normalized `_reasoning` metadata, but neither belongs in
+`input` and neither is dispatched as action data.
+
+Use the canonical calls:
+
+```text
+knowledge(action="info", input={}, reasoning="refresh the catalog")
+knowledge(action="manual", input={}, reasoning="load knowledge guidance")
+```
 
 | Action | Required fields | Optional fields | Return on success |
 |---|---|---|---|
-| `info` | — | — | `{status: "ok", knowledge_dir, catalog_size, problems}` |
+| `info` | `input: {}` | root reasoning metadata | `{status: "ok", knowledge_dir, catalog_size, problems, current_setting}` |
+| `manual` | `input: {}` | root reasoning metadata | `{status: "ok", knowledge_manual, manual_path, current_setting}` |
+
+Every action result, including malformed-input, degraded-manual, and
+unknown-action errors, carries a truthful `current_setting`. It is read afresh
+on every invocation from the Agent-owned `settings/knowledge.json` placeholder
+and reports the exact `source`, revision/hash, and any bounded validation error.
+The placeholder schema is exactly `{ "schema_version": 1 }`; missing, valid,
+hot-changed, and invalid files remain diagnostic only and never alter catalog,
+manual, migration, or dispatch behavior. `info` reconciles the catalog;
+`manual` reads only the installed manual and does not refresh it.
 
 Unknown actions return `{status: "error", message: ...}` and do not mutate
-state. The previous JSON-database actions (`submit`, `view`, `consolidate`,
-`delete`) are intentionally removed: knowledge is now authored by writing
-`KNOWLEDGE.md` files with the regular `write`/`edit` tools, just like skills.
-There is no in-tool capacity limit; the historical `knowledge_limit` kwarg is
-accepted but ignored.
+state. The existing exact message is
+`unknown action: <repr>, only 'info' or 'manual' is supported`. The previous
+JSON-database actions (`submit`, `view`, `consolidate`, `delete`) are
+intentionally removed: knowledge is authored by writing `KNOWLEDGE.md` files
+with the regular `write`/`edit` tools, just like skills. There is no in-tool
+capacity limit; the historical `knowledge_limit` kwarg is accepted but ignored.
 
 Only `knowledge(...)` is registered. There is no `library(...)` or `codex(...)`
 alias.

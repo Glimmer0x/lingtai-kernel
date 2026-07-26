@@ -10,6 +10,6 @@ related_files:
 - src/lingtai/tools/knowledge/glossary-zh.md
 - src/lingtai/tools/knowledge/glossary-wen.md
 maintenance: |
-  English glossary for the `knowledge` tool package (lingtai.tools.knowledge); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when knowledge's public tool schema changes.
+  English glossary for the `knowledge` tool package (lingtai.tools.knowledge); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when knowledge's public tool schema changes. The current closed surface requires root `action` + nested empty `input`; `current_setting` is a result diagnostic, not a localized alias.
   Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

@@ -30,12 +30,14 @@ import logging
 import os
 import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lingtai.kernel.tool_dispatch import dispatch_action
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
+from .._settings import read_settings, current_setting
 from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
@@ -282,20 +284,49 @@ def _knowledge_manual(agent: "BaseAgent") -> dict:
 
 
 def get_description(lang: str = "en") -> str:
-    return "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; `info` only re-scans the knowledge catalog and reports health; `manual` returns the knowledge-manual body. Your private durable knowledge catalog across molts — what you've learned, decided, and discovered. Each entry is a folder at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in your system prompt is a YAML list — each entry is a `- name:` block with `location:` and `description:` — bodies load on demand via the read tool, just like skills. Knowledge is private and agent-owned: entries may reference local paths, mail ids, and logs that skills must not depend on. Author new entries by writing knowledge/<name>/KNOWLEDGE.md with write/edit; revise the same way. Call info to refresh the catalog and inspect health. Before using this tool, read the `knowledge-manual` skill — no exceptions."
+    return (
+        "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; "
+        "use knowledge(action=\"info\", input={}, reasoning=\"refresh the catalog\") "
+        "to re-scan the knowledge catalog and report health, or "
+        "knowledge(action=\"manual\", input={}, reasoning=\"load knowledge guidance\") "
+        "to return the knowledge-manual body. Your private durable knowledge catalog "
+        "across molts — what you've learned, decided, and discovered. Each entry is a folder "
+        "at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) "
+        "and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in "
+        "your system prompt is a YAML list — each entry is a `- name:` block with `location:` "
+        "and `description:` — bodies load on demand via the read tool, just like skills. "
+        "Knowledge is private and agent-owned: entries may reference local paths, mail ids, and "
+        "logs that skills must not depend on. Author new entries by writing knowledge/<name>/"
+        "KNOWLEDGE.md with write/edit; revise the same way. Every action result includes the "
+        "truthful `current_setting` diagnostic from a fresh no-op `settings/knowledge.json` "
+        "placeholder read; a missing, valid, hot-changed, or invalid placeholder never changes "
+        "knowledge behavior. Before using this tool, read the `knowledge-manual` skill — no exceptions."
+    )
 
 
 def get_schema(lang: str = "en") -> dict:
+    def empty_input(title: str) -> dict:
+        return {
+            "title": title,
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["info", "manual"],
-                "description": 'info: re-scan knowledge/ and return runtime health (catalog size, resolved root path, malformed entries) without the manual body. manual: return only the knowledge-manual skill body.',
+                "description": "Required operation: info or manual.",
+            },
+            "input": {
+                "anyOf": [empty_input("info input"), empty_input("manual input")],
             },
         },
-        "required": ["action"],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
 
 
@@ -312,8 +343,46 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     _reconcile(agent)
 
     def handle_knowledge(args: dict) -> dict:
-        return dispatch_action(
-            args,
+        settings_snapshot = read_settings(agent, "knowledge")
+        setting = current_setting(settings_snapshot, "knowledge")
+
+        def with_setting(result: dict) -> dict:
+            result = dict(result)
+            result["current_setting"] = setting
+            return result
+
+        allowed_keys = {"action", "input", "reasoning", "_reasoning"}
+        if not isinstance(args, Mapping):
+            return with_setting({
+                "status": "error",
+                "message": "invalid knowledge arguments: expected an object with action and input",
+            })
+        unexpected = set(args) - allowed_keys
+        if unexpected:
+            return with_setting({
+                "status": "error",
+                "message": "invalid knowledge arguments: only action, input, and reasoning metadata are supported",
+            })
+        if "input" not in args:
+            return with_setting({
+                "status": "error",
+                "message": "invalid knowledge arguments: input is required and must be an empty object",
+            })
+        raw_input = args["input"]
+        if not isinstance(raw_input, Mapping):
+            return with_setting({
+                "status": "error",
+                "message": "invalid knowledge arguments: input must be a mapping",
+            })
+        action_input = dict(raw_input)
+        if action_input:
+            return with_setting({
+                "status": "error",
+                "message": "invalid knowledge arguments: input must be an empty object",
+            })
+
+        result = dispatch_action(
+            {"action": args.get("action", "")},
             {
                 "info": lambda _args: _reconcile(agent),
                 "manual": lambda _args: _knowledge_manual(agent),
@@ -323,6 +392,7 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
                 "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
+        return with_setting(result)
 
     agent.add_tool(
         "knowledge",

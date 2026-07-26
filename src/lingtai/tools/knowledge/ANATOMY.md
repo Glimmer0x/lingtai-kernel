@@ -32,16 +32,20 @@ the regular `read` tool.
   imports shared Markdown-catalog scanning/rendering from `core/_catalog.py`.
 - `core/_catalog.py` — shared frontmatter parser, recursive Markdown catalog
   scanner, and YAML catalog renderer used by both `knowledge` and `skills`.
-- `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
-  layout, prompt injection, knowledge/skill directionality, anchored claims,
-  and verification matrix.
+- `knowledge/CONTRACT.md` — public behavior contract: closed nested
+  `action`/`input` tool surface, settings diagnostics, on-disk layout, prompt
+  injection, knowledge/skill directionality, anchored claims, and verification
+  matrix.
 
 ## Connections
 
 - `lingtai.tools.registry` maps builtin capability name `knowledge` here. Former
   `library` and `codex` capability names are not registered.
-- `setup()` registers exactly one tool, `knowledge`, with a single `info`
-  action. The historical `knowledge_limit` kwarg is accepted and ignored.
+- `setup()` registers exactly one tool, `knowledge`, with `info` and `manual`
+  actions behind a closed root `action`/empty nested `input` schema. BaseAgent
+  adds root-only `reasoning`; the handler accepts that metadata (or executor
+  `_reasoning`) without placing it in action input. The historical
+  `knowledge_limit` kwarg is accepted and ignored.
 - `_reconcile()` writes protected prompt section `knowledge`.
 - `skills/` is the structurally isomorphic, physically separate sibling
   capability — it owns `<agent>/.library/{intrinsic,custom}/<name>/SKILL.md`,
@@ -56,6 +60,10 @@ the regular `read` tool.
 - Required frontmatter: `name`, `description`. Optional: `version`.
 - Prompt state: protected `knowledge` section holds the preamble + YAML catalog
   (one `- name:` block per entry, with `location:` and `description:` fields).
+- Each handler invocation rereads the Agent-owned `settings/knowledge.json`
+  placeholder and attaches the resulting `current_setting` diagnostic to every
+  action, malformed-input, degraded, and unknown result. The exact valid schema
+  is `{ "schema_version": 1 }`; it is no-op metadata and never selects behavior.
 - No JSON store and no per-entry size cap. A one-time legacy migration
   converts `knowledge/knowledge.json` and old `codex/codex.json` entries into `KNOWLEDGE.md` folders, writes old `supplementary` text to `references/supplementary.md`, and renames the source JSON to `<name>.json.migrated`.
 

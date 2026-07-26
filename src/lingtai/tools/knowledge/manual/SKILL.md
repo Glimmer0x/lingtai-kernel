@@ -82,7 +82,25 @@ Required fields are `name` and `description`. Supporting files are optional and 
 
 The system prompt only receives a compact catalog: each entry's `name`, `description`, and `location`. The body of `KNOWLEDGE.md` and supporting files stay on disk until you explicitly read them. This keeps the prompt small while still making the memory discoverable.
 
-Call `knowledge({"action": "info"})` to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant.
+Call `knowledge(action="info", input={}, reasoning="refresh the catalog")` to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant. For the manual itself, call `knowledge(action="manual", input={}, reasoning="load knowledge guidance")`. The root `input` is required and must be exactly `{}`; do not use a flat payload or an action-only call.
+
+## Settings diagnostic
+
+Every `knowledge` invocation rereads the Agent-owned `settings/knowledge.json`
+file and includes the resulting `current_setting` object in its result, including
+malformed, degraded, and unknown-action results. The only valid placeholder file
+shape is:
+
+```json
+{"schema_version": 1}
+```
+
+The placeholder is deliberately diagnostic and no-op: missing, valid, hot-changed,
+or invalid settings report their truthful source/revision/hash/error, but never
+change knowledge catalog, migration, manual, or dispatch behavior. A hot edit is
+observed on the next call; the reader is not cached. `reasoning` is model-facing
+root metadata injected by BaseAgent and is not part of `input`; direct callers may
+use `_reasoning` after executor normalization.
 
 ## Nesting and sub-knowledge
 
@@ -166,4 +184,4 @@ PY
 Recommended cadence: before molt if knowledge sprawl is confusing, after major
 projects, and monthly for long-lived agents. If cleanup is approved with explicit user consent, record the
 entries consolidated/removed in `logs/cleanup.jsonl` and update the catalog with
-`knowledge(action="info")`.
+`knowledge(action="info", input={}, reasoning="refresh the catalog")`.

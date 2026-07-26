@@ -87,7 +87,7 @@ def test_legacy_knowledge_limit_kwarg_is_ignored(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"knowledge_limit": 50})
     try:
         assert "knowledge" in agent._tool_handlers
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
     finally:
         agent.stop(timeout=1.0)
@@ -101,11 +101,67 @@ def test_legacy_knowledge_limit_kwarg_is_ignored(tmp_path):
 def test_info_returns_runtime_snapshot(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert result["knowledge_dir"] == str(workdir / "knowledge")
         assert result["catalog_size"] == 0
         assert result["problems"] == []
+        assert result["current_setting"]["source"] == "missing"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_manual_returns_body_and_current_setting(tmp_path):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        result = agent._tool_handlers["knowledge"](
+            {"action": "manual", "input": {}, "_reasoning": "load guidance"}
+        )
+        assert result["status"] == "ok"
+        assert "# The Knowledge Capability" in result["knowledge_manual"]
+        assert result["current_setting"]["source"] == "missing"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_handler_rereads_settings_and_passes_exact_diagnostic_to_every_result(tmp_path, monkeypatch):
+    from lingtai.tools import knowledge as knowledge_module
+
+    agent, _ = _mk_agent(tmp_path)
+    snapshots = [object() for _ in range(5)]
+    settings = [{"call": index} for index in range(5)]
+    reads = []
+
+    def fake_read(current_agent, tool_name):
+        reads.append((current_agent, tool_name))
+        return snapshots.pop(0)
+
+    def fake_current(snapshot, tool_name):
+        assert tool_name == "knowledge"
+        return settings[len(reads) - 1]
+
+    monkeypatch.setattr(knowledge_module, "read_settings", fake_read)
+    monkeypatch.setattr(knowledge_module, "current_setting", fake_current)
+    monkeypatch.setattr(
+        knowledge_module,
+        "_knowledge_manual",
+        lambda _agent: {"status": "degraded", "knowledge_manual": "", "error": "missing"},
+    )
+    try:
+        handler = agent._tool_handlers["knowledge"]
+        calls = [
+            ({"action": "info", "input": {}}, "ok"),
+            ({"action": "manual", "input": {}}, "degraded"),
+            ({"action": "info"}, "error"),
+            ({"action": "submit", "input": {}}, "error"),
+            ({"action": "info", "input": {"title": "flat"}}, "error"),
+        ]
+        results = [handler(args) for args, _ in calls]
+        assert [result["status"] for result in results] == [expected for _, expected in calls]
+        assert [result["current_setting"] for result in results] == settings
+        assert [result["current_setting"] is setting for result, setting in zip(results, settings)] == [True] * 5
+        assert len(reads) == 5
+        assert all(tool_name == "knowledge" and current_agent is agent for current_agent, tool_name in reads)
     finally:
         agent.stop(timeout=1.0)
 
@@ -124,7 +180,7 @@ def test_info_picks_up_authored_entry(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
     finally:
@@ -136,30 +192,49 @@ def test_unknown_action_returns_error(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
         for action in ("submit", "view", "consolidate", "delete", "filter", "export"):
-            result = agent._tool_handlers["knowledge"]({"action": action})
+            result = agent._tool_handlers["knowledge"]({"action": action, "input": {}})
             assert result["status"] == "error", f"{action!r} should be rejected"
             assert "unknown action" in result["message"].lower()
-        # Exact model-visible envelope must survive the dispatch-helper
-        # migration (issue #513): wording, quoting, and key names verbatim.
-        assert agent._tool_handlers["knowledge"]({"action": "submit"}) == {
+            assert "current_setting" in result
+        setting = agent._tool_handlers["knowledge"]({"action": "submit", "input": {}})["current_setting"]
+        # Exact model-visible wording remains unchanged; only the truthful
+        # settings diagnostic is added at the outer result boundary.
+        assert agent._tool_handlers["knowledge"]({"action": "submit", "input": {}}) == {
             "status": "error",
             "message": "unknown action: 'submit', only 'info' or 'manual' is supported",
+            "current_setting": setting,
         }
-        # A missing action key renders the empty-string default, not None.
-        assert agent._tool_handlers["knowledge"]({}) == {
+        # A missing action key renders the empty-string default, not None, when
+        # the required nested input is present.
+        assert agent._tool_handlers["knowledge"]({"input": {}}) == {
             "status": "error",
             "message": "unknown action: '', only 'info' or 'manual' is supported",
+            "current_setting": agent._tool_handlers["knowledge"]({"input": {}})["current_setting"],
         }
-        # Invalid JSON can make `action` unhashable (issue #513 blocker): the
-        # router must render the unknown-action envelope, not raise TypeError.
-        assert agent._tool_handlers["knowledge"]({"action": []}) == {
-            "status": "error",
-            "message": "unknown action: [], only 'info' or 'manual' is supported",
-        }
-        assert agent._tool_handlers["knowledge"]({"action": {}}) == {
-            "status": "error",
-            "message": "unknown action: {}, only 'info' or 'manual' is supported",
-        }
+        # Invalid JSON can make `action` unhashable: the router must render the
+        # unknown-action envelope, not raise TypeError.
+        for action, rendered in (([], "[]"), ({}, "{}")):
+            result = agent._tool_handlers["knowledge"]({"action": action, "input": {}})
+            assert result["message"] == f"unknown action: {rendered}, only 'info' or 'manual' is supported"
+            assert "current_setting" in result
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_handler_rejects_action_only_flat_and_nonempty_input(tmp_path):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["knowledge"]
+        for args in (
+            {"action": "info"},
+            {"action": "info", "title": "flat payload"},
+            {"action": "info", "input": {"title": "non-empty"}},
+            {"action": "info", "input": []},
+        ):
+            result = handler(args)
+            assert result["status"] == "error"
+            assert "current_setting" in result
+            assert "knowledge" in result["message"]
     finally:
         agent.stop(timeout=1.0)
 
@@ -171,13 +246,69 @@ def test_unknown_action_returns_error(tmp_path):
 
 def test_schema_has_info_and_manual_actions():
     from lingtai.tools.knowledge import get_schema
-    SCHEMA = get_schema("en")
-    actions = SCHEMA["properties"]["action"]["enum"]
-    assert actions == ["info", "manual"]
-    # Old JSON-store properties are gone — these fields no longer have any code path.
-    props = SCHEMA["properties"]
-    for removed in ("title", "summary", "content", "supplementary", "ids", "include_supplementary"):
-        assert removed not in props, f"{removed!r} must be removed from schema"
+
+    schema = get_schema("en")
+    assert set(schema["properties"]) == {"action", "input"}
+    assert schema["required"] == ["action", "input"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["action"]["enum"] == ["info", "manual"]
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [branch["title"] for branch in branches] == ["info input", "manual input"]
+    for branch in branches:
+        assert branch == {
+            "title": branch["title"],
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+    # The raw capability schema deliberately does not include Agent-injected
+    # reasoning, and no branch may smuggle it in.
+    assert "reasoning" not in schema["properties"]
+    assert all("reasoning" not in branch["properties"] for branch in branches)
+
+
+def test_actual_agent_inventory_prompt_and_batches_keep_reasoning_root_only(tmp_path):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        schema = next(item for item in agent._build_tool_schemas() if item.name == "knowledge")
+        params = schema.parameters
+        assert set(params["properties"]) == {"action", "input", "reasoning"}
+        assert params["required"] == ["action", "input"]
+        assert params["additionalProperties"] is False
+        branches = params["properties"]["input"]["anyOf"]
+        assert all("reasoning" not in branch["properties"] for branch in branches)
+
+        full_prompt = agent._build_system_prompt()
+        batches = agent._build_system_prompt_batches()
+        assert full_prompt == "\\n\\n".join(batch for batch in batches if batch)
+        assert "knowledge(action=\"info\", input={}, reasoning=" in full_prompt
+        assert "knowledge(action=\"manual\", input={}, reasoning=" in full_prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_knowledge_schema_survives_openai_and_anthropic_envelopes():
+    from lingtai.kernel.llm.base import WIRE_TOOL_DESCRIPTION, FunctionSchema
+    from lingtai.llm.anthropic.adapter import _build_tools as build_anthropic_tools
+    from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+    from lingtai.tools.knowledge import get_description, get_schema
+
+    raw = get_schema()
+    schema = FunctionSchema(name="knowledge", description=get_description(), parameters=raw)
+    chat = _build_tools([schema])[0]
+    responses = _build_responses_tools([schema])[0]
+    anthropic = build_anthropic_tools([schema])[0]
+    for envelope, parameters in (
+        (chat["function"]["parameters"], chat["function"]["parameters"]),
+        (responses["parameters"], responses["parameters"]),
+        (anthropic["input_schema"], anthropic["input_schema"]),
+    ):
+        assert envelope == raw
+        assert parameters["properties"]["input"]["anyOf"][0]["additionalProperties"] is False
+    assert chat["function"]["description"] == WIRE_TOOL_DESCRIPTION
+    assert responses["description"] == WIRE_TOOL_DESCRIPTION
+    assert anthropic["description"] == WIRE_TOOL_DESCRIPTION
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +370,7 @@ def test_catalog_refreshes_on_info(tmp_path):
             "late-arrival",
             "Added after agent boot.",
         )
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
 
         prompt = agent._prompt_manager.read_section("knowledge") or ""
@@ -277,7 +408,7 @@ def test_knowledge_md_convention_distinct_from_skill_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
         prompt = agent._prompt_manager.read_section("knowledge") or ""
         assert "real-entry" in prompt
@@ -316,7 +447,7 @@ def test_entries_may_have_scripts_and_assets(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert result["catalog_size"] == 1
         assert result["problems"] == []
@@ -349,7 +480,7 @@ def test_entry_may_reference_local_paths_in_body(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
         prompt = agent._prompt_manager.read_section("knowledge") or ""
         # Body (and its private references) stays out of the prompt catalog.
@@ -377,7 +508,7 @@ def test_info_surfaces_missing_frontmatter(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         problem_folders = [p["folder"] for p in result["problems"]]
         assert any("missing-desc" in f for f in problem_folders)
         assert result["catalog_size"] == 0
@@ -408,7 +539,7 @@ def test_legacy_knowledge_json_migrates_to_knowledge_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
 
@@ -456,7 +587,7 @@ def test_legacy_knowledge_json_migration_uses_unique_slugs(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 2
         assert (legacy_dir / "duplicate" / "KNOWLEDGE.md").is_file()
         assert (legacy_dir / "duplicate-b2" / "KNOWLEDGE.md").is_file()
@@ -487,7 +618,7 @@ def test_legacy_codex_json_migrates_to_knowledge_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
 
