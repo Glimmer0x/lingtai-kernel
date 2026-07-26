@@ -277,7 +277,7 @@ def test_opencode_ask_uses_injected_port_with_deadline_and_releases(tmp_path):
     result = mgr._handle_ask_opencode("em-oc-ask-port", entry, "Continue now")
     assert result == {
         "status": "sent", "id": "em-oc-ask-port", "async": True,
-        "message": "ask dispatched; check daemon(action='check', id='em-oc-ask-port') for progress and final reply",
+        "message": "ask dispatched; check daemon(action='check', input={'id': 'em-oc-ask-port'}) for progress and final reply",
     }
     entry["ask_future"].result(timeout=5)
 
@@ -352,7 +352,7 @@ def test_opencode_emanate_appends_backend_argv_before_prompt(tmp_path):
 
 def test_opencode_emanate_persists_session_id_from_first_event(tmp_path):
     """The first JSON event carrying a session-id-shaped field is stored
-    in daemon.json so daemon(ask) can resume from the moment the
+    in daemon.json so daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) can resume from the moment the
     emanation returns."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
@@ -498,12 +498,18 @@ def test_emanate_opencode_routes_to_cli_handler(tmp_path, monkeypatch):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "opencode",
-        "tasks": [{
-            "task": "Summarise the changelog.",
-            "tools": [],
-            "backend_options": {"model": "openai/gpt-5"},
-        }],
+        "input": {
+            "backend": "opencode",
+            "tasks": [
+                {
+                    "task": "Summarise the changelog.",
+                    "tools": [],
+                    "backend_options": {
+                        "model": "openai/gpt-5",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     assert result["backend"] == "opencode"
@@ -550,8 +556,10 @@ def test_ask_opencode_errors_when_no_session_id(tmp_path):
 
     result = mgr.handle({
         "action": "ask",
-        "id": "em-oc-noresume",
-        "message": "any update?",
+        "input": {
+            "id": "em-oc-noresume",
+            "message": "any update?",
+        },
     })
     assert result["status"] == "error"
     assert "opencode session ID" in result["message"]
@@ -591,8 +599,10 @@ def test_ask_opencode_resumes_with_captured_session_id(tmp_path):
     with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
-            "id": "em-oc-resume",
-            "message": "how is it going?",
+            "input": {
+                "id": "em-oc-resume",
+                "message": "how is it going?",
+            },
         })
 
     assert result["status"] == "sent"

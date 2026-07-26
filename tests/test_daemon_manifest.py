@@ -1,5 +1,5 @@
 """Tests for the daemon artifact manifest (artifacts.json) and its surfacing
-through daemon(action='check').
+through daemon(action='check', input={'id': '<id>'}).
 
 The manifest is a compact, durable index of a run dir's important files —
 relative path, size, mtime, inferred role — plus run-level state/result/error
@@ -169,7 +169,7 @@ def test_build_manifest_missing_daemon_json_is_graceful(tmp_path):
 
 
 # ----------------------------------------------------------------------
-# daemon(action="check") surfacing
+# daemon(action="check", input={"id": "<id>"}) surfacing
 # ----------------------------------------------------------------------
 
 def _make_agent(tmp_path):
@@ -213,7 +213,7 @@ def test_check_surfaces_manifest_for_done_run(tmp_path):
     _register(mgr, "em-1", rd)
     rd.mark_done("the result")
 
-    out = mgr.handle({"action": "check", "id": "em-1"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-1"}})
     arts = out["artifacts"]
     assert arts["source"] == "manifest"  # persisted at terminal time
     assert arts["state"] == "done"
@@ -236,7 +236,7 @@ def test_check_computes_fallback_manifest_for_running_run(tmp_path):
     # No terminal marker → no artifacts.json yet.
     assert not rd.manifest_path.is_file()
 
-    out = mgr.handle({"action": "check", "id": "em-2"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-2"}})
     arts = out["artifacts"]
     assert arts["source"] == "fallback"
     assert arts["state"] == "running"
@@ -259,7 +259,7 @@ def test_check_historical_run_without_manifest_falls_back(tmp_path):
     rd.manifest_path.unlink()
     # Not in the in-memory registry → resolves via historical fallback.
 
-    out = mgr.handle({"action": "check", "id": rd.run_id})
+    out = mgr.handle({"action": "check", "input": {"id": rd.run_id}})
     assert out["source"] == "history"
     arts = out["artifacts"]
     assert arts["source"] == "fallback"

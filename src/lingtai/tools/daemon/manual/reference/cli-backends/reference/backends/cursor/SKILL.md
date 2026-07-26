@@ -69,7 +69,7 @@ rules. Still, do not re-set harness-owned surfaces: `-p` (non-interactive
 print mode), `--force` (allows file modifications in print mode),
 `--output-format stream-json` (one JSON event per stdout line — the daemon's
 progress/result parser and the session-id capture depend on it), and
-`--resume` (owned by `daemon(action='ask')` follow-ups, which replay the
+`--resume` (owned by `daemon(action='ask', input={'id': '<id>', 'message': '<message>'})` follow-ups, which replay the
 captured session id).
 
 Session and completion behavior, source-verified: the first stream event

@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 6
-last_changed_at: "2026-07-24"
+contract_version: 7
+last_changed_at: "2026-07-26"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -16,6 +16,8 @@ related_files:
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/tools/_settings.py
+  - tests/test_daemon_action_input_candidate.py
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
@@ -51,6 +53,8 @@ review_triggers:
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/run_dir.py
+  - src/lingtai/tools/_settings.py
+  - tests/test_daemon_action_input_candidate.py
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/manual/
   - src/lingtai/mcp_servers/daemon_common/
@@ -108,8 +112,9 @@ ownership -> §Process and Terminal Boundaries.
 ## Scope
 
 - Canonical tool name: `daemon`.
-- The parent `daemon` tool exposes five actions: `emanate`, `list`, `ask`, `check`,
-  `reclaim`; `action` is required. Every LingTai emanation additionally receives
+- The parent `daemon` tool exposes six actions: `emanate`, `list`, `ask`, `check`,
+  `reclaim`, and read-only `manual`; both `action` and strict nested `input` are
+  required. Every LingTai emanation additionally receives
   the intrinsic `compact` tool, whose required `action` is explicit `run`
   (non-terminal reset) or `manual` (read-only procedures); omission is refused.
 - Backends (`backend`, default `lingtai`): schema enum is `lingtai`, `claude-p`,
@@ -133,11 +138,29 @@ where those changes affect the invariants here.
 
 ## Tool Surface
 
-Schema `required: ["action"]`. Relevant properties: `tasks[]` (each requires
-`task` + `tools`; optional `skills`, `mcp`, `preset`, `backend_options`,
-`prompt`, `context_token_limit`), `id`, `message`, `last`, `truncate`,
-`contains`, `status`, `include_done`, `max_turns`, `timeout`, `backend`,
-`summary`.
+The raw schema is a closed root object with exactly the required properties
+`action` and `input`, `additionalProperties: false`, and action enum
+`emanate|list|ask|check|reclaim|manual`. `input` is a closed `anyOf` of six
+strict action branches; there are no flat fields, aliases, implicit/default
+actions, or compatibility healing. `BaseAgent` alone adds optional root
+`reasoning` to its Agent-facing copy; it is absent from the raw schema and from
+every nested input object. Provider names and envelopes are unchanged.
+
+`emanate.input.tasks[]` retains required `task` + `tools` and optional `skills`,
+`mcp`, `preset`, `backend_options`, `prompt`, and `context_token_limit`; the
+outer branch retains `max_turns`, `timeout`, and `backend`. `list.input` owns
+`contains`, `status`, `include_done`, and `last`; `ask.input` owns required
+`id`/`message`; `check.input` owns required `id` plus optional `last`/`truncate`.
+Every one of the six action branches also admits optional nested `summary`,
+preserving the foundation schema's action-neutral a-priori-summary capability
+inside the canonical input object. Thus `reclaim.input` and `manual.input` are
+empty or contain only `summary`; `manual` loads the installed daemon manual
+without changing daemon state.
+
+Every result, including rejected calls and manual, carries a fresh copy-safe
+`current_setting` block from Agent-owned `settings/daemon.json`. It is strict
+version 1 and accepts only `{"schema_version": 1}`; missing, valid, hot-edited,
+and invalid files are evidence only and never select or change daemon behavior.
 
 `tasks[].task` is required and is the complete parent-controlled daemon system
 instruction for `backend="lingtai"`: objective, role, constraints, tool policy,
@@ -406,10 +429,14 @@ kernel `ToolExecutor`. The closure:
 - accounts usage through `DaemonRunDir.append_tokens`, keeping daemon and parent
   ledgers consistent.
 
-`ToolExecutor` remains responsible for the `summary=true` gate, raw logging,
-fail-closed replacement, and the 500,000-character cap. Daemons expose the
-run-local `logs/events.jsonl` / `daemon_tool_result` recovery locator. The closure
-is inert unless a tool explicitly requests `summary=true`.
+`ToolExecutor` remains responsible for the exact-boolean nested `summary=true`
+gate, raw logging, fail-closed replacement, and the 500,000-character cap.
+Daemon `input.summary` is advertised on all six action branches because the
+foundation public schema exposed one action-neutral root flag; nesting preserves
+that capability without retaining a flat compatibility path. The selected action
+still executes normally; its raw result is durably logged first, then the visible
+payload may be replaced. Daemons expose the run-local `logs/events.jsonl` /
+`daemon_tool_result` recovery locator. Root `summary` is not a fallback.
 
 ## Backend Support Matrix
 
@@ -582,8 +609,8 @@ terminal state, result/artifact files, and one idempotent terminal notification.
 
 Agent stop and `system.refresh` shut down only parent-local resources; they do
 not inspect or terminate a detached supervisor or its backend child. Explicit
-`daemon(action="reclaim")` is the only parent control that requests run
-cancellation. `daemon(action="ask")` uses the run-local control spool and is
+`daemon(action="reclaim", input={})` is the only parent control that requests run
+cancellation. `daemon(action="ask", input={"id": "<id>", "message": "<message>"})` uses the run-local control spool and is
 accepted only while durable state is running. The ownership transition is
 unconditional; detached supervision is not gated behind a production flag.
 

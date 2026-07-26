@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import signal
@@ -22,11 +23,12 @@ import sys
 import threading
 import time
 import yaml
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 
 if TYPE_CHECKING:
@@ -43,6 +45,7 @@ from lingtai.kernel.meta_block import (
 from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
+from .._settings import SettingsSnapshot, current_setting, read_settings
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
@@ -120,7 +123,7 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 
 
 # Default and author ceiling for per-emanation LLM tool-loop turns.
-# Agents may request a smaller per-batch value via daemon(max_turns=...), but
+# Agents may request a smaller per-batch value via daemon(action="emanate", input={"max_turns": ...}), but
 # larger values are capped here.
 DEFAULT_MAX_TURNS = 1000
 DAEMON_CONTEXT_COUNTDOWN_ROUNDS = 9
@@ -790,7 +793,7 @@ _OPENCODE_FAMILY_RESERVED_BACKEND_FLAGS = {
 
 # MiMo Code additionally owns its session selectors: the daemon captures the
 # session id from the run's own JSONL and drives resume through
-# daemon(action='ask') (``mimo run --session <id> --format json``). Letting a
+# daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) (``mimo run --session <id> --format json``). Letting a
 # caller pass ``--session``/``--continue``/``--fork`` in backend_options would
 # hijack or fork the harness-owned session and silently break resume, so they
 # are reserved MiMo-specifically (generic opencode session flags are untouched).
@@ -819,7 +822,7 @@ _QWEN_RESERVED_BACKEND_FLAGS = {
 # non-interactive text-capture harness; overriding them via backend_options
 # would break output capture. ``--yolo`` is forbidden because Kimi's official
 # CLI refuses ``--prompt`` combined with ``--yolo``. Session/continue flags are
-# reserved because daemon(action='ask') resume is not wired for Kimi yet (no
+# reserved because daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) resume is not wired for Kimi yet (no
 # verified stable session-id contract), so callers must not try to hijack a
 # session through backend_options. (Short ``-p``/``-y``/``-S``/``-c`` cannot be
 # emitted by backend_options, which only creates long ``--flag`` tokens, but
@@ -865,12 +868,12 @@ _BACKEND_ALIASES = {
 }
 
 _QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
-    "qwen-code daemon backend does not support daemon(action='ask') yet; "
+    "qwen-code daemon backend does not support daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) yet; "
     "start a new qwen-code emanation instead."
 )
 
 _KIMICODE_ASK_UNSUPPORTED_MESSAGE = (
-    "kimicode daemon backend does not support daemon(action='ask') yet; "
+    "kimicode daemon backend does not support daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) yet; "
     "start a new kimicode emanation instead."
 )
 
@@ -1114,9 +1117,6 @@ class _ToolCollector:
         return getattr(self._parent, n)
 
 
-def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all), manual (return the installed daemon-manual skill). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
-
 
 def _backend_option_value_schema() -> dict:
     """Return a fresh JSON schema for one generic CLI option value.
@@ -1146,7 +1146,12 @@ def _backend_option_value_schema() -> dict:
     }
 
 
-def get_schema(lang: str = "en") -> dict:
+def _daemon_schema_template(lang: str = "en") -> dict:
+    """Return fresh rich field metadata for the canonical daemon schema.
+
+    The outer flat shape is an internal construction template only.  The public
+    ``get_schema`` below emits only the closed ``action`` + ``input`` contract.
+    """
     return {
         "type": "object",
         "properties": {
@@ -1268,6 +1273,257 @@ def get_schema(lang: str = "en") -> dict:
         },
         "required": ["action"],
     }
+
+
+_DAEMON_ACTIONS = ("emanate", "list", "ask", "check", "reclaim", "manual")
+
+
+def get_description(lang: str = "en") -> str:
+    return (
+        "Daemon (神識) delegates work to ephemeral subagents for context isolation. "
+        "Each is a disposable LLM session sharing your working directory and retaining no "
+        "memory after completion. Use daemon(action='emanate', input={'tasks': [...]}) to "
+        "dispatch; list, ask, check, reclaim, and manual are the other explicit actions. "
+        "Results are bounded, so instruct workers to write detailed output to files. Every "
+        "terminal outcome is push-notified once; go idle instead of polling, then inspect it "
+        "with daemon(action='check', input={'id': '<id>'}). LingTai daemons also receive "
+        "compact(action='manual') and compact(action='run', _reason='...'). Optional "
+        "input.summary=true is available on every daemon action: raw logging remains first "
+        "and ToolExecutor may replace only the model-visible result. Read daemon-manual "
+        "before ordinary daemon work."
+    )
+
+
+def _closed_input(title: str, properties: dict, required: list[str]) -> dict:
+    return {
+        "title": title,
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def get_schema(lang: str = "en") -> dict:
+    """Return the raw strict ``action`` + nested ``input`` daemon schema.
+
+    Rich field metadata is retained from the pre-migration surface, but that
+    historical flat object is only an internal template.  BaseAgent alone adds
+    optional root ``reasoning`` to the provider-facing copy.
+    """
+    template = _daemon_schema_template(lang)["properties"]
+    task_schema = template["tasks"]["items"]
+    task_schema["additionalProperties"] = False
+    task_schema["properties"]["task"]["description"] = (
+        "Complete parent-controlled daemon instruction, including objective, constraints, "
+        "tool policy, collaboration boundaries, safety posture, and where to save work."
+    )
+    task_schema["properties"]["tools"]["description"] = (
+        "Capability names available to this task, for example ['file', 'shell']."
+    )
+    tasks_property = template["tasks"]
+    tasks_property["minItems"] = 1
+
+    def field(name: str, *, description: str | None = None, default: Any = None,
+              add_default: bool = False) -> dict:
+        value = dict(template[name])
+        if description is not None:
+            value["description"] = description
+        if add_default:
+            value["default"] = default
+        return value
+
+    branches = [
+        _closed_input(
+            "emanate input",
+            {
+                "tasks": tasks_property,
+                "max_turns": field("max_turns"),
+                "timeout": field("timeout"),
+                "backend": field("backend"),
+                "summary": field("summary"),
+            },
+            ["tasks"],
+        ),
+        _closed_input(
+            "list input",
+            {
+                "contains": field("contains"),
+                "status": field("status"),
+                "include_done": field("include_done", default=True, add_default=True),
+                "last": field("last"),
+                "summary": field("summary"),
+            },
+            [],
+        ),
+        _closed_input(
+            "ask input",
+            {
+                "id": field("id"),
+                "message": field("message"),
+                "summary": field("summary"),
+            },
+            ["id", "message"],
+        ),
+        _closed_input(
+            "check input",
+            {
+                "id": field("id", description="Subagent ID for 'check' action (e.g. 'em-1')"),
+                "last": field("last", default=20, add_default=True),
+                "truncate": field("truncate", default=500, add_default=True),
+                "summary": field("summary"),
+            },
+            ["id"],
+        ),
+        _closed_input("reclaim input", {"summary": field("summary")}, []),
+        _closed_input("manual input", {"summary": field("summary")}, []),
+    ]
+    return {
+        "type": "object",
+        "properties": {
+            "action": template["action"],
+            "input": {
+                "type": "object",
+                "anyOf": branches,
+                "description": "Strict action-specific daemon input; choose the branch matching action.",
+            },
+        },
+        "required": ["action", "input"],
+        "additionalProperties": False,
+    }
+
+
+_DAEMON_PUBLIC_ROOT_FIELDS = frozenset({"action", "input", "reasoning", "_reasoning", "_tc_id"})
+_DAEMON_INPUT_FIELDS: dict[str, frozenset[str]] = {
+    "emanate": frozenset({"tasks", "max_turns", "timeout", "backend", "summary"}),
+    "list": frozenset({"contains", "status", "include_done", "last", "summary"}),
+    "ask": frozenset({"id", "message", "summary"}),
+    "check": frozenset({"id", "last", "truncate", "summary"}),
+    "reclaim": frozenset({"summary"}),
+    "manual": frozenset({"summary"}),
+}
+_DAEMON_TASK_FIELDS = frozenset({
+    "task", "tools", "skills", "mcp", "preset", "backend_options", "prompt",
+    "context_token_limit",
+})
+
+
+def _mapping_keys(value: Mapping) -> tuple[list[Any], str | None]:
+    try:
+        keys = list(value.keys())
+    except Exception:
+        return [], "mapping keys could not be read"
+    if any(not isinstance(key, str) for key in keys):
+        return keys, "mapping keys must be strings"
+    return keys, None
+
+
+def _strict_integer(value: Any, *, minimum: int | None = None, maximum: int | None = None) -> bool:
+    if type(value) is not int:
+        return False
+    return ((minimum is None or value >= minimum) and
+            (maximum is None or value <= maximum))
+
+
+def _strict_number(value: Any, *, minimum: float | None = None) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return minimum is None or value >= minimum
+
+
+def _validate_daemon_task_shape(task: Any, index: int) -> str | None:
+    if not isinstance(task, Mapping):
+        return f"tasks[{index}] must be an object"
+    keys, key_error = _mapping_keys(task)
+    if key_error:
+        return f"tasks[{index}] {key_error}"
+    unknown = set(keys) - _DAEMON_TASK_FIELDS
+    if unknown:
+        return f"tasks[{index}] has unsupported field(s): {', '.join(sorted(unknown))}"
+    if "task" not in task or "tools" not in task:
+        return f"tasks[{index}] requires task and tools"
+    if not isinstance(task["task"], str):
+        return f"tasks[{index}].task must be a string"
+    tools = task["tools"]
+    if not isinstance(tools, list) or not all(isinstance(item, str) for item in tools):
+        return f"tasks[{index}].tools must be an array of strings"
+    for field in ("skills",):
+        if field in task:
+            value = task[field]
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                return f"tasks[{index}].{field} must be an array of strings"
+    for field in ("preset", "prompt"):
+        if field in task and not isinstance(task[field], str):
+            return f"tasks[{index}].{field} must be a string"
+    if "context_token_limit" in task and not _strict_integer(task["context_token_limit"], minimum=1):
+        return f"tasks[{index}].context_token_limit must be a positive integer"
+    if "mcp" in task:
+        if not isinstance(task["mcp"], list) or not all(isinstance(item, Mapping) for item in task["mcp"]):
+            return f"tasks[{index}].mcp must be an array of objects"
+    if "backend_options" in task and not isinstance(task["backend_options"], Mapping):
+        return f"tasks[{index}].backend_options must be an object"
+    return None
+
+
+def _validate_daemon_input(action: Any, raw_input: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate the public action/input envelope without entering daemon seams."""
+    if type(action) is not str or action not in _DAEMON_ACTIONS:
+        return None, "action must be one of: emanate, list, ask, check, reclaim, manual"
+    if not isinstance(raw_input, Mapping):
+        return None, "input is required and must be an object"
+    keys, key_error = _mapping_keys(raw_input)
+    if key_error:
+        return None, f"daemon input {key_error}"
+    unknown = set(keys) - _DAEMON_INPUT_FIELDS[action]
+    if unknown:
+        return None, f"unsupported {action} input field(s): {', '.join(sorted(unknown))}"
+    payload = dict(raw_input)
+    if "summary" in payload and type(payload["summary"]) is not bool:
+        return None, "summary must be a boolean"
+    if action == "manual" or action == "reclaim":
+        return payload, None
+    if action == "emanate":
+        if "tasks" not in payload:
+            return None, "emanate input requires tasks"
+        tasks = payload["tasks"]
+        if not isinstance(tasks, list) or not tasks:
+            return None, "emanate input tasks must be a non-empty array"
+        for index, task in enumerate(tasks):
+            error = _validate_daemon_task_shape(task, index)
+            if error:
+                return None, error
+        if "max_turns" in payload and not _strict_integer(payload["max_turns"], minimum=1, maximum=DEFAULT_MAX_TURNS):
+            return None, f"max_turns must be an integer between 1 and {DEFAULT_MAX_TURNS}"
+        if "timeout" in payload and not _strict_number(payload["timeout"], minimum=5):
+            return None, "timeout must be a finite number of seconds >= 5"
+        if "backend" in payload and payload["backend"] not in _BACKEND_SCHEMA_ENUM:
+            return None, "backend must be one of the advertised daemon backends"
+    elif action == "list":
+        if "contains" in payload and not isinstance(payload["contains"], str):
+            return None, "contains must be a string"
+        if "status" in payload and not isinstance(payload["status"], str):
+            return None, "status must be a string"
+        if "include_done" in payload and type(payload["include_done"]) is not bool:
+            return None, "include_done must be a boolean"
+        if "last" in payload and not _strict_integer(payload["last"], minimum=1, maximum=1000):
+            return None, "last must be an integer between 1 and 1000"
+    elif action == "ask":
+        if "id" not in payload or "message" not in payload:
+            return None, "ask input requires id and message"
+        if not isinstance(payload["id"], str) or not isinstance(payload["message"], str):
+            return None, "ask id and message must be strings"
+    elif action == "check":
+        if "id" not in payload:
+            return None, "check input requires id"
+        if not isinstance(payload["id"], str):
+            return None, "check id must be a string"
+        if "last" in payload and not _strict_integer(payload["last"], minimum=1, maximum=1000):
+            return None, "last must be an integer between 1 and 1000"
+        if "truncate" in payload and not _strict_integer(payload["truncate"], minimum=0):
+            return None, "truncate must be a non-negative integer"
+    return payload, None
 
 
 # Sentinel strings a cooperatively-exited run returns through the future.
@@ -1455,7 +1711,7 @@ class DaemonManager:
         self._cli_term_reasons: dict[int, str] = {}
         self._cli_lock = threading.Lock()
         # Dedicated pool for CLI-backend `ask` follow-ups so they run off the
-        # caller's tool-dispatch thread. The agent's `daemon(action="ask")` call
+        # caller's tool-dispatch thread. The agent's `daemon(action="ask", input={"id": "<id>", "message": "<message>"})` call
         # returns immediately while progress + final reply land in the run_dir
         # (cli_output events, last_output, follow-up completion notification).
         # Workers are submitted lazily so the pool is only spun up on first use.
@@ -1625,37 +1881,117 @@ class DaemonManager:
         except (OSError, UnicodeDecodeError):
             return ""
 
-    def handle(self, args: dict) -> dict:
-        action = args.get("action")
+    def _setting_diagnostic(self) -> dict[str, Any]:
+        """Reread Agent-owned no-op settings evidence for this public call."""
+        try:
+            snapshot = read_settings(self._agent, "daemon")
+        except Exception as exc:  # defensive boundary for minimal/fake Agents
+            snapshot = SettingsSnapshot(
+                "settings_error", "error", None,
+                f"settings reader failed ({type(exc).__name__})",
+            )
+        try:
+            return current_setting(snapshot, "daemon")
+        except Exception as exc:  # keep every public result bounded
+            return {
+                "configurable": False,
+                "placeholder": "no-op",
+                "source": "settings_error",
+                "settings_revision": "error",
+                "settings_hash": None,
+                "settings_error": f"settings diagnostic failed ({type(exc).__name__})",
+                "change_hint": "Edit settings/daemon.json; changes never change daemon behavior.",
+            }
+
+    @staticmethod
+    def _with_setting(result: Any, diagnostic: dict[str, Any]) -> dict[str, Any]:
+        """Attach copy-safe authoritative settings evidence to one result."""
+        if isinstance(result, Mapping):
+            value = dict(result)
+        else:
+            value = {"status": "error", "message": "daemon action failed"}
+        value["current_setting"] = dict(diagnostic)
+        return value
+
+    def _validate_public_emanate_details(self, payload: dict[str, Any]) -> str | None:
+        """Run pure task validators before preset/MCP/run-dir/scheduling seams."""
+        backend = _normalize_backend(payload.get("backend", "lingtai"))
+        for index, task in enumerate(payload["tasks"]):
+            spec = dict(task)
+            try:
+                self._task_mcp_registrations(spec)
+            except (TypeError, ValueError) as exc:
+                return f"tasks[{index}].mcp: {exc}"
+            options = spec.get("backend_options")
+            if options is not None:
+                try:
+                    argv = _backend_options_to_argv(dict(options))
+                    _validate_claude_backend_argv(backend, argv)
+                except (TypeError, ValueError) as exc:
+                    return f"tasks[{index}].backend_options: {exc}"
+        return None
+
+    def handle(self, args: Any) -> dict:
+        """Validate one canonical public call before any daemon execution seam."""
+        diagnostic = self._setting_diagnostic()
+
+        def error(message: str) -> dict:
+            return self._with_setting({"status": "error", "message": message}, diagnostic)
+
+        if not isinstance(args, Mapping):
+            return error("daemon arguments must be an object")
+        root_keys, key_error = _mapping_keys(args)
+        if key_error:
+            return error(f"daemon {key_error}")
+        if any(key not in _DAEMON_PUBLIC_ROOT_FIELDS for key in root_keys):
+            return error("daemon accepts only root action, input, and Agent reasoning metadata")
+        if "action" not in root_keys or "input" not in root_keys:
+            return error("daemon requires root action and input")
+        try:
+            action = args["action"]
+            raw_input = args["input"]
+        except Exception:
+            return error("daemon arguments are malformed")
+        payload, validation_error = _validate_daemon_input(action, raw_input)
+        if validation_error:
+            return error(validation_error)
+        assert payload is not None
+
         if action == "manual":
-            return load_installed_manual(self._agent, "daemon")
-        backend = _normalize_backend(args.get("backend", "lingtai"))
+            try:
+                result = load_installed_manual(self._agent, "daemon")
+            except Exception as exc:
+                result = {"status": "degraded", "manual": "", "error": f"daemon manual failed ({type(exc).__name__})"}
+            return self._with_setting(result, diagnostic)
+        if action == "reclaim":
+            return self._with_setting(self._handle_reclaim(), diagnostic)
         if action == "emanate":
-            return self._handle_emanate(
-                args.get("tasks", []),
-                max_turns=args.get("max_turns"),
-                timeout=args.get("timeout"),
+            detail_error = self._validate_public_emanate_details(payload)
+            if detail_error:
+                return error(detail_error)
+            backend = _normalize_backend(payload.get("backend", "lingtai"))
+            result = self._handle_emanate(
+                payload["tasks"],
+                max_turns=payload.get("max_turns"),
+                timeout=payload.get("timeout"),
                 backend=backend,
             )
         elif action == "list":
-            return self._handle_list(
-                contains=args.get("contains", ""),
-                status_filter=args.get("status", "all"),
-                include_done=args.get("include_done", True),
-                limit=args.get("last"),
+            result = self._handle_list(
+                contains=payload.get("contains", ""),
+                status_filter=payload.get("status", "all"),
+                include_done=payload.get("include_done", True),
+                limit=payload.get("last"),
             )
         elif action == "ask":
-            return self._handle_ask(args.get("id", ""), args.get("message", ""))
-        elif action == "check":
-            return self._handle_check(
-                args.get("id", ""),
-                last=args.get("last", 20),
-                truncate=args.get("truncate", 500),
+            result = self._handle_ask(payload["id"], payload["message"])
+        else:  # check
+            result = self._handle_check(
+                payload["id"],
+                last=payload.get("last", 20),
+                truncate=payload.get("truncate", 500),
             )
-        elif action == "reclaim":
-            return self._handle_reclaim()
-        else:
-            return {"status": "error", "message": f"Unknown action: {action}"}
+        return self._with_setting(result, diagnostic)
 
     def _daemon_intrinsic_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
         """Return daemon-eligible intrinsic schemas/handlers.
@@ -3215,10 +3551,10 @@ class DaemonManager:
         - ``claude_session_id`` to daemon.json on the first event that
           carries one (typically the system ``init`` event, but any event
           with ``session_id`` works as a fallback). This makes
-          ``daemon(ask)`` usable from the moment ``emanate`` returns,
+          ``daemon(action="ask", input={"id": "<id>", "message": "<message>"})`` usable from the moment ``emanate`` returns,
           rather than after the initial run completes.
         - Per-turn ``text``/``tool_use`` blocks via
-          ``record_cli_output`` so ``daemon(check)`` shows live progress.
+          ``record_cli_output`` so ``daemon(action="check", input={"id": "<id>"})`` shows live progress.
         - Tool calls via ``set_current_tool`` / ``clear_current_tool``.
         - stderr to its own pipe so diagnostic messages aren't lost in
           the stdout stream.
@@ -3329,7 +3665,7 @@ class DaemonManager:
             # `usage` fields here would mix unrelated currencies (cache
             # read/write semantics differ from the kernel's LLM adapters)
             # and create a misleading "lifetime totals" number. Spend
-            # remains visible to the agent via daemon(check) — the
+            # remains visible to the agent via daemon(action="check", input={"id": "<id>"}) — the
             # `last_output` field, cli_output events, and stderr — and,
             # for UI display, the final result event's usage is persisted
             # separately to daemon.json.cli_tokens (see the result-event
@@ -3478,7 +3814,7 @@ class DaemonManager:
 
         # Fallback: if no event carried session_id (extremely unusual but
         # possible if Claude Code changes its stream format), fall back to
-        # the legacy JSONL scan so daemon(ask) still works.
+        # the legacy JSONL scan so daemon(action="ask", input={"id": "<id>", "message": "<message>"}) still works.
         if not session_id_captured:
             session_id = self._find_claude_session_id(em_id)
             if session_id:
@@ -3576,7 +3912,7 @@ class DaemonManager:
         progress and captures a resumable session id — mirroring the
         Claude Code backend. ``--ephemeral`` is intentionally **not**
         passed: it would disable session persistence and break
-        ``daemon(ask, id=em-N)``.
+        ``daemon(action="ask", input={"id": "em-N", "message": "..."})``.
 
         Event shapes (codex-cli 0.128.0):
         - ``{"type":"thread.started","thread_id":"<uuid>"}`` — first event,
@@ -3590,7 +3926,7 @@ class DaemonManager:
           NOT forward it to ``append_tokens``: codex runs as an external
           process with its own billing path, and counting its tokens
           into the kernel's ledger would mix unrelated currencies. Spend
-          is visible to the agent via ``daemon(check)`` but not via
+          is visible to the agent via ``daemon(action="check", input={"id": "<id>"})`` but not via
           ``sum_token_ledger``.
         """
         if cancel_event.is_set():
@@ -3782,7 +4118,7 @@ class DaemonManager:
         the parent agent can dispatch a daemon and safely go idle: the kernel
         notification sync wakes it when the run ends, no polling required. Full
         daemon output belongs in the run directory and is inspectable via
-        ``daemon(action="check", id=...)``.  The parent notification is only a
+        ``daemon(action="check", input={"id": ...})``.  The parent notification is only a
         wake signal with provenance, bounded preview, and the inspection path.
         It must not arrive as ordinary ``MSG_REQUEST`` text.
 
@@ -3799,7 +4135,7 @@ class DaemonManager:
             )
         parts = [
             f"Daemon {em_id} {status}.",
-            f"Inspect with daemon(action=\"check\", id=\"{em_id}\").",
+            f'Inspect with daemon(action="check", input={{"id": "{em_id}"}}).',
         ]
         recorded_error = None
         if run_dir is not None:
@@ -3881,7 +4217,7 @@ class DaemonManager:
         future and never reach the agent or the run_dir. We log the
         exception via the standard daemon log channel and best-effort
         record it into the emanation's run_dir as a cli_output line so a
-        later daemon(check) shows what happened.
+        later daemon(action="check", input={"id": "<id>"}) shows what happened.
         """
         try:
             exc = future.exception()
@@ -5053,7 +5389,7 @@ class DaemonManager:
         #   - cursor:                      `agent -p --resume <cursor_session_id> ...`
         # Qwen Code headless mode does not expose a stable resume contract here.
         # All stream progress into the daemon run directory so
-        # `daemon(check)` shows live progress.
+        # `daemon(action="check", input={"id": "<id>"})` shows live progress.
         # Every production entry is created with "detached": True (see
         # `_handle_emanate`/`_handle_emanate_cli`/`_durable_detached_entry`), so
         # this always takes the detached branch in production. The legacy
@@ -5161,7 +5497,7 @@ class DaemonManager:
         self._log("daemon_ask_detached_resume", em_id=em_id,
                   generation=claim["generation"], message_length=len(message))
         return {"status": "sent", "id": em_id, "generation": claim["generation"],
-                "async": True, "message": "detached resume owner started; inspect daemon(action='check')"}
+                "async": True, "message": "detached resume owner started; inspect daemon(action='check', input={'id': '<id>'})"}
 
     @staticmethod
     def _read_run_dir_state_from_disk(run_dir: DaemonRunDir) -> dict:
@@ -5194,7 +5530,7 @@ class DaemonManager:
                 return {"status": "busy", "id": em_id,
                         "message": f"a previous ask on {em_id} is still "
                                    "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
+                                   f"daemon(action='check', input={{'id': '{em_id}'}})"}
             entry["ask_in_flight"] = True
 
         try:
@@ -5214,7 +5550,7 @@ class DaemonManager:
         entry["ask_future"] = ask_future
         return {"status": "sent", "id": em_id, "async": True,
                 "message": "interactive ask dispatched; check daemon(action='check', "
-                           f"id='{em_id}') for progress and final reply"}
+                           f"input={{'id': '{em_id}'}}) for progress and final reply"}
 
     def _run_ask_claude_interactive_stream(
         self,
@@ -5297,7 +5633,7 @@ class DaemonManager:
         Returns immediately after spawning the subprocess; the stream-json
         parse runs in ``self._ask_pool``. Progress + final reply still land
         in ``run_dir`` (``cli_output`` events, ``last_output``, and a
-        ``follow-up completed`` notification on success), so ``daemon(check)``
+        ``follow-up completed`` notification on success), so ``daemon(action="check", input={"id": "<id>"})``
         observes the ask just as it did when this method was synchronous.
 
         Refuses a second concurrent ask against the same emanation with
@@ -5322,7 +5658,7 @@ class DaemonManager:
                 return {"status": "busy", "id": em_id,
                         "message": f"a previous ask on {em_id} is still "
                                    "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
+                                   f"daemon(action='check', input={{'id': '{em_id}'}})"}
             entry["ask_in_flight"] = True
 
         cmd = [
@@ -5353,7 +5689,7 @@ class DaemonManager:
                 entry["ask_in_flight"] = False
             return {"status": "error",
                     "message": f"Failed to start claude CLI: {e}"}
-        # Surface that an ask just started so `daemon(check)` shows it
+        # Surface that an ask just started so `daemon(action="check", input={"id": "<id>"})` shows it
         # immediately, even before any stream-json event arrives.
         # record_cli_output already routes its filesystem writes through
         # _safe (which catches OSError); the outer guard here is only for
@@ -5543,7 +5879,7 @@ class DaemonManager:
                 return {"status": "busy", "id": em_id,
                         "message": f"a previous ask on {em_id} is still "
                                    "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
+                                   f"daemon(action='check', input={{'id': '{em_id}'}})"}
             entry["ask_in_flight"] = True
 
         cmd = [
@@ -5986,7 +6322,7 @@ class DaemonManager:
         as ``cli_output`` so nothing is silently dropped. The first event that
         carries a session-id-shaped field is stored in daemon.json under
         ``session_state_key`` (``opencode_session_id`` by default) — used later
-        by ``daemon(action='ask')`` to resume the session.
+        by ``daemon(action='ask', input={'id': '<id>', 'message': '<message>'})`` to resume the session.
 
         OpenCode-family event field naming is less standardized than
         claude-code or codex, so the default parser is intentionally
@@ -6235,7 +6571,7 @@ class DaemonManager:
         approval prompts. The OpenCode-family JSON parser is reused — its
         ``_opencode_extract_session_id`` already recognizes a ``type:session``
         header with a bare top-level ``id`` — with a distinct session-id field
-        in daemon.json so ``daemon(action='ask')`` can resume via ``--session``.
+        in daemon.json so ``daemon(action='ask', input={'id': '<id>', 'message': '<message>'})`` can resume via ``--session``.
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
@@ -6264,7 +6600,7 @@ class DaemonManager:
         additionally owns ``--yolo`` so the daemon can proceed without
         interactive approval prompts. Qwen Code does not expose a stable
         machine-readable streaming/resume contract here, so stdout/stderr are
-        recorded verbatim and ``daemon(action='ask')`` is intentionally
+        recorded verbatim and ``daemon(action='ask', input={'id': '<id>', 'message': '<message>'})`` is intentionally
         unsupported for this backend.
         """
         if cancel_event.is_set():
@@ -6439,7 +6775,7 @@ class DaemonManager:
         ``backend_options`` are inserted *before* those owned flags. Kimi Code
         does not expose a verified stable machine-readable session-id / resume
         contract here, so stdout/stderr are recorded verbatim and
-        ``daemon(action='ask')`` is intentionally unsupported for this backend.
+        ``daemon(action='ask', input={'id': '<id>', 'message': '<message>'})`` is intentionally unsupported for this backend.
 
         The per-run environment (see ``_kimicode_run_env``) pins a run-private
         ``KIMI_CODE_HOME``, disables telemetry/auto-update, maps a Kimi/Moonshot
@@ -6584,7 +6920,7 @@ class DaemonManager:
                 return {"status": "busy", "id": em_id,
                         "message": f"a previous ask on {em_id} is still "
                                    "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
+                                   f"daemon(action='check', input={{'id': '{em_id}'}})"}
             entry["ask_in_flight"] = True
 
         if build_resume_cmd is not None:
@@ -6920,7 +7256,7 @@ class DaemonManager:
         file modifications in that mode (matching the daemon's coding-agent
         expectation); ``stream-json`` gives one JSON object per stdout line.
         The first event carrying a session-id-shaped field is stored in
-        daemon.json under ``cursor_session_id`` for ``daemon(action='ask')``.
+        daemon.json under ``cursor_session_id`` for ``daemon(action='ask', input={'id': '<id>', 'message': '<message>'})``.
         """
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
@@ -7102,7 +7438,7 @@ class DaemonManager:
                 return {"status": "busy", "id": em_id,
                         "message": f"a previous ask on {em_id} is still "
                                    "running; wait for it or use "
-                                   f"daemon(action='check', id='{em_id}')"}
+                                   f"daemon(action='check', input={{'id': '{em_id}'}})"}
             entry["ask_in_flight"] = True
 
         cmd = [
@@ -7627,7 +7963,7 @@ class DaemonManager:
 
         # During parent stop/refresh, keep heartbeat/lock alive for a bounded
         # grace period while killed CLI workers and cooperative daemon loops
-        # unwind. Explicit daemon(action="reclaim") keeps the old non-blocking
+        # unwind. Explicit daemon(action="reclaim", input={}) keeps the old non-blocking
         # behavior by passing wait_timeout=0.
         futures_remaining = sum(1 for future in wait_futures if not future.done())
         if wait_timeout > 0 and futures_remaining:

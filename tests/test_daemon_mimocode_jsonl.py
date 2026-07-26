@@ -518,9 +518,18 @@ def test_mimocode_rejects_harness_owned_session_selectors(tmp_path):
     ):
         result = mgr.handle({
             "action": "emanate",
-            "backend": "mimo",
-            "tasks": [{"task": "bad", "tools": [],
-                       "backend_options": {key: value}}],
+            "input": {
+                "backend": "mimo",
+                "tasks": [
+                    {
+                        "task": "bad",
+                        "tools": [],
+                        "backend_options": {
+                            key: value,
+                        },
+                    },
+                ],
+            },
         })
         assert result["status"] == "error", flag
         assert f"{flag} is reserved by the mimocode daemon backend" in result["message"], flag
@@ -612,8 +621,10 @@ def test_mimocode_usage_is_shared_by_initial_and_followup_streams(tmp_path):
         )
         result = mgr.handle({
             "action": "ask",
-            "id": "em-mimo-usage-followup",
-            "message": "continue",
+            "input": {
+                "id": "em-mimo-usage-followup",
+                "message": "continue",
+            },
         })
         assert result["status"] == "sent"
         ask_future = mgr._emanations["em-mimo-usage-followup"]["ask_future"]
@@ -750,8 +761,10 @@ def test_mimocode_concurrent_initial_and_resume_usage_persistence_is_atomic(tmp_
         # stream; it reaches the duplicate and pauses before the distinct part.
         result = mgr.handle({
             "action": "ask",
-            "id": "em-mimo-usage-concurrent",
-            "message": "continue",
+            "input": {
+                "id": "em-mimo-usage-concurrent",
+                "message": "continue",
+            },
         })
         assert result["status"] == "sent"
         assert resume_duplicate_seen.wait(timeout=5)
@@ -832,8 +845,10 @@ def test_mimocode_ask_uses_harness_resume_command(tmp_path):
     with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
-            "id": "em-mimo-resume",
-            "message": "any update?",
+            "input": {
+                "id": "em-mimo-resume",
+                "message": "any update?",
+            },
         })
         assert result["status"] == "sent"
         ask_future = mgr._emanations["em-mimo-resume"]["ask_future"]
@@ -886,8 +901,10 @@ def test_mimocode_ask_surfaces_only_type_text_reply(tmp_path):
             patch.object(mgr, "_publish_followup_if_live", side_effect=fake_publish):
         mgr.handle({
             "action": "ask",
-            "id": "em-mimo-resume-ans",
-            "message": "continue",
+            "input": {
+                "id": "em-mimo-resume-ans",
+                "message": "continue",
+            },
         })
         ask_future = mgr._emanations["em-mimo-resume-ans"]["ask_future"]
         if ask_future is not None:
@@ -940,8 +957,10 @@ def test_mimocode_ask_structured_error_fails_followup(tmp_path):
             patch.object(mgr, "_publish_followup_if_live", side_effect=fake_publish):
         mgr.handle({
             "action": "ask",
-            "id": "em-mimo-resume-err",
-            "message": "continue",
+            "input": {
+                "id": "em-mimo-resume-err",
+                "message": "continue",
+            },
         })
         ask_future = mgr._emanations["em-mimo-resume-err"]["ask_future"]
         if ask_future is not None:

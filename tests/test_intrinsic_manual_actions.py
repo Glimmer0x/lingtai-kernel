@@ -72,7 +72,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
 
     calls = {
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
-        "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
+        "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual", "input": {}})),
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
@@ -91,6 +91,11 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         if tool_name == "web":
             assert result["status"] == "ok"
             assert result["action"] == "manual"
+            assert result["manual"] == body
+            assert result["manual_path"] == str(path)
+            assert isinstance(result["current_setting"], dict)
+        elif tool_name == "daemon":
+            assert result["status"] == "ok"
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)

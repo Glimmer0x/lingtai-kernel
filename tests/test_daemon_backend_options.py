@@ -194,11 +194,25 @@ def test_emanate_cli_rejects_bad_backend_options(tmp_path):
     mgr = agent.get_capability("daemon")
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude-code",
-        "tasks": [
-            {"task": "ok task", "tools": [], "backend_options": {"effort": "high"}},
-            {"task": "bad task", "tools": [], "backend_options": {"-model": "x"}},
-        ],
+        "input": {
+            "backend": "claude-code",
+            "tasks": [
+                {
+                    "task": "ok task",
+                    "tools": [],
+                    "backend_options": {
+                        "effort": "high",
+                    },
+                },
+                {
+                    "task": "bad task",
+                    "tools": [],
+                    "backend_options": {
+                        "-model": "x",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "error"
     assert "tasks[1].backend_options" in result["message"]
@@ -213,12 +227,18 @@ def test_emanate_cli_persists_resolved_options(tmp_path, monkeypatch):
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude-code",
-        "tasks": [{
-            "task": "Refactor auth.",
-            "tools": [],
-            "backend_options": {"config": "model_reasoning_effort=ultra"},
-        }],
+        "input": {
+            "backend": "claude-code",
+            "tasks": [
+                {
+                    "task": "Refactor auth.",
+                    "tools": [],
+                    "backend_options": {
+                        "config": "model_reasoning_effort=ultra",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     assert "future" not in mgr._emanations[result["ids"][0]]
@@ -249,8 +269,16 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "claude-code",
-        "tasks": [{"task": "no options", "tools": []}],
+        "action": "emanate",
+        "input": {
+            "backend": "claude-code",
+            "tasks": [
+                {
+                    "task": "no options",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     assert result["handoff"] == (
@@ -289,14 +317,16 @@ def test_lingtai_backend_ignores_backend_options(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        # backend defaults to "lingtai"
-        "tasks": [{
-            "task": "lingtai task",
-            "tools": ["file"],
-            # This must be ignored, not validated. Even an "invalid" object
-            # would be accepted because the lingtai backend never reads it.
-            "backend_options": {"effort": "high"},
-        }],
+        "input": {
+            # backend defaults to "lingtai"
+            "tasks": [{
+                "task": "lingtai task",
+                "tools": ["file"],
+                # This must be ignored, not validated. Even an "invalid" object
+                # would be accepted because the lingtai backend never reads it.
+                "backend_options": {"effort": "high"},
+            }],
+        },
     })
     assert result["status"] == "dispatched"
 
@@ -307,8 +337,16 @@ def test_unknown_backend_falls_back_to_lingtai_path(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "not-real",
-        "tasks": [{"task": "fall back", "tools": []}],
+        "action": "emanate",
+        "input": {
+            "backend": "not-real",
+            "tasks": [
+                {
+                    "task": "fall back",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -538,9 +576,19 @@ def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "mimo",
-        "tasks": [{"task": "Use MiMo Code.", "tools": [],
-                   "backend_options": {"model": "mimo-auto"}}],
+        "action": "emanate",
+        "input": {
+            "backend": "mimo",
+            "tasks": [
+                {
+                    "task": "Use MiMo Code.",
+                    "tools": [],
+                    "backend_options": {
+                        "model": "mimo-auto",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
@@ -559,14 +607,33 @@ def test_cli_contexts_keep_per_task_argv_and_passive_mcp(tmp_path, monkeypatch):
         side_effect=AssertionError("CLI backend must not connect MCP clients"),
     ):
         result = mgr.handle({
-            "action": "emanate", "backend": "claude-code",
-            "tasks": [
-                {"task": "task with argv", "tools": [],
-                 "backend_options": {"model": "claude-opus-4-7"}},
-                {"task": "task with mcp", "tools": [],
-                 "mcp": [{"name": "demo", "command": "demo-mcp",
-                           "args": ["--serve"], "env": {"TOKEN": "secret"}}]},
-            ],
+            "action": "emanate",
+            "input": {
+                "backend": "claude-code",
+                "tasks": [
+                    {
+                        "task": "task with argv",
+                        "tools": [],
+                        "backend_options": {
+                            "model": "claude-opus-4-7",
+                        },
+                    },
+                    {
+                        "task": "task with mcp",
+                        "tools": [],
+                        "mcp": [
+                            {
+                                "name": "demo",
+                                "command": "demo-mcp",
+                                "args": ['--serve'],
+                                "env": {
+                                    "TOKEN": "secret",
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
         })
     assert result["status"] == "dispatched"
     states = {
@@ -783,9 +850,18 @@ def test_qwen_code_rejects_harness_owned_backend_options(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "qwen-code",
-        "tasks": [{"task": "bad", "tools": [],
-                   "backend_options": {"prompt": "override"}}],
+        "input": {
+            "backend": "qwen-code",
+            "tasks": [
+                {
+                    "task": "bad",
+                    "tools": [],
+                    "backend_options": {
+                        "prompt": "override",
+                    },
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
@@ -798,18 +874,32 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
     install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "qwen-code",
-        "tasks": [{"task": "Qwen once.", "tools": []}],
+        "action": "emanate",
+        "input": {
+            "backend": "qwen-code",
+            "tasks": [
+                {
+                    "task": "Qwen once.",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+    ask = mgr.handle({
+        "action": "ask",
+        "input": {
+            "id": em_id,
+            "message": "follow up",
+        },
+    })
 
     assert ask["status"] == "error"
     assert ask["message"] == (
-        "qwen-code daemon backend does not support daemon(action='ask') yet; "
+        "qwen-code daemon backend does not support daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) yet; "
         "start a new qwen-code emanation instead."
     )
 
@@ -834,9 +924,19 @@ def test_kimicode_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch,
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": backend,
-        "tasks": [{"task": "Use Kimi Code.", "tools": [],
-                   "backend_options": {"model": "kimi-for-coding"}}],
+        "action": "emanate",
+        "input": {
+            "backend": backend,
+            "tasks": [
+                {
+                    "task": "Use Kimi Code.",
+                    "tools": [],
+                    "backend_options": {
+                        "model": "kimi-for-coding",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
@@ -1083,14 +1183,35 @@ def test_kimicode_writes_run_private_mcp_json_for_common_and_parent_mcp(tmp_path
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "kimicode",
-        "tasks": [{"task": "Use Kimi MCP.", "tools": [], "mcp": [
-            {"name": "parent-docs", "transport": "stdio", "command": "/bin/echo",
-             "args": ["docs"], "env": {"DOC_TOKEN": "dummy"}},
-            {"name": "parent_http", "transport": "http",
-             "url": "https://mcp.example.test/mcp",
-             "headers": {"Authorization": "Bearer dummy"}},
-        ]}],
+        "action": "emanate",
+        "input": {
+            "backend": "kimicode",
+            "tasks": [
+                {
+                    "task": "Use Kimi MCP.",
+                    "tools": [],
+                    "mcp": [
+                        {
+                            "name": "parent-docs",
+                            "transport": "stdio",
+                            "command": "/bin/echo",
+                            "args": ['docs'],
+                            "env": {
+                                "DOC_TOKEN": "dummy",
+                            },
+                        },
+                        {
+                            "name": "parent_http",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/mcp",
+                            "headers": {
+                                "Authorization": "Bearer dummy",
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     record = records[0]
@@ -1177,9 +1298,18 @@ def test_kimicode_rejects_harness_owned_backend_options(tmp_path, bad_flag):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "kimicode",
-        "tasks": [{"task": "bad", "tools": [],
-                   "backend_options": {bad_flag: "override"}}],
+        "input": {
+            "backend": "kimicode",
+            "tasks": [
+                {
+                    "task": "bad",
+                    "tools": [],
+                    "backend_options": {
+                        bad_flag: "override",
+                    },
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
@@ -1192,18 +1322,32 @@ def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
     install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": "kimicode",
-        "tasks": [{"task": "Kimi once.", "tools": []}],
+        "action": "emanate",
+        "input": {
+            "backend": "kimicode",
+            "tasks": [
+                {
+                    "task": "Kimi once.",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
 
-    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+    ask = mgr.handle({
+        "action": "ask",
+        "input": {
+            "id": em_id,
+            "message": "follow up",
+        },
+    })
 
     assert ask["status"] == "error"
     assert ask["message"] == (
-        "kimicode daemon backend does not support daemon(action='ask') yet; "
+        "kimicode daemon backend does not support daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) yet; "
         "start a new kimicode emanation instead."
     )
 
@@ -1228,9 +1372,19 @@ def test_oh_my_pi_alias_and_canonical_dispatch_to_backend(tmp_path, monkeypatch,
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
     result = mgr.handle({
-        "action": "emanate", "backend": backend,
-        "tasks": [{"task": "Use Oh-My-Pi.", "tools": [],
-                   "backend_options": {"provider": "anthropic"}}],
+        "action": "emanate",
+        "input": {
+            "backend": backend,
+            "tasks": [
+                {
+                    "task": "Use Oh-My-Pi.",
+                    "tools": [],
+                    "backend_options": {
+                        "provider": "anthropic",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
@@ -1327,7 +1481,13 @@ def test_oh_my_pi_ask_resume_uses_session_flag(tmp_path):
                                                           '{"type":"message.completed","text":"resumed"}\n',
                                                       ],
                                                   ))):
-        resp = mgr.handle({"action": "ask", "id": em_id, "message": "keep going"})
+        resp = mgr.handle({
+            "action": "ask",
+            "input": {
+                "id": em_id,
+                "message": "keep going",
+            },
+        })
         # ask is async; wait for the ask worker to finish before asserting.
         fut = entry.get("ask_future")
         if fut is not None:
@@ -1369,7 +1529,13 @@ def test_oh_my_pi_ask_before_session_id_returns_initializing_error(tmp_path):
         ask_in_flight=False,
     )
 
-    resp = mgr.handle({"action": "ask", "id": em_id, "message": "continue"})
+    resp = mgr.handle({
+        "action": "ask",
+        "input": {
+            "id": em_id,
+            "message": "continue",
+        },
+    })
 
     assert resp["status"] == "error"
     assert "No oh-my-pi session ID found" in resp["message"]
@@ -1394,9 +1560,18 @@ def test_oh_my_pi_rejects_harness_owned_backend_options(tmp_path):
     ):
         result = mgr.handle({
             "action": "emanate",
-            "backend": "oh-my-pi",
-            "tasks": [{"task": "bad", "tools": [],
-                       "backend_options": {key: value}}],
+            "input": {
+                "backend": "oh-my-pi",
+                "tasks": [
+                    {
+                        "task": "bad",
+                        "tools": [],
+                        "backend_options": {
+                            key: value,
+                        },
+                    },
+                ],
+            },
         })
         assert result["status"] == "error", flag
         assert f"{flag} is reserved by the oh-my-pi daemon backend" in result["message"], flag

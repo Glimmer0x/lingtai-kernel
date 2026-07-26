@@ -1,4 +1,4 @@
-"""Tests for daemon(action='check') falling back to historical run dirs.
+"""Tests for daemon(action='check', input={'id': '<id>'}) falling back to historical run dirs.
 
 Regression coverage for the post-refresh/molt bug: immediately after a
 refresh or molt the parent gets a fresh ``DaemonManager`` whose in-memory
@@ -60,7 +60,7 @@ def test_check_resolves_completed_historical_run_by_short_id(tmp_path):
     rd = _make_completed_run_dir(agent, "em-5", "completed daemon work")
 
     mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": "em-5"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-5"}})
 
     assert out.get("status") != "error", out
     assert out["id"] == "em-5"
@@ -81,7 +81,7 @@ def test_check_resolves_completed_historical_run_by_compact_id(tmp_path):
     rd = _make_completed_run_dir(agent, "em-abcd", "compact daemon work", run_id="em-abcd")
 
     mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": "em-abcd"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-abcd"}})
 
     assert out.get("status") != "error", out
     assert out["id"] == "em-abcd"
@@ -96,7 +96,7 @@ def test_check_resolves_completed_historical_run_by_run_id(tmp_path):
     rd = _make_completed_run_dir(agent, "em-6", "by run id")
 
     mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": rd.run_id})
+    out = mgr.handle({"action": "check", "input": {"id": rd.run_id}})
 
     assert out.get("status") != "error", out
     assert out["run_id"] == rd.run_id
@@ -139,7 +139,7 @@ def test_check_rejects_ambiguous_legacy_short_id_without_path_list(tmp_path):
     newer = _write_run("em-7-20260623-110000-bbbbbb", "newer run")
 
     mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": "em-7"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-7"}})
 
     assert out["status"] == "error"
     assert out.get("ambiguous") is True
@@ -148,7 +148,7 @@ def test_check_rejects_ambiguous_legacy_short_id_without_path_list(tmp_path):
     assert "use the exact run_id" in out["message"]
     assert "other_run_dirs" not in out
 
-    exact = mgr.handle({"action": "check", "id": "em-7-20260623-110000-bbbbbb"})
+    exact = mgr.handle({"action": "check", "input": {"id": "em-7-20260623-110000-bbbbbb"}})
     assert exact.get("status") != "error", exact
     assert exact["run_id"] == "em-7-20260623-110000-bbbbbb"
     assert exact["path"] == str(newer)
@@ -159,7 +159,7 @@ def test_check_truly_unknown_id_still_errors(tmp_path):
     """A short id with no in-memory entry AND no run dir on disk still errors."""
     agent = _make_agent(tmp_path)
     mgr = _fresh_manager(agent)
-    out = mgr.handle({"action": "check", "id": "em-999"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-999"}})
     assert out["status"] == "error"
     assert "em-999" in out["message"]
 

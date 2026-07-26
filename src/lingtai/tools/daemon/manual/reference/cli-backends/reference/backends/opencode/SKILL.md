@@ -63,7 +63,7 @@ OpenCode reserves `--format` at the validation layer: the daemon owns
 `opencode run --format json` so its per-line JSON event parsing keeps working,
 and passing `--format` in `backend_options` refuses the whole batch before
 spawn. Beyond that, do not re-set harness-owned surfaces: session flags
-(`--session` / `--continue`) belong to `daemon(action="ask")` resume
+(`--session` / `--continue`) belong to `daemon(action="ask", input={"id": "<id>", "message": "<message>"})` resume
 (`opencode run --session <opencode_session_id> --format json ...`), and the
 completion MCP is injected through the `OPENCODE_CONFIG_CONTENT` environment
 variable — not argv — so breaking either silently breaks progress/result

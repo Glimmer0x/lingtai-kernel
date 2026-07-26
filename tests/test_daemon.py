@@ -482,18 +482,26 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "_run_codex_emanation", fake_run)
     result = mgr.handle({
         "action": "emanate",
-        "backend": "codex",
-        "tasks": [{
-            "task": "x",
-            "tools": [],
-            "mcp": [{
-                "name": "demo-mcp",
-                "transport": "stdio",
-                "command": "python",
-                "args": ["-m", "demo"],
-                "env": {"TOKEN": "secret"},
-            }],
-        }],
+        "input": {
+            "backend": "codex",
+            "tasks": [
+                {
+                    "task": "x",
+                    "tools": [],
+                    "mcp": [
+                        {
+                            "name": "demo-mcp",
+                            "transport": "stdio",
+                            "command": "python",
+                            "args": ['-m', 'demo'],
+                            "env": {
+                                "TOKEN": "secret",
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
     })
 
     assert result["status"] == "dispatched"
@@ -980,7 +988,15 @@ def test_obsolete_system_prompt_fails_before_run_dir(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        "tasks": [{"task": "x", "tools": [], "system_prompt": "old"}],
+        "input": {
+            "tasks": [
+                {
+                    "task": "x",
+                    "tools": [],
+                    "system_prompt": "old",
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
@@ -995,8 +1011,16 @@ def test_external_cli_prompt_fails_before_run_dir(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "codex",
-        "tasks": [{"task": "x", "tools": [], "prompt": "first user"}],
+        "input": {
+            "backend": "codex",
+            "tasks": [
+                {
+                    "task": "x",
+                    "tools": [],
+                    "prompt": "first user",
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
@@ -1016,10 +1040,20 @@ def test_handle_emanate_maps_prompt_default_and_preserves_whitespace_before_deta
     monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
     result = mgr.handle({
         "action": "emanate",
-        "tasks": [
-            {"task": "system task one", "tools": [], "prompt": "  first user  "},
-            {"task": "system task two", "tools": [], "prompt": "   "},
-        ],
+        "input": {
+            "tasks": [
+                {
+                    "task": "system task one",
+                    "tools": [],
+                    "prompt": "  first user  ",
+                },
+                {
+                    "task": "system task two",
+                    "tools": [],
+                    "prompt": "   ",
+                },
+            ],
+        },
     })
 
     assert result["status"] == "dispatched"
@@ -1900,10 +1934,21 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"]},
-        {"task": "task B", "tools": ["file"]},
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "task A",
+                    "tools": ['file'],
+                },
+                {
+                    "task": "task B",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     assert result["status"] == "dispatched"
     assert result["handoff"] == (
         "While waiting, go idle or call system(action='sleep'); the terminal result "
@@ -1958,9 +2003,17 @@ def test_handle_emanate_allows_concurrent(tmp_path):
     mgr = agent.get_capability("daemon")
 
     mgr._emanations["em-0"] = {"future": MagicMock(done=MagicMock(return_value=False)), "run_dir": None}
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "x", "tools": ["file"]},
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "x",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     # No limit enforced — should succeed
     assert result["status"] == "dispatched"
     assert len(result["ids"]) == 1
@@ -2293,9 +2346,17 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "summarize architecture", "tools": ["file"]},
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "summarize architecture",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     _assert_compact_daemon_id(em_id)
@@ -2308,7 +2369,12 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     statuses = {e["id"]: e["status"] for e in list_result["emanations"]}
     assert statuses.get(em_id) == "done"
 
-    check = mgr.handle({"action": "check", "id": em_id})
+    check = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": em_id,
+        },
+    })
     assert check["state"] == "done"
 
     from tests._notification_store_helpers import snapshot_notifications
@@ -2329,7 +2395,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
         raise AssertionError(f"detached terminal notification not published for {em_id}")
     assert any(e["source"] == "daemon" and e["ref_id"] == em_id for e in events)
     assert any("Task done" in e["body"] for e in events)
-    assert any(f"daemon(action=\"check\", id=\"{em_id}\")" in e["body"] for e in events)
+    assert any(f'daemon(action="check", input={{"id": "{em_id}"}})' in e["body"] for e in events)
     assert all("[daemon:em-" not in e["body"] for e in events)
 
     reclaim_result = mgr._handle_reclaim()
@@ -2671,9 +2737,29 @@ def test_sequential_emanate_increments_ids(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    r1 = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "a",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     time.sleep(0.5)
-    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
+    r2 = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "b",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
 
     id1 = r1["ids"][0]
     id2 = r2["ids"][0]
@@ -2704,9 +2790,17 @@ def test_emanate_creates_folder_on_disk(tmp_path):
     agent.service.create_session = MagicMock(return_value=mock_session)
 
     try:
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "find todos", "tools": ["file"]},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "find todos",
+                        "tools": ['file'],
+                    },
+                ],
+            },
+        })
         assert result["status"] == "dispatched"
         em_id = result["ids"][0]
         _assert_compact_daemon_id(em_id)
@@ -2744,12 +2838,35 @@ def test_reclaim_preserves_compact_id_uniqueness(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    r1 = mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    r1 = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "a",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     id1 = r1["ids"][0]
     _assert_compact_daemon_id(id1)
     time.sleep(0.5)
-    mgr.handle({"action": "reclaim"})
-    r2 = mgr.handle({"action": "emanate", "tasks": [{"task": "b", "tools": ["file"]}]})
+    mgr.handle({
+        "action": "reclaim",
+        "input": {},
+    })
+    r2 = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "b",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     id2 = r2["ids"][0]
     _assert_compact_daemon_id(id2)
     assert id2 != id1
@@ -2770,13 +2887,26 @@ def test_reclaim_preserves_folders(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
+    mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "a",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     time.sleep(0.5)
     daemons_dir = agent._working_dir / "daemons"
     folders_before = list(daemons_dir.iterdir())
     assert len(folders_before) == 1
 
-    mgr.handle({"action": "reclaim"})
+    mgr.handle({
+        "action": "reclaim",
+        "input": {},
+    })
     folders_after = list(daemons_dir.iterdir())
     assert folders_after == folders_before  # same folder still there
 
@@ -2796,7 +2926,17 @@ def test_handle_list_includes_run_id_and_path(tmp_path):
     mock_session.send = MagicMock(return_value=mock_resp)
     agent.service.create_session = MagicMock(return_value=mock_session)
 
-    mgr.handle({"action": "emanate", "tasks": [{"task": "x", "tools": ["file"]}]})
+    mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "x",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     time.sleep(0.5)
     listing = mgr._handle_list()
     assert len(listing["emanations"]) >= 1
@@ -2814,9 +2954,17 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
 
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "find TODOs", "tools": ["file"]},
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "find TODOs",
+                    "tools": ['file'],
+                },
+            ],
+        },
+    })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
     run_dir = mgr._emanations[em_id]["run_dir"]
@@ -2872,7 +3020,10 @@ def test_e2e_emanate_writes_full_fs_artifact(tmp_path, monkeypatch):
     assert all("unsafe" not in e for e in daemon_tagged)
 
     # Reclaim does not touch folder
-    mgr.handle({"action": "reclaim"})
+    mgr.handle({
+        "action": "reclaim",
+        "input": {},
+    })
     assert folder.is_dir()
     # daemon.json still readable, still state=done (reclaim doesn't rewrite completed daemons)
     data_after = json.loads((folder / "daemon.json").read_text())
@@ -3043,9 +3194,18 @@ def test_emanate_lingtai_valid_but_unallowed_preset_rejected_before_preflight(
              "DaemonRunDir must not be constructed for an unauthorized preset")), \
          patch.object(ThreadPoolExecutor, "submit") as mock_submit, \
          patch.object(mgr, "_run_emanation") as mock_run:
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": unlisted_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                        "preset": unlisted_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "error"
     assert "unlisted" in result["message"] or unlisted_path in result["message"]
@@ -3081,9 +3241,18 @@ def test_emanate_lingtai_authorized_equivalent_path_reaches_preflight(
 
     # Connectivity is mocked so the LingTai preflight completes.
     with patch.object(preset_connectivity, "_probe_host", return_value=10):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": str(abs_path)},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                        "preset": str(abs_path),
+                    },
+                ],
+            },
+        })
 
     # The gate passed — batch either dispatched or failed later in the
     # pipeline (e.g. session mocking), never with the allowlist message.
@@ -3108,9 +3277,17 @@ def test_emanate_lingtai_omitted_preset_never_reads_allowlist(tmp_path, monkeypa
     agent.service.create_session.return_value.send = MagicMock(return_value=mock_resp)
 
     with patch.object(agent, "_read_preset_from_init") as mock_read:
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"]},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                    },
+                ],
+            },
+        })
 
     mock_read.assert_not_called()
     assert result["status"] == "dispatched"
@@ -3149,8 +3326,17 @@ def test_emanate_cli_backend_unauthorized_preset_string_unaffected(
          patch.object(mgr, "_handle_emanate_cli",
                        return_value={"status": "dispatched", "count": 1}) as mock_cli:
         result = mgr.handle({
-            "action": "emanate", "backend": "codex",
-            "tasks": [{"task": "task A", "tools": ["file"], "preset": unlisted_path}],
+            "action": "emanate",
+            "input": {
+                "backend": "codex",
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                        "preset": unlisted_path,
+                    },
+                ],
+            },
         })
 
     spy_read.assert_not_called()
@@ -3171,10 +3357,15 @@ def test_emanate_with_preset_validates_preset_exists(tmp_path, monkeypatch):
 
     ghost_path = str(presets_dir / "ghost.json")
     # 'ghost' doesn't exist in the library
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"], "preset": ghost_path},
-        {"task": "task B", "tools": ["file"]},  # valid task, but should be refused too
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {"task": "task A", "tools": ["file"], "preset": ghost_path},
+                {"task": "task B", "tools": ["file"]},  # valid task, but should be refused too
+            ],
+        },
+    })
     assert result["status"] == "error"
     assert "ghost" in result["message"]
     # No daemons spawned — whole batch refused
@@ -3200,9 +3391,18 @@ def test_emanate_with_preset_unreachable_refuses(tmp_path, monkeypatch):
     preset_path = str(presets_dir / "deepseek.json")
     with patch.object(preset_connectivity, "_probe_host",
                       side_effect=OSError("connection refused")):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
     assert result["status"] == "error"
     assert "unreachable" in result["message"]
     assert "deepseek" in result["message"]
@@ -3222,9 +3422,18 @@ def test_emanate_with_preset_no_credentials_refuses(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
 
     preset_path = str(presets_dir / "deepseek.json")
-    result = mgr.handle({"action": "emanate", "tasks": [
-        {"task": "task A", "tools": ["file"], "preset": preset_path},
-    ]})
+    result = mgr.handle({
+        "action": "emanate",
+        "input": {
+            "tasks": [
+                {
+                    "task": "task A",
+                    "tools": ['file'],
+                    "preset": preset_path,
+                },
+            ],
+        },
+    })
     assert result["status"] == "error"
     assert "no_credentials" in result["message"]
     assert "deepseek" in result["message"]
@@ -3264,9 +3473,18 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     preset_path = str(presets_dir / "deepseek.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=42),\
          patch("lingtai.llm.service.LLMService", return_value=preset_svc):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "find todos", "tools": ["file"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "find todos",
+                        "tools": ['file'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched"
     assert result["count"] == 1
@@ -3308,9 +3526,17 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
 
     with patch.object(PosixDaemonSupervisorAdapter, "spawn_detached", fake_owner), \
          patch.object(agent, "_read_preset_from_init") as read_allowlist:
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "task A", "tools": ["file"]},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "task A",
+                        "tools": ['file'],
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched"
     state = _poll_daemon_terminal(records[0][1])
@@ -3373,7 +3599,7 @@ def test_claude_code_env_noop_when_unset(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # CLI-backend ask: non-blocking dispatch + concurrent-ask guard (GH issue:
-# daemon(ask) hanging the parent agent's tool turn). The handlers must
+# daemon(action='ask', input={'id': '<id>', 'message': '<message>'}) hanging the parent agent's tool turn). The handlers must
 # return promptly even when the resumed `claude --resume` / `codex exec
 # resume` process is slow/hangs, and a second ask while one is in flight
 # must be refused with a clear busy error.
@@ -3489,7 +3715,7 @@ def _cli_entry(mgr, agent, em_id: str, backend: str, session_id: str) -> dict:
 
 
 def test_ask_claude_code_returns_immediately_when_subprocess_hangs(tmp_path, monkeypatch):
-    """`daemon(ask)` against a claude-code emanation must not block the
+    """`daemon(action='ask', input={'id': '<id>', 'message': '<message>'})` against a claude-code emanation must not block the
     parent's tool turn even when the resumed subprocess is slow."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
@@ -3931,7 +4157,7 @@ def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
 def test_ask_worker_exception_is_logged(tmp_path, monkeypatch):
     """An unexpected exception in the ask worker must be logged via
     daemon_ask_worker_error and recorded into the run_dir as a cli_output
-    line so daemon(check) shows what happened."""
+    line so daemon(action='check', input={'id': '<id>'}) shows what happened."""
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     proc = _FakeProc()

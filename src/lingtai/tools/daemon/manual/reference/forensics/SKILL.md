@@ -22,7 +22,7 @@ on-disk state, transcript, or token/event artifacts.
 
 ## Each emanation is a forensic mini-avatar
 
-Every time you call `daemon(action="emanate", tasks=[...])`, each task gets a working folder under `daemons/` in your own directory. New manager-created runs use one compact id everywhere — the returned daemon id, `daemon.json.run_id`, and the folder name:
+Every time you call `daemon(action="emanate", input={"tasks": [...]})`, each task gets a working folder under `daemons/` in your own directory. New manager-created runs use one compact id everywhere — the returned daemon id, `daemon.json.run_id`, and the folder name:
 
     daemons/em-<4 hex of time hash>[-<collision suffix>]/
 
@@ -56,21 +56,21 @@ mtime, and an inferred role like `status` / `result` / `prompt` / `transcript` /
 manifest also carries run-level `state`, `result_path`, and `error_path` (the
 last set to `result.txt` for failed/timeout/cancelled runs). Artifact entries are
 run-dir-relative; run-level `result_path` / `error_path` intentionally preserve the
-absolute-path convention already returned by `daemon(check)`, so humans can open
+absolute-path convention already returned by `daemon(action="check", input={"id": "<id>"})`, so humans can open
 the full files directly. It lists **paths and metadata only — never file contents**
 — and caps the number of entries (recording `artifacts_total` and `truncated` when
 a run drops more files than the cap). Because names and relative paths are still
 visible metadata, avoid creating daemon work products whose filenames themselves
 contain secrets.
 
-`daemon(action="check")` surfaces this as an `artifacts` block so you don't have
+`daemon(action="check", input={"id": "<id>"})` surfaces this as an `artifacts` block so you don't have
 to scan the folder yourself: it prefers the persisted `artifacts.json`
 (`source: "manifest"`) and, for a still-running run or an old run that predates
 the manifest, computes an equivalent listing on the fly (`source: "fallback"`).
 Read the `artifacts` block first to learn which files exist and how big they are,
 then open `result_path` / `error_path` for the full content.
 
-Read these artifacts in disclosure order: start with `daemon(action="list")` (the
+Read these artifacts in disclosure order: start with `daemon(action="list", input={})` (the
 compact searchable index over these per-run files — see
 `../cli-backends/SKILL.md` for its filters and lazy-rebuild behavior), then the
 returned `.prompt` / `result.txt`, and only then drop to full forensic grep over
@@ -100,7 +100,7 @@ Tail `history/chat_history.jsonl`. Each line is one role/turn entry:
 - `{role: "user", kind: "task"}` — the original task
 - `{role: "assistant", text: "..."}` — what the emanation said
 - `{role: "user", kind: "tool_results"}` — what the tools returned
-- `{role: "user", kind: "followup"}` — your `daemon(action="ask", ...)` messages
+- `{role: "user", kind: "followup"}` — your `daemon(action="ask", input={"id": "<id>", "message": "..."})` messages
 
 Read the most recent assistant text to see the latest progress narrative.
 
@@ -138,7 +138,7 @@ typically nothing wrong with either.
   low for the task's explore-then-act shape: the daemon watchdog SIGTERMs the
   child mid-exploration. This is the most common cause for `claude-p` / `codex`.
   See the `max_turns` guidance in `reference/cli-backends/SKILL.md`.
-- **`reclaim` / cancel.** A parent (or a human) ran `daemon(action="reclaim")`,
+- **`reclaim` / cancel.** A parent (or a human) ran `daemon(action="reclaim", input={})`,
   or otherwise cancelled the run. `reclaim` stops the process — that stop is a
   SIGTERM, surfacing as 143.
 - **Parent reclaim on shutdown.** When the parent agent molts, restarts, or is

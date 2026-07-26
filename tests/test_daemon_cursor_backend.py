@@ -3,7 +3,7 @@
 Cursor exposes its headless agent as the ``agent`` executable.  The daemon
 backend uses print mode with stream-json output so it behaves like the other
 external CLI backends: command construction is deterministic, JSONL progress is
-persisted to the daemon run dir, and ``daemon(ask)`` resumes by session id.
+persisted to the daemon run dir, and ``daemon(action="ask", input={"id": "<id>", "message": "<message>"})`` resumes by session id.
 
 The tests exercise the injected Port with a patched POSIX adapter; Cursor
 itself is not required.
@@ -501,12 +501,18 @@ def test_emanate_cursor_routes_to_cli_handler(tmp_path, monkeypatch):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "cursor",
-        "tasks": [{
-            "task": "Summarise the changelog.",
-            "tools": [],
-            "backend_options": {"model": "gpt-5"},
-        }],
+        "input": {
+            "backend": "cursor",
+            "tasks": [
+                {
+                    "task": "Summarise the changelog.",
+                    "tools": [],
+                    "backend_options": {
+                        "model": "gpt-5",
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     assert result["backend"] == "cursor"
@@ -548,8 +554,10 @@ def test_ask_cursor_errors_when_no_session_id(tmp_path):
 
     result = mgr.handle({
         "action": "ask",
-        "id": "em-cur-noresume",
-        "message": "any update?",
+        "input": {
+            "id": "em-cur-noresume",
+            "message": "any update?",
+        },
     })
 
     assert result["status"] == "error"
@@ -576,8 +584,10 @@ def test_ask_cursor_resumes_with_captured_session_id(tmp_path):
     with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
-            "id": "em-cur-resume",
-            "message": "how is it going?",
+            "input": {
+                "id": "em-cur-resume",
+                "message": "how is it going?",
+            },
         })
 
     assert result["status"] == "sent"
@@ -631,8 +641,11 @@ def test_cursor_initial_and_resume_accumulate_ui_usage_without_ledgers(tmp_path)
         run_dir._atomic_write_json(run_dir.daemon_json_path, run_dir._state)
         _register_cursor_entry(mgr, run_dir, em_id="em-cur-initial-resume")
         sent = mgr.handle({
-            "action": "ask", "id": "em-cur-initial-resume",
-            "message": "Resume task.",
+            "action": "ask",
+            "input": {
+                "id": "em-cur-initial-resume",
+                "message": "Resume task.",
+            },
         })
         assert sent["status"] == "sent"
         mgr._emanations["em-cur-initial-resume"]["ask_future"].result(timeout=5)
@@ -664,8 +677,10 @@ def test_ask_cursor_error_result_publishes_failure(tmp_path):
     with patch("lingtai.tools.daemon.subprocess.Popen", side_effect=fake_popen):
         result = mgr.handle({
             "action": "ask",
-            "id": "em-cur-resume-error",
-            "message": "try again",
+            "input": {
+                "id": "em-cur-resume-error",
+                "message": "try again",
+            },
         })
 
     assert result["status"] == "sent"
@@ -711,8 +726,10 @@ def test_cursor_resume_valid_usage_is_buffered_until_success(
     ):
         sent = mgr.handle({
             "action": "ask",
-            "id": "em-cur-resume-failed-usage",
-            "message": "Fail after resume usage.",
+            "input": {
+                "id": "em-cur-resume-failed-usage",
+                "message": "Fail after resume usage.",
+            },
         })
 
     assert sent["status"] == "sent"

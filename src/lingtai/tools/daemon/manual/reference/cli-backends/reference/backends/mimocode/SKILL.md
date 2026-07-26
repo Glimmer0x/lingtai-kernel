@@ -64,7 +64,7 @@ validate, enumerate, or simulate it.
 `--format json` JSONL events) plus its own session selectors — `--session`
 (`-s`), `--continue` (`-c`), and `--fork` — MiMo-specifically. Passing any of
 them in `backend_options` refuses the whole batch before any process is
-spawned, because session/resume is harness-owned: `daemon(action="ask")`
+spawned, because session/resume is harness-owned: `daemon(action="ask", input={"id": "<id>", "message": "<message>"})`
 asynchronously runs
 `mimo run --session <mimocode_session_id> --format json <message>`, with the
 session id captured from the first session-shaped JSON event into

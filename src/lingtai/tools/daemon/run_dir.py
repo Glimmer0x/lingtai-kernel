@@ -573,7 +573,7 @@ class DaemonRunDir:
 
     def record_followup(self, generation: str, *, status: str,
                         output: str = "", error: str | None = None) -> None:
-        """Persist the latest detached follow-up result for ``daemon(check)``."""
+        """Persist the latest detached follow-up result for ``daemon(action="check", input={"id": "<id>"})``."""
         followups = self.path / "followups"
         followups.mkdir(exist_ok=True)
         result_path = followups / f"{generation}.txt"
@@ -839,7 +839,7 @@ class DaemonRunDir:
         CLI backends (Claude Code / Codex) do not run through the LingTai
         ChatSession tool loop, so ``turn`` and ``current_tool`` stay mostly
         static while the child process works.  This hook makes their progress
-        visible to ``daemon(check)`` by appending bounded ``cli_output`` events,
+        visible to ``daemon(action="check", input={"id": "<id>"})`` by appending bounded ``cli_output`` events,
         updating a small ``last_output`` field in daemon.json, and touching the
         heartbeat.  The final full output is still captured by ``mark_done``.
         """
@@ -1328,7 +1328,7 @@ class DaemonRunDir:
         """Record that LingTai signalled this run's CLI subprocess.
 
         Writes a structured ``daemon_cli_terminate`` event and stamps
-        ``cli_termination`` onto daemon.json so a later ``daemon(check)`` or a
+        ``cli_termination`` onto daemon.json so a later ``daemon(action="check", input={"id": "<id>"})`` or a
         post-mortem run-dir inspection can attribute an otherwise-opaque
         signal exit (e.g. SIGTERM/143) to its local cause — parent
         refresh/agent_stop, reclaim, or watchdog timeout. This is forensic

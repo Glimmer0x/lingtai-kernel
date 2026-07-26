@@ -69,7 +69,7 @@ drive the non-interactive text-capture harness), forbids `--yolo` (the CLI
 refuses `--prompt` combined with `--yolo`), and reserves the
 session/continue flags because resume is not wired for this backend: no
 stable machine-readable session-id output was verified, so
-`daemon(action="ask")` returns an explicit unsupported-backend error — start
+`daemon(action="ask", input={"id": "<id>", "message": "<message>"})` returns an explicit unsupported-backend error — start
 a new kimicode emanation instead.
 
 Free-form options are inserted between `kimi` and the owned flags (the

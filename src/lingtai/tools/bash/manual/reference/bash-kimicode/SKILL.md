@@ -67,7 +67,7 @@ native MCP config.
   `--prompt` + `--output-format text`).
 - `ask`/resume is **not supported yet**: `-S/--session` and `-c/--continue`
   exist, but a stable machine-readable session-id output was not verified, so a
-  reliable resume contract could not be source-cited. `daemon(action='ask')`
+  reliable resume contract could not be source-cited. `daemon(action='ask', input={'id': '<id>', 'message': '<message>'})`
   returns an explicit unsupported-backend error.
 - MCP arbitrary-server loading is wired through run-private
   `$KIMI_CODE_HOME/mcp.json`: `daemon_common` plus parent-provided stdio and HTTP

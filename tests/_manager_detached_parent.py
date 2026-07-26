@@ -20,8 +20,15 @@ def main() -> int:
     agent.service._provider_defaults = {}
     result = agent.get_capability("daemon").handle({
         "action": "emanate",
-        "tasks": [{"task": "parent interpreter exits", "tools": []}],
-        "timeout": 30,
+        "input": {
+            "tasks": [
+                {
+                    "task": "parent interpreter exits",
+                    "tools": [],
+                },
+            ],
+            "timeout": 30,
+        },
     })
     if result.get("status") != "dispatched":
         raise SystemExit(f"manager did not dispatch: {result!r}")

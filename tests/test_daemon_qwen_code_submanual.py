@@ -99,7 +99,7 @@ def test_qwen_code_child_states_harness_boundaries():
     # Per-run MCP settings injection and the no-resume planning consequence.
     assert "QWEN_CODE_SYSTEM_SETTINGS_PATH" in body
     assert "qwen-daemon-settings.json" in body
-    assert "daemon(action='ask')" in body
+    assert "daemon(action='ask', input={'id': '<id>', 'message': '<message>'})" in body
 
 
 def test_qwen_code_child_stays_tiny_not_a_flag_catalog():

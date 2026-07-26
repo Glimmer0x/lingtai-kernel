@@ -20,7 +20,7 @@ before reclaiming it, or before going to rest with daemon work pending.
 
 ## Polling cadence — when, how often, and which call
 
-**First principle: completion is push-notified, not polled.** When an emanation reaches a terminal state (`done`, `failed`, `cancelled`, `timeout`), the kernel publishes a compact entry to `.notification/system.json` naming the em-id and pointing at `daemon(action="check", id="em-N")`. You do **not** need to poll to discover completion. If you find yourself running `check` repeatedly waiting for a `state` transition, stop — you're duplicating work the kernel is already doing.
+**First principle: completion is push-notified, not polled.** When an emanation reaches a terminal state (`done`, `failed`, `cancelled`, `timeout`), the kernel publishes a compact entry to `.notification/system.json` naming the em-id and pointing at `daemon(action="check", input={"id": "em-N"})`. You do **not** need to poll to discover completion. If you find yourself running `check` repeatedly waiting for a `state` transition, stop — you're duplicating work the kernel is already doing.
 
 You *do* need to poll when:
 
@@ -43,8 +43,8 @@ Use `elapsed_s` (from `daemon.json` or `list`) to pick an interval. These are st
 
 ### Which call to use, in order
 
-1. **`daemon(action="list")` first** when multiple emanations are in flight and you want a status sweep. Cheap; one line per emanation with `elapsed_s` and `state`. Use it to decide *which* (if any) to investigate.
-2. **`daemon(action="check", id="em-N", last=20, truncate=500)`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. Read the response's `artifacts` block to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand (see `../forensics/SKILL.md`).
+1. **`daemon(action="list", input={})` first** when multiple emanations are in flight and you want a status sweep. Cheap; one line per emanation with `elapsed_s` and `state`. Use it to decide *which* (if any) to investigate.
+2. **`daemon(action="check", input={"id": "em-N", "last": 20, "truncate": 500})`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. Read the response's `artifacts` block to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand (see `../forensics/SKILL.md`).
 3. **Direct `Read` of `daemon.json`** — only when you need a field `check` doesn't surface (rare). Prefer `check`.
 4. **`tail` of `history/chat_history.jsonl`** — when `check` events don't tell you what the LLM is *thinking*. The last assistant text shows the current line of reasoning. (lingtai backend only — CLI backends don't write the LLM transcript here.)
 
@@ -74,7 +74,7 @@ Because the only progress signal is `last_output_at`, the right cadence on CLI b
 
 ### Anti-patterns
 
-- **Poll-for-completion loops.** Wrong because completion is pushed. A `while state == "running": sleep` pattern is working against the system — do other work or yield; the notification will tell you when there's something to inspect. If `_advisory.type == "duplicate_tool_call"` appears on repeated `daemon(list/check)`, the result was still executed and not blocked; do not answer it by immediately making the same call again. Choose one owner (usually the parent) to coordinate daemon status, then wait for notification or set one future reminder.
+- **Poll-for-completion loops.** Wrong because completion is pushed. A `while state == "running": sleep` pattern is working against the system — do other work or yield; the notification will tell you when there's something to inspect. If `_advisory.type == "duplicate_tool_call"` appears on repeated `daemon(action="list", input={}) / daemon(action="check", input={"id": "<id>"})`, the result was still executed and not blocked; do not answer it by immediately making the same call again. Choose one owner (usually the parent) to coordinate daemon status, then wait for notification or set one future reminder.
 - **`check` immediately after `emanate`.** The first 30 seconds are almost always model warmup + initial tool calls; nothing actionable. Save the call.
 - **Reclaiming on a hunch.** See the stall heuristic. Default to "let it cook."
 - **`check` with `last=1000, truncate=0`.** Dumps the full event log into your context. Use targeted `last=20` and only widen if needed.
@@ -102,7 +102,7 @@ This complements the polling rule above: completion is push-notified, stalls are
 
 ## Worked example: a daemon that's been running 5 minutes
 
-You called `daemon(action="emanate", ...)` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
+You called `daemon(action="emanate", input={"tasks": [...]})` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
 
 ```bash
 # What's the live state?

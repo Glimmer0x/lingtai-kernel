@@ -70,7 +70,7 @@ parent stdio MCP registrations) and injects it via the
 `QWEN_CODE_SYSTEM_SETTINGS_PATH` environment variable — overriding settings
 paths silently breaks completion enforcement.
 
-Plan flags at emanate time: `daemon(action='ask')` is intentionally
+Plan flags at emanate time: `daemon(action='ask', input={'id': '<id>', 'message': '<message>'})` is intentionally
 unsupported for this backend (no stable headless resume contract), so there
 is no later chance to adjust a running session. Output parsing is verbatim
 text — Qwen Code headless mode has no machine-readable event stream here, so

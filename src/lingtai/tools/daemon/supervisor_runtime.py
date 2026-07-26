@@ -529,7 +529,7 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
     em_id = run_dir.handle
     parts = [
         f"Daemon {em_id} {status}.",
-        f"Inspect with daemon(action=\"check\", id=\"{em_id}\").",
+        f'Inspect with daemon(action="check", input={{"id": "{em_id}"}}).',
     ]
     task = (state.get("task") or "").strip()
     if task:

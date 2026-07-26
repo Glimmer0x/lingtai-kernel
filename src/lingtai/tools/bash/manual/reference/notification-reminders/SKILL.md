@@ -137,7 +137,7 @@ payload = {
   "data": {
     "source": "cron-reminder",
     "message": "I rested while a daemon/CLI job was still active.",
-    "todo": "Read pad, then run daemon(list) or inspect the named job/PR.",
+    "todo": 'Read pad, then run daemon(action="list", input={}) or inspect the named job/PR.',
     "reminder_id": "daemon-check-" + str(int(time.time())),
   },
 }

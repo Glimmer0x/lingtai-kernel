@@ -457,7 +457,7 @@ def test_materialize_preserves_init_capability_overrides(tmp_path, monkeypatch):
     A preset enabling daemon must not clobber init.json's
     manifest.capabilities.daemon.max_emanations — the preset decides *which*
     capabilities run, but per-agent overrides win key-by-key. Regression for
-    daemon(list) reporting the default ceiling instead of the configured one.
+    daemon(action="list", input={}) reporting the default ceiling instead of the configured one.
     """
     plib = _make_preset_lib(tmp_path, {
         "smart": {
@@ -629,7 +629,7 @@ def test_refresh_preset_omitting_daemon_keeps_override_in_manager(tmp_path, monk
 def test_refresh_preset_keeps_daemon_override_in_manager(tmp_path, monkeypatch):
     """End-to-end refresh: a real Agent with an active preset that enables
     daemon at 10 plus an init.json daemon override of 30 ends up with a live
-    DaemonManager whose ceiling is 30 (and daemon(list) reports 30).
+    DaemonManager whose ceiling is 30 (and daemon(action="list", input={}) reports 30).
 
     This exercises the full path the bug report described: materialize active
     preset → _setup_from_init → _setup_capability("daemon", ...) → DaemonManager.

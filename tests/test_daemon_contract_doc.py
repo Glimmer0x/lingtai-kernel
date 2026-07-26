@@ -11,6 +11,8 @@ REQUIRED_RELATED = [
     "src/lingtai/tools/daemon/__init__.py",
     "src/lingtai/tools/daemon/system_prompt.py",
     "src/lingtai/tools/daemon/run_dir.py",
+    "src/lingtai/tools/_settings.py",
+    "tests/test_daemon_action_input_candidate.py",
     "src/lingtai/tools/daemon/manual/SKILL.md",
     "src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md",
     "src/lingtai/mcp_servers/daemon_common/server.py",
@@ -24,6 +26,8 @@ REQUIRED_TRIGGERS = [
     "src/lingtai/tools/daemon/__init__.py",
     "src/lingtai/tools/daemon/system_prompt.py",
     "src/lingtai/tools/daemon/run_dir.py",
+    "src/lingtai/tools/_settings.py",
+    "tests/test_daemon_action_input_candidate.py",
     "src/lingtai/tools/daemon/ANATOMY.md",
     "src/lingtai/tools/daemon/manual/",
     "src/lingtai/mcp_servers/daemon_common/",
@@ -45,7 +49,7 @@ def test_daemon_contract_frontmatter_lists_related_files_and_triggers():
     meta = _frontmatter(DOC)
     assert meta["name"] == "daemon-contract"
     assert meta["status"] == "active"
-    assert meta["contract_version"] == 6
+    assert meta["contract_version"] == 7
     related = set(meta["related_files"])
     triggers = set(meta["review_triggers"])
     for rel in REQUIRED_RELATED:

@@ -1,4 +1,4 @@
-"""Tests for daemon(action='check') — read-only event-tail surface."""
+"""Tests for daemon(action='check', input={'id': '<id>'}) — read-only event-tail surface."""
 
 from tests._daemon_helpers import (
     completed_future,
@@ -11,7 +11,7 @@ from tests._daemon_helpers import (
 def test_check_unknown_id_returns_error(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    out = mgr.handle({"action": "check", "id": "em-999"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-999"}})
     assert out["status"] == "error"
     assert "em-999" in out["message"]
 
@@ -27,7 +27,7 @@ def test_check_running_emanation_returns_state_and_events(tmp_path):
     rd.clear_current_tool("ok")
     rd.bump_turn(turn=1, response_text="working...")
 
-    out = mgr.handle({"action": "check", "id": "em-1"})
+    out = mgr.handle({"action": "check", "input": {"id": "em-1"}})
     assert out["id"] == "em-1"
     assert out["state"] == "running"
     assert out["turn"] == 1
@@ -50,7 +50,7 @@ def test_check_respects_last_parameter(tmp_path):
         rd.set_current_tool(f"tool_{i}", {"i": i})
         rd.clear_current_tool("ok")
 
-    out = mgr.handle({"action": "check", "id": "em-2", "last": 3})
+    out = mgr.handle({"action": "check", "input": {"id": "em-2", "last": 3}})
     assert out["events_returned"] == 3
     assert out["events_total"] >= 11  # 1 start + 10 tool events
     # The last 3 should include the most recent tool_result
@@ -67,7 +67,13 @@ def test_check_truncate_limits_string_fields(tmp_path):
     # Inject an event with a very long args_preview
     rd.set_current_tool("bash", {"cmd": "x" * 2000})
 
-    out = mgr.handle({"action": "check", "id": "em-3", "truncate": 100})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-3",
+            "truncate": 100,
+        },
+    })
     # Find the tool_call event we just wrote
     tool_call_events = [e for e in out["events"] if e.get("event") == "tool_call"]
     assert tool_call_events, "expected at least one tool_call event"
@@ -84,7 +90,13 @@ def test_check_truncate_zero_disables(tmp_path):
     register_daemon_entry(mgr, "em-4", rd)
     rd.set_current_tool("bash", {"cmd": "x" * 100})
 
-    out = mgr.handle({"action": "check", "id": "em-4", "truncate": 0})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-4",
+            "truncate": 0,
+        },
+    })
     tool_call_events = [e for e in out["events"] if e.get("event") == "tool_call"]
     assert tool_call_events
     # With truncate=0 the args_preview must NOT carry the truncation marker.
@@ -105,7 +117,12 @@ def test_check_includes_terminal_event_for_done_emanation(tmp_path):
 
     rd.mark_done("final report text")
 
-    out = mgr.handle({"action": "check", "id": "em-5"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-5",
+        },
+    })
     assert out["state"] == "done"
     assert out["backend"] == "lingtai"
     assert out["path"] == str(rd.path)
@@ -128,7 +145,12 @@ def test_check_includes_cli_progress_fields(tmp_path):
 
     rd.record_cli_output("phase 1 complete", stream="combined")
 
-    out = mgr.handle({"action": "check", "id": "em-cli"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-cli",
+        },
+    })
     assert out["backend"] == "codex"
     assert out["last_output"] == "phase 1 complete"
     assert out["last_output_at"] is not None
@@ -147,7 +169,12 @@ def test_check_includes_failure_error(tmp_path):
 
     rd.mark_failed(RuntimeError("boom"))
 
-    out = mgr.handle({"action": "check", "id": "em-fail"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-fail",
+        },
+    })
     assert out["state"] == "failed"
     assert out["error"]["type"] == "RuntimeError"
     assert out["error"]["message"] == "boom"
@@ -165,7 +192,12 @@ def test_check_default_last_is_20(tmp_path):
         rd.clear_current_tool("ok")
 
     # Default last=20 → 20 returned, 31 total (1 start + 30 tool)
-    out = mgr.handle({"action": "check", "id": "em-6"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-6",
+        },
+    })
     assert out["events_returned"] == 20
     assert out["events_total"] == 31
 
@@ -174,7 +206,13 @@ def test_check_rejects_non_numeric_last(tmp_path):
     """Non-numeric `last` must return a clean error, not raise."""
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    out = mgr.handle({"action": "check", "id": "em-x", "last": "twenty"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-x",
+            "last": "twenty",
+        },
+    })
     assert out["status"] == "error"
     assert "last" in out["message"]
 
@@ -182,7 +220,13 @@ def test_check_rejects_non_numeric_last(tmp_path):
 def test_check_rejects_non_numeric_truncate(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    out = mgr.handle({"action": "check", "id": "em-x", "truncate": "tons"})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-x",
+            "truncate": "tons",
+        },
+    })
     assert out["status"] == "error"
     assert "truncate" in out["message"]
 
@@ -190,17 +234,35 @@ def test_check_rejects_non_numeric_truncate(tmp_path):
 def test_check_rejects_zero_or_negative_last(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    out = mgr.handle({"action": "check", "id": "em-x", "last": 0})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-x",
+            "last": 0,
+        },
+    })
     assert out["status"] == "error"
     assert "last" in out["message"]
-    out = mgr.handle({"action": "check", "id": "em-x", "last": -1})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-x",
+            "last": -1,
+        },
+    })
     assert out["status"] == "error"
 
 
 def test_check_rejects_negative_truncate(tmp_path):
     agent = make_daemon_agent(tmp_path)
     mgr = agent.get_capability("daemon")
-    out = mgr.handle({"action": "check", "id": "em-x", "truncate": -10})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-x",
+            "truncate": -10,
+        },
+    })
     assert out["status"] == "error"
     assert "truncate" in out["message"]
 
@@ -215,7 +277,13 @@ def test_check_caps_last_at_max(tmp_path):
     register_daemon_entry(mgr, "em-cap", rd)
 
     # Asking for a huge value still works but only returns up to the cap.
-    out = mgr.handle({"action": "check", "id": "em-cap", "last": 10**9})
+    out = mgr.handle({
+        "action": "check",
+        "input": {
+            "id": "em-cap",
+            "last": 10 ** 9,
+        },
+    })
     # Successful check returns the data shape (no `status` field — that's
     # reserved for error responses). The important property: no exception,
     # no DoS, response shape intact.

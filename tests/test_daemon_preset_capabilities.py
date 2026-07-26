@@ -390,9 +390,18 @@ def test_emanate_with_preset_instantiates_caps_for_emanation(tmp_path,
 
     thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "scan files", "tools": ["file"], "preset": thinker_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "scan files",
+                        "tools": ['file'],
+                        "preset": thinker_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched", result.get("message")
     # Folder was created — preset surface was satisfied
@@ -428,9 +437,18 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
 
     preset_path = str(presets_dir / "wizard_style.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["read"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "x",
+                        "tools": ['read'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched", \
         f"expected dispatched, got {result!r}"
@@ -458,9 +476,18 @@ def test_emanate_preset_request_for_email_intrinsic_dispatches(tmp_path, monkeyp
 
     preset_path = str(presets_dir / "wizard_style.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["email"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "x",
+                        "tools": ['email'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched", result
     assert result["count"] == 1
@@ -486,9 +513,18 @@ def test_emanate_preset_does_not_pollute_parent_tool_registry(tmp_path,
 
     thinker_path = str(presets_dir / "thinker.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["file"], "preset": thinker_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "x",
+                        "tools": ['file'],
+                        "preset": thinker_path,
+                    },
+                ],
+            },
+        })
     assert result["status"] == "dispatched"
 
     # Parent unchanged
@@ -528,9 +564,18 @@ def test_emanate_preset_broken_unused_vision_dispatches(tmp_path, monkeypatch):
 
     preset_path = str(presets_dir / "file_plus_broken_vision.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "scan files", "tools": ["file"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "scan files",
+                        "tools": ['file'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched", result.get("message")
     assert result["count"] == 1
@@ -565,9 +610,18 @@ def test_emanate_preset_broken_requested_vision_fails(tmp_path, monkeypatch):
 
     preset_path = str(presets_dir / "broken_vision.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "inspect image", "tools": ["vision"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "inspect image",
+                        "tools": ['vision'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "error"
     assert "preset capability 'vision' failed to set up" in result["message"]
@@ -809,9 +863,18 @@ def test_emanate_preset_skipped_provider_cap_still_runs_host_tools(
 
     preset_path = str(presets_dir / "glm_like.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
-        result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "run a command", "tools": ["shell"], "preset": preset_path},
-        ]})
+        result = mgr.handle({
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "run a command",
+                        "tools": ['shell'],
+                        "preset": preset_path,
+                    },
+                ],
+            },
+        })
 
     assert result["status"] == "dispatched", result.get("message")
     assert result["count"] == 1

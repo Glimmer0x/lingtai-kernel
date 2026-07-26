@@ -79,8 +79,15 @@ def test_claude_command_includes_per_run_mcp_config(tmp_path, monkeypatch):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude-p",
-        "tasks": [{"task": "Run validation.", "tools": []}],
+        "input": {
+            "backend": "claude-p",
+            "tasks": [
+                {
+                    "task": "Run validation.",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -176,7 +183,14 @@ def test_lingtai_backend_gets_default_common_mcp_registration(tmp_path, monkeypa
     monkeypatch.setattr(mgr, "_connect_task_mcp_registrations", forbidden_parent_connect)
     result = mgr.handle({
         "action": "emanate",
-        "tasks": [{"task": "Do work.", "tools": []}],
+        "input": {
+            "tasks": [
+                {
+                    "task": "Do work.",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -201,26 +215,34 @@ def test_cli_backend_receives_common_mcp_configuration(tmp_path, monkeypatch, ba
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": backend,
-        "tasks": [{
-            "task": f"Run with {backend}.",
-            "tools": [],
-            "mcp": [
+        "input": {
+            "backend": backend,
+            "tasks": [
                 {
-                    "name": "parent-docs",
-                    "transport": "stdio",
-                    "command": "/bin/echo",
-                    "args": ["docs"],
-                    "env": {"DOC_TOKEN": "dummy"},
-                },
-                {
-                    "name": "parent_http",
-                    "transport": "http",
-                    "url": "https://mcp.example.test/sse",
-                    "headers": {"Authorization": "Bearer dummy"},
+                    "task": f'Run with {backend}.',
+                    "tools": [],
+                    "mcp": [
+                        {
+                            "name": "parent-docs",
+                            "transport": "stdio",
+                            "command": "/bin/echo",
+                            "args": ['docs'],
+                            "env": {
+                                "DOC_TOKEN": "dummy",
+                            },
+                        },
+                        {
+                            "name": "parent_http",
+                            "transport": "http",
+                            "url": "https://mcp.example.test/sse",
+                            "headers": {
+                                "Authorization": "Bearer dummy",
+                            },
+                        },
+                    ],
                 },
             ],
-        }],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]

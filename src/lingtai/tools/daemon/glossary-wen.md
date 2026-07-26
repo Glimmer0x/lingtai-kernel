@@ -21,3 +21,5 @@ maintenance: |
 - `ask`：问，续问
 - `check`：察，察进展
 - `reclaim`：收，收分神
+- `manual`：录，读所装 daemon 之手册，惟读
+- `input`：入，诸行动之闭参数；`action`、`input` 必具，根之 `reasoning` 由 BaseAgent 加之，非 daemon 自有

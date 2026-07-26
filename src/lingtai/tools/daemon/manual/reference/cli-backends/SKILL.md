@@ -2,7 +2,7 @@
 name: daemon-cli-backends
 description: >
   Nested daemon-manual reference for daemon API details and CLI backends:
-  daemon(action=list), claude-p/codex/opencode behavior,
+  daemon(action='list', input={}), claude-p/codex/opencode behavior,
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
@@ -19,7 +19,7 @@ maintenance: |
 # Daemon CLI Backend Reference
 
 Nested daemon-manual reference. Open this when choosing a daemon backend,
-inspecting `daemon(action="list")`, or passing CLI flags through `backend_options`.
+inspecting `daemon(action="list", input={})`, or passing CLI flags through `backend_options`.
 
 ## Nested reference catalog
 
@@ -111,7 +111,7 @@ catalog. Only backends with proven demand get a page.
 | Oh-My-Pi (`omp`)-specific flags for a daemon task: model selection, tool/provider switches, the harness-reserved mode/approval/session flags; discover the installed `omp` CLI's flags and translate them into `backend_options` | `reference/backends/oh-my-pi/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, lingtai/tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
-## API note: `daemon(action="list")`
+## API note: `daemon(action="list", input={})`
 
 `list` is a compact index over both currently tracked runs and historical run
 folders. By default it scans `daemons/*/daemon.json` and returns completed,
@@ -134,7 +134,7 @@ you only want currently tracked in-memory runs. This is the first layer of progr
 Daemon backend integration and user-facing shell execution guidance now split by
 ownership:
 
-- This page owns the daemon API contract: backend names, `daemon(...)` behavior,
+- This page owns the daemon API contract: backend names, `daemon(action="...", input={...})` behavior,
   `backend_options`, result/session capture, `ask`/resume, and backend-specific
   parser caveats.
 - `shell-manual` owns the shell subprocess recipes for the underlying CLIs. Before
@@ -318,7 +318,7 @@ The exact list lives on that backend's page under "Harness boundary"; consult it
 before adding options.
 
 **When it applies:** `backend_options` is honored only at `emanate` time (when
-the CLI session is first spawned). `daemon(action="ask", ...)` reuses the
+the CLI session is first spawned). `daemon(action="ask", input={"id": "em-N", "message": "..."})` reuses the
 existing session via `claude --resume` / `codex exec resume` / backend-specific
 resume and does not re-pass `backend_options` — the runtime flags chosen at
 emanate time persist for the life of the session.
@@ -349,11 +349,11 @@ persisted to the run directory as `cli_output` events and
 notification.
 
 **`ask` on CLI backends is asynchronous.** For resumable CLI emanations,
-`daemon(action="ask", id="em-N", message="...")` spawns/resumes the backend and
+`daemon(action="ask", input={"id": "em-N", "message": "..."})` spawns/resumes the backend and
 returns immediately with `{"status":"sent","async":true}`. Progress streams
 into the same run directory (`cli_output` events, `last_output`); the final reply
 text arrives as a `follow-up completed` system notification and is also visible
-via `daemon(action="check", id="em-N")`. Poll `check` (or wait for the
+via `daemon(action="check", input={"id": "em-N"})`. Poll `check` (or wait for the
 notification) instead of expecting the reply in the `ask` return value.
 
 While one CLI `ask` is in flight against a given emanation, a second `ask` to the

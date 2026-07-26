@@ -783,8 +783,15 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     mgr = agent.get_capability("daemon")
     result = mgr.handle({
         "action": "emanate",
-        "tasks": [{"task": "real manager detached path", "tools": []}],
-        "timeout": 30,
+        "input": {
+            "tasks": [
+                {
+                    "task": "real manager detached path",
+                    "tools": [],
+                },
+            ],
+            "timeout": 30,
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -794,14 +801,32 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
     # A fresh manager resolves the exact run directory, checks supervisor
     # identity, and submits control without adopting the process.
     fresh = DaemonManager(agent)
-    ask = fresh.handle({"action": "ask", "id": em_id, "message": "keep going"})
-    assert ask == {"status": "sent", "id": em_id}
+    ask = fresh.handle({
+        "action": "ask",
+        "input": {
+            "id": em_id,
+            "message": "keep going",
+        },
+    })
+    assert ask["status"] == "sent"
+    assert ask["id"] == em_id
+    assert isinstance(ask["current_setting"], dict)
     stop = fresh.shutdown_for_agent_stop(reason="agent_stop", wait_timeout=0.0)
     assert stop["cancelled"] == 0
     _poll_until(lambda: _disk_state(run_dir).get("state") == "done", timeout=20)
-    check = fresh.handle({"action": "check", "id": em_id})
+    check = fresh.handle({
+        "action": "check",
+        "input": {
+            "id": em_id,
+        },
+    })
     assert check["state"] == "done"
-    listing = fresh.handle({"action": "list", "include_done": True})
+    listing = fresh.handle({
+        "action": "list",
+        "input": {
+            "include_done": True,
+        },
+    })
     assert em_id in json.dumps(listing)
 
     # The inline value is consumed by the fake provider only as a boolean
@@ -998,7 +1023,13 @@ def test_fresh_manager_terminal_cli_ask_has_one_detached_resume_owner(
 
     def _ask(manager, message):
         start.wait(timeout=5)
-        return manager.handle({"action": "ask", "id": run_dir.run_id, "message": message})
+        return manager.handle({
+            "action": "ask",
+            "input": {
+                "id": run_dir.run_id,
+                "message": message,
+            },
+        })
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [
@@ -1027,7 +1058,12 @@ def test_fresh_manager_terminal_cli_ask_has_one_detached_resume_owner(
     calls = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines()]
     assert len(calls) == 1
     assert calls[0]["name"] == backend
-    check = first_manager.handle({"action": "check", "id": run_dir.run_id})
+    check = first_manager.handle({
+        "action": "check",
+        "input": {
+            "id": run_dir.run_id,
+        },
+    })
     assert check["followup_status"] == "done"
     assert check["followup_result_path"] == state["followup_result_path"]
 
@@ -1486,9 +1522,16 @@ def _dispatch_detached_interactive(tmp_path: Path, monkeypatch):
     manager = agent.get_capability("daemon")
     dispatched = manager.handle({
         "action": "emanate",
-        "backend": "claude",
-        "tasks": [{"task": "detached production interactive task", "tools": []}],
-        "timeout": 30,
+        "input": {
+            "backend": "claude",
+            "tasks": [
+                {
+                    "task": "detached production interactive task",
+                    "tools": [],
+                },
+            ],
+            "timeout": 30,
+        },
     })
     assert dispatched["status"] == "dispatched"
     run_dir = manager._emanations[dispatched["ids"][0]]["run_dir"]
@@ -1540,8 +1583,10 @@ def test_detached_interactive_resume_production_host_publishes_followup_done_aft
     fresh_manager = DaemonManager(agent)
     ask = fresh_manager.handle({
         "action": "ask",
-        "id": em_id,
-        "message": "detached production follow-up message",
+        "input": {
+            "id": em_id,
+            "message": "detached production follow-up message",
+        },
     })
     assert ask["status"] == "sent"
     generation = ask["generation"]

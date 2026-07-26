@@ -208,12 +208,19 @@ def test_emanate_claude_dispatches_interactive_runner(tmp_path, monkeypatch):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude",
-        "tasks": [{
-            "task": "Use interactive Claude",
-            "tools": [],
-            "backend_options": {"model": "opus", "verbose": True},
-        }],
+        "input": {
+            "backend": "claude",
+            "tasks": [
+                {
+                    "task": "Use interactive Claude",
+                    "tools": [],
+                    "backend_options": {
+                        "model": "opus",
+                        "verbose": True,
+                    },
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -235,8 +242,15 @@ def test_emanate_claude_p_dispatches_legacy_print_runner(tmp_path, monkeypatch):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude-p",
-        "tasks": [{"task": "Use print mode", "tools": []}],
+        "input": {
+            "backend": "claude-p",
+            "tasks": [
+                {
+                    "task": "Use print mode",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -272,8 +286,15 @@ def test_claude_backend_ids_are_preserved_while_sharing_runners(
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": backend,
-        "tasks": [{"task": "Use Claude", "tools": []}],
+        "input": {
+            "backend": backend,
+            "tasks": [
+                {
+                    "task": "Use Claude",
+                    "tools": [],
+                },
+            ],
+        },
     })
     assert result["status"] == "dispatched"
     em_id = result["ids"][0]
@@ -299,12 +320,18 @@ def test_claude_reserved_backend_options_are_rejected(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude",
-        "tasks": [{
-            "task": "should not spawn",
-            "tools": [],
-            "backend_options": {"settings": "{}"},
-        }],
+        "input": {
+            "backend": "claude",
+            "tasks": [
+                {
+                    "task": "should not spawn",
+                    "tools": [],
+                    "backend_options": {
+                        "settings": "{}",
+                    },
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
@@ -318,12 +345,18 @@ def test_claude_interactive_system_prompt_backend_option_is_rejected(tmp_path):
 
     result = mgr.handle({
         "action": "emanate",
-        "backend": "claude",
-        "tasks": [{
-            "task": "should not spawn",
-            "tools": [],
-            "backend_options": {"append_system_prompt_file": "/tmp/override.md"},
-        }],
+        "input": {
+            "backend": "claude",
+            "tasks": [
+                {
+                    "task": "should not spawn",
+                    "tools": [],
+                    "backend_options": {
+                        "append_system_prompt_file": "/tmp/override.md",
+                    },
+                },
+            ],
+        },
     })
 
     assert result["status"] == "error"
