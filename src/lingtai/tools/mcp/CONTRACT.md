@@ -1,7 +1,7 @@
 ---
 name: mcp-contract
 tool: mcp
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/ANATOMY.md
@@ -56,21 +56,40 @@ source of truth.
 
 ## Tool surface
 
-Schema requires `action`; the handler is `handle_mcp` (dispatched via
-`dispatch_action`). Exactly two read-only actions.
+The raw module schema is a closed object requiring exactly root `action` and
+`input`. `input` is an `anyOf` containing two exact empty object branches titled
+`info input` and `manual input`; both have `properties: {}`, `required: []`, and
+`additionalProperties: false`. The module does not declare `reasoning`.
+
+`BaseAgent._build_tool_schemas()` creates the final Agent/model-facing schema by
+adding one optional root-level `reasoning` property. It does not add reasoning to
+an input branch. `ToolExecutor` records public `reasoning` as internal
+`_reasoning` before invoking `handle_mcp`; neither metadata field is part of the
+raw module schema. Model calls therefore use, for example,
+`mcp(action="info", input={}, reasoning="check registry health")` and
+`mcp(action="manual", input={}, reasoning="load MCP guidance")`.
+
+The handler is `handle_mcp` (dispatched via `dispatch_action`). It accepts only
+root `action`, root `input`, and the Agent metadata keys `reasoning`/`_reasoning`.
+It rejects action-only, flat, non-mapping, and non-empty input; there is no flat
+compatibility route. Exactly two read-only actions are available.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `info` | `action="info"` | — | reconciles registry, re-injects prompt XML, returns `{status: "ok", registry_path, registered_count, registered: [{name, summary, identity?}], problems}` | see below |
-| `manual` | `action="manual"` | — | `{status: "ok", mcp_manual, manual_path}` | degraded shape below |
+| `info` | `action="info"`, `input={}` | model-facing root `reasoning` | reconciles registry, re-injects prompt XML, returns `{status: "ok", registry_path, registered_count, registered: [{name, summary, identity?}], problems, current_setting}` | malformed/unknown below |
+| `manual` | `action="manual"`, `input={}` | model-facing root `reasoning` | `{status: "ok", mcp_manual, manual_path, current_setting}` | degraded/malformed below |
 
 Each `registered` entry is `{name, summary}` and carries `identity` only when a
 matching identity record with non-empty `accounts` exists. `manual` returns
 `status: "degraded"` with an empty `mcp_manual` and an `error` string when
-`.library/intrinsic/capabilities/mcp/SKILL.md` is missing.
+`.library/intrinsic/capabilities/mcp/SKILL.md` is missing. Every action result,
+including degraded, malformed, and unknown results, carries `current_setting`.
+The historical unknown-action message remains exactly:
+`unknown action: <action>, only 'info' or 'manual' is supported`.
 
 **Error shapes** (plain dicts):
-- Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported"}`.
+- Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported", "current_setting": {...}}`.
+- Malformed input: `{"status": "error", "message": <bounded validation message>, "current_setting": {...}}`.
 
 ## State & storage
 
@@ -85,6 +104,32 @@ boot-time addon decompression (`decompress_addons`, run by the Agent initializer
 which appends catalog entries named in init.json's `addons: [...]`, append-only
 and idempotent). Identity records are read separately via `read_identities`. `mcp`
 only reads, validates, and renders; `info` re-reads and re-injects on demand.
+
+### Agent-owned settings placeholder
+
+The handler calls `read_settings(agent, "mcp")` and then
+`current_setting(snapshot, "mcp")` at the start of every invocation, before
+validation or action dispatch. The exact diagnostic object is attached as
+`current_setting` to every result. The optional file is exactly:
+
+```text
+<agent>/settings/mcp.json
+```
+
+A valid v1 placeholder contains only:
+
+```json
+{"schema_version": 1}
+```
+
+Missing is normal. A valid file is hot-reread on the next call; the placeholder
+is metadata-only and cannot select, enable, or alter registry behavior. Invalid
+JSON, schema versions, duplicate fields, non-regular files, and unstable reads
+produce a bounded `settings_error` diagnostic while `info`, `manual`, registry
+reconciliation, and prompt XML remain unchanged. `current_setting` includes
+`configurable: false`, `placeholder: "no-op"`, `source`, `settings_revision`,
+`settings_hash`, and a `change_hint`; malformed settings additionally include
+`settings_error`.
 
 ## Cross-platform invariants
 
@@ -115,8 +160,9 @@ Do not change any of the following; documented for reviewers only.
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | Registry renders into the prompt | `tests/test_mcp_capability.py::test_mcp_capability_renders_registry_into_prompt` | Add a registry line, inspect the `mcp` prompt section | Registered MCPs invisible to the model |
-| Tool is read-only (no mutation) | `tests/test_mcp_capability.py::test_mcp_show_action_returns_health_snapshot` | Call `info`, confirm `mcp_registry.jsonl` unchanged | Signpost promise violated; surprise mutations |
-| Unknown actions handled | `tests/test_mcp_capability.py::test_mcp_show_unknown_action_returns_error` | Call `mcp(action="foo")` | Silent mis-dispatch |
+| Tool is read-only (no mutation) | `tests/test_mcp_capability.py::test_mcp_show_action_returns_health_snapshot` | Call `mcp(action="info", input={})`, confirm `mcp_registry.jsonl` unchanged | Signpost promise violated; surprise mutations |
+| Nested input and unknown actions handled | `tests/test_mcp_capability.py::test_mcp_show_unknown_action_returns_error` | Call `mcp(action="foo", input={})`; reject action-only/flat/non-empty calls | Silent mis-dispatch or hidden compatibility contract |
+| Settings are hot-reread evidence only | `tests/test_mcp_capability.py::test_mcp_settings_reread_and_invalid_diagnostic_do_not_change_registry` | Change `settings/mcp.json`, call again, compare `current_setting` and registry | Stale or behavior-changing placeholder |
 | Addon decompression is idempotent | `tests/test_mcp_capability.py::test_decompress_is_idempotent` | Boot twice with the same `addons`, diff the registry | Duplicate registry growth |
 | Secrets never reach the prompt | `tests/test_mcp_identity_discovery.py::test_secret_fields_are_stripped_from_accounts` | Add an identity with a secret field, inspect `info` output | Credential leakage into the prompt |
 

@@ -5,6 +5,7 @@ tool_package: lingtai.tools.mcp
 language: en
 related_files:
 - docs.yaml
+- src/lingtai/tools/mcp/CONTRACT.md
 - src/lingtai/kernel/tool_glossary.py
 - src/lingtai/tools/glossary_validator.py
 - src/lingtai/tools/mcp/glossary-zh.md

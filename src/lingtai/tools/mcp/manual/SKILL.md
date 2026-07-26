@@ -14,7 +14,7 @@ description: >
       `whatsapp` / `cloud_mail` addon, or any LingTai email/chat integration.
       **Step 1 is always** `reference/curated-addons.md`; exact config field
       names come from the addon docs — do NOT guess them.
-    - You want to know what MCPs you currently have (`mcp(action="info")`).
+    - You want to know what MCPs you currently have (`mcp(action="info", input={}, reasoning="check registry health")`).
     - An MCP isn't behaving: registry validation, the `problems` list,
       refresh-after-edit verification, common boot errors.
     - You're exploring an unfamiliar third-party MCP and need its docs.
@@ -107,7 +107,48 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-Two actions: `mcp(action="info")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body; `mcp(action="manual")` returns this manual body on demand.
+Two actions: `mcp(action="info", input={}, reasoning="check registry health")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body; `mcp(action="manual", input={}, reasoning="load MCP guidance")` returns this manual body on demand.
+
+### Closed action/input contract
+
+The raw `mcp` module schema is a closed object requiring root `action` and
+`input`. The `input` value must be the empty object `{}` for either action; the
+`info input` and `manual input` schema branches have no properties and reject
+additional properties. Action-only calls, flat legacy fields, and non-empty
+input are invalid. The raw module does not declare `reasoning`.
+
+When an Agent builds its model-facing schemas, `BaseAgent` adds one optional
+root-level `reasoning` property. It never adds `reasoning` inside `input`.
+`ToolExecutor` removes public `reasoning` and passes it as internal `_reasoning`
+metadata to the handler. Keep the call shape nested and do not use a provider-
+specific or flat compatibility transform.
+
+Every `info`, `manual`, degraded, malformed, and unknown result includes the
+fresh `current_setting` diagnostic. Manual content remains this installed
+`SKILL.md` body; settings are never substituted for it.
+
+### Agent-owned settings placeholder
+
+The handler rereads the exact Agent-owned file below on **every** invocation,
+before input validation or action dispatch:
+
+```text
+<agent>/settings/mcp.json
+```
+
+The only valid v1 contents are:
+
+```json
+{"schema_version": 1}
+```
+
+A missing file is normal. A valid file is hot-reread on the next call but is a
+metadata-only no-op and cannot select, enable, or alter an MCP registry. Invalid
+JSON, an invalid schema version, duplicate fields, an unsafe file type, or an
+unstable read yields a bounded `settings_error` inside `current_setting`; the
+registry, prompt XML, info health, and manual body are unchanged. The diagnostic
+contains `configurable: false`, `placeholder: "no-op"`, `source`,
+`settings_revision`, `settings_hash`, and `change_hint`.
 
 Each `registered` entry may also carry a non-secret **`identity`** block, so you can tell *which* configured account/bot/channel an MCP surface represents without reading private config:
 

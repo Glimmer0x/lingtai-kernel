@@ -672,18 +672,76 @@ def test_addons_dict_still_works_for_legacy(tmp_path):
     assert not registry_path.exists()
 
 
+def test_mcp_raw_schema_is_closed_nested_and_agent_adds_root_reasoning(tmp_path):
+    from lingtai.tools.mcp import get_schema
+
+    raw = get_schema()
+    assert set(raw["properties"]) == {"action", "input"}
+    assert raw["required"] == ["action", "input"]
+    assert raw["additionalProperties"] is False
+    assert [branch["title"] for branch in raw["properties"]["input"]["anyOf"]] == [
+        "info input",
+        "manual input",
+    ]
+    for branch in raw["properties"]["input"]["anyOf"]:
+        assert branch == {
+            "title": branch["title"],
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+
+    agent, _ = _mk_agent(tmp_path)
+    schema = next(item for item in agent._build_tool_schemas() if item.name == "mcp")
+    params = schema.parameters
+    assert set(params["properties"]) == {"action", "input", "reasoning"}
+    assert params["required"] == ["action", "input"]
+    assert params["additionalProperties"] is False
+    assert "reasoning" not in params["properties"]["input"]
+    assert all("reasoning" not in branch for branch in params["properties"]["input"]["anyOf"])
+
+
+def test_mcp_settings_reread_and_invalid_diagnostic_do_not_change_registry(tmp_path):
+    agent, workdir = _mk_agent(tmp_path, addons=["imap"])
+    handler = agent._tool_handlers["mcp"]
+    settings = workdir / "settings" / "mcp.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+
+    settings.write_text('{"schema_version": 1}\n', encoding="utf-8")
+    first = handler({"action": "info", "input": {}})
+    assert first["current_setting"]["source"] == "settings/mcp.json"
+    first_revision = first["current_setting"]["settings_revision"]
+
+    settings.write_text('{\n  "schema_version": 1\n}\n', encoding="utf-8")
+    second = handler({"action": "manual", "input": {}})
+    assert second["current_setting"]["source"] == "settings/mcp.json"
+    assert second["current_setting"]["settings_revision"] != first_revision
+
+    before = handler({"action": "info", "input": {}})
+    settings.write_text('{"schema_version": 2}\n', encoding="utf-8")
+    invalid = handler({"action": "info", "input": {}})
+    assert invalid["current_setting"]["source"] == "settings_error"
+    assert "settings_error" in invalid["current_setting"]
+    assert invalid["registered"] == before["registered"]
+    assert invalid["registered_count"] == before["registered_count"]
+    assert invalid["problems"] == before["problems"]
+
+
 def test_mcp_show_action_returns_health_snapshot(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
     assert handler is not None
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}})
     assert result["status"] == "ok"
     assert result["registered_count"] == 1
     assert result["registered"][0]["name"] == "imap"
     assert "mcp_manual" not in result
-    manual = handler({"action": "manual"})
+    assert result["current_setting"]["source"] == "missing"
+    manual = handler({"action": "manual", "input": {}})
     assert manual["status"] == "ok"
     assert "mcp_manual" in manual and manual["mcp_manual"]  # umbrella SKILL.md body
+    assert manual["current_setting"]["source"] == "missing"
 
 
 def test_mcp_manual_preserves_tui_command_boundary():
@@ -723,29 +781,38 @@ def test_mcp_manual_preserves_tui_command_boundary():
 def test_mcp_show_unknown_action_returns_error(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "register"})  # not supported in slice
+    result = handler({"action": "register", "input": {}})  # not supported in slice
     assert result["status"] == "error"
-    # Exact model-visible envelope must survive the dispatch-helper migration
-    # (issue #513).
-    assert result == {
-        "status": "error",
-        "message": "unknown action: 'register', only 'info' or 'manual' is supported",
-    }
-    # Missing action key renders the empty-string default, not None.
-    assert handler({}) == {
-        "status": "error",
-        "message": "unknown action: '', only 'info' or 'manual' is supported",
-    }
+    # Exact model-visible message must survive the dispatch-helper migration
+    # (issue #513); the new diagnostic is an outer result field.
+    assert result["message"] == (
+        "unknown action: 'register', only 'info' or 'manual' is supported"
+    )
+    assert result["current_setting"]["source"] == "missing"
+
+    # Missing input is malformed; there is no action-only compatibility route.
+    missing = handler({"action": "info"})
+    assert missing["status"] == "error"
+    assert missing["message"] == "mcp requires root action and input"
+    assert missing["current_setting"]["source"] == "missing"
+
+    # Flat and non-empty payloads are rejected before dispatch.
+    flat = handler({"action": "info", "title": "legacy"})
+    assert flat["status"] == "error"
+    assert flat["current_setting"]["source"] == "missing"
+    nonempty = handler({"action": "info", "input": {"title": "legacy"}})
+    assert nonempty["status"] == "error"
+    assert nonempty["message"] == "mcp input must be an empty object"
+    assert nonempty["current_setting"]["source"] == "missing"
+
     # Invalid JSON can make `action` unhashable (issue #513 blocker): the router
-    # must render the unknown-action envelope, not raise TypeError.
-    assert handler({"action": []}) == {
-        "status": "error",
-        "message": "unknown action: [], only 'info' or 'manual' is supported",
-    }
-    assert handler({"action": {}}) == {
-        "status": "error",
-        "message": "unknown action: {}, only 'info' or 'manual' is supported",
-    }
+    # must render the historical unknown-action message, not raise TypeError.
+    for action, rendered in (([], "[]"), ({}, "{}")):
+        unknown = handler({"action": action, "input": {}})
+        assert unknown["message"] == (
+            f"unknown action: {rendered}, only 'info' or 'manual' is supported"
+        )
+        assert unknown["current_setting"]["source"] == "missing"
 
 
 # ---------------------------------------------------------------------------

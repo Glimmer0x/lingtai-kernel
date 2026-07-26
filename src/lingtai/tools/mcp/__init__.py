@@ -28,9 +28,11 @@ Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from lingtai.kernel.tool_dispatch import dispatch_action
+from lingtai.tools._settings import current_setting, read_settings
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -104,18 +106,23 @@ def _manual(agent: "BaseAgent") -> dict:
 
 _DESCRIPTION = (
     "SIGNPOST ONLY: this tool does not register, activate, configure, or "
-    "troubleshoot MCP servers by itself. `info` only re-reads the registry and "
-    "returns registry health; `manual` returns the mcp-manual body. "
-    "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
-    "system prompt lists every MCP server currently registered. Before using "
+    "troubleshoot MCP servers by itself. Use "
+    "mcp(action=\"info\", input={}, reasoning=\"check registry health\") "
+    "to re-read the registry and return registry health, or "
+    "mcp(action=\"manual\", input={}, reasoning=\"load MCP guidance\") "
+    "to return the mcp-manual body. Your per-agent MCP server registry is "
+    "listed in the <registered_mcp> catalog in your system prompt. Before using "
     "this tool (registering, deregistering, updating, or troubleshooting MCP "
     "servers), read the `mcp-manual` skill — call `manual` to fetch its body "
     "(registration contract, file paths, schema), and call `info` for the current "
-    "registry health snapshot; no exceptions. To register, deregister, or update MCPs, edit "
-    "mcp_registry.jsonl directly with write/edit and call "
+    "registry health snapshot; no exceptions. To register, deregister, or update "
+    "MCPs, edit mcp_registry.jsonl directly with write/edit and call "
     "system(action=\"refresh\")."
 )
 
+# This is the raw module schema. BaseAgent adds the optional root-level
+# ``reasoning`` property when building the model-facing schema; it does not
+# belong in either empty ``input`` branch.
 _SCHEMA = {
     "type": "object",
     "properties": {
@@ -129,8 +136,27 @@ _SCHEMA = {
                 "Neither action mutates MCP configuration."
             ),
         },
+        "input": {
+            "anyOf": [
+                {
+                    "title": "info input",
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+                {
+                    "title": "manual input",
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            ]
+        },
     },
-    "required": ["action"],
+    "required": ["action", "input"],
+    "additionalProperties": False,
 }
 
 
@@ -153,8 +179,40 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     _reconcile(agent)
 
     def handle_mcp(args: dict) -> dict:
-        return dispatch_action(
-            args,
+        # Settings are evidence only.  Read them before inspecting or dispatching
+        # the call so every path (including malformed and unknown calls) reports
+        # the fresh Agent-owned placeholder snapshot.
+        snapshot = read_settings(agent, "mcp")
+        diagnostic = current_setting(snapshot, "mcp")
+
+        def with_setting(result: dict) -> dict:
+            result["current_setting"] = diagnostic
+            return result
+
+        def malformed(message: str) -> dict:
+            return with_setting({"status": "error", "message": message})
+
+        if not isinstance(args, Mapping):
+            return malformed("mcp arguments must be an object")
+
+        allowed = {"action", "input", "reasoning", "_reasoning"}
+        if any(key not in allowed for key in args):
+            return malformed(
+                "mcp accepts only root action, input, reasoning, and _reasoning"
+            )
+        if "action" not in args or "input" not in args:
+            return malformed("mcp requires root action and input")
+        if not isinstance(args["input"], Mapping):
+            return malformed("mcp input must be an object")
+
+        # Unwrap exactly once at the normalization boundary.  The two public
+        # actions have no payload, so selected input must be an empty mapping.
+        action_input = dict(args["input"])
+        if action_input:
+            return malformed("mcp input must be an empty object")
+
+        result = dispatch_action(
+            {"action": args["action"], "input": action_input},
             {
                 "info": lambda _args: _reconcile(agent),
                 "manual": lambda _args: _manual(agent),
@@ -164,6 +222,7 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
                 "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
+        return with_setting(result)
 
     agent.add_tool(
         "mcp",

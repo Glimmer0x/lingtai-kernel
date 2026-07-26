@@ -5,6 +5,7 @@ tool_package: lingtai.tools.mcp
 language: zh
 related_files:
 - docs.yaml
+- src/lingtai/tools/mcp/CONTRACT.md
 - src/lingtai/kernel/tool_glossary.py
 - src/lingtai/tools/glossary_validator.py
 - src/lingtai/tools/mcp/glossary-en.md
@@ -15,4 +16,5 @@ maintenance: |
 ---
 **术语对照**
 
-- `mcp`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `mcp`：原 locale catalog 未定义 model-facing 本地化别名；调用名、`action`、`input`、`reasoning` 与 `current_setting` 均保持 canonical English。
+- `info`、`manual`：皆须配空 `input`；本词表只记 canonical 名相，不提供扁平调用别名。

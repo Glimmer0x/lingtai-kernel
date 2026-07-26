@@ -5,6 +5,7 @@ tool_package: lingtai.tools.mcp
 language: wen
 related_files:
 - docs.yaml
+- src/lingtai/tools/mcp/CONTRACT.md
 - src/lingtai/kernel/tool_glossary.py
 - src/lingtai/tools/glossary_validator.py
 - src/lingtai/tools/mcp/glossary-en.md
@@ -15,4 +16,5 @@ maintenance: |
 ---
 **名相对照**
 
-- `mcp`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `mcp`：原 locale catalog 未载 model-facing 本地名；召名、`action`、`input`、`reasoning`、`current_setting` 皆仍书 canonical English。
+- `info`、`manual`：皆当与空 `input` 相随；词表但记 canonical 名相，不立扁平别名。
