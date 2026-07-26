@@ -6,7 +6,7 @@ Covers the design's invariants and the patch's §13 test matrix:
 - §13.2 — IDLE-state pair injection / strip / no-op
 - §13.3 — ACTIVE-state deferral without ToolResultBlock mutation
 - §13.4 — ASLEEP-state wake on fingerprint change
-- §13.5 — voluntary `notification(action="check")` returns the dict
+- §13.5 — voluntary `notification(action="check", input={})` returns the dict
 - §13.6 — producer migrations: email, soul, system
 - §13.7 — molt clearing
 
@@ -182,7 +182,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# §13.5 — `notification(action="check")` voluntary call
+# §13.5 — `notification(action="check", input={})` voluntary call
 #
 # The read verb moved off `system` onto the standalone `notification` tool.
 # `system(action="notification")` is no longer a valid action.
@@ -202,15 +202,14 @@ def test_check_action_returns_empty_when_nothing_published(
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check"})
+    res = handle(_Stub(), {"action": "check", "input": {}})
     # Voluntary call returns a placeholder dict — the live notification
     # payload (if any) is stamped on by the turn loop's meta-block hook,
     # never built by the handler itself. So even with nothing published,
     # the bare channel keys are absent here.
-    assert res == {
-        "_notification_placeholder": True,
-        "message": res["message"],
-    }
+    assert res["_notification_placeholder"] is True
+    assert "message" in res
+    assert res["current_setting"]["source"] == "missing"
     assert "notification" in res["message"].lower()
 
 
@@ -228,7 +227,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check"})
+    res = handle(_Stub(), {"action": "check", "input": {}})
     # Handler returns a placeholder only — channel keys MUST NOT appear
     # here. The canonical `notifications` payload is attached later by
     # `attach_active_notifications`, not by this handler. This guarantees
@@ -670,7 +669,7 @@ def test_sync_idle_posts_wake_message(tmp_path: Path) -> None:
 
     The synthesized ``(ToolCallBlock, ToolResultBlock)`` pair has
     already been spliced by ``_inject_notification_pair`` —
-    impersonating a voluntary ``notification(action="check")`` call
+    impersonating a voluntary ``notification(action="check", input={})`` call
     from the agent's perspective.  ``MSG_TC_WAKE`` then unblocks the
     run loop so ``_handle_tc_wake`` drives one inference round off
     the existing wire, no fake user message and no meta prefix.
@@ -941,9 +940,9 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     result_block = entries[1].content[0]
     assert isinstance(call_block, ToolCallBlock)
     # The kernel-synthesized delivery pair impersonates a voluntary
-    # notification(action="check") read — not system(action="notification").
+    # notification(action="check", input={}) read — not system(action="notification").
     assert call_block.name == "notification"
-    assert call_block.args["action"] == "check"
+    assert call_block.args == {"action": "check", "input": {}}
     assert isinstance(result_block, ToolResultBlock)
     assert result_block.name == "notification"
     assert result_block.synthesized is True
@@ -1611,7 +1610,7 @@ def test_sync_asleep_inject_fail_falls_back_to_degraded_request(tmp_path: Path) 
     to ASLEEP without committing the fingerprint, so the next heartbeat
     saw the same .notification/ state, woke again, failed inject again,
     reverted again — forever. The fix wakes the agent via a degraded
-    request that tells it to call notification(action="check") or
+    request that tells it to call notification(action="check", input={}) or
     read the producer files directly.
     """
     from lingtai.kernel.state import AgentState

@@ -4,13 +4,13 @@ The notification tool is the **only** agent-callable home for the notification
 verbs.  ``system`` exposes no notification or dismiss verb — there are no
 compatibility aliases.  Dismissal is **atomic**:
 
-* ``notification(action="check")`` returns a placeholder dict that the
+* ``notification(action="check", input={})`` returns a placeholder dict that the
   meta-block later stamps the live payload onto;
-* ``notification(action="dismiss_channel", channel=...)`` clears one channel
+* ``notification(action="dismiss_channel", input={"channel": ...})`` clears one channel
   whole and refuses ``event_id``/``ref_id``;
-* ``notification(action="dismiss_event", event_id=..., [channel="system"])``
+* ``notification(action="dismiss_event", input={"event_id": ..., "channel": "system"})``
   removes one ``system`` event;
-* ``notification(action="dismiss_ref", ref_id=..., [channel="system"])``
+* ``notification(action="dismiss_ref", input={"ref_id": ..., "channel": "system"})``
   removes ``system`` event(s) by ``ref_id``.
 
 ``summarize`` is NOT here — it stays a ``system`` action.
@@ -96,11 +96,21 @@ def test_notification_schema_exposes_atomic_actions() -> None:
         "dismiss_ref",
         "manual",
     ]
-    assert schema["required"] == ["action"]
-    # Dismiss params present; summarize 'items' must NOT be here.
-    for key in ("channel", "force", "event_id", "ref_id", "reason"):
-        assert key in schema["properties"]
-    assert "items" not in schema["properties"]
+    assert schema["required"] == ["action", "input"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"action", "input"}
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [branch["title"] for branch in branches] == [
+        "check input", "dismiss_channel input", "dismiss_event input",
+        "dismiss_ref input", "manual input",
+    ]
+    assert branches[0]["properties"] == {}
+    assert branches[-1]["properties"] == {}
+    assert branches[1]["required"] == ["channel"]
+    assert branches[2]["required"] == ["event_id"]
+    assert branches[3]["required"] == ["ref_id"]
+    assert all(branch["additionalProperties"] is False for branch in branches)
+    assert "reasoning" not in schema["properties"]
 
 
 def test_notification_schema_has_no_kitchen_sink_dismiss() -> None:
@@ -120,13 +130,13 @@ def test_notification_schema_is_canonical_english() -> None:
         assert notif_intrinsic.get_schema(lang) == base_schema
     # Descriptions are real prose, not raw i18n keys.
     assert base_desc and "notification" in base_desc.casefold()
-    assert "notification(action='manual')" in base_desc
+    assert "notification(action='manual', input={})" in base_desc
     assert "read-only" in base_desc.casefold()
     adesc = base_schema["properties"]["action"]["description"]
     assert adesc and "check" in adesc.casefold()
-    assert "notification(action='manual')" in adesc
+    assert "manual reads the installed manual" in adesc
     assert "read-only" in adesc.casefold()
-    cdesc = base_schema["properties"]["channel"]["description"]
+    cdesc = base_schema["properties"]["input"]["anyOf"][1]["properties"]["channel"]["description"]
     assert cdesc and "channel" in cdesc.casefold()
 
 
@@ -203,13 +213,12 @@ def test_manual_returns_installed_notification_manual_without_state_mutation(
     before_fingerprint = fingerprint_notifications(tmp_path)
     before_logs = list(agent._logs)
 
-    res = notif_intrinsic.handle(agent, {"action": "manual"})
+    res = notif_intrinsic.handle(agent, {"action": "manual", "input": {}})
 
-    assert res == {
-        "status": "ok",
-        "notification_manual": manual_body,
-        "manual_path": str(manual_path),
-    }
+    assert res["status"] == "ok"
+    assert res["notification_manual"] == manual_body
+    assert res["manual_path"] == str(manual_path)
+    assert res["current_setting"]["source"] == "missing"
     assert snapshot_notifications(tmp_path) == before_state
     assert fingerprint_notifications(tmp_path) == before_fingerprint
     assert agent._logs == before_logs
@@ -221,17 +230,16 @@ def test_manual_missing_installed_file_returns_degraded_without_state_mutation(
     agent = _StubAgent(tmp_path)
     manual_path = _notification_manual_path(tmp_path)
 
-    res = notif_intrinsic.handle(agent, {"action": "manual"})
+    res = notif_intrinsic.handle(agent, {"action": "manual", "input": {}})
 
-    assert res == {
-        "status": "degraded",
-        "notification_manual": "",
-        "manual_path": str(manual_path),
-        "error": (
-            "notification manual missing — initializer may have failed or "
-            "capability not installed correctly"
-        ),
-    }
+    assert res["status"] == "degraded"
+    assert res["notification_manual"] == ""
+    assert res["manual_path"] == str(manual_path)
+    assert res["error"] == (
+        "notification manual missing — initializer may have failed or "
+        "capability not installed correctly"
+    )
+    assert res["current_setting"]["source"] == "missing"
     assert not (tmp_path / ".notification").exists()
     assert agent._logs == []
 
@@ -243,15 +251,15 @@ def test_manual_missing_installed_file_returns_degraded_without_state_mutation(
 
 def test_check_returns_placeholder_dict(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(agent, {"action": "check"})
+    res = notif_intrinsic.handle(agent, {"action": "check", "input": {}})
     assert res["_notification_placeholder"] is True
-    assert "notification(action=check)" in res["message"]
+    assert "notification(action='check', input={})" in res["message"]
     assert "notifications" not in res
 
 
 def test_unknown_action_errors(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(agent, {"action": "bogus"})
+    res = notif_intrinsic.handle(agent, {"action": "bogus", "input": {}})
     assert res["status"] == "error"
     assert "Unknown notification action" in res["message"]
 
@@ -266,9 +274,13 @@ def test_dismiss_channel_clears_surface(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "soul"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "input": {"channel": "soul"}})
 
-    assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
+    assert res["status"] == "ok"
+    assert res["channel"] == "soul"
+    assert res["cleared"] is True
+    assert res["forced"] is False
+    assert res["current_setting"]["source"] == "missing"
     assert snapshot_notifications(tmp_path) == {}
     # Provenance: invoked_by="notification"; no system_dismiss line.
     assert _events(agent, "notification_dismiss")[0]["invoked_by"] == "notification"
@@ -277,7 +289,7 @@ def test_dismiss_channel_clears_surface(tmp_path: Path) -> None:
 
 def test_dismiss_channel_missing_channel(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "input": {}})
     assert res["status"] == "error"
     assert res["reason"] == "missing_channel"
 
@@ -287,10 +299,10 @@ def test_dismiss_channel_rejects_event_target(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     for kwargs in ({"event_id": "evt_a"}, {"ref_id": "goal:current"}):
         res = notif_intrinsic.handle(
-            agent, {"action": "dismiss_channel", "channel": "system", **kwargs}
+            agent, {"action": "dismiss_channel", "input": {"channel": "system", **kwargs}}
         )
         assert res["status"] == "error", kwargs
-        assert res["reason"] == "channel_dismiss_rejects_event_target", kwargs
+        assert res["reason"] == "unexpected_input_field", kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +328,7 @@ def test_dismiss_event_removes_one(tmp_path: Path) -> None:
     _mark_delivered(agent)
 
     res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_event", "event_id": "evt_b"}
+        agent, {"action": "dismiss_event", "input": {"event_id": "evt_b"}}
     )
 
     assert res["status"] == "ok"
@@ -327,7 +339,7 @@ def test_dismiss_event_removes_one(tmp_path: Path) -> None:
 
 def test_dismiss_event_missing_event_id(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_event"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_event", "input": {}})
     assert res["status"] == "error"
     assert res["reason"] == "missing_event_id"
 
@@ -341,7 +353,7 @@ def test_dismiss_event_defaults_to_system_channel(tmp_path: Path) -> None:
         {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
     )
     _mark_delivered(agent)
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_event", "event_id": "evt_a"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_event", "input": {"event_id": "evt_a"}})
     assert res["status"] == "ok"
     assert res["channel"] == "system"
     assert res["removed"] == 1
@@ -362,7 +374,7 @@ def test_dismiss_ref_removes_by_ref(tmp_path: Path) -> None:
     _mark_delivered(agent)
 
     res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_ref", "ref_id": "goal:current"}
+        agent, {"action": "dismiss_ref", "input": {"ref_id": "goal:current"}}
     )
 
     assert res["status"] == "ok"
@@ -372,7 +384,7 @@ def test_dismiss_ref_removes_by_ref(tmp_path: Path) -> None:
 
 def test_dismiss_ref_missing_ref_id(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "input": {}})
     assert res["status"] == "error"
     assert res["reason"] == "missing_ref_id"
 
@@ -391,12 +403,12 @@ def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
     returns status=ok, reports ``acked_large_result_refs``, and removes the
     reminder from the channel."""
     cases = [
-        {"action": "dismiss_channel", "channel": "system"},
-        {"action": "dismiss_channel", "channel": "system", "force": True},
-        {"action": "dismiss_event", "event_id": "evt_lr"},
-        {"action": "dismiss_event", "event_id": "evt_lr", "force": True},
-        {"action": "dismiss_ref", "ref_id": "large_tool_result:toolu_big"},
-        {"action": "dismiss_ref", "ref_id": "large_tool_result:toolu_big", "force": True},
+        {"action": "dismiss_channel", "input": {"channel": "system"}},
+        {"action": "dismiss_channel", "input": {"channel": "system", "force": True}},
+        {"action": "dismiss_event", "input": {"event_id": "evt_lr"}},
+        {"action": "dismiss_event", "input": {"event_id": "evt_lr", "force": True}},
+        {"action": "dismiss_ref", "input": {"ref_id": "large_tool_result:toolu_big"}},
+        {"action": "dismiss_ref", "input": {"ref_id": "large_tool_result:toolu_big", "force": True}},
     ]
     for kwargs in cases:
         agent = _StubAgent(tmp_path / json.dumps(kwargs, sort_keys=True))
@@ -418,7 +430,7 @@ def test_large_result_guard_every_atomic_action(tmp_path: Path) -> None:
 def test_summarize_is_not_a_notification_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     res = notif_intrinsic.handle(
-        agent, {"action": "summarize", "items": [{"tool_call_id": "x", "summary": "y"}]}
+        agent, {"action": "summarize", "input": {"items": [{"tool_call_id": "x", "summary": "y"}]}}
     )
     assert res["status"] == "error"
     assert "Unknown notification action" in res["message"]
@@ -528,7 +540,7 @@ def test_guarded_channel_refuses_without_force(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "email", {"header": "1 unread"})
 
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "email"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "input": {"channel": "email"}})
 
     assert res["status"] == "error"
     assert res["reason"] == "guarded"
@@ -543,7 +555,7 @@ def test_stale_channel_refused_without_force(tmp_path: Path) -> None:
     _mark_delivered(agent)
     publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "input": {"channel": "system"}})
 
     assert res["status"] == "error"
     assert res["reason"] == "stale_channel_version"
@@ -557,7 +569,7 @@ def test_force_bypasses_stale_on_allowed_channel(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "system", {"header": "two", "data": {"events": ["old", "new"]}})
 
     res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": "system", "force": True}
+        agent, {"action": "dismiss_channel", "input": {"channel": "system", "force": True}}
     )
 
     assert res["status"] == "ok"
@@ -571,7 +583,7 @@ def test_protected_goal_channel_refused(tmp_path: Path) -> None:
     agent._notification_fp = fingerprint_notifications(tmp_path)
 
     res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": "goal", "force": True}
+        agent, {"action": "dismiss_channel", "input": {"channel": "goal", "force": True}}
     )
 
     assert res["status"] == "error"
@@ -584,14 +596,14 @@ def test_post_molt_dismiss_requires_reason(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
     res = notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": "post-molt"}
+        agent, {"action": "dismiss_channel", "input": {"channel": "post-molt"}}
     )
     assert res["status"] == "error"
     assert res["reason"] == "missing_ack_reason"
 
     res2 = notif_intrinsic.handle(
         agent,
-        {"action": "dismiss_channel", "channel": "post-molt", "reason": "continue: done"},
+        {"action": "dismiss_channel", "input": {"channel": "post-molt", "reason": "continue: done"}},
     )
     assert res2["status"] == "ok"
     assert res2["reason"] == "continue: done"

@@ -61,7 +61,7 @@ _PROTECTED_GENERIC_DISMISS: dict[str, str] = {
 
 # Channels whose generic dismissal would leak producer-owned state.
 # Producers with durable unread/state mirrors register themselves here at
-# import time so notification(action="dismiss_channel", channel=...) can refuse
+# import time so notification(action="dismiss_channel", input={"channel": ...}) can refuse
 # unsafe generic clears and point the agent at the producer-specific verb.
 _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 
@@ -215,7 +215,7 @@ def submit(
         tool_name: The producer's namespace key — ``email``, ``soul``,
             ``system``, ``mcp.<server>``, …  This becomes both the file
             basename (``<tool_name>.json``) AND the dict key the agent
-            sees when it reads ``notification(action="check")``.
+            sees when it reads ``notification(action="check", input={})``.
         data: Structured payload the agent will read.  No restrictions
             on shape — producers decide.
         header: One-line glanceable summary used by frontends (TUI

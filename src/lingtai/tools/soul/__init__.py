@@ -8,7 +8,7 @@ Three actions:
               written to ``.notification/soul.json`` via
               ``publish_notification``; the kernel's ``_sync_notifications``
               picks up the fingerprint change and surfaces them inside the
-              single-slot synthesized ``notification(action="check")`` wire
+              single-slot synthesized ``notification(action="check", input={})`` wire
               pair. Mechanical — agent cannot invoke manually.
     inquiry — sync mirror session. Clones conversation (text+thinking only),
               sends question, returns answer in tool result. On-demand.
@@ -126,7 +126,7 @@ def handle(agent, args: dict) -> dict:
     Flow is invocable too, but the call returns immediately with a
     synthesized success result; the actual voices arrive shortly by
     writing ``.notification/soul.json``, which the kernel's notification
-    sync surfaces inside the synthesized ``notification(action="check")``
+    sync surfaces inside the synthesized ``notification(action="check", input={})``
     wire pair.
     """
     action = args.get("action", "")

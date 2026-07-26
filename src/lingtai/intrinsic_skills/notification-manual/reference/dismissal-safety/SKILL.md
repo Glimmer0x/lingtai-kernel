@@ -7,9 +7,9 @@ description: >
   reminder escape hatches. Read after notification-manual before clearing a
   channel or diagnosing a dismissal refusal; summarization mechanics live in
   summarize-manual instead.
-version: 0.1.0
+version: 0.2.0
 tags: [lingtai, notifications, dismiss, force, stale, safety]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-07-26T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
@@ -30,9 +30,9 @@ dismissal would clear only the high-attention mirror.
 For a dismissible notification-owned surface, choose one atomic target:
 
 ```text
-notification(action='dismiss_channel', channel='nudge')
-notification(action='dismiss_event', event_id='evt_...')
-notification(action='dismiss_ref', ref_id='goal:current')
+notification(action='dismiss_channel', input={'channel': 'nudge'})
+notification(action='dismiss_event', input={'event_id': 'evt_...'})
+notification(action='dismiss_ref', input={'ref_id': 'goal:current'})
 ```
 
 `dismiss_channel` clears one allowlisted `.notification/<channel>.json` whole
@@ -62,7 +62,7 @@ as a routine retry or a substitute for handling the producer.
 ## Protected and acknowledgement-sensitive channels
 
 `goal` is protected source of truth. A generic
-`notification(action='dismiss_channel', channel='goal')` refuses even with
+`notification(action='dismiss_channel', input={'channel': 'goal'})` refuses even with
 `force=true`; use `../../../system-manual/reference/goal-manual/SKILL.md` to cancel or complete active goal
 state correctly.
 
@@ -72,8 +72,10 @@ that records the decision, for example:
 ```text
 notification(
   action='dismiss_channel',
-  channel='post-molt',
-  reason='continue: recovered the pending work'
+  input={
+    'channel': 'post-molt',
+    'reason': 'continue: recovered the pending work'
+  }
 )
 ```
 
@@ -91,8 +93,8 @@ matching `tool_call_id` also clears the legacy reminder. If summarization is no
 longer possible, use an atomic notification escape hatch:
 
 ```text
-notification(action='dismiss_ref', ref_id='large_tool_result:<tool_call_id>')
-notification(action='dismiss_event', event_id='<event_id>')
+notification(action='dismiss_ref', input={'ref_id': 'large_tool_result:<tool_call_id>'})
+notification(action='dismiss_event', input={'event_id': '<event_id>'})
 ```
 
 Whole-channel system dismissal also covers such an event but may clear unrelated

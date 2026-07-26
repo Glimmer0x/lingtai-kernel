@@ -41,7 +41,7 @@ parent notification and communication state is never projected into a daemon.
 
 As of 2026-05-02, the meta block no longer carries inbox-drained
 notifications. System-source notifications (mail arrival, bounce, future
-MCP events) are now delivered as synthetic notification(action="check")
+MCP events) are now delivered as synthetic notification(action="check", input={})
 tool-call pairs spliced by ``BaseAgent._inject_notification_pair`` (the
 legacy ``tc_inbox`` splice path is dormant); see
 docs/plans/2026-05-02-system-notification-as-tool-call.md.
@@ -2778,7 +2778,7 @@ def build_synthetic_tool_meta(
 ) -> dict:
     """Return a minimal synthetic ``tool_meta`` block for the IDLE/ASLEEP pair.
 
-    The synthesized ``notification(action="check")`` pair has no real tool
+    The synthesized ``notification(action="check", input={})`` pair has no real tool
     execution, so :class:`ToolExecutor._attach_tool_block` never stamps a
     ``_meta.tool_meta`` block on it.  The ``/notification`` history view still
     wants a ``tool_meta`` block to render, so this builds a parallel one carrying
@@ -2968,7 +2968,7 @@ def notification_payload_signature(payload: Mapping[str, Any] | None) -> str:
 
 
 def _is_notification_check_placeholder(content) -> bool:
-    """Return True when ``content`` is a voluntary ``notification(action=check)``
+    """Return True when ``content`` is a voluntary ``notification(action="check", input={})``
     placeholder result.
 
     The ``notification`` intrinsic's ``check`` action returns a dict carrying
@@ -3029,7 +3029,7 @@ def attach_active_notifications(
           ``_notification_fp`` is left uncommitted, and ``prior_holder`` is
           returned — the state can still be delivered later.
         * The current payload is copied for both unchanged and changed
-          signatures, including a deliberate ``notification(action="check")``
+          signatures, including a deliberate ``notification(action="check", input={})``
           read. The prior holder is released (a
           synthesized pair is skeletonized; a normal tool result RETAINS its old
           payload as a historical trace — timely transient semantics, Jason

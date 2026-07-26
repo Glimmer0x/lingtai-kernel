@@ -1255,7 +1255,7 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
 
     # Dismiss now succeeds — large_tool_result reminders are dismissable as escape hatch.
     dismissed = notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": "system", "force": True}
+        agent, {"action": "dismiss_channel", "input": {"channel": "system", "force": True}}
     )
     assert dismissed["status"] == "ok"
     assert "acked_large_result_refs" in dismissed

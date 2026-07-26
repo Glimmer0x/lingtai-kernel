@@ -1881,7 +1881,7 @@ def test_reconstruction_tool_meta_is_one_shot():
 # ---------------------------------------------------------------------------
 # notifications field removed 2026-05-02 (Task 11 of system-notification-as-
 # tool-call redesign). System-source notifications are now delivered as
-# synthetic notification(action="check") tool-call pairs spliced by
+# synthetic notification(action="check", input={}) tool-call pairs spliced by
 # BaseAgent._inject_notification_pair (the legacy tc_inbox splice path is
 # dormant); see docs/plans/2026-05-02-system-notification-as-tool-call.md. Tests for the
 # old inbox-drain path lived here and have been removed alongside the field.
@@ -1891,7 +1891,7 @@ def test_reconstruction_tool_meta_is_one_shot():
 # ---------------------------------------------------------------------------
 # attach_active_notifications — moving single-slot, SPARSE / update-driven
 # stamping.  The payload attaches on first appearance and re-attaches only when
-# it materially changes (or on a deliberate notification(action=check) read);
+# it materially changes (or on a deliberate notification(action="check", input={}) read);
 # an unchanged payload is NOT chased onto every newest ordinary tool result.
 # ---------------------------------------------------------------------------
 
@@ -2176,7 +2176,7 @@ def test_attach_active_notifications_unchanged_signature_without_holder_reattach
 
 
 def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_path):
-    # A deliberate notification(action=check) placeholder result is a read
+    # A deliberate notification(action="check", input={}) placeholder result is a read
     # request: it must receive the current payload even when unchanged.
     _write_email_notif(tmp_path)
     agent = _notif_agent(tmp_path)
@@ -2186,7 +2186,7 @@ def test_attach_active_notifications_check_read_receives_unchanged_payload(tmp_p
     holder = attach_active_notifications(agent, [first], prior_holder=None)
     assert "notifications" in first.metadata["agent_meta"]
 
-    # Now the agent voluntarily calls notification(action=check): its result is
+    # Now the agent voluntarily calls notification(action="check", input={}): its result is
     # the placeholder dict.  Even though the payload is unchanged, the check
     # result must receive the payload (deliberate read) and become the holder.
     check_result = ToolResultBlock(

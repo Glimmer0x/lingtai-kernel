@@ -313,7 +313,7 @@ def test_send_none_replays_pre_staged_notification_style_pair():
     iface = ChatInterface()
     iface.add_system("system")
     iface.add_assistant_message([
-        ToolCallBlock(id="notif_1", name="notification", args={"action": "check"}),
+        ToolCallBlock(id="notif_1", name="notification", args={"action": "check", "input": {}}),
     ])
     iface.add_tool_results([
         ToolResultBlock(id="notif_1", name="notification", content={"email": {"count": 1}}),
@@ -328,7 +328,7 @@ def test_send_none_replays_pre_staged_notification_style_pair():
             "type": "function_call",
             "call_id": "notif_1",
             "name": "notification",
-            "arguments": '{"action": "check"}',
+            "arguments": '{"action": "check", "input": {}}',
         },
         {
             "type": "function_call_output",
@@ -349,7 +349,7 @@ def test_send_none_failure_preserves_pre_staged_notification_style_pair():
     iface = ChatInterface()
     iface.add_system("system")
     iface.add_assistant_message([
-        ToolCallBlock(id="notif_1", name="notification", args={"action": "check"}),
+        ToolCallBlock(id="notif_1", name="notification", args={"action": "check", "input": {}}),
     ])
     iface.add_tool_results([
         ToolResultBlock(id="notif_1", name="notification", content={"email": {"count": 1}}),
@@ -375,7 +375,7 @@ def test_pre_request_hook_entries_replay_on_same_stateless_responses_request():
 
     def hook(iface):
         iface.add_assistant_message([
-            ToolCallBlock(id="notif_1", name="notification", args={"action": "check"}),
+            ToolCallBlock(id="notif_1", name="notification", args={"action": "check", "input": {}}),
         ])
         iface.add_tool_results([
             ToolResultBlock(id="notif_1", name="notification", content={"count": 1}),
@@ -390,7 +390,7 @@ def test_pre_request_hook_entries_replay_on_same_stateless_responses_request():
             "type": "function_call",
             "call_id": "notif_1",
             "name": "notification",
-            "arguments": '{"action": "check"}',
+            "arguments": '{"action": "check", "input": {}}',
         },
         {
             "type": "function_call_output",

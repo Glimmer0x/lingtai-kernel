@@ -366,7 +366,7 @@ def _dispatch_summary(
     Uses the kernel's canonical ``.notification/`` filesystem-as-protocol
     instead of the legacy inbox queue.  The notification file is written as
     ``.notification/mcp.<mcp_name>.json`` and surfaces in the agent's
-    ``notification(action="check")`` wire block alongside email, soul,
+    ``notification(action="check", input={})`` wire block alongside email, soul,
     and system events.
 
     No explicit wake is needed — ``_sync_notifications`` detects the

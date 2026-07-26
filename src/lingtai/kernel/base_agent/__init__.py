@@ -1284,7 +1284,7 @@ class BaseAgent:
         3. Otherwise, inject a new block appropriate for current state:
 
            * IDLE → splice ``(call, result)`` pair (impersonates a
-             voluntary ``notification(action="check")`` call from the
+             voluntary ``notification(action="check", input={})`` call from the
              agent's perspective), post ``MSG_TC_WAKE`` so the run loop
              unblocks and ``_handle_tc_wake`` drives the next inference
              round off the existing wire — no fake user input, no meta
@@ -1371,7 +1371,7 @@ class BaseAgent:
                 return
             # Notification arrival wakes the agent, then inject as IDLE.
             # The synthesized (call, result) pair impersonates a
-            # voluntary notification(action="check") call; MSG_TC_WAKE
+            # voluntary notification(action="check", input={}) call; MSG_TC_WAKE
             # unblocks the run loop so _handle_tc_wake drives one
             # inference round off the existing wire (no fake user
             # input, no meta prefix).
@@ -1432,7 +1432,7 @@ class BaseAgent:
                     "[system] Notification delivery could not be injected onto "
                     f"the wire after a heal attempt. Affected source(s): "
                     f"{', '.join(sources)}. Please query the current state by "
-                    "calling notification(action=\"check\") or read the "
+                    "calling notification(action=\"check\", input={}) or read the "
                     "producer files under .notification/ directly, then decide "
                     "whether to act. The kernel will not retry this delivery "
                     "until the on-disk state changes."
@@ -1582,12 +1582,12 @@ class BaseAgent:
     def _inject_notification_pair(self, notifications: dict) -> bool:
         """Inject a synthetic (call, result) pair for IDLE / ASLEEP states.
 
-        Builds ``notification(action="check")`` / ``<JSON dict>`` and
+        Builds ``notification(action="check", input={})`` / ``<JSON dict>`` and
         appends to the wire interface.  Records the call_id for later
         stripping.
 
         The synthesized pair is byte-shape-identical to a voluntary
-        ``notification(action="check")`` read so the LLM cannot distinguish
+        ``notification(action="check", input={})`` read so the LLM cannot distinguish
         a kernel-injected delivery from one it issued itself; the
         ``_synthesized: true`` body flag remains the only marker.
 
@@ -1607,9 +1607,10 @@ class BaseAgent:
         distinguish kernel-injected reads from voluntary calls when reading
         conversation history.
 
-        Both call.args and result.content carry safe notification freshness
-        fields from build_meta plus a monotonic injection_seq. Internal tool-meta
-        transit keys are stripped below before the synthesized pair reaches the wire.
+        Result content and metadata carry safe notification freshness fields
+        from build_meta plus a monotonic injection_seq. The call itself stays
+        on the strict public action/input shape; internal freshness belongs in
+        the result sidecar rather than in an extra root or nested input field.
         This makes
         every synthesized pair tokenize uniquely even when the underlying
         notification payload repeats — a protection layer against the
@@ -1800,18 +1801,15 @@ class BaseAgent:
 
         # ``summary_text`` is log-only.  Do not place it in a TextBlock on the
         # wire: successful notification sync should be a structured
-        # notification(action="check") call/result pair, not a visible
+        # notification(action="check", input={}) call/result pair, not a visible
         # synthesized diary/text-input row.
-        # call.args carries injection_seq only — real tool calls don't have
-        # runtime freshness fields in their args (those live in results).
-        # The seq is enough to defeat byte-equality on the assistant turn.
+        # Keep the synthetic call on the same strict action/input shape as a
+        # voluntary notification check. Freshness is carried by the result
+        # content and sidecar, not by an extra public argument.
         call_block = ToolCallBlock(
             id=call_id,
             name="notification",
-            args={
-                "action": "check",
-                "injection_seq": self._notification_inject_seq,
-            },
+            args={"action": "check", "input": {}},
         )
         result_block = ToolResultBlock(
             id=call_id,

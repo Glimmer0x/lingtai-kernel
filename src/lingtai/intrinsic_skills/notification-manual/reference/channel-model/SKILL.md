@@ -6,9 +6,9 @@ description: >
   kernel sync, voluntary check behavior, and canonical producer state versus
   notification mirrors. Read after notification-manual when interpreting,
   producing, or debugging notification payloads; skip for dismissal policy.
-version: 0.1.0
+version: 0.2.0
 tags: [lingtai, notifications, channels, protocol, sync, nudge]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-07-26T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -74,7 +74,7 @@ replacement so readers never observe a partial JSON file.
 
 ## Voluntary check and model-visible delivery
 
-`notification(action='check')` returns a dict placeholder. The turn-loop
+`notification(action='check', input={})` returns a dict placeholder. The turn-loop
 post-hook stamps the canonical live payload onto that same result under
 `_meta.agent_meta.notifications.attention` and
 `_meta.agent_meta.guidance.transient`. The handler does not
@@ -82,7 +82,7 @@ assemble a second bare channel representation and does not write notification
 state.
 
 When notifications arrive while an agent is IDLE or ASLEEP, the kernel can
-synthesize the same `notification(action='check')` tool-call/result shape and
+synthesize the same `notification(action='check', input={})` tool-call/result shape and
 wake the agent. During ACTIVE work, the post-hook moves the single live payload
 to a suitable dict-shaped tool result only when required by first appearance,
 material change, or a deliberate check. Delivery fingerprints and the live

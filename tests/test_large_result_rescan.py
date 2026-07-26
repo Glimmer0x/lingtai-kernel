@@ -13,7 +13,7 @@ This file pins what survives that removal:
    keeps its ``skip_if_ref_id_exists`` dedup contract.
 3. Legacy ``large_tool_result`` events that already exist in ``system.json``
    (e.g. persisted before this change / before a molt) remain dismissible via
-   ``notification(action="dismiss_ref")`` as an escape hatch (P0 requirement §3).
+   ``notification(action="dismiss_ref", input={"ref_id": "<ref_id>"})`` as an escape hatch (P0 requirement §3).
 4. ToolExecutor metadata stamping (``tool_meta``) is unaffected.
 """
 from __future__ import annotations
@@ -321,7 +321,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     )
     agent._notification_fp = fingerprint_notifications(tmp_path)
 
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "ref_id": stale_ref})
+    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "input": {"ref_id": stale_ref}})
 
     assert res["status"] == "ok"
     assert stale_ref in res.get("acked_large_result_refs", [])

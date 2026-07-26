@@ -5,9 +5,9 @@ The ``system`` tool no longer exposes any dismiss/notification verb (see
 ``test_notification_tool.py`` for the no-compatibility regression anchors).
 Dismissal is atomic on the ``notification`` tool:
 
-* ``notification(action="dismiss_channel", channel=...)`` → whole-channel clear,
-* ``notification(action="dismiss_event", event_id=..., [channel="system"])``,
-* ``notification(action="dismiss_ref", ref_id=..., [channel="system"])``.
+* ``notification(action="dismiss_channel", input={"channel": ...})`` → whole-channel clear,
+* ``notification(action="dismiss_event", input={"event_id": ..., "channel": "system"})``,
+* ``notification(action="dismiss_ref", input={"ref_id": ..., "channel": "system"})``.
 
 The ``soul(action="dismiss")`` convenience alias still routes through the same
 shared helper with ``invoked_by="soul"``. Generic dismiss clears one
@@ -37,16 +37,16 @@ from tests._notification_helpers import (
 
 def _dismiss_channel(agent, channel, **kwargs):
     return notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": channel, **kwargs}
+        agent, {"action": "dismiss_channel", "input": {"channel": channel, **kwargs}}
     )
 
 
 def _dismiss_event(agent, **kwargs):
-    return notif_intrinsic.handle(agent, {"action": "dismiss_event", **kwargs})
+    return notif_intrinsic.handle(agent, {"action": "dismiss_event", "input": dict(kwargs)})
 
 
 def _dismiss_ref(agent, **kwargs):
-    return notif_intrinsic.handle(agent, {"action": "dismiss_ref", **kwargs})
+    return notif_intrinsic.handle(agent, {"action": "dismiss_ref", "input": dict(kwargs)})
 
 
 def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
@@ -56,7 +56,11 @@ def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
 
     res = _dismiss_channel(agent, "soul")
 
-    assert res == {"status": "ok", "channel": "soul", "cleared": True, "forced": False}
+    assert res["status"] == "ok"
+    assert res["channel"] == "soul"
+    assert res["cleared"] is True
+    assert res["forced"] is False
+    assert res["current_setting"]["source"] == "missing"
     assert snapshot_notifications(tmp_path) == {}
     nd = _events(agent, "notification_dismiss")[0]
     assert nd["channel"] == "soul"
@@ -91,7 +95,7 @@ def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
 def test_dismiss_validation_errors(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
 
-    missing = notif_intrinsic.handle(agent, {"action": "dismiss_channel"})
+    missing = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "input": {}})
     assert missing["status"] == "error"
     assert missing["reason"] == "missing_channel"
 
