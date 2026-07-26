@@ -466,14 +466,6 @@ def _control_and_deadline_watcher(
         time.sleep(_CONTROL_POLL_INTERVAL_S)
 
 
-def _mark_cancelled_or_timeout(run_dir, timeout_event: threading.Event | None) -> str:
-    if timeout_event is not None and timeout_event.is_set():
-        run_dir.mark_timeout()
-    else:
-        run_dir.mark_cancelled()
-    return "[cancelled]"
-
-
 # ---------------------------------------------------------------------
 # Terminal notification — published directly by this process
 # ---------------------------------------------------------------------

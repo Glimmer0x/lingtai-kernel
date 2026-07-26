@@ -1308,8 +1308,8 @@ def _classify_terminal_state(
     Returns one of ``"timeout"``, ``"cancelled"``, ``"failed"``, ``"done"``.
 
     Called only when ``future.result()`` succeeded (no exception). When the
-    future raises, ``_on_emanation_done`` sets ``status="failed"`` directly and
-    does not call this helper.
+    future raises, the caller sets ``status="failed"`` directly and does not
+    call this helper.
 
     The sole purpose is to preserve the true terminal state (timeout /
     cancelled / failed / done) before publishing the parent-facing daemon
@@ -3909,7 +3909,15 @@ class DaemonManager:
                 pass
 
     def _drain_followup(self, em_id: str) -> str | None:
-        """Drain the follow-up buffer for a specific emanation."""
+        """Drain the follow-up buffer for a specific emanation.
+
+        The production `_run_emanation` call path always binds ``self`` to a
+        `DetachedDaemonExecutionHost`, whose own `_drain_followup` override
+        (reading the run-local control spool) shadows this one — see
+        `execution_host.py`. This method stays reachable when `_run_emanation`
+        is exercised directly against a plain `DaemonManager` (as tests do) and
+        as the shared in-process followup-buffer implementation.
+        """
         entry = self._emanations.get(em_id)
         if not entry:
             return None
@@ -5040,8 +5048,12 @@ class DaemonManager:
         # Qwen Code headless mode does not expose a stable resume contract here.
         # All stream progress into the daemon run directory so
         # `daemon(check)` shows live progress.
-        # Detached ownership is checked before the backend-specific legacy
-        # ask handlers; those handlers retain parent pools/process handles.
+        # Every production entry is created with "detached": True (see
+        # `_handle_emanate`/`_handle_emanate_cli`/`_durable_detached_entry`), so
+        # this always takes the detached branch in production. The legacy
+        # backend-specific dispatch below stays reachable only when a test
+        # constructs a non-detached entry directly, exercising
+        # `_handle_ask_cli`/`_handle_ask_codex`/etc. in isolation.
         if entry.get("detached"):
             return self._handle_ask_detached(em_id, entry, message)
 
@@ -5053,9 +5065,6 @@ class DaemonManager:
                         "message": backend_spec.ask_unsupported_msg}
             ask_handler = getattr(self, backend_spec.ask_handler_attr)
             return ask_handler(em_id, entry, message)
-
-        if entry.get("detached"):
-            return self._handle_ask_detached(em_id, entry, message)
 
         if entry["future"].done():
             return {"status": "error", "message": "not running"}
@@ -7750,68 +7759,6 @@ class DaemonManager:
             result["detached_reclaim_pending"] = detached_pending
         return result
 
-    def _on_emanation_done(self, em_id: str, task_summary: str, future) -> None:
-        entry = self._emanations.get(em_id)
-        elapsed = time.time() - entry["start_time"] if entry else 0.0
-        timeout_s = entry.get("timeout_s", self._timeout) if entry else self._timeout
-        run_dir = entry.get("run_dir") if entry else None
-
-        # Extract the result. The future returns text on cooperative exit
-        # (including the short ``[cancelled]`` / ``[no output]`` sentinels a
-        # timed-out/reclaimed run returns) and raises on a hard failure.
-        future_succeeded = False
-        exc = None
-        try:
-            text = future.result()
-            future_succeeded = True
-        except Exception as e:
-            exc = e
-            text = f"Failed: {e}"
-
-        # Classify the terminal state. ``_classify_terminal_state`` keeps the
-        # recorded ``run_dir`` state authoritative (current main's behaviour) and
-        # layers timeout_event / cancel_event / sentinel / elapsed fallbacks on
-        # top, so a non-normal terminal state (timeout / cancelled / failed) is
-        # never misclassified as a tiny ``done``. The parent always learns the
-        # daemon terminated, and with the correct terminal label, even when it
-        # failed silently. A raised future is ``failed`` unconditionally.
-        if future_succeeded:
-            status = _classify_terminal_state(entry, future_succeeded, text, timeout_s)
-        else:
-            status = "failed"
-
-        self._log("daemon_result", em_id=em_id, status=status,
-                  text_length=len(text), elapsed_ms=round(elapsed * 1000),
-                  timeout_s=timeout_s)
-        if not future_succeeded and exc is not None:
-            self._log("daemon_error", em_id=em_id,
-                      exception=type(exc).__name__, exception_message=str(exc))
-
-        # Deliver every terminal state, including short successful results: the
-        # compact system notification is the wake signal that lets the parent
-        # safely go idle after dispatch and still learn the run ended.
-        # Deliver exactly once per run: the done-callback can fire more than
-        # once for the same em_id (racing reclaim, re-entrant callbacks). The
-        # run directory owns the once-only claim, decoupled from the system
-        # channel's ref_id dedup so an earlier follow-up (``ask``) event sharing
-        # this run's ref_id cannot suppress the terminal notification.
-        idempotency_key = None
-        if run_dir is not None:
-            idempotency_key = run_dir.claim_terminal_notification(status)
-            if idempotency_key is None:
-                self._log("daemon_terminal_notify_skipped_duplicate",
-                          em_id=em_id, status=status)
-                return
-        published = self._publish_daemon_notification(
-            em_id, status=status, text=text, run_dir=run_dir,
-            idempotency_key=idempotency_key,
-        )
-        if run_dir is not None and idempotency_key is not None:
-            if published:
-                run_dir.mark_terminal_notification_published(idempotency_key)
-            else:
-                run_dir.clear_terminal_notification_claim()
-
     # ------------------------------------------------------------------
     # CLI process-group tracking helpers
     #
@@ -8013,70 +7960,6 @@ class DaemonManager:
             f"{signal_name}, code {proc.returncode})"
         )
         return f"{msg}: {detail}" if detail else msg
-
-    def _arm_batch_done_cancel(self, futures: list,
-                               cancel_event: threading.Event) -> None:
-        """Set *cancel_event* once every future in *futures* is done.
-
-        This stops a completed batch's watchdog from sleeping out its full
-        timeout and then waking to kill/scan after all work already finished.
-        A done-callback runs per future; the last one to complete trips the
-        event. Setting cancel after all futures are done is harmless to the run
-        loops (they have already returned) — only the idle watchdog observes it.
-
-        ``timeout_event`` is intentionally left unset: this is normal
-        completion, not a timeout, so terminal run state stays "done"/"failed".
-        """
-        if not futures:
-            cancel_event.set()
-            return
-        remaining = {"n": len(futures)}
-        lock = threading.Lock()
-
-        def _done(_f):
-            with lock:
-                remaining["n"] -= 1
-                if remaining["n"] > 0:
-                    return
-            cancel_event.set()
-
-        for future in futures:
-            future.add_done_callback(_done)
-
-    def _watchdog(self, cancel_event: threading.Event,
-                  timeout_event: threading.Event, timeout: float,
-                  cli_group_id: str | None = None) -> None:
-        """Kill emanations that exceed the timeout.
-
-        Sets timeout_event BEFORE cancel_event so the run loop can observe
-        the timeout flag at its next checkpoint and call mark_timeout instead
-        of mark_cancelled.
-
-        Also directly kills the CLI process groups *belonging to this batch*
-        (``cli_group_id``) so that long child tool/CLI commands are terminated
-        even if the run loop is blocked on stdout (GH #121) — without touching
-        a newer, unrelated batch's procs (GH overlapping-batch kill). When
-        ``cli_group_id`` is None (e.g. the in-process lingtai backend, which
-        spawns no CLI procs) no kill scan runs.
-
-        Returns early without firing if ``cancel_event`` is already set — once
-        a batch's futures are all done, the dispatch path signals cancel so a
-        completed batch's watchdog cannot wake later and do work.
-        """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if cancel_event.is_set():
-                return
-            time.sleep(1.0)
-        if cancel_event.is_set():
-            return
-        timeout_event.set()
-        cancel_event.set()
-        # Kill CLI process groups directly — the run loop may be blocked
-        # reading stdout from a long child command and cannot check
-        # cancel_event until that command finishes. Scoped to this batch only.
-        if cli_group_id is not None:
-            self._kill_cli_group(cli_group_id)
 
     def _new_emanation_id(self, *, reserved_ids: set[str] | None = None) -> str:
         """Return a compact, collision-safe daemon id for a new run.

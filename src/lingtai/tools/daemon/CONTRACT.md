@@ -518,8 +518,10 @@ POSIX mechanics for symmetry.
 - The hidden interactive Claude backend uses a POSIX PTY. Native interactive
   support remains explicitly deferred until a ConPTY adapter exists and is
   accepted.
-- The LingTai backend spawns no CLI process; its watchdog only flips
-  cancel/timeout events for in-thread run loops.
+- The LingTai backend spawns no CLI process; its run loop is an in-thread
+  `_run_emanation` inside the run's own detached supervisor, whose
+  `_control_and_deadline_watcher` flips `cancel_event`/`timeout_event` for
+  that loop to observe.
 
 ### Windows invariants
 
@@ -666,7 +668,7 @@ Re-check this contract when touching:
 | Backend enum/alias contract stays consistent | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract` | Pass an alias (`mimo`) and confirm it normalizes | Backend selection drifts from advertised names |
 | Terminal state is classified from the recorded snapshot | `tests/test_daemon_check.py::test_check_includes_terminal_event_for_done_emanation` | Run to completion, confirm `state=done` in `check` | Parent mis-reads timeout/cancel as success |
 | CLI `ask` never blocks the caller's tool thread | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs` | `ask` a hung CLI daemon, confirm immediate return | Parent loop stalls on a hung subprocess |
-| Reclaim kills the right process group / batch | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two batches, reclaim, confirm scoped kill | A batch kills an unrelated newer batch's procs |
+| Reclaim kills every tracked CLI proc; each run's own detached supervisor kills only its own exact child on timeout | `tests/test_daemon_cli_watchdog_scope.py`, `tests/test_lifecycle_daemon_shutdown.py` | Emanate two runs, reclaim, confirm both are killed; let one run time out and confirm only its own child dies | Reclaim misses a tracked proc, or one run's timeout kills an unrelated run's child |
 | Dual-ledger token accounting stays correct | `tests/test_daemon_run_dir.py::test_append_tokens_writes_parent_ledger_tagged` | Inspect both token_ledger.jsonl files after a run | Daemon spend double-counted or lost in totals |
 | `context_token_limit` stays Codex/native-mimo-only and inert everywhere else; native `mimo` compaction failure is a HARD failure | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` | Emanate a `backend='lingtai'` Codex task with an explicit `context_token_limit`, then repeat with native `mimo` | A bad value silently breaks unrelated providers/backends or swallows a hard MiMo failure |
 
