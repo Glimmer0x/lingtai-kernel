@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 6
-last_changed_at: "2026-07-24"
+last_changed_at: "2026-07-26"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -228,6 +228,22 @@ When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
+
+Only the in-process LingTai loop may issue one same-session recovery when all of
+these hold: `daemon_common` completion is required, the completion file is
+absent (not malformed or an existing non-done receipt), the response has zero
+tool calls, the response text is `None`, empty, or whitespace-only, and one more
+turn remains under the effective ceiling. The runtime sets a one-shot latch
+before sending the narrow cue `Call finish exactly once or return a non-empty
+explanation.` with an instruction not to repeat successful tool calls. A
+recovery response still follows the ordinary tool executor; text never satisfies
+completion, and only a validated `finish(status="done")` permits `done`.
+Provider errors, cancellation, timeout, turn exhaustion, existing receipts,
+ordinary non-empty responses, and a second semantic-empty response retain their
+failure semantics. The recovery decision writes one secret-safe shape event with
+text length/semantic-empty status, tool-call count and bounded names, and
+normalized usage presence/counts; it never reads or writes raw provider payloads,
+response text, tool arguments/results, or prompts.
 
 ### 4. Artifacts separate review evidence from secret-bearing config
 

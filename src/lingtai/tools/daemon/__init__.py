@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 
 if TYPE_CHECKING:
@@ -141,6 +141,49 @@ DAEMON_MECHANICAL_COMPACT_RECOVERY = (
     "resume from that verified state. Do not assume erased context or repeat "
     "side effects without verification."
 )
+_DAEMON_MISSING_COMPLETION_ERROR = "missing completion MCP finish signal"
+DAEMON_COMPLETION_RECOVERY_PROMPT = (
+    "The provider returned a semantically empty response with no tool calls. "
+    "Do not repeat tool calls that already succeeded. Call finish exactly once "
+    "or return a non-empty explanation."
+)
+
+
+def _safe_response_shape(response: Any) -> dict[str, Any]:
+    """Return bounded response shape without retaining provider payloads."""
+    text = getattr(response, "text", None)
+    tool_calls = getattr(response, "tool_calls", None)
+    if not isinstance(tool_calls, list):
+        tool_calls = []
+    usage = getattr(response, "usage", None)
+    shape: dict[str, Any] = {
+        "text_char_count": len(text) if isinstance(text, str) else 0,
+        "text_semantically_empty": text is None
+        or (isinstance(text, str) and not text.strip()),
+        "tool_call_count": len(tool_calls),
+        "tool_names": [
+            name[:80]
+            for tool_call in tool_calls[:8]
+            if isinstance(name := getattr(tool_call, "name", None), str)
+        ],
+        "usage_present": usage is not None,
+        "usage_counts": {
+            field: value
+            for field in (
+                "input_tokens",
+                "output_tokens",
+                "thinking_tokens",
+                "cached_tokens",
+            )
+            if usage is not None
+            and isinstance(value := getattr(usage, field, None), int)
+            and not isinstance(value, bool)
+            and value >= 0
+        },
+    }
+    return shape
+
+
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
@@ -1954,7 +1997,7 @@ class DaemonManager:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return _DaemonCompletion(None, error="missing completion MCP finish signal")
+            return _DaemonCompletion(None, error=_DAEMON_MISSING_COMPLETION_ERROR)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
             return _DaemonCompletion(None, error=f"invalid completion signal: {e}")
         if not isinstance(data, dict):
@@ -3003,7 +3046,62 @@ class DaemonManager:
                 return _mark_cancelled_or_timeout(run_dir, timeout_event)
             turns = 0
             recovery_tool_batch_pending = False
+            completion_recovery_used = False
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+
+            def _recover_semantic_empty() -> bool:
+                nonlocal completion_recovery_used, response, turns
+                if completion_recovery_used or not self._run_has_daemon_common_mcp(
+                    run_dir
+                ):
+                    return False
+                text = getattr(response, "text", None)
+                if response.tool_calls or (
+                    text is not None
+                    and (not isinstance(text, str) or text.strip())
+                ):
+                    return False
+                completion = self._read_daemon_completion(run_dir)
+                if (
+                    completion.error != _DAEMON_MISSING_COMPLETION_ERROR
+                    or turns + 1 >= effective_max_turns
+                ):
+                    return False
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return False
+                completion_recovery_used = True
+                run_dir.append_event(
+                    "daemon_completion_recovery_decision",
+                    em_id=em_id,
+                    run_id=getattr(run_dir, "run_id", None),
+                    **_safe_response_shape(response),
+                )
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return False
+                run_dir.record_user_send(
+                    DAEMON_COMPLETION_RECOVERY_PROMPT,
+                    kind="completion_recovery",
+                )
+                response = session.send(DAEMON_COMPLETION_RECOVERY_PROMPT)
+                daemon_meta_state.note_response(response, session)
+                _accum(response)
+                turns += 1
+                run_dir.bump_turn(
+                    turn=turns + 1,
+                    response_text=response.text or "",
+                )
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return False
+                return True
+
+            if not response.tool_calls:
+                _recover_semantic_empty()
 
             while response.tool_calls and (
                 turns < effective_max_turns or recovery_tool_batch_pending
@@ -3128,6 +3226,8 @@ class DaemonManager:
                 # canonical interface tail is assistant[tool_calls] and a user
                 # message here would violate the pairing invariant.
                 if not response.tool_calls:
+                    if _recover_semantic_empty():
+                        continue
                     if not mechanically_compacted and daemon_meta_state.compact_due:
                         if cancel_event.is_set():
                             return _mark_cancelled_or_timeout(run_dir, timeout_event)
