@@ -180,7 +180,7 @@ returns fewer than `per_page` results, sleeping between pages to respect rate li
 | Tavily/Exa/Brave quota exhausted | Monthly limit | Switch to DuckDuckGo |
 | Exa returns empty | Too specific | Switch to `type: "keyword"` |
 | Serper 401 | Invalid/expired key | Check key, fall back to DDG |
-| All engines fail | Outage | Use the built-in `web_search` tool |
+| All engines fail | Outage | Use `web(action='search')` with an admitted available engine |
 | Spam / low quality | Bad sources | Add `site:`, use Exa for quality |
 
 ```bash

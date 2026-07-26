@@ -553,8 +553,8 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
     # Core-default daemon override carried forward despite preset omitting it.
     assert "daemon" in caps
     assert caps["daemon"]["max_emanations"] == 30
-    # Preset still owns the explicit opt-in set.
-    assert "web_search" in caps
+    # Preset still owns the explicit opt-in set, emitted canonically.
+    assert "web" in caps
     # Non-core optional capability that the preset omits is NOT carried over.
     assert "vision" not in caps
 
@@ -788,8 +788,8 @@ def test_materialize_inherit_expansion_runs(tmp_path, monkeypatch):
     a = _make_probe_agent(wd)
     data = a._read_init()
     caps = data["manifest"]["capabilities"]
-    assert caps["web_search"]["provider"] == "gemini"
-    assert caps["web_search"]["api_key_env"] == "GEMINI_API_KEY"
+    assert caps["web"]["provider"] == "gemini"
+    assert caps["web"]["api_key_env"] == "GEMINI_API_KEY"
 
 
 # ---------------------------------------------------------------------------

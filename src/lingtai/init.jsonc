@@ -77,9 +77,9 @@
     //
     // Entries below are either:
     //   1. Overrides for default-on capabilities (shell, skills here).
-    //   2. Opt-in capabilities not in the default set (vision, browser,
-    //      web_search). Browser reads caller-named public pages; web_search
-    //      remains an independent discovery-only capability.
+    //   2. Opt-in capabilities not in the default set (vision, web).
+    //      web(action='search') discovers and web(action='browse') reads a
+    //      known public page through one unified capability.
     // -------------------------------------------------------
     "capabilities": {
       // --- Shell access (override) ---
@@ -100,13 +100,16 @@
       // Providers: "minimax", "anthropic", "openai", "gemini", "local" (no API key).
       "vision": { "provider": "minimax", "api_key_env": "MINIMAX_API_KEY" },
 
-      // --- Browser (opt-in) ---
-      // Static, browse/manual-only public-page reads; web_search is independent.
-      "browser": {},
-
-      // --- Web search (opt-in) ---
-      // Providers: "minimax", "anthropic", "openai", "gemini", "duckduckgo" (no API key).
-      "web_search": { "provider": "minimax", "api_key_env": "MINIMAX_API_KEY" }
+      // --- Unified web (opt-in) ---
+      // Search providers are operator-selected; the Agent settings file may
+      // select only an admitted engine without carrying credentials.
+      "web": {
+        "default_engine": "duckduckgo",
+        "engines": {
+          "duckduckgo": {},
+          "minimax": { "api_key_env": "MINIMAX_API_KEY" }
+        }
+      }
 
       // --- Removed capabilities (for reference) ---
       // "web_read"        — folded into the `web-browsing` skill.

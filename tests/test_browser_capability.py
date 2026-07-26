@@ -1,12 +1,12 @@
-"""Hermetic browser capability and real-Agent integration tests."""
+"""Hermetic browse tests through the canonical unified ``web`` capability."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from lingtai.agent import Agent
-from lingtai.tools.browser import get_schema
 from lingtai.tools.browser.core import BrowserEngine
 from lingtai.tools.browser.port import ResolvedTarget, TransportResponse
+from lingtai.tools.web_search import get_schema
 from tests._service_helpers import make_gemini_mock_service
 
 
@@ -35,7 +35,7 @@ class FakeBrowserPort:
         )
 
 
-def test_browser_browse_vertical_slice(tmp_path):
+def test_web_browse_vertical_slice(tmp_path):
     port = FakeBrowserPort(
         {
             "https://public.example/page": (
@@ -48,21 +48,21 @@ def test_browser_browse_vertical_slice(tmp_path):
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="browser-vertical-slice",
+        agent_name="web-browse-vertical-slice",
         working_dir=tmp_path,
-        capabilities={"browser": {"browser_port": port}},
+        capabilities={"web": {"browser_port": port}},
         disable=[
             "knowledge", "skills", "shell", "avatar", "daemon", "mcp",
-            "read", "write", "edit", "glob", "grep", "vision", "web_search",
+            "read", "write", "edit", "glob", "grep", "vision",
         ],
     )
     try:
-        assert "browser" in agent._tool_handlers
+        assert "web" in agent._tool_handlers
         schemas = agent._build_tool_schemas()
-        browser_schema = next(schema for schema in schemas if schema.name == "browser")
-        assert set(browser_schema.parameters["properties"]) == set(get_schema()["properties"]) | {"reasoning"}
-        first = agent._tool_handlers["browser"](
-            {"url": "https://public.example/page", "max_chars": 18}
+        web_schema = next(schema for schema in schemas if schema.name == "web")
+        assert set(web_schema.parameters["properties"]) == set(get_schema()["properties"]) | {"reasoning"}
+        first = agent._tool_handlers["web"](
+            {"action": "browse", "url": "https://public.example/page", "max_chars": 18}
         )
         assert first["status"] == "ok"
         assert first["source_sha256"]
@@ -73,8 +73,9 @@ def test_browser_browse_vertical_slice(tmp_path):
         assert first["next_cursor"]
         calls_after_first = len(port.calls)
 
-        second = agent._tool_handlers["browser"](
+        second = agent._tool_handlers["web"](
             {
+                "action": "browse",
                 "url": "https://public.example/page",
                 "cursor": first["next_cursor"],
                 "max_chars": 18,
@@ -88,11 +89,11 @@ def test_browser_browse_vertical_slice(tmp_path):
         assert first_ids.isdisjoint(second_ids)
 
         link_ref = first["links"][0]["ref"]
-        followed = agent._tool_handlers["browser"]({"link_ref": link_ref})
+        followed = agent._tool_handlers["web"]({"action": "browse", "link_ref": link_ref})
         assert followed["status"] == "ok"
         assert followed["requested_url"] == "https://public.example/next"
 
-        manual = agent._tool_handlers["browser"]({"action": "manual", "url": "not-used"})
+        manual = agent._tool_handlers["web"]({"action": "manual"})
         assert manual["status"] == "ok"
         assert manual["action"] == "manual"
         assert len(port.calls) == calls_after_first + 1
@@ -100,15 +101,15 @@ def test_browser_browse_vertical_slice(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_browser_real_agent_startup_and_complete_prompt_build(tmp_path):
+def test_web_real_agent_startup_and_complete_prompt_build(tmp_path):
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="browser-startup-gate",
+        agent_name="web-startup-gate",
         working_dir=tmp_path,
-        capabilities={"browser": {}},
+        capabilities={"web": {}},
         disable=[
             "knowledge", "skills", "shell", "avatar", "daemon", "mcp",
-            "read", "write", "edit", "glob", "grep", "vision", "web_search",
+            "read", "write", "edit", "glob", "grep", "vision",
         ],
     )
     try:
@@ -116,9 +117,9 @@ def test_browser_real_agent_startup_and_complete_prompt_build(tmp_path):
         prompt = agent._build_system_prompt()
         batches = agent._build_system_prompt_batches()
         schemas = agent._build_tool_schemas()
-        assert "### browser" in prompt
-        assert "browser" in {schema.name for schema in schemas}
-        assert "browser" in "\\n\\n".join(batches)
+        assert "### web" in prompt
+        assert "web" in {schema.name for schema in schemas}
+        assert "web" in "\n\n".join(batches)
     finally:
         agent.stop(timeout=1.0)
 
@@ -137,9 +138,8 @@ def test_browser_policy_and_cursor_failures_are_typed_and_sanitized():
     assert stale["error_code"] == "CURSOR_MALFORMED"
 
 
-def test_browser_schema_is_browse_manual_only():
+def test_web_schema_includes_search_browse_and_manual():
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"] == ["browse", "manual"]
-    assert "search" not in schema["properties"]
+    assert schema["properties"]["action"]["enum"] == ["search", "browse", "manual"]
     assert schema["properties"]["extract"]["enum"] == ["article"]
-    assert schema["required"] == []
+    assert schema["required"] == ["action"]

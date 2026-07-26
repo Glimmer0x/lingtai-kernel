@@ -10,6 +10,6 @@ related_files:
 - src/lingtai/tools/web_search/glossary-zh.md
 - src/lingtai/tools/web_search/glossary-wen.md
 maintenance: |
-  English glossary for the `web_search` tool package (lingtai.tools.web_search); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when web_search's public tool schema changes.
+  English glossary for the public `web` capability (retained in lingtai.tools.web_search); the English body must stay empty per tool_glossary.py's language contract. Update the zh/wen bodies in lockstep when web's public schema changes.
   Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

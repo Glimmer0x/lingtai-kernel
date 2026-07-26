@@ -2470,7 +2470,12 @@ class DaemonManager:
         The caller (``_handle_emanate``) converts required setup failures into
         a tool-level error and refuses the whole batch.
         """
-        from lingtai.tools.registry import setup_capability, _GROUPS, BUILTIN_TOOLS
+        from lingtai.tools.registry import (
+            BUILTIN_TOOLS,
+            _GROUPS,
+            canonical_capability_name,
+            setup_capability,
+        )
         from lingtai.presets import expand_inherit
 
         # Resolve provider:"inherit" sentinels against the preset's LLM
@@ -2498,6 +2503,7 @@ class DaemonManager:
         collector = _ToolCollector(self._agent)
         required = required_tools
         for name, kwargs in expanded.items():
+            name = canonical_capability_name(name)
             if name in EMANATION_BLACKLIST:
                 continue
             # Tolerate non-capability names (intrinsics like 'email', 'psyche',

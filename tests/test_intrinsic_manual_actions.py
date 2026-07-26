@@ -13,7 +13,7 @@ from lingtai.tools import read as read_tool
 from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
 from lingtai.tools import write as write_tool
-from lingtai.tools import web_search as web_search_tool
+from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 
 
@@ -53,7 +53,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "read-manual",
             "soul-manual",
             "system-manual",
-            "web_search",
+            "web",
             "file-manual",
         )
     }
@@ -68,8 +68,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     shell_manager._agent = agent
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
     daemon_manager._agent = agent
-    web_search_manager = web_search_tool.WebSearchManager.__new__(web_search_tool.WebSearchManager)
-    web_search_manager._agent = agent
+    web_manager = web_tool.setup(agent)
 
     calls = {
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
@@ -79,7 +78,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
-        "web_search": ("web_search", lambda: web_search_manager.handle({"action": "manual"})),
+        "web": ("web", lambda: web_manager.handle({"action": "manual"})),
         "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),
         "edit": ("file-manual", lambda: agent.handlers["edit"]({"action": "manual"})),
         "glob": ("file-manual", lambda: agent.handlers["glob"]({"action": "manual"})),
@@ -88,11 +87,19 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
 
     for tool_name, (skill_name, call) in calls.items():
         body, path = expected[skill_name]
-        assert call() == {
-            "status": "ok",
-            "manual": body,
-            "manual_path": str(path),
-        }, tool_name
+        result = call()
+        if tool_name == "web":
+            assert result["status"] == "ok"
+            assert result["action"] == "manual"
+            assert result["manual"] == body
+            assert result["manual_path"] == str(path)
+            assert isinstance(result["current_setting"], dict)
+        else:
+            assert result == {
+                "status": "ok",
+                "manual": body,
+                "manual_path": str(path),
+            }, tool_name
 
 
 def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
@@ -106,7 +113,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         read_tool,
         soul_tool,
         system_tool,
-        web_search_tool,
+        web_tool,
         write_tool,
         edit_tool,
         glob_tool,
@@ -119,7 +126,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
 
     assert shell_tool.get_schema()["required"] == []
     assert psyche_tool.get_schema()["required"] == ["action"]
-    assert web_search_tool.get_schema()["required"] == []
+    assert web_tool.get_schema()["required"] == ["action"]
     for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
         assert module.get_schema()["required"] == []
 

@@ -198,10 +198,10 @@ def test_e2e_inherit_resolves_after_swap(tmp_path, monkeypatch):
     assert data is not None
 
     caps = data["manifest"]["capabilities"]
-    assert caps["web_search"]["provider"] == "gemini"
-    assert caps["web_search"]["api_key_env"] == "GEMINI_API_KEY"
+    assert caps["web"]["provider"] == "gemini"
+    assert caps["web"]["api_key_env"] == "GEMINI_API_KEY"
     assert caps["vision"]["provider"] == "gemini"
     assert caps["vision"]["api_key_env"] == "GEMINI_API_KEY"
     # model is NOT inherited
-    assert "model" not in caps["web_search"]
+    assert "model" not in caps["web"]
     assert "model" not in caps["vision"]
