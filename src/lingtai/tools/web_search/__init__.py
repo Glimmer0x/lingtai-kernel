@@ -26,18 +26,19 @@ PROVIDERS = {
     "fallback_on_inherit": "duckduckgo",
 }
 
-_ACTION_FIELDS = {
-    "search": {"action", "query", "reasoning"},
-    "browse": {"action", "url", "link_ref", "cursor", "extract", "max_chars", "reasoning"},
-    "manual": {"action", "reasoning"},
+_ACTION_PARAMETERS = {
+    "search": {"query"},
+    "browse": {"url", "link_ref", "cursor", "extract", "max_chars"},
+    "manual": set(),
 }
 
 
 def get_description(lang: str = "en") -> str:
     return (
-        "Unified web capability. Use web(action='search', query='...') for current "
-        "discovery, then web(action='browse', link_ref='...') for a known result. "
-        "Use web(action='manual') for the procedure and settings guidance."
+        "Unified web capability. Use web(action='search', parameters={'query': '...'}) "
+        "for current discovery, then web(action='browse', parameters={'link_ref': '...'}) "
+        "for a known result. Use web(action='manual', parameters={}) for the procedure "
+        "and settings guidance."
     )
 
 
@@ -50,14 +51,60 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                 "enum": ["search", "browse", "manual"],
                 "description": "Required operation: search, browse, or manual.",
             },
-            "query": {"type": "string", "description": "Search query for action='search'."},
-            "url": {"type": "string", "description": "Public HTTP(S) URL for action='browse'."},
-            "link_ref": {"type": "string", "description": "Same-Agent result reference for action='browse'."},
-            "cursor": {"type": "string", "description": "Same-Agent continuation cursor for action='browse'."},
-            "extract": {"type": "string", "enum": ["article"], "default": "article"},
-            "max_chars": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 12000},
+            "parameters": {
+                "description": "Strict action-specific parameters; the selected action is validated again at dispatch.",
+                "anyOf": [
+                    {
+                        "title": "search parameters",
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Search query."},
+                        },
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "title": "browse parameters",
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": ["string", "null"],
+                                "description": "Public HTTP(S) URL; use null when link_ref or cursor is supplied.",
+                            },
+                            "link_ref": {
+                                "type": ["string", "null"],
+                                "description": "Same-Agent search result reference; use null when not supplied.",
+                            },
+                            "cursor": {
+                                "type": ["string", "null"],
+                                "description": "Same-Agent continuation cursor; use null when not supplied.",
+                            },
+                            "extract": {
+                                "type": ["string", "null"],
+                                "enum": ["article", None],
+                                "description": "Article extraction, or null for the default.",
+                            },
+                            "max_chars": {
+                                "type": ["integer", "null"],
+                                "minimum": 1,
+                                "maximum": 100000,
+                                "description": "Maximum returned characters, or null for the default 12000.",
+                            },
+                        },
+                        "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "title": "manual parameters",
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                ],
+            },
         },
-        "required": ["action"],
+        "required": ["action", "parameters"],
         "additionalProperties": False,
     }
 
@@ -229,19 +276,30 @@ class WebManager:
     def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
         raw = dict(args or {})
         action = raw.get("action")
-        if action not in _ACTION_FIELDS:
+        if action not in _ACTION_PARAMETERS:
             _, snapshot, diagnostic = self._resolve()
             return self._failure("unknown", snapshot, diagnostic, "ACTION_REQUIRED", "action must be one of search, browse, or manual")
-        unknown = set(raw) - _ACTION_FIELDS[action]
+        unknown = set(raw) - {"action", "parameters", "reasoning"}
         if unknown:
             _, snapshot, diagnostic = self._resolve()
             return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web argument")
+        parameters = raw.get("parameters")
+        if not isinstance(parameters, Mapping):
+            _, snapshot, diagnostic = self._resolve()
+            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "parameters must be an object")
+        action_args = dict(parameters)
+        if set(action_args) - _ACTION_PARAMETERS[action]:
+            _, snapshot, diagnostic = self._resolve()
+            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web parameter")
+        # Strict OpenAI schemas express optional fields as required nullable
+        # properties.  Null means absent to the internal action handlers.
+        dispatch_args = {"action": action, **{key: value for key, value in action_args.items() if value is not None}}
         _, snapshot, diagnostic = self._resolve()
         if action == "manual":
             return self.manual(snapshot, diagnostic)
         if action == "search":
-            return self._search(raw, snapshot, diagnostic)
-        browse_args = dict(raw)
+            return self._search(dispatch_args, snapshot, diagnostic)
+        browse_args = dict(dispatch_args)
         try:
             result = self._engine.handle(browse_args)
         except Exception:

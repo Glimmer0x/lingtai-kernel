@@ -35,6 +35,19 @@ class FakeBrowserPort:
         )
 
 
+class FakeSearch:
+    def __init__(self):
+        self.queries: list[str] = []
+
+    def search(self, query: str):
+        self.queries.append(query)
+        return [{
+            "title": "Provider-shaped result",
+            "url": "https://public.example/page",
+            "snippet": "Hermetic search evidence",
+        }]
+
+
 def test_web_browse_vertical_slice(tmp_path):
     port = FakeBrowserPort(
         {
@@ -61,9 +74,16 @@ def test_web_browse_vertical_slice(tmp_path):
         schemas = agent._build_tool_schemas()
         web_schema = next(schema for schema in schemas if schema.name == "web")
         assert set(web_schema.parameters["properties"]) == set(get_schema()["properties"]) | {"reasoning"}
-        first = agent._tool_handlers["web"](
-            {"action": "browse", "url": "https://public.example/page", "max_chars": 18}
-        )
+        first = agent._tool_handlers["web"]({
+            "action": "browse",
+            "parameters": {
+                "url": "https://public.example/page",
+                "link_ref": None,
+                "cursor": None,
+                "extract": None,
+                "max_chars": 18,
+            },
+        })
         assert first["status"] == "ok"
         assert first["source_sha256"]
         assert first["snapshot_id"]
@@ -73,14 +93,16 @@ def test_web_browse_vertical_slice(tmp_path):
         assert first["next_cursor"]
         calls_after_first = len(port.calls)
 
-        second = agent._tool_handlers["web"](
-            {
-                "action": "browse",
+        second = agent._tool_handlers["web"]({
+            "action": "browse",
+            "parameters": {
                 "url": "https://public.example/page",
+                "link_ref": None,
                 "cursor": first["next_cursor"],
+                "extract": None,
                 "max_chars": 18,
-            }
-        )
+            },
+        })
         assert second["status"] == "ok"
         assert second["timings_ms"] == {}
         assert len(port.calls) == calls_after_first
@@ -89,14 +111,77 @@ def test_web_browse_vertical_slice(tmp_path):
         assert first_ids.isdisjoint(second_ids)
 
         link_ref = first["links"][0]["ref"]
-        followed = agent._tool_handlers["web"]({"action": "browse", "link_ref": link_ref})
+        followed = agent._tool_handlers["web"]({
+            "action": "browse",
+            "parameters": {
+                "url": None,
+                "link_ref": link_ref,
+                "cursor": None,
+                "extract": None,
+                "max_chars": None,
+            },
+        })
         assert followed["status"] == "ok"
         assert followed["requested_url"] == "https://public.example/next"
 
-        manual = agent._tool_handlers["web"]({"action": "manual"})
+        manual = agent._tool_handlers["web"]({"action": "manual", "parameters": {}})
         assert manual["status"] == "ok"
         assert manual["action"] == "manual"
         assert len(port.calls) == calls_after_first + 1
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_web_action_parameters_search_to_link_ref_browse(tmp_path):
+    search = FakeSearch()
+    port = FakeBrowserPort({
+        "https://public.example/page": b"<html><body><p>Provider-shaped page</p></body></html>",
+    })
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="web-action-parameters",
+        working_dir=tmp_path,
+        capabilities={
+            "web": {
+                "default_engine": "duckduckgo",
+                "engines": {
+                    "duckduckgo": {
+                        "provider": "duckduckgo",
+                        "search_service": search,
+                    }
+                },
+                "browser_port": port,
+            }
+        },
+        disable=[
+            "knowledge", "skills", "shell", "avatar", "daemon", "mcp",
+            "read", "write", "edit", "glob", "grep", "vision",
+        ],
+    )
+    try:
+        handler = agent._tool_handlers["web"]
+        manual = handler({"action": "manual", "parameters": {}})
+        assert manual["status"] == "ok"
+        found = handler({"action": "search", "parameters": {"query": "mission interval"}})
+        assert found["status"] == "ok"
+        assert search.queries == ["mission interval"]
+        link_ref = found["results"][0]["link_ref"]
+        browsed = handler({
+            "action": "browse",
+            "parameters": {
+                "url": None,
+                "link_ref": link_ref,
+                "cursor": None,
+                "extract": None,
+                "max_chars": None,
+            },
+        })
+        assert browsed["status"] == "ok"
+        assert browsed["requested_url"] == "https://public.example/page"
+        flat = handler({"action": "search", "parameters": {}, "query": "legacy flat"})
+        assert flat["error_code"] == "INVALID_ARGUMENT"
+        engine = handler({"action": "manual", "parameters": {"engine": "duckduckgo"}})
+        assert engine["error_code"] == "INVALID_ARGUMENT"
     finally:
         agent.stop(timeout=1.0)
 
@@ -138,8 +223,19 @@ def test_browser_policy_and_cursor_failures_are_typed_and_sanitized():
     assert stale["error_code"] == "CURSOR_MALFORMED"
 
 
-def test_web_schema_includes_search_browse_and_manual():
+def test_web_schema_includes_strict_action_parameters():
     schema = get_schema()
     assert schema["properties"]["action"]["enum"] == ["search", "browse", "manual"]
-    assert schema["properties"]["extract"]["enum"] == ["article"]
-    assert schema["required"] == ["action"]
+    assert schema["required"] == ["action", "parameters"]
+    assert schema["additionalProperties"] is False
+    branches = schema["properties"]["parameters"]["anyOf"]
+    assert [branch["title"] for branch in branches] == [
+        "search parameters", "browse parameters", "manual parameters",
+    ]
+    for branch in branches:
+        assert branch["additionalProperties"] is False
+        assert set(branch["required"]) == set(branch["properties"])
+    browse = branches[1]["properties"]
+    assert browse["url"]["type"] == ["string", "null"]
+    assert browse["extract"]["enum"] == ["article", None]
+    assert branches[2]["properties"] == {}

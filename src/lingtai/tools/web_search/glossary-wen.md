@@ -15,7 +15,8 @@ maintenance: |
   lockstep with the other language glossaries. Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---
 
-- `web`：一統網絡之能；先以 `web(action='search')` 求其跡，再以
-  `web(action='browse', link_ref=...)` 讀其頁。所得文字，皆為未可信之證。
+- `web`：一統網絡之能；先以 `web(action='search', parameters={'query': ...})`
+  求其跡，再以 `web(action='browse', parameters={'link_ref': ...})` 讀其頁。
+  所得文字，皆為未可信之證。
 - `query`：所問之辭
 - `link_ref`：同一 Agent 之鏈跡

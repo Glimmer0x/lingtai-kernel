@@ -56,7 +56,11 @@ remain in force.
 
 - The public name is `web`; no browser or web_search registry, schema, prompt,
   check-caps, catalog, or installed manual entry exists.
-- `action` is required and is one of `search`, `browse`, or `manual`.
+- `action` and nested `parameters` are required. `action` is one of
+  `search`, `browse`, or `manual`; `parameters` uses strict action-specific
+  object branches. Each branch is closed, every declared branch field is
+  required, and browse optionals use JSON null, matching OpenAI strict-object
+  conventions.
 - Settings v1 is exactly `{"schema_version":1,"search":{"engine":"..."}}`.
   Only an operator-admitted engine name is permitted. Missing files use the
   operator/built-in default; malformed, unknown, disallowed, unavailable, or
@@ -68,7 +72,8 @@ remain in force.
   oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong schema.
   Diagnostics contain source, selected engine/null, bounded available statuses,
   revision/hash, and the exact change hint `Edit settings/web.json; changes apply
-  on the next web call; use web(action='manual') for schema.`; secrets and absolute
+  on the next web call; use web(action='manual', parameters={}) for schema.`;
+  secrets and absolute
   paths never appear.
 - Search results are bounded `{title,url,snippet,link_ref}` objects with count
   and actual engine. References are same-Agent handles accepted by browse.

@@ -30,7 +30,7 @@ def test_web_with_dedicated_service():
     mock_search_svc.search.return_value = [mock_result]
     agent = MagicMock()
     mgr = WebManager(agent, search_service=mock_search_svc)
-    result = mgr.handle({"action": "search", "query": "python"})
+    result = mgr.handle({"action": "search", "parameters": {"query": "python"}})
     assert result["status"] == "ok"
     assert result["results"][0]["title"] == "Python"
     mock_search_svc.search.assert_called_once()
@@ -40,7 +40,7 @@ def test_web_missing_query(tmp_path):
     """web search should return a typed failure for missing query."""
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path,
                        capabilities={"web": {"provider": "duckduckgo"}})
-    result = agent._tool_handlers["web"]({"action": "search", "query": ""})
+    result = agent._tool_handlers["web"]({"action": "search", "parameters": {"query": ""}})
     assert result.get("status") == "failed"
     assert result.get("error_code") == "INVALID_QUERY"
 
@@ -53,7 +53,7 @@ def test_web_manager_uses_search_service():
     ]
     agent = MagicMock()
     mgr = WebManager(agent, search_service=mock_svc)
-    result = mgr.handle({"action": "search", "query": "test"})
+    result = mgr.handle({"action": "search", "parameters": {"query": "test"}})
     assert result["status"] == "ok"
     assert result["results"][0]["title"] == "Result"
     mock_svc.search.assert_called_once_with("test")
@@ -65,7 +65,7 @@ def test_web_service_exception():
     mock_svc.search.side_effect = RuntimeError("connection failed")
     agent = MagicMock()
     mgr = WebManager(agent, search_service=mock_svc)
-    result = mgr.handle({"action": "search", "query": "test"})
+    result = mgr.handle({"action": "search", "parameters": {"query": "test"}})
     assert result["status"] == "failed"
     assert result["error_code"] == "SEARCH_FAILED"
     assert "connection failed" not in result["message"]
@@ -139,7 +139,7 @@ def test_web_setup_resolves_api_key_env(monkeypatch):
     with patch("lingtai.services.websearch.create_search_service") as mock_factory:
         mock_factory.return_value = MagicMock(spec=SearchService)
         mgr = setup(agent, provider="gemini", api_key_env="WEB_SEARCH_TEST_API_KEY")
-        mgr.handle({"action": "search", "query": "test"})
+        mgr.handle({"action": "search", "parameters": {"query": "test"}})
 
     assert isinstance(mgr, WebManager)
     mock_factory.assert_called_once()
@@ -162,7 +162,7 @@ def test_web_setup_api_key_env_overrides_raw_key(monkeypatch):
             api_key="sk-raw",
             api_key_env="WEB_SEARCH_TEST_API_KEY",
         )
-        mgr.handle({"action": "search", "query": "test"})
+        mgr.handle({"action": "search", "parameters": {"query": "test"}})
 
     assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
 
@@ -178,7 +178,7 @@ def test_web_setup_omits_api_host_for_gemini():
     ):
         mock_factory.return_value = MagicMock(spec=SearchService)
         mgr = setup(agent, provider="gemini", api_key="sk-test")
-        mgr.handle({"action": "search", "query": "test"})
+        mgr.handle({"action": "search", "parameters": {"query": "test"}})
 
     assert mock_factory.call_args.args == ("gemini",)
     assert mock_factory.call_args.kwargs["api_key"] == "sk-test"
@@ -200,7 +200,7 @@ def test_web_setup_passes_api_host_for_minimax():
     ):
         mock_factory.return_value = MagicMock(spec=SearchService)
         mgr = setup(agent, provider="minimax", api_key="sk-test")
-        mgr.handle({"action": "search", "query": "test"})
+        mgr.handle({"action": "search", "parameters": {"query": "test"}})
 
     assert mock_factory.call_args.args == ("minimax",)
     assert mock_factory.call_args.kwargs["api_host"] == "https://mini.example"
@@ -222,7 +222,7 @@ def test_web_setup_passes_zhipu_mode_without_api_host():
     ):
         mock_factory.return_value = MagicMock(spec=SearchService)
         mgr = setup(agent, provider="zhipu", api_key="sk-test")
-        mgr.handle({"action": "search", "query": "test"})
+        mgr.handle({"action": "search", "parameters": {"query": "test"}})
 
     assert mock_factory.call_args.args == ("zhipu",)
     assert mock_factory.call_args.kwargs["z_ai_mode"] == "ZHIPU"
@@ -256,7 +256,7 @@ def test_inherited_web_env_key_registers(tmp_path, monkeypatch):
             working_dir=tmp_path / "test",
             capabilities=capabilities,
         )
-        agent._tool_handlers["web"]({"action": "search", "query": "test"})
+        agent._tool_handlers["web"]({"action": "search", "parameters": {"query": "test"}})
 
     try:
         assert agent.has_capability("web") is True

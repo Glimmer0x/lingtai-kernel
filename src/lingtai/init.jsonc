@@ -78,8 +78,9 @@
     // Entries below are either:
     //   1. Overrides for default-on capabilities (shell, skills here).
     //   2. Opt-in capabilities not in the default set (vision, web).
-    //      web(action='search') discovers and web(action='browse') reads a
-    //      known public page through one unified capability.
+    //      web(action='search', parameters={'query': '...'}) discovers and
+    //      web(action='browse', parameters={'url': '...'}) reads a known public
+    //      page through one unified capability.
     // -------------------------------------------------------
     "capabilities": {
       // --- Shell access (override) ---
