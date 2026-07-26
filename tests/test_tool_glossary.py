@@ -658,7 +658,7 @@ class TestSourceValidation:
             env={"PYTHONPATH": str(repo_root / "src"), "PATH": ""},
         )
         assert result.returncode == 0, f"Validator failed:\n{result.stderr}"
-        assert "54" in result.stdout
+        assert "57" in result.stdout
 
     def test_no_repo_root_tools_directory(self):
         """Root tools/ directory must not exist (anatomy hygiene)."""

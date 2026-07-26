@@ -1,62 +1,73 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/tools/browser/ANATOMY.md
+  - src/lingtai/tools/browser/core.py
+  - src/lingtai/tools/browser/port.py
   - src/lingtai/services/websearch/ANATOMY.md
-  - src/lingtai/tools/web_search/glossary-en.md
-  - src/lingtai/tools/web_search/glossary-zh.md
-  - src/lingtai/tools/web_search/glossary-wen.md
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep this public web Anatomy and its Contract reciprocal, keep the parent
+  link bidirectional, and keep the sole web-manual edge on both owner twins.
+  Browser is an internal browse subcomponent, not another model-facing node.
+  Update this map with structural code changes and verify citations.
 ---
-# src/lingtai/tools/web_search/
+# Unified web capability Anatomy
 
-Web search capability — web lookup via pluggable SearchService backends.
-
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
+The retained `web_search` package is the public `web` composition owner. It
+combines lazy SearchService adapters with the internal browser Core while
+exposing one model-facing handler and one per-Agent state boundary.
 
 ## Components
 
-| File | LOC | Role |
-|---|---|---|
-| `__init__.py` | 146 | `WebSearchManager`, `setup()`, provider registry, search/manual tool schema |
-| `manual/` | 26 files | TUI-derived `web-search-manual` router, references, assets, and extraction scripts |
-
-**Key symbols:**
-- `PROVIDERS` (L20-24) — supported: `duckduckgo`, `minimax`, `zhipu`, `gemini`, `anthropic`, `openai`. Default: `duckduckgo`. Fallback on inherit: `duckduckgo`.
-- `WebSearchManager` — returns the installed manual before touching query/service state, otherwise delegates to `SearchService.search()`.
-- `setup()` — entry point. Creates manager and registers the `"web_search"` tool.
-- `manual/SKILL.md` — collision-safe `web-search-manual` root synchronized from the TUI web-browsing bundle; relative scripts/references ship together.
+- `WebManager`, `setup()`, and the single `web` schema — dispatch, lazy engine
+  composition, settings diagnostics, and registration
+  (`src/lingtai/tools/web_search/__init__.py:1-334`).
+- `_EngineSpec` and `_specs_from_kwargs` — immutable operator engine wiring and
+  legacy flat-config migration (`src/lingtai/tools/web_search/__init__.py:66-334`).
+- `read_settings()` — bounded regular-file snapshot and strict v1 selector
+  validation (`src/lingtai/tools/web_search/settings.py:49-180`).
+- `BrowserEngine` — internal static browse use case, provenance, refs, cursors,
+  SSRF policy, and typed failures (`src/lingtai/tools/browser/core.py:119-315`).
+- `SearchService` adapters — provider implementations behind the internal
+  service boundary (`src/lingtai/services/websearch/__init__.py:20-70`).
+- `manual/SKILL.md` — sole installed `web-manual` route
+  (`src/lingtai/tools/web_search/manual/SKILL.md:1-91`).
 
 ## Connections
 
-- **→ `lingtai.i18n.t`** (L14) — i18n for tool description and schema strings.
-- **→ `lingtai.services.websearch.SearchService`** (L15) — abstract service interface + `create_search_service()` factory.
-- **→ `capabilities._media_host.resolve_media_host`** (L110) — injected for non-duckduckgo providers.
-- **→ `capabilities._zhipu_mode.resolve_z_ai_mode`** (L113) — injected for `zhipu` provider.
-- **→ `lingtai.kernel.base_agent.BaseAgent`** — type-only.
-- **→ `tools._manual.load_installed_manual`** — read-only `action="manual"` loader for `.library/intrinsic/capabilities/web_search/SKILL.md`.
-- **→ `Agent._install_intrinsic_manuals()`** — copies `manual/` wholesale into each agent’s intrinsic skill catalog.
-- **← `capabilities.__init__`** — registered as `".web_search"` in `_BUILTIN`.
+`registry.py` maps public `web` to this package and maps legacy input
+`web_search` one-way to `web`. `WebManager` calls only `SearchService` for
+search and only `BrowserEngine` for browse; neither path crosses into the other
+transport. Agent manual installation maps this retained package's `manual/` to
+`capabilities/web/` and skips the retained browser manual.
 
 ## Composition
 
-One code module plus a self-contained manual bundle. `WebSearchManager` instances hold agent + service refs; manual files are immutable package data copied into the agent library.
+The parent [`src/lingtai/tools/ANATOMY.md`](../ANATOMY.md) owns capability
+registry composition. The internal browse child
+[`src/lingtai/tools/browser/ANATOMY.md`](../browser/ANATOMY.md) owns static-page
+structure but has no public registration. The shared
+[`src/lingtai/tools/CONTRACT.md`](../CONTRACT.md) owns the future canonical public
+call shape. The paired [`CONTRACT.md`](CONTRACT.md) specializes
+that promise for web's actions, behavior, and evidence.
 
 ## State
 
-- `WebSearchManager._agent` / `_search_service` (L49-50) — per-agent instance. Service can be `None` (returns error on call, L57-64).
-- `PROVIDERS` dict is module-level constant.
-- `action="manual"` reads installed package data only; it neither constructs nor calls a search service.
+Each manager owns immutable engine specs, a lazy per-engine service cache, one
+browser engine, and its bounded ref/snapshot/cursor stores. Settings are read
+from the Agent workdir on every call and never written by the capability.
+Credentials stay in operator wiring or process configuration; no call mutates
+environment state.
 
 ## Notes
 
-- Graceful fallback (L97-105): unsupported providers fall back to `duckduckgo` (with `api_key=None`). Unlike vision, this never skips — always provides search.
-- No-provider default (L119-120): if neither `search_service` nor `provider` is given, defaults to `duckduckgo`.
-- Results are formatted as markdown `**title**\nurl\nsnippet`.
-- The manual bundle keeps `<skill-path>` references portable and uses the distinct `web-search-manual` frontmatter name so a TUI `web-browsing` utility can coexist.
+`web_search` remains a physical implementation path and a read-only config
+alias only. Provider-native wire names such as an API's `web_search` remain
+unchanged. The manual's legacy scripts are procedure fallbacks, not public
+handlers or additional catalog entries.

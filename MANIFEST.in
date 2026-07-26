@@ -40,14 +40,14 @@ recursive-include src/lingtai/kernel/i18n *.json
 # Consolidated tool packages ship data assets (i18n catalogs, per-tool JSON
 # policy/data files, and manual trees). pyproject.toml owns the wheel
 # package-data globs; mirror them here so source releases carry the same tool
-# assets. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
+# assets for 19 glossary packages. ``graft`` pulls the manual trees (arbitrary file types) wholesale.
 recursive-include src/lingtai/tools *.json
 # Per-tool contracts (src/lingtai/tools/<tool>/CONTRACT.md) — mirror the
 # package-data glob in pyproject.toml so source releases carry the same tool
 # contracts.
 recursive-include src/lingtai/tools CONTRACT.md
 # Per-tool glossary resources — mirror the package-data globs in
-# pyproject.toml so source releases carry the 54 files (exact filenames,
+# pyproject.toml so source releases carry the 57 files (exact filenames,
 # not a wildcard, to prevent accidental inclusion of extra files).
 recursive-include src/lingtai/tools glossary-en.md
 recursive-include src/lingtai/tools glossary-zh.md
@@ -64,3 +64,4 @@ graft src/lingtai/tools/avatar/manual
 graft src/lingtai/tools/daemon/manual
 graft src/lingtai/tools/mcp/manual
 graft src/lingtai/tools/web_search/manual
+graft src/lingtai/tools/browser/manual

@@ -24,7 +24,7 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
     """Agent with no explicit capabilities still boots the always-on tool floor.
 
     The default-on set covers knowledge/skills/bash/avatar/daemon/mcp + file caps.
-    Opt-in capabilities (vision, web_search) stay off until requested.
+    Opt-in capabilities (vision, web) stay off until requested.
     """
     from lingtai.tools.registry import CORE_DEFAULTS
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test")
@@ -40,7 +40,7 @@ def test_agent_no_capabilities_boots_core_floor(tmp_path):
         assert agent.has_capability(name) is True
         assert name in manifest_registered
     assert "vision" not in registered
-    assert "web_search" not in registered
+    assert "web" not in registered
     agent.stop(timeout=1.0)
 
 
@@ -131,14 +131,14 @@ def test_agent_capabilities_dict(tmp_path):
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities={
             "vision": {"vision_service": FakeVisionService()},
-            "web_search": {"search_service": FakeSearchService()},
+            "web": {"search_service": FakeSearchService()},
         },
     )
     registered = {name for name, _ in agent._capabilities}
     assert "vision" in registered
-    assert "web_search" in registered
+    assert "web" in registered
     assert "vision" in agent._tool_handlers
-    assert "web_search" in agent._tool_handlers
+    assert "web" in agent._tool_handlers
     agent.stop(timeout=1.0)
 
 
@@ -179,13 +179,13 @@ def test_vision_requires_provider(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_web_search_defaults_to_duckduckgo(tmp_path):
+def test_web_defaults_to_duckduckgo(tmp_path):
     """Web search capability falls back to duckduckgo when no provider given."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["web_search"],
+        capabilities=["web"],
     )
-    mgr = agent.get_capability("web_search")
+    mgr = agent.get_capability("web")
     assert mgr is not None
-    assert "web_search" in {s.name for s in agent._tool_schemas}
+    assert "web" in {s.name for s in agent._tool_schemas}
     agent.stop(timeout=1.0)

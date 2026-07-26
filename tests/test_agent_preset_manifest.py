@@ -272,6 +272,71 @@ def test_manifest_never_contains_api_key(tmp_path):
     agent.stop(timeout=1.0)
 
 
+def test_nested_capability_secrets_are_absent_from_manifest_and_agent_json(tmp_path):
+    """Every supported container depth is redacted without losing runtime identity."""
+    service = object()
+    port = object()
+    class _HashableMapping(dict):
+        __hash__ = object.__hash__
+
+    sentinels = {
+        "api_key": "nested-api-key-sentinel",
+        "api_key_env": "NESTED_API_KEY_ENV_SENTINEL",
+        "api_secret": "nested-api-secret-sentinel",
+        "token": "nested-token-sentinel",
+        "password": "nested-password-sentinel",
+    }
+    sentinel_map = _HashableMapping(sentinels)
+    agent = Agent(
+        service=_mock_service(),
+        agent_name="nested-secrets",
+        working_dir=tmp_path / "nested-secrets",
+        capabilities={
+            "web": {
+                "search_service": service,
+                "browser_port": port,
+                "provider": "duckduckgo",
+                "model": "public-model",
+                "nested": {
+                    "provider": "public-provider",
+                    "model": "public-nested-model",
+                    **sentinels,
+                    "items": [sentinels, (sentinels,)],
+                },
+            }
+        },
+    )
+    # Exercise the serialization-boundary walk for set/frozenset containers as
+    # well; normal capability normalization intentionally copies JSON-like
+    # configuration and cannot represent a mapping as a set member.
+    agent._capabilities.append((
+        "nested-regression",
+        {"set_items": {sentinel_map}, "frozen_items": frozenset({sentinel_map})},
+    ))
+    try:
+        manifest = agent._build_manifest()
+        agent._workdir.write_manifest(manifest)
+        agent_json = json.loads((tmp_path / "nested-secrets" / ".agent.json").read_text())
+        for value in (manifest, agent_json):
+            blob = json.dumps(value)
+            for sentinel in sentinels.values():
+                assert sentinel not in blob
+            assert "public-provider" in blob
+            assert "public-nested-model" in blob
+            def keys(node):
+                if isinstance(node, dict):
+                    yield from node.keys()
+                    for child in node.values():
+                        yield from keys(child)
+                elif isinstance(node, list):
+                    for child in node:
+                        yield from keys(child)
+            assert not ({"api_key", "api_key_env", "api_secret", "token", "password"} & set(keys(value)))
+        assert agent._capability_managers["web"]._specs["duckduckgo"].service is service
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_wrapper_manifest_includes_preset_from_init(tmp_path):
     workdir = tmp_path / "withpreset"
     active_path = "~/.lingtai-tui/presets/saved/codex-gpt5.5.json"

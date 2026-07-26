@@ -304,9 +304,9 @@ def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
              "api_key_env": "GEMINI_API_KEY"},
         )
 
-    assert captured.get("web_search", {}).get("provider") == "gemini"
-    # api credentials inherited too
-    assert captured["web_search"].get("api_key_env") == "GEMINI_API_KEY"
+    assert captured.get("web", {}).get("provider") == "gemini"
+    # api credentials inherited too; the legacy input key materializes canonically.
+    assert captured["web"].get("api_key_env") == "GEMINI_API_KEY"
 
 
 # ---------------------------------------------------------------------------

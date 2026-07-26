@@ -262,7 +262,7 @@ def test_deep_refresh_removes_old_capabilities(tmp_path):
     persist across refresh regardless of init.json — that is by design;
     `manifest.disable` is the opt-out channel for those.
     """
-    init = _make_init(capabilities={"web_search": {"provider": "duckduckgo"}})
+    init = _make_init(capabilities={"web": {"provider": "duckduckgo"}})
     agent = _make_agent(tmp_path, init)
     agent._setup_from_init()  # initial setup
 
@@ -273,16 +273,16 @@ def test_deep_refresh_removes_old_capabilities(tmp_path):
     agent._session = mock_session
 
     cap_names_before = {name for name, _ in agent._capabilities}
-    assert "web_search" in cap_names_before
+    assert "web" in cap_names_before
 
-    # Drop web_search from init.json
+    # Drop web from init.json
     new_init = _make_init(capabilities={})
     (tmp_path / "init.json").write_text(json.dumps(new_init))
 
     agent._setup_from_init()
 
     cap_names_after = {name for name, _ in agent._capabilities}
-    assert "web_search" not in cap_names_after
+    assert "web" not in cap_names_after
 
 
 def test_deep_refresh_preserves_chat_history(tmp_path):

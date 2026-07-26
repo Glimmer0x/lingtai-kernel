@@ -71,13 +71,14 @@ exclude = [
     "i18n/*.json",
     "*/*.json",
     "*/manual/**/*",
-    # Per-tool contract documents — one src/lingtai/tools/<tool>/CONTRACT.md per
-    # built-in tool. The runtime loads these to surface each tool's invariants;
-    # omitting the glob ships the tool code while silently dropping all 18
-    # contracts from the wheel.
+    # Shared future tool-call contract plus one
+    # src/lingtai/tools/<tool>/CONTRACT.md per built-in tool. The runtime and
+    # development graph use these invariants; omitting either entry silently
+    # drops contract documents while still shipping the tool code.
+    "CONTRACT.md",
     "*/CONTRACT.md",
     # Per-tool glossary resources — exactly glossary-{en,zh,wen}.md per
-    # first-party package (18 packages × 3 languages = 54 files). The
+    # first-party package (19 packages × 3 languages = 57 files). The
     # renderer loads them via importlib.resources to append localized
     # terminology bodies to each tool's ## tools description.
     "*/glossary-en.md",

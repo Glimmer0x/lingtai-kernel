@@ -11,7 +11,7 @@ from lingtai.tools.registry import get_all_providers
 def test_get_all_providers_returns_all_capabilities():
     result = get_all_providers()
     expected = {
-        "file", "shell", "web_search", "knowledge",
+        "file", "shell", "web", "knowledge",
         "skills", "vision", "avatar", "daemon",
     }
     assert expected == set(result.keys())

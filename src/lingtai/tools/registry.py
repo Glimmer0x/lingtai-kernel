@@ -92,7 +92,9 @@ BUILTIN_TOOLS: dict[str, str] = {
     "glob": "lingtai.tools.glob",
     "grep": "lingtai.tools.grep",
     "vision": "lingtai.tools.vision",
-    "web_search": "lingtai.tools.web_search",
+    # Unified public web capability.  ``web_search`` is a one-way input alias
+    # below so old presets materialize this single handler.
+    "web": "lingtai.tools.web_search",
 }
 
 # Group names that expand to multiple capabilities.
@@ -160,7 +162,10 @@ def apply_core_defaults(
     return out
 
 
-_LEGACY_CAPABILITY_ALIASES: dict[str, str] = {"bash": "shell"}
+_LEGACY_CAPABILITY_ALIASES: dict[str, str] = {
+    "bash": "shell",
+    "web_search": "web",
+}
 
 
 class CapabilityShapeDecision(str, Enum):
@@ -190,6 +195,24 @@ def canonical_capability_name(name: str) -> str:
     return _LEGACY_CAPABILITY_ALIASES.get(name, name)
 
 
+def _copy_configuration(value: Any) -> Any:
+    """Copy JSON-like containers while preserving opaque injected dependencies.
+
+    Browser ports, fake services, locks, clients, and other runtime objects are
+    caller-owned identity-bearing values.  ``deepcopy`` silently detached them
+    during capability normalization; only configuration containers are copied.
+    """
+    if isinstance(value, dict):
+        return {key: _copy_configuration(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_configuration(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_configuration(item) for item in value)
+    if isinstance(value, set):
+        return {_copy_configuration(item) for item in value}
+    return value
+
+
 def classify_capabilities(
     capabilities: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], CapabilityShapeEvidence]:
@@ -205,35 +228,36 @@ def classify_capabilities(
     if not isinstance(capabilities, Mapping):
         return {}, CapabilityShapeEvidence(CapabilityShapeDecision.UNKNOWN)
 
-    out = copy.deepcopy(dict(capabilities))
-    has_bash = "bash" in out
-    has_shell = "shell" in out
-    if not has_bash:
-        return out, CapabilityShapeEvidence(CapabilityShapeDecision.PASS)
-
-    mapping = {
-        "raw_path": "manifest.capabilities.bash",
-        "effective_path": "manifest.capabilities.shell",
-    }
-    if not has_shell:
-        out["shell"] = out.pop("bash")
-        return out, CapabilityShapeEvidence(
-            CapabilityShapeDecision.NUDGE,
-            compatibility_paths=(mapping,),
-        )
-
-    if out["bash"] != out["shell"]:
+    out = {key: _copy_configuration(value) for key, value in capabilities.items()}
+    compatibility: list[dict[str, str]] = []
+    conflicts: list[str] = []
+    for legacy, canonical in _LEGACY_CAPABILITY_ALIASES.items():
+        if legacy not in out:
+            continue
+        mapping = {
+            "raw_path": f"manifest.capabilities.{legacy}",
+            "effective_path": f"manifest.capabilities.{canonical}",
+        }
+        compatibility.append(mapping)
+        if canonical in out and out[legacy] != out[canonical]:
+            conflicts.extend((mapping["raw_path"], mapping["effective_path"]))
+    if conflicts:
         return out, CapabilityShapeEvidence(
             CapabilityShapeDecision.BLOCKED,
-            compatibility_paths=(mapping,),
-            conflict_paths=("manifest.capabilities.bash", "manifest.capabilities.shell"),
+            compatibility_paths=tuple(compatibility),
+            conflict_paths=tuple(conflicts),
         )
-
-    out.pop("bash")
-    return out, CapabilityShapeEvidence(
-        CapabilityShapeDecision.NUDGE,
-        compatibility_paths=(mapping,),
-    )
+    if compatibility:
+        for legacy, canonical in _LEGACY_CAPABILITY_ALIASES.items():
+            if legacy in out:
+                if canonical not in out:
+                    out[canonical] = out[legacy]
+                out.pop(legacy, None)
+        return out, CapabilityShapeEvidence(
+            CapabilityShapeDecision.NUDGE,
+            compatibility_paths=tuple(compatibility),
+        )
+    return out, CapabilityShapeEvidence(CapabilityShapeDecision.PASS)
 
 
 def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
@@ -247,8 +271,8 @@ def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
     normalized, evidence = classify_capabilities(capabilities)
     if evidence.decision is CapabilityShapeDecision.BLOCKED:
         raise CapabilityShapeConflict(
-            "conflicting manifest.capabilities.bash and "
-            "manifest.capabilities.shell values"
+            "conflicting capability aliases: "
+            + ", ".join(evidence.conflict_paths)
         )
     if evidence.decision is CapabilityShapeDecision.UNKNOWN:
         raise CapabilityShapeConflict("unclassifiable manifest.capabilities shape")
@@ -317,7 +341,7 @@ def get_all_providers() -> dict[str, dict]:
     _USER_FACING: dict[str, str] = {
         "file": "lingtai.tools.read",
         "shell": "lingtai.tools.bash",
-        "web_search": "lingtai.tools.web_search",
+        "web": "lingtai.tools.web_search",
         "knowledge": "lingtai.tools.knowledge",
         "skills": "lingtai.tools.skills",
         "vision": "lingtai.tools.vision",

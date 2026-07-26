@@ -361,10 +361,36 @@ class Agent(BaseAgent):
         """
         from lingtai.tools.registry import CAPABILITY_UNAVAILABLE, setup_capability
 
-        serializable_kw = {
-            k: v for k, v in kwargs.items()
-            if isinstance(v, (str, int, float, bool, type(None), list, dict))
-        }
+        def _manifest_safe(value: Any) -> Any:
+            # Keep configuration containers visible while omitting opaque,
+            # identity-bearing injected ports/services from the JSON manifest.
+            # Sensitive names are removed at every nesting level and through
+            # every container shape accepted here; runtime setup still receives
+            # the original kwargs unchanged.
+            from collections.abc import Mapping as ABCMapping
+
+            if isinstance(value, ABCMapping):
+                clean: dict[Any, Any] = {}
+                for key, item in value.items():
+                    if key in self._SENSITIVE_KEYS:
+                        continue
+                    safe_value = _manifest_safe(item)
+                    if safe_value is not _UNSERIALIZABLE:
+                        clean[key] = safe_value
+                return clean
+            if isinstance(value, (list, tuple, set, frozenset)):
+                clean_items = []
+                for item in value:
+                    safe_value = _manifest_safe(item)
+                    if safe_value is not _UNSERIALIZABLE:
+                        clean_items.append(safe_value)
+                return clean_items
+            if isinstance(value, (str, int, float, bool, type(None))):
+                return value
+            return _UNSERIALIZABLE
+
+        _UNSERIALIZABLE = object()
+        serializable_kw = _manifest_safe(kwargs)
         self._capabilities.append((name, serializable_kw))
         try:
             mgr = setup_capability(self, name, **kwargs)
@@ -411,12 +437,24 @@ class Agent(BaseAgent):
             for entry in sorted(pkg_root.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("_"):
                     continue
+                # Browser is an internal browse subcomponent. Its former manual
+                # is retained on disk but must not become a second public model.
+                if entry.name == "browser":
+                    continue
                 src = entry / "manual"
                 if src.is_dir():
-                    # The retained implementation directory is ``bash``; its
-                    # agent-facing manual is installed under canonical ``shell``.
-                    destination_name = "shell" if entry.name == "bash" else entry.name
-                    shutil.copytree(src, intrinsic_dir / subdir / destination_name)
+                    # Retained implementation directories map to canonical
+                    # model-facing names exactly once.
+                    if entry.name == "bash":
+                        destination_name = "shell"
+                    elif entry.name == "web_search":
+                        destination_name = "web"
+                    else:
+                        destination_name = entry.name
+                    destination = intrinsic_dir / subdir / destination_name
+                    if destination.exists():
+                        continue
+                    shutil.copytree(src, destination)
 
         def install_skills_from(pkg, subdir: str) -> None:
             """Install standalone skill bundles (no companion code, no manual/ wrapper).
@@ -485,9 +523,31 @@ class Agent(BaseAgent):
         data = super()._build_manifest()
         caps = getattr(self, "_capabilities", None)
         if caps:
+            # Re-apply the recursive redaction at the serialization boundary.
+            # _capabilities is normally already sanitized, but keeping this
+            # boundary defensive prevents a nested credential from leaking if a
+            # caller or future setup path stores a raw mapping.
+            from collections.abc import Mapping as ABCMapping
+            omitted = object()
+
+            def _safe(value: Any) -> Any:
+                if isinstance(value, ABCMapping):
+                    clean = {}
+                    for key, item in value.items():
+                        if key in self._SENSITIVE_KEYS:
+                            continue
+                        safe_item = _safe(item)
+                        if safe_item is not omitted:
+                            clean[key] = safe_item
+                    return clean
+                if isinstance(value, (list, tuple, set, frozenset)):
+                    return [safe_item for item in value if (safe_item := _safe(item)) is not omitted]
+                if isinstance(value, (str, int, float, bool, type(None))):
+                    return value
+                return omitted
+
             data["capabilities"] = [
-                (name, {k: v for k, v in kw.items() if k not in self._SENSITIVE_KEYS})
-                for name, kw in caps
+                (name, _safe(kw)) for name, kw in caps
             ]
         if self._combo_name:
             data["combo"] = self._combo_name

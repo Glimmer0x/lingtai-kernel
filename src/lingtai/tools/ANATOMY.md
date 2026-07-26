@@ -1,82 +1,67 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
   - src/lingtai/ANATOMY.md
-  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/browser/ANATOMY.md
+  - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
-  - src/lingtai/tools/i18n/__init__.py
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep this registry Anatomy connected to its parent and the unified web owner.
+  Browser is an internal browse child, not a second public capability. Update
+  structural claims with code and keep reciprocal graph edges valid.
 ---
 # src/lingtai/tools/
 
-Top-level home for every concrete built-in agent tool. One directory per tool
-package, flat — there is no `intrinsics/` / `core/` / `capabilities/` interior
-ownership layer. The kernel (`lingtai.kernel`) owns the tool *machinery*
-(protocol, schema build, dispatch, guard, executor, meta/notifications,
-lifecycle); this package owns the *concrete tools* and the registry that
-composes them.
-
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents**
-> update this file in the same commit as code changes. **LingTai agents** report
-> drift as issues.
+This package owns concrete built-in tools and the registry that composes them
+onto an Agent. The kernel owns generic tool machinery; this layer owns public
+capability names and lazy adapters.
 
 ## Components
 
-| File / dir | Role |
-|---|---|
-| `registry.py` | The composition seam: `INTRINSICS` (5 mandatory intrinsic modules injected into `BaseAgent`), `BUILTIN_TOOLS` (name → `tools.<pkg>` path), `_GROUPS`, `CORE_DEFAULTS`, `setup_capability`, `apply_core_defaults`, `normalize_capabilities`, `expand_groups`, `get_all_providers`, `CAPABILITY_UNAVAILABLE` |
-| `i18n/` | `en/zh/wen` string catalogs for every tool; registers into the kernel i18n cache via `register_strings` on import |
-| `_catalog.py` | Shared scan/manifest helpers for `knowledge` + `skills` |
-| `_file_paths.py` | `resolve_workdir_path` — shared by the five file tools |
-| `_manual.py` | `load_installed_manual` — read-only loader for tools exposing an already-installed intrinsic manual skill |
-| `_media_host.py`, `_zhipu_mode.py` | Provider-host / z.ai-mode helpers for `vision` + `web_search` |
-
-**Tool sub-packages:** `email/`, `system/`, `psyche/`, `soul/`, `notification/`
-(the five mandatory intrinsics); canonical `shell` (retained `bash/` implementation), `knowledge/`, `skills/`, `avatar/`,
-`daemon/`, `mcp/`, `read/`, `write/`, `edit/`, `glob/`, `grep/` (always-on
-floor); `vision/`, `web_search/` (opt-in). `avatar/` registers one tool,
-`avatar`, dispatched by `action` (`spawn`\|`rules`\|`manual`).
+- `CONTRACT.md` — future canonical model-facing tool call contract and explicit
+  per-tool migration boundary.
+- `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
+  defaults, normalization, setup, and check-caps metadata
+  (`src/lingtai/tools/registry.py:40-359`).
+- `web_search/` — public `web` composition owner for search, browse, settings,
+  and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
+- `browser/` — internal static browse Core/Port used by `web`
+  (`src/lingtai/tools/browser/ANATOMY.md`).
+- `_manual.py` — bounded installed-manual loader
+  (`src/lingtai/tools/_manual.py:1-29`).
 
 ## Connections
 
-- **→ `lingtai.kernel`** — tools import kernel machinery freely (static): schema
-  types, dispatch helpers, notifications, i18n, services. This is the allowed
-  downward edge.
-- **← `lingtai.Agent`** — passes `lingtai.tools.registry.INTRINSICS` into
-  `BaseAgent(intrinsics=...)` and calls `setup_capability` for the dynamic
-  tools.
-- **→ `lingtai` (lazy only)** — a handful of tools reach `lingtai` services
-  (`daemon` → MCP clients / presets / llm.service; `mcp` → `mcp_registry`;
-  `vision`/`web_search` → provider services) but **only** via imports inside
-  `setup()`/handlers, never at module top. `import tools` must not import
-  `lingtai`.
+`Agent` calls registry setup. The public `web` row imports
+`lingtai.tools.web_search` lazily. That owner imports the browser Core and
+provider factory only at composition or action boundaries. The pinned browser
+transport remains an outer adapter. `web_search` is accepted only as a
+one-way configuration input alias and is never emitted as a public name.
 
-## Import DAG
+## Composition
 
-    lingtai  →  lingtai.tools → lingtai.kernel
-
-`lingtai.kernel` imports neither `lingtai` nor `tools`
-(`tests/test_kernel_isolation.py`). The single back-edge `lingtai.tools → lingtai` is
-lazy-only, keeping import-time acyclicity.
+The parent [`src/lingtai/ANATOMY.md`](../ANATOMY.md) owns Agent composition.
+The paired tools Contract owns the future canonical `action` / `input` /
+`reasoning` public call shape and migration boundary. The web Contract specializes
+that promise for the first real implementation; its Anatomy and the internal
+browser Anatomy provide progressive disclosure. Other tool packages retain their
+existing public shapes until explicitly migrated.
 
 ## State
 
-No mutable runtime state lives in this package root. Per-tool persistent state
-(mailbox, jobs, daemons, knowledge, `.library`, `.notification`) is documented in
-each tool's own `ANATOMY.md` and `CONTRACT.md`.
+No mutable state lives at package root. `WebManager` owns per-Agent engine
+specs, lazy provider cache, BrowserEngine refs/snapshots/cursors, and settings
+observations. No process-global environment mutation or cross-Agent state is
+owned here.
 
 ## Notes
 
-- Membership in `registry.INTRINSICS` is the mandatory-include mechanism for the
-  five intrinsics — the `BaseAgent._wire_intrinsics` loop is unconditional.
-- `CORE_DEFAULTS` is the always-on floor; `vision`/`web_search` stay opt-in.
-- Each `tools/<name>/` carries `__init__.py` (+ submodules), `ANATOMY.md`,
-  `CONTRACT.md`, and an optional `manual/`.
+Physical legacy directories and provider-native wire strings remain for
+compatibility. They must not become registry, schema, prompt, check-caps,
+manual, or catalog entries under those old public names.

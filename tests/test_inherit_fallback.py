@@ -32,14 +32,14 @@ def _stub_agent(language: str = "en"):
     return a
 
 
-def test_web_search_unknown_provider_falls_back_to_duckduckgo():
-    """web_search with provider='deepseek' (unknown) falls back to duckduckgo."""
+def test_web_unknown_provider_falls_back_to_duckduckgo():
+    """web with provider='deepseek' (unknown) falls back to duckduckgo."""
     from lingtai.tools.web_search import setup as ws_setup
     a = _stub_agent()
     # Pretend agent's main LLM is deepseek (which has no web search service)
     ws_setup(a, provider="deepseek", api_key=None)
-    # Must NOT raise; should have registered web_search via duckduckgo
-    assert "web_search" in a._tool_handlers
+    # Must NOT raise; should have registered web via duckduckgo
+    assert "web" in a._tool_handlers
 
 
 def test_vision_unknown_provider_registers_manual_only_route():
@@ -54,18 +54,18 @@ def test_vision_unknown_provider_registers_manual_only_route():
     assert not any(event == "capability_skipped" for event, _ in a._log_events)
 
 
-def test_web_search_supported_provider_uses_it(monkeypatch):
-    """web_search with provider='gemini' (supported) uses gemini, no fallback."""
+def test_web_supported_provider_uses_it(monkeypatch):
+    """web with provider='gemini' (supported) uses gemini, no fallback."""
     monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
     from lingtai.tools.web_search import setup as ws_setup
     a = _stub_agent()
     ws_setup(a, provider="gemini", api_key="sk-test")
-    assert "web_search" in a._tool_handlers
+    assert "web" in a._tool_handlers
 
 
-def test_web_search_no_provider_uses_duckduckgo():
-    """web_search with no provider arg defaults to duckduckgo (existing behavior)."""
+def test_web_no_provider_uses_duckduckgo():
+    """web with no provider arg defaults to duckduckgo (existing behavior)."""
     from lingtai.tools.web_search import setup as ws_setup
     a = _stub_agent()
     ws_setup(a)
-    assert "web_search" in a._tool_handlers
+    assert "web" in a._tool_handlers

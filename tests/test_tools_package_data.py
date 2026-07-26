@@ -1,8 +1,8 @@
 """Regression test: built wheels must ship every built-in tool contract.
 
-The consolidated ``lingtai.tools`` package ships one ``CONTRACT.md`` per
-built-in tool and the daemon's intentional interactive-terminal component
-contract, alongside its manual trees.
+The consolidated ``lingtai.tools`` package ships its shared ``CONTRACT.md``,
+one ``CONTRACT.md`` per built-in tool, and the daemon's intentional interactive-
+terminal component contract, alongside its manual trees.
 These reach the wheel only through the ``"lingtai.tools"`` entry
 in ``[tool.setuptools.package-data]`` in ``pyproject.toml``; a missing glob
 silently drops the contract while the tool code still installs (the
@@ -30,7 +30,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The eighteen built-in tools, each owning a top-level CONTRACT.md.
+# The nineteen built-in tools, each owning a top-level CONTRACT.md.
 _BUILTIN_TOOLS = [
     "avatar",
     "bash",
@@ -49,6 +49,7 @@ _BUILTIN_TOOLS = [
     "system",
     "vision",
     "web_search",
+    "browser",
     "write",
 ]
 
@@ -107,6 +108,7 @@ _WEB_SEARCH_MANUAL_FILES = (
 
 # The three per-tool glossary languages that each package must ship.
 _GLOSSARY_LANGS = ("en", "zh", "wen")
+_BROWSER_MANUAL_FILES = ("lingtai/tools/browser/manual/SKILL.md",)
 
 
 def _build_wheel(dest: Path) -> Path:
@@ -197,18 +199,26 @@ def test_wheel_ships_vision_manual(wheel_entries: set[str]):
     assert "lingtai/tools/vision/manual/SKILL.md" in wheel_entries
 
 
+def test_wheel_ships_browser_manual(wheel_entries: set[str]):
+    missing = [path for path in _BROWSER_MANUAL_FILES if path not in wheel_entries]
+    assert not missing, "browser manual files missing from wheel: %r" % missing
+
+
 def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
     missing = [path for path in _WEB_SEARCH_MANUAL_FILES if path not in wheel_entries]
     assert not missing, "web_search manual files missing from wheel: %r" % missing
 
 
 def test_wheel_ships_exact_expected_tool_contracts(wheel_entries: set[str]):
-    # Keep the manifest closed: the 18 top-level tool contracts plus the one
-    # intentional daemon component contract. No other nested/manual contract
-    # may sneak in through an over-broad package-data glob.
+    # Keep the manifest closed: the shared tools contract, nineteen top-level
+    # built-in tool contracts, and one intentional daemon component contract.
+    # No other nested/manual contract may sneak in through an over-broad glob.
     expected = {
         f"lingtai/tools/{tool}/CONTRACT.md" for tool in _BUILTIN_TOOLS
-    } | {"lingtai/tools/daemon/interactive_terminal/CONTRACT.md"}
+    } | {
+        "lingtai/tools/CONTRACT.md",
+        "lingtai/tools/daemon/interactive_terminal/CONTRACT.md",
+    }
     contracts = {
         e
         for e in wheel_entries
@@ -235,7 +245,7 @@ def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
 
 
 # ---------------------------------------------------------------------------
-# Glossary resources (54 files: 18 packages × 3 languages)
+# Glossary resources (57 files: 19 packages × 3 languages)
 # ---------------------------------------------------------------------------
 
 
@@ -249,8 +259,8 @@ def test_wheel_ships_every_glossary_resource(wheel_entries: set[str]):
     assert not missing, "glossary resources missing from wheel: %r" % missing
 
 
-def test_wheel_ships_exactly_54_glossary_resources(wheel_entries: set[str]):
-    # Exactly 18 packages × 3 languages = 54. The narrowed package-data globs
+def test_wheel_ships_exactly_57_glossary_resources(wheel_entries: set[str]):
+    # Exactly 19 packages × 3 languages = 57. The narrowed package-data globs
     # (glossary-en.md, glossary-zh.md, glossary-wen.md — not glossary-*.md)
     # must include exactly these files and nothing more.
     glossary_files = {
@@ -258,8 +268,8 @@ def test_wheel_ships_exactly_54_glossary_resources(wheel_entries: set[str]):
         for e in wheel_entries
         if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
-    assert len(glossary_files) == 54, (
-        "expected exactly 54 glossary resources, wheel has %d: %r"
+    assert len(glossary_files) == 57, (
+        "expected exactly 57 glossary resources, wheel has %d: %r"
         % (len(glossary_files), sorted(glossary_files))
     )
 
@@ -299,7 +309,7 @@ def test_installed_wheel_validator_reads_package_resources(
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "54 glossary resources across 18 packages" in result.stdout
+    assert "57 glossary resources across 19 packages" in result.stdout
 
 
 @pytest.fixture(scope="module")
@@ -337,6 +347,11 @@ def sdist_entries(tmp_path_factory) -> set[str]:
         return {_logical(name) for name in tf.getnames()}
 
 
+def test_sdist_ships_browser_manual(sdist_entries: set[str]):
+    missing = [path for path in _BROWSER_MANUAL_FILES if path not in sdist_entries]
+    assert not missing, "browser manual files missing from sdist: %r" % missing
+
+
 def test_sdist_ships_every_glossary_resource(sdist_entries: set[str]):
     missing = []
     for tool in _BUILTIN_TOOLS:
@@ -352,12 +367,12 @@ def test_sdist_ships_complete_web_search_manual_bundle(sdist_entries: set[str]):
     assert not missing, "web_search manual files missing from sdist: %r" % missing
 
 
-def test_sdist_ships_exactly_54_glossary_resources(sdist_entries: set[str]):
+def test_sdist_ships_exactly_57_glossary_resources(sdist_entries: set[str]):
     glossary_files = {
         e
         for e in sdist_entries
         if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
-    assert len(glossary_files) == 54, (
-        "expected exactly 54 glossary resources in sdist, got %d" % len(glossary_files)
+    assert len(glossary_files) == 57, (
+        "expected exactly 57 glossary resources in sdist, got %d" % len(glossary_files)
     )

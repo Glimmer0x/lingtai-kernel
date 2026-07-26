@@ -134,6 +134,28 @@ def test_openai_responses_wire_description():
     assert schemas[0].description == FULL_DESCRIPTION
 
 
+def test_web_action_input_schema_survives_chat_and_responses_wires():
+    from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+    from lingtai.tools.web_search import get_schema
+
+    schema = FunctionSchema(name="web", description="web", parameters=get_schema())
+    chat = _build_tools([schema])[0]["function"]["parameters"]
+    responses = _build_responses_tools([schema])[0]["parameters"]
+    for wire in (chat, responses):
+        assert wire["type"] == "object"
+        assert wire["required"] == ["action", "input"]
+        assert wire["additionalProperties"] is False
+        branches = wire["properties"]["input"]["anyOf"]
+        assert [branch["title"] for branch in branches] == [
+            "search input", "browse input", "manual input",
+        ]
+        for branch in branches:
+            assert branch["additionalProperties"] is False
+            assert set(branch["required"]) == set(branch["properties"])
+        assert branches[1]["properties"]["cursor"]["type"] == ["string", "null"]
+        assert branches[2]["properties"] == {}
+
+
 def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
     from lingtai.llm.openai.adapter import _build_responses_tools
     from lingtai.tools.daemon import get_schema
