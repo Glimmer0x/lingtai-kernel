@@ -105,6 +105,15 @@ ambiguous. That failure is a feature: it prevents accidental broad changes.
 Use `replace_all=true` only when every occurrence is supposed to change and you
 have checked the match set with `grep` first.
 
+### The `edit` action/input contract
+
+The public `edit` call is explicit: set the root `action` to `"edit"` and put
+`file_path`, `old_string`, `new_string`, and `replace_all` in its nested `input`.
+`replace_all` is a required nullable boolean for strict providers; `null` means
+false. The direct handler also treats an omitted `replace_all` as false. The
+manual route is `action="manual"` with `input={}` and performs no edit. Do not
+use the removed flat or omitted-action forms.
+
 ## Search workflow
 
 Start broad with `glob` (file names), narrow with `grep` (file contents), then
@@ -125,16 +134,16 @@ content or attach/export a file through the appropriate communication channel.
 
 ## Manual versus ordinary calls
 
-Normal file work is primary. Each file tool has two explicit modes:
+Normal file work is primary. Follow each tool's current public schema. The
+`edit` tool has two explicit root actions: use `action="edit"` with the nested
+ordinary input described above, or use `action="manual"` with `input={}` for
+this guide. Its removed flat and omitted-action forms are not supported.
 
-- **Ordinary work:** for backward compatibility, omit `action` or set it to the
-  tool name: `action="read"`, `"write"`, `"edit"`, `"glob"`, or `"grep"`.
-  Supply the ordinary arguments shown in that tool's schema.
-- **Manual lookup:** use `action="manual"` as a one-time entry when you need the
-  installed workflow guide. It returns documentation and performs no file
-  operation. `write`, `edit`, `glob`, and `grep` return this manual; `read`
-  returns `read-manual`.
+Other file tools may document their own ordinary arguments. A manual lookup is
+always an explicit `action="manual"` one-time entry when that tool exposes it;
+it returns documentation and performs no file operation. `write`, `edit`, `glob`,
+and `grep` return this manual; `read` returns `read-manual`.
 
-After a manual result, continue the original task with an ordinary call. Do not
-request the same manual again. Repeating an identical manual call is an error loop,
-not progress.
+After a manual result, continue the original task with the ordinary action. Do
+not request the same manual again. Repeating an identical manual call is an
+error loop, not progress.

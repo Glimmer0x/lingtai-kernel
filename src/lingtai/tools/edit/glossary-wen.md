@@ -15,8 +15,9 @@ maintenance: |
 ---
 **名相对照**
 
-- `edit`：精确替换文中之字。若 old_string 未见或有歧义则不成。
-- `file_path`：文卷之绝对路径
-- `old_string`：欲查且替之精确文字
-- `new_string`：替换后之文字
-- `replace_all`：替换所有匹配
+- `action`：所行之名；唯 `edit`、`manual` 二值
+- `input`：封闭之行参；`manual` 之参当为空
+- `replace_all`：严式字段，可为 `boolean` 或 `null`；`null` 即 false
+- `current_setting`：每次结果所附之设置快照，仅为证据而不改编辑
+
+`file_path`、`old_string`、`new_string` 皆守英文名相，不设省略 `action` 或扁平参之别名。

@@ -1,10 +1,11 @@
 ---
 name: edit-contract
 tool: edit
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/edit/__init__.py
   - src/lingtai/tools/_file_paths.py
+  - src/lingtai/tools/_settings.py
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
@@ -23,17 +24,18 @@ lives in `src/lingtai/tools/edit/__init__.py`; the code is the source of truth.
 ## Routing Card
 
 **Use this when:**
-- You are editing the match-count / `replace_all` guard logic.
+- You are editing the action/input schema or its strict root/branch validation.
 - You need the exact ambiguity rule (what happens when `old_string` appears more
-  than once) or the "not found" behavior.
+  than once) or the `replace_all` rule.
+- You need the per-call settings diagnostic contract.
 
 **Do not use this for:**
 - Full-file replacement or new files: read `src/lingtai/tools/write/CONTRACT.md`.
 - Reading content: read `src/lingtai/tools/read/CONTRACT.md`.
 - The byte-level read/write: `src/lingtai/services/file_io.py`.
 
-**Fast paths:** tool schema -> §Tool surface; ambiguity / `replace_all` rule ->
-§Tool surface; read-then-write flow -> §State & storage.
+**Fast paths:** tool schema → §Tool surface; ambiguity / `replace_all` rule →
+§Tool surface; read-then-write flow → §State & storage.
 
 ## Scope
 
@@ -42,44 +44,53 @@ lives in `src/lingtai/tools/edit/__init__.py`; the code is the source of truth.
 - Non-goals: no regex, no fuzzy matching, no multi-file edits, no file creation
   (the target must already exist). Matching is literal substring counting via
   `str.count` / `str.replace`.
+- Public compatibility with omitted-action or flat arguments is removed.
 
 ## Tool surface
 
-`handle_edit` has two modes:
+The raw tool-owned schema is a closed root object with required `action` and
+required nested `input`, and no other root fields. `BaseAgent` adds optional root
+`reasoning` only to the model-facing schema. The handler also accepts executor
+metadata `_reasoning`; neither metadata field enters action dispatch.
 
-- **Ordinary:** omit `action` (backward compatible) or set
-  `action="edit"`; both forms run the same edit operation.
-- **Manual:** `action="manual"` returns the installed `file-manual` without
-  attempting to edit a file.
+`action` is exactly one of `edit` or `manual`:
 
-The schema lists `edit` before `manual`. Any other explicit action
-returns a plain error before file I/O. After a manual response, the caller
-continues the original task with an ordinary call rather than repeating the
-manual.
+- `edit` uses a closed input object requiring `file_path: string`,
+  `old_string: string`, `new_string: string`, and `replace_all: boolean | null`.
+  Strict providers therefore always send `replace_all`; `null` means false.
+  Direct handler calls that omit it also preserve the historical false default.
+- `manual` uses a closed empty input object and returns the real installed
+  `file-manual` body without attempting an edit.
 
-| Call | Required inputs | Optional inputs | Success output | Error shapes |
-|---|---|---|---|---|
-| `edit` | `file_path: string`, `old_string: string`, `new_string: string` | `replace_all: bool` (default false) | `{status: "ok", replacements}` (`count` when `replace_all`, else `1`) | see below |
+| Call | Required inputs | Success output | Error shapes |
+|---|---|---|---|
+| `edit` | `file_path`, `old_string`, `new_string`, `replace_all` (nullable boolean) | `{status: "ok", replacements}` (`count` when true, else `1`) | plain `{status: "error", message: "...", current_setting}` dict; see below |
+| `manual` | empty `input` | installed manual result plus `current_setting` | degraded manual result plus `current_setting` if unavailable |
+
+Every result, including malformed, unknown-action, manual, and file-I/O results,
+contains `current_setting`. The first operation of every call is a strict fresh
+`read_settings(agent, "edit")`. The Agent-owned settings placeholder accepts
+only `{schema_version: 1}`; missing, valid, hot-changed, or invalid settings
+produce evidence only and never change path resolution, matching, counts,
+ambiguity, replacement, or FileIO behavior.
 
 **Error shapes** (plain dicts, not exceptions):
-- `{"status": "error", "message": "file_path is required"}` — empty/missing path.
-- `{"status": "error", "message": "File not found: <path>"}` — `FileNotFoundError`
-  on the initial read.
-- `{"status": "error", "message": "Cannot read <path>: <exc>"}` — other read
-  failure.
-- `{"status": "error", "message": "old_string not found in <path>"}` — zero
-  matches.
-- `{"status": "error", "message": "old_string found <count> times — use replace_all=true or provide more context"}`
-  — more than one match without `replace_all`.
-- `{"status": "error", "message": "Cannot write <path>: <exc>"}` — write-back
-  failure.
+- `{"status": "error", "message": "edit requires root action and input", ...}` —
+  missing required root fields.
+- `{"status": "error", "message": "file_path is required", ...}` — empty/missing path.
+- `{"status": "error", "message": "File not found: <path>", ...}` —
+  `FileNotFoundError` on the initial read.
+- `{"status": "error", "message": "Cannot read <path>: <exc>", ...}` — other read failure.
+- `{"status": "error", "message": "old_string not found in <path>", ...}` — zero matches.
+- `{"status": "error", "message": "old_string found <count> times — use replace_all=true or provide more context", ...}` — more than one match without `replace_all`.
+- `{"status": "error", "message": "Cannot write <path>: <exc>", ...}` — write-back failure.
 
 ## State & storage
 
 None owned. `edit` does its own read→replace→write against the target file via
 `agent._file_io.read` then `agent._file_io.write`; it holds no persistent state.
-When `replace_all` is false the replacement is `content.replace(old, new, 1)`;
-when true it replaces every occurrence.
+When `replace_all` is false (including null or direct omission), the replacement
+is `content.replace(old, new, 1)`; when true it replaces every occurrence.
 
 ## Cross-platform invariants
 
@@ -98,27 +109,27 @@ Do not change any of the following; documented for reviewers only.
 
 | Claim | Source `src/lingtai/tools/edit/...` | Test |
 |---|---|---|
-| Exact string replacement works through the capability | `__init__.py` (`handle_edit`) | `tests/test_layers_file.py::test_edit_via_capability` |
-| Edit surfaces a `{status: error}` dict on failure | `__init__.py` (`handle_edit`) | `tests/test_layers_file.py::test_edit_error_shape` |
-| Relative paths resolve under the agent workdir | `__init__.py` (`resolve_workdir_path`) | `tests/test_layers_file.py::test_file_capability_relative_paths_resolve_under_workdir` |
-| Edit routes through the injected FileIOService | `__init__.py` (`handle_edit`) | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` |
-| `file` sugar registers edit alongside the other four file tools | `src/lingtai/tools/registry.py` | `tests/test_layers_file.py::test_file_sugar_expands_to_five` |
+| Raw schema is closed action/input with strict edit/manual branches | `__init__.py` (`get_schema`) | `tests/test_edit_capability.py::test_raw_schema_is_closed_action_input` |
+| Agent schema adds only root reasoning metadata | `__init__.py`, BaseAgent schema builder | `tests/test_edit_capability.py::test_agent_schema_has_only_action_input_reasoning` |
+| Exact replacement and legacy false defaults work only under explicit edit action | `__init__.py` (`handle_edit`) | `tests/test_edit_capability.py::test_edit_replacement_and_defaults` |
+| Manual returns installed canonical body | `__init__.py` (`load_installed_manual`) | `tests/test_edit_capability.py::test_manual_returns_installed_body` |
+| Settings are fresh evidence and behavior-invariant | `__init__.py` / `_settings.py` | `tests/test_edit_capability.py::test_settings_are_attached_and_invariant` |
+| Envelope schemas expose only action/input/reasoning | BaseAgent schema and provider adapters | `tests/test_edit_capability.py::test_provider_envelopes_keep_public_fields` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| Single replacement round-trips | `tests/test_layers_file.py::test_edit_via_capability` | `edit` a unique substring, `read` the result | Silent corruption / wrong content |
-| Ambiguous match is refused without `replace_all` | `__init__.py` count guard | `edit` a substring that appears twice without `replace_all` | Unintended mass replacement |
-| Missing file / missing substring reported clearly | `tests/test_layers_file.py::test_edit_error_shape` | `edit` a nonexistent file or absent substring | Executor crash or silent no-op |
-| Relative paths stay in workdir | `tests/test_layers_file.py::test_file_capability_relative_paths_resolve_under_workdir` | `edit` a relative path from a known workdir | Edits escape the sandbox |
-| Edit routes through FileIOService | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` | Boot with `capabilities=["edit"]` and confirm `agent._file_io` is used | Backend selection / sandbox bypassed |
+| Single replacement round-trips | `tests/test_edit_capability.py::test_edit_replacement_and_defaults` | edit a unique substring, then read the result | Silent corruption / wrong content |
+| Ambiguous match is refused without `replace_all` | `__init__.py` count guard | edit a substring that appears twice without `replace_all` | Unintended mass replacement |
+| Missing file / missing substring reported clearly | `__init__.py` structured errors | edit a nonexistent file or absent substring | Executor crash or silent no-op |
+| Relative paths stay in workdir | `__init__.py` `resolve_workdir_path` | edit a relative path from a known workdir | Edits escape the sandbox |
+| Edit routes through FileIOService | `__init__.py` (`handle_edit`) | boot with `capabilities=["edit"]` and inspect the injected service | Backend selection / sandbox bypassed |
+| Settings never select behavior | `_settings.py` plus handler | repeat after missing/valid/hot/invalid settings changes | Configuration leaks into edits |
 
-Run before merging:
-
-```bash
-python -m pytest tests/test_layers_file.py -q
-```
+Validation uses the repository's no-bytecode compile harness and the glossary
+validator; do not substitute a schema or manual copy for the installed canonical
+manual.
 
 ## Schema and glossary ownership
 

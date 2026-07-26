@@ -15,8 +15,9 @@ maintenance: |
 ---
 **术语对照**
 
-- `edit`：精确替换文件中的字符串。如果 old_string 未找到或存在歧义则失败。
-- `file_path`：文件的绝对路径
-- `old_string`：要查找并替换的精确文本
-- `new_string`：替换后的文本
-- `replace_all`：替换所有匹配项
+- `action`：明确的操作名；值为 `edit` 或 `manual`
+- `input`：封闭的操作输入对象；`manual` 的输入为空
+- `replace_all`：可为 `boolean` 或 `null` 的严格字段；`null` 表示 false
+- `current_setting`：每次结果附带的设置快照诊断，不改变编辑行为
+
+`file_path`、`old_string`、`new_string` 保持英文标识，不提供省略 `action` 或扁平输入别名。
