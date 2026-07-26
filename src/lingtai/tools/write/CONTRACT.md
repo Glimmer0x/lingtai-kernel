@@ -1,7 +1,7 @@
 ---
 name: write-contract
 tool: write
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/write/__init__.py
   - src/lingtai/tools/_file_paths.py
@@ -45,26 +45,34 @@ truth.
 
 ## Tool surface
 
-`handle_write` has two modes:
+`handle_write` has two explicit actions and a closed nested input envelope:
 
-- **Ordinary:** omit `action` (backward compatible) or set
-  `action="write"`; both forms run the same write operation.
-- **Manual:** `action="manual"` returns the installed `file-manual` without
-  attempting to write a file.
+- **Write:** `write(action="write", input={"file_path": "...", "content": "..."},
+  reasoning="...")` requires exactly the two string input fields.
+- **Manual:** `write(action="manual", input={}, reasoning="...")` returns the
+  installed `file-manual` without attempting to write a file.
 
-The schema lists `write` before `manual`. Any other explicit action
-returns a plain error before file I/O. After a manual response, the caller
-continues the original task with an ordinary call rather than repeating the
-manual.
+The raw schema requires `action` and `input`, accepts only `write` or `manual`,
+and rejects unknown root fields. `BaseAgent` adds optional root `reasoning`;
+`ToolExecutor` preserves it only as internal `_reasoning` metadata. Neither
+reasoning key enters the action input. Omitted-action and flat-root calls are
+not supported. Any malformed or unknown action/input returns a structured error
+before file I/O. After a manual response, the caller continues the original task
+with a write call rather than repeating the manual.
 
 | Call | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `write` | `file_path: string`, `content: string` | — | `{status: "ok", path, bytes}` where `bytes = len(content.encode("utf-8"))` | see below |
+| `write` | `action`, `input.file_path: string`, `input.content: string` | root `reasoning` metadata | `{status: "ok", path, bytes, current_setting}` where `bytes = len(content.encode("utf-8"))` | see below |
+| `manual` | `action`, empty `input` | root `reasoning` metadata | `{status: "ok", action: "manual", manual, manual_path, current_setting}` | missing/manual-load errors include `current_setting` |
 
 **Error shapes** (plain dicts, not exceptions):
-- `{"status": "error", "message": "file_path is required"}` — empty/missing path.
-- `{"status": "error", "message": "Cannot write <path>: <exc>"}` — any backend
-  write failure.
+- `{"status": "error", "message": "file_path is required", "current_setting": {...}}`
+  — empty/missing path.
+- `{"status": "error", "message": "Cannot write <path>: <exc>",
+  "current_setting": {...}}` — any backend write failure.
+- Unknown actions, omitted/flat arguments, malformed inputs, and runtime errors
+  return the same structured error envelope with a truthful secret-free
+  `current_setting` diagnostic.
 
 ## State & storage
 
@@ -91,26 +99,26 @@ Do not change any of the following; documented for reviewers only.
 
 | Claim | Source `src/lingtai/tools/write/...` | Test |
 |---|---|---|
-| A written file can be read back through the capability | `__init__.py` (`handle_write`) | `tests/test_layers_file.py::test_write_and_read_via_capability` |
-| Relative paths resolve under the agent workdir | `__init__.py` (`resolve_workdir_path`) | `tests/test_layers_file.py::test_file_capability_relative_paths_resolve_under_workdir` |
-| Write failures return a `{status: error}` dict | `__init__.py` (`handle_write`) | `tests/test_layers_file.py::test_write_error_shape` |
-| Writes route through the injected FileIOService | `__init__.py` (`handle_write`) | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` |
+| A written file can be read back through the capability | `__init__.py` (`handle_write`) | `tests/test_write_capability.py::test_write_round_trip_and_settings` |
+| Relative paths resolve under the agent workdir | `__init__.py` (`resolve_workdir_path`) | `tests/test_write_capability.py::test_write_relative_path_and_parent_creation` |
+| Write failures return a `{status: error}` dict | `__init__.py` (`handle_write`) | `tests/test_write_capability.py::test_write_error_shape_and_current_setting` |
+| Writes route through the injected FileIOService | `__init__.py` (`handle_write`) | `tests/test_write_capability.py::test_write_delegates_to_injected_file_io` |
 | `file` sugar registers write alongside the other four file tools | `src/lingtai/tools/registry.py` | `tests/test_layers_file.py::test_file_sugar_expands_to_five` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| Round-trip write→read works | `tests/test_layers_file.py::test_write_and_read_via_capability` | `write` a file then `read` it | Data silently lost or corrupted |
-| Parent dirs are created | `tests/test_layers_file.py::test_write_and_read_via_capability` | `write` to `a/b/c.txt` under a fresh workdir | Nested writes fail spuriously |
-| Relative paths stay in workdir | `tests/test_layers_file.py::test_file_capability_relative_paths_resolve_under_workdir` | `write` a relative path, confirm location | Writes escape the sandbox |
-| Errors are dicts, not exceptions | `tests/test_layers_file.py::test_write_error_shape` | `write` to an unwritable path | Executor crashes instead of surfacing a message |
-| Writes route through FileIOService | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` | Boot with `capabilities=["write"]` and confirm `agent._file_io` is used | Backend selection / sandbox bypassed |
+| Round-trip write→read works | `tests/test_write_capability.py::test_write_round_trip_and_settings` | `write` a file then `read` it | Data silently lost or corrupted |
+| Parent dirs are created | `tests/test_write_capability.py::test_write_relative_path_and_parent_creation` | `write` to `a/b/c.txt` under a fresh workdir | Nested writes fail spuriously |
+| Relative paths stay in workdir | `tests/test_write_capability.py::test_write_relative_path_and_parent_creation` | `write` a relative path, confirm location | Writes escape the sandbox |
+| Errors are dicts, not exceptions | `tests/test_write_capability.py::test_write_error_shape_and_current_setting` | `write` to an unwritable path | Executor crashes instead of surfacing a message |
+| Writes route through FileIOService | `tests/test_write_capability.py::test_write_delegates_to_injected_file_io` | Boot with `capabilities=["write"]` and confirm `agent._file_io` is used | Backend selection / sandbox bypassed |
 
 Run before merging:
 
 ```bash
-python -m pytest tests/test_layers_file.py -q
+python -m pytest tests/test_write_capability.py -q
 ```
 
 ## Schema and glossary ownership

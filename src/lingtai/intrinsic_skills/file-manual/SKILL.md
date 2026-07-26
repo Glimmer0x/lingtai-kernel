@@ -88,11 +88,15 @@ handling, read `read-manual` rather than improvising.
 
 ## Writing and editing safely
 
-`write` is a full-file operation: use it to create a new file, replace a
-generated artifact, or deliberately rewrite a small file you already understand.
-Before overwriting an important existing file, read it first unless the human
-explicitly asked for a blind overwrite. Do not use `write` for tiny
-modifications to large files — use `edit`.
+`write` is a full-file operation. Its public call is a closed envelope:
+`write(action="write", input={"file_path": "...", "content": "..."},
+reasoning="...")`; `action` and `input` are required, and the nested write
+input contains exactly the two string fields. `write(action="manual", input={})`
+returns this installed file-manual. Do not omit `action` or pass flat
+`file_path`/`content` fields to the public write tool. Parent directories are
+created by the injected FileIO service. Before overwriting an important existing
+file, read it first unless the human explicitly asked for a blind overwrite. Do
+not use `write` for tiny modifications to large files — use `edit`.
 
 `edit` replaces an exact string and fails when the old string is absent or
 ambiguous. That failure is a feature: it prevents accidental broad changes.
