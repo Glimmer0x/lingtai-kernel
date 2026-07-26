@@ -110,8 +110,11 @@ have checked the match set with `grep` first.
 Start broad with `glob` (file names), narrow with `grep` (file contents), then
 inspect with `read`.
 
+For `glob`, use its canonical closed action/input call; its `path` is optional
+and defaults to the Agent workdir:
+
 ```python
-glob({"pattern": "**/*.py", "path": "/abs/path/project"})
+glob({"action": "glob", "input": {"pattern": "**/*.py", "path": "/abs/path/project"}, "reasoning": "discover Python files"})
 grep({"pattern": "read_text\\(", "path": "/abs/path/project/src", "glob": "*.py", "max_matches": 100})
 ```
 
@@ -127,14 +130,18 @@ content or attach/export a file through the appropriate communication channel.
 
 Normal file work is primary. Each file tool has two explicit modes:
 
-- **Ordinary work:** for backward compatibility, omit `action` or set it to the
-  tool name: `action="read"`, `"write"`, `"edit"`, `"glob"`, or `"grep"`.
-  Supply the ordinary arguments shown in that tool's schema.
+- **Ordinary work:** the unmigrated file tools retain their existing ordinary
+  argument forms. For `glob`, use the canonical closed root and nested input:
+  `{"action":"glob","input":{"pattern":"**/*.py"},"reasoning":"discover Python files"}`;
+  `input.path` defaults to the Agent workdir and `input.summary` is an exact-boolean
+  orchestration control. Agent-injected `reasoning` stays at the root.
+  Supply the ordinary arguments shown in each tool's schema.
 - **Manual lookup:** use `action="manual"` as a one-time entry when you need the
-  installed workflow guide. It returns documentation and performs no file
-  operation. `write`, `edit`, `glob`, and `grep` return this manual; `read`
-  returns `read-manual`.
+  installed workflow guide. For `glob`, the canonical manual call is
+  `{"action":"manual","input":{},"reasoning":"load the installed file guide"}`;
+  it returns this installed manual and performs no search. `write`, `edit`, and `grep` retain their existing manual
+  calls; `read` returns `read-manual`.
 
-After a manual result, continue the original task with an ordinary call. Do not
-request the same manual again. Repeating an identical manual call is an error loop,
-not progress.
+After a manual result, continue the original task with that tool's ordinary call.
+Do not request the same manual again. Repeating an identical manual call is an
+error loop, not progress.
