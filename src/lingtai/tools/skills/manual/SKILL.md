@@ -84,7 +84,7 @@ To pin a skill's body into your pad so it survives a molt and rides in the cache
 system-prompt prefix:
 
 ```
-psyche({"object": "pad", "action": "append", "files": ["<location>"]})
+psyche({"action": "pad_append", "input": {"files": ["<location>"]}})
 ```
 
 Pinning is cheap per-token over a session; repeated `read`s of the same file are

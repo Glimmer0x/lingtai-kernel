@@ -126,10 +126,16 @@ class TestNotificationPersistenceAgentMolt:
             from lingtai.tools.psyche._molt import _context_molt
             from lingtai.kernel.llm.interface import ToolCallBlock
             tc_id = "toolu_test_123"
+            journal_path = _write_session_journal(agent)
             tc_block = ToolCallBlock(
                 id=tc_id, name="psyche",
-                args={"object": "context", "action": "molt",
-                      "summary": "test summary for molt"},
+                args={"action": "context_molt",
+                      "input": {
+                          "summary": "test summary for molt",
+                          "session_journal_path": journal_path,
+                          "keep_tool_calls": None,
+                          "keep_last": None,
+                      }},
             )
             # Place the ToolCallBlock in a fake assistant entry
             mock_entry = MagicMock()
@@ -137,7 +143,6 @@ class TestNotificationPersistenceAgentMolt:
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "test summary for molt",
                 "_tc_id": tc_id,
@@ -188,17 +193,22 @@ class TestNotificationPersistenceAgentMolt:
             from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_456"
+            journal_path = _write_session_journal(agent)
             tc_block = ToolCallBlock(
                 id=tc_id, name="psyche",
-                args={"object": "context", "action": "molt",
-                      "summary": "multi-file test"},
+                args={"action": "context_molt",
+                      "input": {
+                          "summary": "multi-file test",
+                          "session_journal_path": journal_path,
+                          "keep_tool_calls": None,
+                          "keep_last": None,
+                      }},
             )
             mock_entry = MagicMock()
             mock_entry.role = "assistant"
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "multi-file test",
                 "_tc_id": tc_id,
@@ -306,17 +316,22 @@ class TestNotificationTrackingStateAfterMolt:
             from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_789"
+            journal_path = _write_session_journal(agent)
             tc_block = ToolCallBlock(
                 id=tc_id, name="psyche",
-                args={"object": "context", "action": "molt",
-                      "summary": "tracking test"},
+                args={"action": "context_molt",
+                      "input": {
+                          "summary": "tracking test",
+                          "session_journal_path": journal_path,
+                          "keep_tool_calls": None,
+                          "keep_last": None,
+                      }},
             )
             mock_entry = MagicMock()
             mock_entry.role = "assistant"
             mock_entry.content = [tc_block]
             mock_interface.entries = [mock_entry]
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "tracking test",
                 "_tc_id": tc_id,

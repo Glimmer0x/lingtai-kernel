@@ -29,7 +29,7 @@ def test_psyche_pad_edit(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "hello world"})
+    result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "hello world", "files": None}})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == "hello world"
@@ -45,9 +45,9 @@ def test_psyche_pad_edit_empty_clears(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     # First write something
-    agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "data"})
-    # Then clear it (must pass content="" — empty args alone is rejected)
-    result = agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": ""})
+    agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "data", "files": None}})
+    # Then clear it (must pass content="" — null content and null files together is rejected)
+    result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "", "files": None}})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == ""
@@ -74,7 +74,7 @@ def test_psyche_pad_load(tmp_path):
         system_dir.mkdir(exist_ok=True)
         (system_dir / "pad.md").write_text("loaded content")
 
-        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "loaded content" in section
@@ -92,7 +92,7 @@ def test_psyche_pad_load_empty(tmp_path):
     )
     agent.start()
     try:
-        result = agent._intrinsics["psyche"]({"object": "pad", "action": "load"})
+        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
@@ -148,18 +148,26 @@ def test_psyche_molt_uses_summary(tmp_path):
                 id=molt_wire_id,
                 name="psyche",
                 args={
-                    "object": "context", "action": "molt", "summary": molt_summary,
-                    "session_journal_path": journal_path,
+                    "action": "context_molt",
+                    "input": {
+                        "summary": molt_summary,
+                        "session_journal_path": journal_path,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                 },
             ),
         ])
 
         result = agent._intrinsics["psyche"]({
-            "object": "context",
-            "action": "molt",
-            "summary": molt_summary,
+            "action": "context_molt",
+            "input": {
+                "summary": molt_summary,
+                "session_journal_path": journal_path,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
             "_tc_id": molt_wire_id,
-            "session_journal_path": journal_path,
         })
         assert result["status"] == "ok"
         # The summary now lives in the replayed ToolCallBlock's args, not
@@ -170,7 +178,7 @@ def test_psyche_molt_uses_summary(tmp_path):
         assert assistant_entries
         last_calls = [b for b in assistant_entries[-1].content if isinstance(b, ToolCallBlock)]
         assert last_calls and last_calls[0].id == molt_wire_id
-        assert "X=42" in last_calls[0].args.get("summary", "")
+        assert "X=42" in last_calls[0].args.get("input", {}).get("summary", "")
     finally:
         agent.stop()
 
@@ -184,52 +192,57 @@ def test_psyche_molt_rejects_empty_summary(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     result = agent._intrinsics["psyche"]({
-        "object": "context", "action": "molt", "summary": "",
+        "action": "context_molt",
+        "input": {"summary": "", "session_journal_path": None, "keep_tool_calls": None, "keep_last": None},
     })
     assert "error" in result
     assert "empty" in result["error"].lower()
     agent.stop(timeout=1.0)
 
 
-def test_psyche_molt_rejects_missing_summary(tmp_path):
-    """molt without summary arg returns error."""
+def test_psyche_molt_rejects_null_summary(tmp_path):
+    """Strict dispatch rejects a null summary before the molt handler runs."""
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"object": "context", "action": "molt"})
+    result = agent._intrinsics["psyche"]({
+        "action": "context_molt",
+        "input": {"summary": None, "session_journal_path": None, "keep_tool_calls": None, "keep_last": None},
+    })
     assert "error" in result
-    assert "required" in result["error"].lower()
+    assert "must be a string" in result["error"].lower()
     agent.stop(timeout=1.0)
 
 
 def test_eigen_schema_has_context_molt(tmp_path):
-    """Schema exposes context/summary without strict-incompatible combinators."""
+    """Schema exposes context_molt/summary via the canonical action+input contract."""
     from lingtai.tools.psyche import get_schema
     s = get_schema("en")
-    assert "context" in s["properties"]["object"]["enum"]
-    assert "summary" in s["properties"]
-    # ``manual`` is a valid object-less action, so only action is required.
-    assert "action" in s["required"]
-    assert "object" not in s["required"]
-    for keyword in ("allOf", "oneOf", "anyOf", "not"):
-        assert keyword not in s
+    assert "context_molt" in s["properties"]["action"]["enum"]
+    molt_branch = next(
+        b for b in s["properties"]["input"]["anyOf"] if b["title"] == "context_molt input"
+    )
+    assert "summary" in molt_branch["properties"]
+    # Canonical contract: only action + input are required at root; the
+    # (former object, action) pair now lives entirely in the action enum.
+    assert s["required"] == ["action", "input"]
+    assert "object" not in s["properties"]
 
 
 def test_psyche_rejects_invalid_object_action_pair(tmp_path):
-    """Runtime validation still enforces per-object actions without schema allOf."""
+    """Runtime validation still enforces the closed action set."""
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"object": "context", "action": "load"})
+    result = agent._intrinsics["psyche"]({"action": "context_load", "input": {}})
     assert "error" in result
-    assert "Invalid action" in result["error"]
-    assert "molt" in result["error"]
+    assert "Unknown action" in result["error"]
     agent.stop(timeout=1.0)
 
 
@@ -288,7 +301,7 @@ def test_eigen_unknown_object(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"object": "bogus", "action": "edit"})
+    result = agent._intrinsics["psyche"]({"action": "bogus_edit", "input": {}})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -300,7 +313,7 @@ def test_eigen_unknown_action(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"object": "pad", "action": "bogus"})
+    result = agent._intrinsics["psyche"]({"action": "pad_bogus", "input": {}})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -326,7 +339,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
     """psyche name action sets agent true name."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert agent.agent_name is None
-    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "悟空"})
+    result = agent._intrinsics["psyche"]({"action": "name_set", "input": {"content": "悟空"}})
     assert result["status"] == "ok"
     assert result["name"] == "悟空"
     assert agent.agent_name == "悟空"
@@ -336,7 +349,7 @@ def test_eigen_name_sets_agent_name(tmp_path):
 def test_eigen_name_rejects_second_set(tmp_path):
     """psyche name action fails if already named."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", agent_name="alice", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": "bob"})
+    result = agent._intrinsics["psyche"]({"action": "name_set", "input": {"content": "bob"}})
     assert "error" in result
     assert agent.agent_name == "alice"  # unchanged
     agent.stop(timeout=1.0)
@@ -345,7 +358,7 @@ def test_eigen_name_rejects_second_set(tmp_path):
 def test_eigen_name_rejects_empty(tmp_path):
     """psyche name action fails with empty name."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["psyche"]({"object": "name", "action": "set", "content": ""})
+    result = agent._intrinsics["psyche"]({"action": "name_set", "input": {"content": ""}})
     assert "error" in result
     assert agent.agent_name is None  # still unnamed
     agent.stop(timeout=1.0)
@@ -404,16 +417,26 @@ def test_snapshot_written_on_agent_molt(tmp_path):
             ToolCallBlock(
                 id=molt_id, name="psyche",
                 args={
-                    "object": "context", "action": "molt", "summary": molt_summary,
-                    "session_journal_path": journal_path,
+                    "action": "context_molt",
+                    "input": {
+                        "summary": molt_summary,
+                        "session_journal_path": journal_path,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                 },
             ),
         ])
 
         result = agent._intrinsics["psyche"]({
-            "object": "context", "action": "molt",
-            "summary": molt_summary, "_tc_id": molt_id,
-            "session_journal_path": journal_path,
+            "action": "context_molt",
+            "input": {
+                "summary": molt_summary,
+                "session_journal_path": journal_path,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
+            "_tc_id": molt_id,
         })
         assert result["status"] == "ok"
 

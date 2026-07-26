@@ -10,7 +10,7 @@ maintenance: |
 
 Use this asset when a molt is more than routine: long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, active background jobs, or any handoff the next you could not reconstruct quickly.
 
-Fill every section. Write `None` rather than omitting a section. This template is for the `summary=` argument to `psyche(object="context", action="molt", ...)`; tend durable stores before writing it.
+Fill every section. Write `None` rather than omitting a section. This template is for the `input.summary` field of `psyche(action="context_molt", input={...})`; tend durable stores before writing it.
 
 ## Summary scaffold
 
@@ -49,7 +49,7 @@ Fill every section. Write `None` rather than omitting a section. This template i
 
 ## Pre-molt verification checklist
 
-Before you call `psyche(object="context", action="molt", summary=..., session_journal_path=...)`, verify:
+Before you call `psyche(action="context_molt", input={"summary": ..., "session_journal_path": ..., "keep_tool_calls": null, "keep_last": null})`, verify:
 
 - The just-finished session segment is recorded as a session-journal child at
   `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md`,

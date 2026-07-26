@@ -31,8 +31,8 @@ the standalone `notification` tool. The implementation lives in
 - Notification reads/dismissals: use the `notification` tool
   (`src/lingtai/tools/notification/CONTRACT.md`). `system` exposes no `notification`/
   `dismiss` alias; those actions are rejected as unknown.
-- Context molt (shedding history): that is `psyche(object='context',
-  action='molt')` (`src/lingtai/tools/psyche/CONTRACT.md`). `system` only *requests* a
+- Context molt (shedding history): that is
+  `psyche(action='context_molt', input={...})` (`src/lingtai/tools/psyche/CONTRACT.md`). `system` only *requests* a
   provider-context rebuild via `summarize(rebuild=true)`.
 - Code navigation only: read `src/lingtai/tools/system/ANATOMY.md`.
 

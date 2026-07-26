@@ -1,6 +1,6 @@
 """Tests for the molt session-journal gate (issue #350).
 
-The gate makes ``psyche(object="context", action="molt", ...)`` require a
+The gate makes ``psyche(action="context_molt", input={...})`` require a
 machine-checkable pointer to the session journal the agent wrote before
 shedding context. Validation runs BEFORE any state mutation — a rejected
 journal must leave molt_count and history untouched.
@@ -294,9 +294,13 @@ def _molt_setup(tmp_path):
 
 
 def _emit_molt_call(agent, ToolCallBlock, wire_id, summary, journal_path=None):
-    args = {"object": "context", "action": "molt", "summary": summary}
-    if journal_path is not None:
-        args["session_journal_path"] = journal_path
+    action_input = {
+        "summary": summary,
+        "session_journal_path": journal_path,
+        "keep_tool_calls": None,
+        "keep_last": None,
+    }
+    args = {"action": "context_molt", "input": action_input}
     agent._session._chat.interface.add_assistant_message([
         ToolCallBlock(id=wire_id, name="psyche", args=args),
     ])
@@ -313,8 +317,12 @@ def test_molt_rejects_missing_journal_path(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text")
         before_count = agent._molt_count
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": None,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
         assert "error" in result
         assert "session_journal_path" in result["error"]
@@ -333,9 +341,12 @@ def test_molt_rejects_nonexistent_journal(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", bad)
         before_count = agent._molt_count
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
-            "session_journal_path": bad,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": bad,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
         assert "error" in result
         assert agent._molt_count == before_count
@@ -354,9 +365,12 @@ def test_molt_rejects_outside_area(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         before_count = agent._molt_count
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
-            "session_journal_path": path,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": path,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
         assert "error" in result
         assert agent._molt_count == before_count
@@ -378,9 +392,12 @@ def test_molt_rejects_invalid_frontmatter(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         before_count = agent._molt_count
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
-            "session_journal_path": path,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": path,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
         assert "error" in result
         assert agent._molt_count == before_count
@@ -397,9 +414,12 @@ def test_molt_accepts_valid_journal_and_records_path(tmp_path):
         wire = "toolu_gate_005"
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
-            "session_journal_path": path,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": path,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
         assert result.get("status") == "ok", result
         # Path recorded in molt result metadata.
@@ -423,9 +443,12 @@ def test_molt_absolute_journal_path_records_normalized_path_in_event_stores(tmp_
         wire = "toolu_gate_absolute_001"
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", absolute_path)
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "summary text", "_tc_id": wire,
-            "session_journal_path": absolute_path,
+            "action": "context_molt",
+            "input": {
+                "summary": "summary text", "session_journal_path": absolute_path,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
         })
 
         assert result.get("status") == "ok", result
@@ -458,8 +481,15 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
     """A model-provided ``_initiator: "system"`` arg must NOT bypass the
     session-journal gate (issue #350). ``_initiator`` is a tool arg that can
     reach intrinsic dispatch from model-controlled args, not trusted kernel
-    state — so a molt carrying it but no valid journal must still be refused
-    on the missing journal, and must not shed any context."""
+    state.
+
+    Under the canonical strict contract, ``_initiator`` is not a recognized
+    root argument at all (only ``action``/``input``/``reasoning``/
+    ``_reasoning``/``_tc_id`` are tolerated) — so the smuggling attempt is
+    now rejected outright by root-argument validation, a STRONGER guarantee
+    than the pre-migration behavior (where the extra key was silently
+    ignored and the missing-journal gate provided the actual refusal). Either
+    way, no molt must succeed and no context may be shed."""
     agent, ToolCallBlock = _molt_setup(tmp_path)
     try:
         wire = "toolu_gate_bypass_001"
@@ -469,9 +499,13 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
                 id=wire,
                 name="psyche",
                 args={
-                    "object": "context",
-                    "action": "molt",
-                    "summary": "briefing",
+                    "action": "context_molt",
+                    "input": {
+                        "summary": "briefing",
+                        "session_journal_path": None,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                     "_initiator": "system",
                 },
             ),
@@ -479,14 +513,18 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
         before_count = agent._molt_count
         before_chat = agent._session._chat
         result = _call(agent, {
-            "object": "context", "action": "molt",
-            "summary": "briefing", "_tc_id": wire,
+            "action": "context_molt",
+            "input": {
+                "summary": "briefing", "session_journal_path": None,
+                "keep_tool_calls": None, "keep_last": None,
+            },
+            "_tc_id": wire,
             "_initiator": "system",
         })
-        # Rejected FIRST on the missing journal — the gate ran despite
-        # _initiator == "system".
+        # Rejected outright by strict root-argument validation — the
+        # smuggled key never reaches the journal gate at all.
         assert "error" in result
-        assert "session_journal_path" in result["error"]
+        assert "_initiator" in result["error"]
         # Fail closed: nothing shed, no molt consumed, chat untouched.
         assert agent._molt_count == before_count
         assert agent._session._chat is before_chat

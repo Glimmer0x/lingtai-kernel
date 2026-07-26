@@ -73,21 +73,32 @@ def _populate_conversation(agent, messages: list[tuple[str, str]]):
             iface.add_assistant_message([TextBlock(text=text)])
 
 
-def _add_molt_call(agent, summary="Test summary"):
-    """Add a molt ToolCallBlock to the interface, return its id."""
+def _add_molt_call(
+    agent,
+    summary="Test summary",
+    *,
+    keep_tool_calls=None,
+    keep_last=None,
+):
+    """Add a replay-faithful molt ToolCallBlock and return its id + journal."""
     tc_id = "toolu_test_molt"
+    journal_path = _write_session_journal(agent)
     iface = agent._chat.interface
     molt_block = ToolCallBlock(
         id=tc_id,
         name="psyche",
         args={
-            "object": "context",
-            "action": "molt",
-            "summary": summary,
+            "action": "context_molt",
+            "input": {
+                "summary": summary,
+                "session_journal_path": journal_path,
+                "keep_tool_calls": keep_tool_calls,
+                "keep_last": keep_last,
+            },
         },
     )
     iface.add_assistant_message(content=[molt_block])
-    return tc_id
+    return tc_id, journal_path
 
 
 def _count_non_system_entries(iface):
@@ -117,9 +128,8 @@ class TestContextMoltKeepLast:
                 ("user", "Message 2"),
                 ("assistant", "Reply 2"),
             ])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent)
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -152,9 +162,8 @@ class TestContextMoltKeepLast:
                 ("user", "Message 2"),
                 ("assistant", "Reply 2"),
             ])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent, keep_last=0)
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -191,9 +200,8 @@ class TestContextMoltKeepLast:
                 ("user", "Recent message"),
                 ("assistant", "Recent reply"),
             ])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent, keep_last=2)
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -237,11 +245,10 @@ class TestContextMoltKeepLast:
                 ("user", "Only message"),
                 ("assistant", "Only reply"),
             ])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent, keep_last=100)
 
             # 3 non-system entries (user, assistant, molt-call), but molt-call
             # is excluded from keep_last (replayed separately), so keep all 2
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -300,11 +307,12 @@ class TestContextMoltKeepLast:
             iface.add_assistant_message([TextBlock(text="Here's what I found")])
             iface.add_user_message("Thanks")
 
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(
+                agent, keep_tool_calls=[lt_id], keep_last=100
+            )
 
             # keep_last=100 to keep everything, keep_tool_calls names the
             # same tool pair — the overlapping entries should be deduplicated.
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -346,9 +354,8 @@ class TestContextMoltKeepLast:
         try:
             _ensure_session(agent)
             _populate_conversation(agent, [("user", "Hi")])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent, keep_last="twenty")
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -370,9 +377,8 @@ class TestContextMoltKeepLast:
         try:
             _ensure_session(agent)
             _populate_conversation(agent, [("user", "Hi")])
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(agent, keep_last=-5)
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,
@@ -417,9 +423,10 @@ class TestContextMoltKeepLast:
             iface.add_user_message("Now do another thing")
             iface.add_assistant_message([TextBlock(text="Working on it")])
 
-            tc_id = _add_molt_call(agent)
+            tc_id, journal_path = _add_molt_call(
+                agent, keep_tool_calls=[lt_id], keep_last=2
+            )
 
-            journal_path = _write_session_journal(agent)
             result = _context_molt(agent, {
                 "summary": "Test summary",
                 "_tc_id": tc_id,

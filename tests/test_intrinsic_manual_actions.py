@@ -74,7 +74,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
-        "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
+        "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual", "input": {}})),
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
@@ -91,6 +91,14 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         if tool_name == "web":
             assert result["status"] == "ok"
             assert result["action"] == "manual"
+            assert result["manual"] == body
+            assert result["manual_path"] == str(path)
+            assert isinstance(result["current_setting"], dict)
+        elif tool_name == "psyche":
+            # Canonical contract: every psyche result (including manual)
+            # carries a fresh current_setting snapshot alongside the
+            # installed-manual payload.
+            assert result["status"] == "ok"
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
@@ -125,7 +133,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
     assert shell_tool.get_schema()["required"] == []
-    assert psyche_tool.get_schema()["required"] == ["action"]
+    psyche_schema = psyche_tool.get_schema()
+    assert psyche_schema["required"] == ["action", "input"]
+    assert len(psyche_schema["properties"]["input"]["anyOf"]) == 9
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input"]
     assert len(web_schema["properties"]["input"]["anyOf"]) == 3

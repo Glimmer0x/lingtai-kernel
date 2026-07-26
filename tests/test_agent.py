@@ -519,14 +519,14 @@ def test_agent_creates_lock_file(tmp_path):
 
 
 def test_agent_pad_persists_via_edit(tmp_path):
-    """Pad is disk-authoritative — psyche(pad, edit) writes pad.md immediately."""
+    """Pad is disk-authoritative — psyche(action="pad_edit") writes pad.md immediately."""
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", pad="initial",
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "updated knowledge"})
+    agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "updated knowledge", "files": None}})
     pad_file = agent.working_dir / "system" / "pad.md"
     assert pad_file.is_file()
     assert pad_file.read_text() == "updated knowledge"

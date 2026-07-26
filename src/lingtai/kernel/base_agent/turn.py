@@ -1081,7 +1081,7 @@ def _turn_boundary_housekeeping(agent) -> None:
 
 
 def _is_context_molt_call(tc) -> bool:
-    """Return True when ``tc`` is ``psyche(context, molt, ...)``.
+    """Return True when ``tc`` is ``psyche(action="context_molt", ...)``.
 
     A post-molt notification is published before the ``psyche.molt`` tool
     result returns.  If that same result batch were active-stamped with the
@@ -1096,7 +1096,7 @@ def _is_context_molt_call(tc) -> bool:
     args = getattr(tc, "args", None)
     if not isinstance(args, dict):
         return False
-    return args.get("object") == "context" and args.get("action") == "molt"
+    return args.get("action") == "context_molt"
 
 
 def _batch_includes_context_molt(tool_calls) -> bool:

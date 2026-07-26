@@ -73,10 +73,21 @@ def _setup_mock_chat(agent):
     return mock_interface
 
 
-def _build_molt_call_entry(mock_interface, tc_id, summary, reasoning=None):
+def _build_molt_call_entry(
+    agent, mock_interface, tc_id, summary, reasoning=None
+):
     from lingtai.kernel.llm.interface import ToolCallBlock
 
-    args = {"object": "context", "action": "molt", "summary": summary}
+    journal_path = _write_session_journal(agent)
+    args = {
+        "action": "context_molt",
+        "input": {
+            "summary": summary,
+            "session_journal_path": journal_path,
+            "keep_tool_calls": None,
+            "keep_last": None,
+        },
+    }
     if reasoning is not None:
         args["_reasoning"] = reasoning
     tc_block = ToolCallBlock(id=tc_id, name="psyche", args=args)
@@ -84,6 +95,7 @@ def _build_molt_call_entry(mock_interface, tc_id, summary, reasoning=None):
     mock_entry.role = "assistant"
     mock_entry.content = [tc_block]
     mock_interface.entries = [mock_entry]
+    return journal_path
 
 
 def _read_post_molt(agent):
@@ -105,14 +117,13 @@ class TestPostMoltNotificationAgentMolt:
         try:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_postmolt_1"
-            _build_molt_call_entry(
-                mock_interface,
+            journal_path = _build_molt_call_entry(
+                agent, mock_interface,
                 tc_id,
                 summary="finish the foo feature",
                 reasoning="context full; want to resume foo cleanly",
             )
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "finish the foo feature",
@@ -155,12 +166,11 @@ class TestPostMoltNotificationAgentMolt:
         try:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_postmolt_2"
-            _build_molt_call_entry(
-                mock_interface, tc_id,
+            journal_path = _build_molt_call_entry(
+                agent, mock_interface, tc_id,
                 summary="first line: keep going on the parser bug\nsecond line",
             )
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "first line: keep going on the parser bug\nsecond line",
@@ -189,12 +199,11 @@ class TestPostMoltNotificationAgentMolt:
         try:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_postmolt_3"
-            _build_molt_call_entry(
-                mock_interface, tc_id,
+            journal_path = _build_molt_call_entry(
+                agent, mock_interface, tc_id,
                 summary="continue work",
             )
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "continue work",
@@ -283,9 +292,8 @@ class TestPostMoltContinuationSignal:
                 "Did the foundation work for the doctor skill.\n"
                 "Next action: open the PR and run focused tests."
             )
-            _build_molt_call_entry(mock_interface, tc_id, summary=summary)
+            journal_path = _build_molt_call_entry(agent, mock_interface, tc_id, summary=summary)
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
@@ -316,9 +324,8 @@ class TestPostMoltContinuationSignal:
         try:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_cont_2"
-            _build_molt_call_entry(mock_interface, tc_id, summary="keep going")
+            journal_path = _build_molt_call_entry(agent, mock_interface, tc_id, summary="keep going")
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "keep going", "_tc_id": tc_id,
@@ -355,9 +362,8 @@ class TestPostMoltContinuationSignal:
             mock_interface = _setup_mock_chat(agent)
             tc_id = "toolu_cont_3"
             summary = "Next step: finish wiring the parser; tests red on case 3."
-            _build_molt_call_entry(mock_interface, tc_id, summary=summary)
+            journal_path = _build_molt_call_entry(agent, mock_interface, tc_id, summary=summary)
 
-            journal_path = _write_session_journal(agent)
             from lingtai.tools.psyche._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
