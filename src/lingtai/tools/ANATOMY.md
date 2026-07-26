@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/_settings.py
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
@@ -35,6 +36,10 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_settings.py` — private Agent-owned placeholder-settings reader and
+  secret-free current-setting diagnostic. It strictly validates the exact
+  versioned no-op schema, rereads `settings/<bounded tool_name>.json` per call,
+  and never supplies action, input, reasoning, or tool behavior.
 
 ## Connections
 
