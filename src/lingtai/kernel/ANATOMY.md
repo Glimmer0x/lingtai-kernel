@@ -210,8 +210,8 @@ publish_notification(
     header=f"{n} unread email{'s' if n != 1 else ''}",
     icon="📧",
     instructions=(
-        "After handling, call email(action=\"read\", email_id=[...]) "
-        "or email(action=\"dismiss\", email_id=[...]) to clear "
+        "After handling, call email(action=\"read\", input={\"email_id\": [...]}) "
+        "or email(action=\"dismiss\", input={\"email_id\": [...]}) to clear "
         "handled mails from this notification."
     ),
     data={"count": n, "newest_received_at": ts, "email_ids": ids, "emails": emails},

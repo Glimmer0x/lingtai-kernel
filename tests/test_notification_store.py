@@ -445,7 +445,7 @@ class TestAtomicCoreRedCounterexamples:
     def test_guarded_force_and_protected_goal_are_actual_dismissals(self):
         store = FakeNotificationStore()
         agent = _CoreAgent(store)
-        register_generic_dismiss_guard("email", "email(action='read')")
+        register_generic_dismiss_guard("email", "email(action='read', input=")
         store.publish("email", {"header": "unread"})
         guarded = dismiss_channel(agent, "email", invoked_by="notification")
         assert guarded["reason"] == "guarded"

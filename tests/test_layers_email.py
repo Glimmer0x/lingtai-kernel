@@ -1030,7 +1030,7 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     assert "50,000" in text
     assert "secondary" not in text
     assert "email(action='dismiss'" in text
-    assert "email.reply/reply_all" in text
+    assert "email(action='reply', input={...}) or email(action='reply_all', input={...})" in text
 
 
 def test_email_read_rerenders_notification(tmp_path):

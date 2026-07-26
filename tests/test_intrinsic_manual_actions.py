@@ -73,7 +73,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     calls = {
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
-        "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
+        "email": ("email", lambda: email_tool.handle(agent, {"action": "manual", "input": {}})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),

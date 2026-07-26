@@ -238,7 +238,7 @@ def _mail(agent, address: str, message: str, subject: str = "") -> dict:
 
     Routes through the email intrinsic (renamed from mail in 0.7.5).
     """
-    return agent._intrinsics["email"]({"action": "send", "address": address, "message": message, "subject": subject})
+    return agent._intrinsics["email"]({"action": "send", "input": {"address": address, "message": message, "subject": subject}})
 
 
 def _send(agent, content: str | dict, sender: str = "user") -> None:

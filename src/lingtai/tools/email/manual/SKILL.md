@@ -8,19 +8,26 @@ description: >
   self-send time capsules, the full-body persistent notification contract, and
   the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
   recurring schedules are `shell-manual`.
-version: 1.0.1
+version: 1.0.2
 tags: [capabilities, email, communication]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-07-26T00:00:00Z"
 related_files:
+- src/lingtai/tools/email/__init__.py
+- src/lingtai/tools/email/schema.py
 - src/lingtai/tools/email/manager.py
 - src/lingtai/tools/email/primitives.py
 - src/lingtai/tools/email/ANATOMY.md
 - src/lingtai/tools/email/CONTRACT.md
+- src/lingtai/tools/_settings.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Email Manual — the internal `email` tool
+
+> Public calls always use `email(action=..., input={...})`; `action` and the
+> strict action-specific `input` object are required. BaseAgent alone adds
+> optional root `reasoning`; there are no flat aliases or public `summary` field.
 
 > LingTai email protocol between agents in your `.lingtai/` network. Not the internet. No IMAP, no SMTP, no DNS. Messages are JSON files written under `mailbox/inbox/` of the recipient agent and `mailbox/sent/` of the sender.
 
@@ -28,7 +35,7 @@ maintenance: |
 
 The `email` tool moves messages as files between agents that share a `.lingtai/` directory tree:
 
-- `email(action="send")` records sender-side outbox/sent state, then starts one `_mailman` daemon thread per recipient. Even when `delay=0`, the tool may return `status: "sent"` before that background delivery attempt finishes.
+- `email(action="send", input={...})` records sender-side outbox/sent state, then starts one `_mailman` daemon thread per recipient. Even when `delay=0`, the tool may return `status: "sent"` before that background delivery attempt finishes.
 - Delivery to a normal agent accepts only a target with `.agent.json` and a fresh `.agent.heartbeat` (normally younger than two seconds); human recipients (`admin: null`) skip the heartbeat check. If the target is refreshing/relaunching and its heartbeat is not fresh yet, delivery is refused as `not running`; no recipient inbox entry is queued for later. The eventual failure is surfaced to the sender as an `email.bounce` event in `.notification/system.json`.
 - Read state lives in the recipient's `mailbox/read.json` (a set of message IDs).
 - The kernel mirrors current unread mail into `.notification/email.json`, which surfaces as a notification block read via `notification(action="check")` — that's how you find out new mail arrived.
@@ -59,8 +66,8 @@ Addresses are **bare directory names** inside `.lingtai/`. No `@`, no domains, n
 Multiple recipients: pass `address` as a string or a list, plus optional `cc` / `bcc`.
 
 ```python
-email(action="send", address=["mimo-1", "scribe"], cc=["human"],
-      subject="status", message="ready")
+email(action="send", input={"address": ["mimo-1", "scribe"], "cc": ["human"],
+      "subject": "status", "message": "ready"})
 ```
 
 To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. Do not invent addresses — a refused dispatch produces an `email.bounce` event and queues no recipient inbox entry.
@@ -78,7 +85,7 @@ Any other value is rejected with `invalid mode`.
 
 > **Reply on the channel the message arrived on.**
 
-If a message arrived via `email`, reply with `email(action="reply", ...)`. Do not pivot to `pigeon`, IM, or a fresh `send`. If you must change channels (e.g. the original sender is dead), explain that pivot in the reply body before sending it elsewhere.
+If a message arrived via `email`, reply with `email(action="reply", input={"email_id": ["<id>"], "message": "..."})`. Do not pivot to `pigeon`, IM, or a fresh `send`. If you must change channels (e.g. the original sender is dead), explain that pivot in the reply body before sending it elsewhere.
 
 **Prefer `reply` and `reply_all` over `send`** even when you know the addresses:
 
@@ -106,13 +113,13 @@ When you mention the sender in a reply body or in a summary you give the human, 
 
 | Action            | Purpose                                                            | Required args                                      |
 |-------------------|--------------------------------------------------------------------|----------------------------------------------------|
-| `send`            | Start a new thread; body hard-capped at 50,000 characters          | `address`, `subject`, `message`                    |
+| `send`            | Start a new thread; body hard-capped at 50,000 characters          | `address`, `message`; optional `subject`            |
 | `check`           | List inbox (newest-first), with optional `filter={...}` and `n=N`  | —                                                  |
 | `read`            | Fetch source-of-truth record/attachments and mark read             | `email_id` (list of IDs)                           |
 | `dismiss`         | Mark read **without** re-fetching body — preferred after persistent content is handled | `email_id` (list of IDs)                           |
 | `reply`           | Reply to sender only; preserves thread linkage                     | `email_id`, `message`                              |
 | `reply_all`       | Reply to sender + all original recipients minus self               | `email_id`, `message`                              |
-| `search`          | Search across inbox/sent/archive by `query` + `filter`             | `query` (and/or `filter`)                          |
+| `search`          | Search inbox/sent/archive by regular-expression `query`            | `query`                                            |
 | `archive`         | Move from inbox to archive folder (keeps thread, removes from view)| `email_id`                                         |
 | `delete`          | Permanently delete (inbox/archive only; `sent` is read-only)       | `email_id`                                         |
 | `contacts`        | List your address book                                             | —                                                  |
@@ -137,7 +144,7 @@ Internal email bodies are capped at 50,000 characters at **send time**. The reas
 `check` accepts a structured `filter` for narrowing the inbox without round-tripping:
 
 ```python
-email(action="check", filter={
+email(action="check", input={"filter": {
     "unread_only":     True,
     "from":            "mimo-1",
     "subject":         "status",
@@ -146,7 +153,7 @@ email(action="check", filter={
     "has_attachments": False,
     "sort":            "newest",
     "truncate":        500,    # body preview length per entry
-}, n=20)
+}, "n": 20})
 ```
 
 Use this aggressively. Pulling 100 messages with `check` and then post-filtering in your head is wasteful.
@@ -173,7 +180,7 @@ Use delayed self-send as a **future nudge**, not delayed tool execution. The mes
 
 The mailbox UUID (`email_id`) is **local to your working directory**. Never paste a raw mailbox ID into a message to another agent or to the human — it has no meaning outside your tree and reveals nothing useful. Refer to messages by `subject` + `from` + approximate time.
 
-The exception: when you call `email(action="read"/"dismiss"/"reply", email_id=[...])`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
+The exception: when you call `email(action="read", input={"email_id": [...]})`, `email(action="dismiss", input={"email_id": [...]})`, or `email(action="reply", input={"email_id": [...], "message": "..."})`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
 
 ## 9. Addon ownership — what this skill does NOT cover
 
@@ -193,36 +200,35 @@ Those MCP addons are separate processes with separate auth surfaces and failure 
 
 ```python
 # Handle content already injected into notification_persistent.email
-email(action="dismiss", email_id=["<id-from-persistent-email>"])
+email(action="dismiss", input={"email_id": ["<id-from-persistent-email>"]})
 
 # Need source-of-truth refresh / attachments / metadata
-email(action="read", email_id=["<id-from-persistent-email>"])
+email(action="read", input={"email_id": ["<id-from-persistent-email>"]})
 
 # Optional mailbox listing / filters
-email(action="check", filter={"unread_only": True}, n=20)
+email(action="check", input={"filter": {"unread_only": True}, "n": 20})
 
 # Thread-preserving reply
-email(action="reply", email_id=["<id>"], message="ack, looking now")
+email(action="reply", input={"email_id": ["<id>"], "message": "ack, looking now"})
 
 # Self-note that survives molt
-email(action="send", address="<self>", subject="resume",
-      message="Picked the Helmholtz approach; see paper/drafts/2026-05-18.md")
+email(action="send", input={"address": "<self>", "subject": "resume",
+      "message": "Picked the Helmholtz approach; see paper/drafts/2026-05-18.md"})
 
 # 5-minute timer
-email(action="send", address="<self>", delay=300,
-      subject="ding", message="check the deploy")
+email(action="send", input={"address": "<self>", "delay": 300,
+      "subject": "ding", "message": "check the deploy"})
 
 # Reach an agent in another .lingtai/ network on this machine
-email(action="send", mode="abs", address="/Users/alice/projectB/.lingtai/外援",
-      subject="cross-network", message="ping")
+email(action="send", input={"mode": "abs", "address": "/Users/alice/projectB/.lingtai/外援",
+      "subject": "cross-network", "message": "ping"})
 
 # Find related mail
-email(action="search", query="helmholtz",
-      filter={"after": "2026-05-01T00:00:00Z"})
+email(action="search", input={"query": "helmholtz", "folder": "inbox"})
 
 # Address book
-email(action="add_contact", address="mimo-1", name="MiMo (vision)",
-      note="reachable for image-analysis requests")
+email(action="add_contact", input={"address": "mimo-1", "name": "MiMo (vision)",
+      "note": "reachable for image-analysis requests"})
 ```
 
 ---
@@ -232,7 +238,7 @@ email(action="add_contact", address="mimo-1", name="MiMo (vision)",
 
 Internal email persists under the agent mailbox: inbox/archive/sent message
 files, attachments, contacts, and read/archive state. Mail is also memory: do not
-blindly delete it. Prefer `email(archive)` or `email(delete)` verbs over `rm`,
+blindly delete it. Prefer `email(action="archive", input={...})` or `email(action="delete", input={...})` over `rm`,
 and never delete mail that is the only copy of a decision, handoff, or
 attachment the human may expect you to retain.
 

@@ -3,7 +3,7 @@
 These tests cover the prose body produced by
 ``_render_unread_digest`` — which is the renderer that built the old
 per-arrival ``notification(action="check")`` body and now builds the
-single ``email(action="unread")`` digest body. The same edge cases
+single kernel-owned unread digest body (there is no public ``email(action="unread")`` action). The same edge cases
 apply (subject placeholder, sent_at vs received_at fallback, time-blind
 agents) — they just live one layer deeper in the code now.
 """
@@ -167,7 +167,7 @@ def test_notification_per_entry_prefers_time_over_received_at(tmp_path):
 
 def test_notification_digest_includes_mailbox_id(tmp_path):
     """Each digest entry exposes the mailbox ID so the agent can pass
-    it to email(action="read"|"dismiss") without a separate check."""
+    it to email(action="read"|"dismiss", input={...}) without a separate check."""
     agent = _make_agent(tmp_path)
     eid = _persist_inbox(tmp_path, {
         "from": "alice",
@@ -194,7 +194,7 @@ def test_notification_digest_includes_mailbox_id_zh(tmp_path):
 def test_notification_digest_prefers_directory_mailbox_id_over_stale_payload(tmp_path):
     """Digest IDs come from the mailbox directory, not a stale JSON field.
 
-    The filesystem directory is the lookup key that email(action="read"|"dismiss")
+    The filesystem directory is the lookup key that email(action="read"|"dismiss", input={...})
     accepts. If a copied or externally written message carries an old
     ``_mailbox_id`` inside ``message.json``, the notification digest must still
     expose the real directory id.

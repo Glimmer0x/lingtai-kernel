@@ -108,7 +108,7 @@ def test_email_registers_generic_dismiss_guard() -> None:
 
     suggestion = is_generic_dismiss_guarded("email")
     assert suggestion is not None
-    assert "email(action='dismiss'" in suggestion
+    assert "email(action='dismiss', input=" in suggestion
     assert is_generic_dismiss_guarded("soul") is None
 
 

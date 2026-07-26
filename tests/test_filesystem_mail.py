@@ -351,7 +351,7 @@ def test_pseudo_agent_outbox_pickup(tmp_path):
     own_inbox_msg = my_dir / "mailbox" / "inbox" / "msg-001" / "message.json"
     assert own_inbox_msg.is_file(), (
         "claimed message must be written to the subscriber's own inbox; "
-        "otherwise email(action='check') sees an empty inbox after wake"
+        "otherwise email(action='check', input={}) sees an empty inbox after wake"
     )
     own_payload = json.loads(own_inbox_msg.read_text())
     assert own_payload["message"] == "hello from human"

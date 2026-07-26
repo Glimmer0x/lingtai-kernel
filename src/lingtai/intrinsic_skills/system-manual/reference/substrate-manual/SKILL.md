@@ -137,7 +137,7 @@ Reading and clearing notification channels is **not** a `system` operation. The
 `notification` tool: `check` to read the live payload, and the atomic dismiss
 verbs `dismiss_channel` / `dismiss_event` / `dismiss_ref` to clear a channel or a
 single `system` event. Prefer producer-specific verbs first for guarded
-producers (`email.read`, `email.dismiss`, Telegram `read`, other MCP read
+producers (`email(action="read", input={...})`, `email(action="dismiss", input={...})`, Telegram `read`, other MCP read
 actions); a generic channel dismiss is for channels that do not own their own
 read state, or for stale mirrors when the producer-owned state is already
 handled. Never treat a notification preview as the full source of truth — §4

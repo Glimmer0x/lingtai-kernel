@@ -1,8 +1,8 @@
 """Regression tests for issue #145 — internal email reply route preservation.
 
 When two `.lingtai/` networks both contain an agent named ``mimo-1``,
-``email(action="send", mode="abs", address=...)`` from A to B followed by
-``email(action="reply", ...)`` on the receiving side must route back to the
+``email(action="send", input={"mode": "abs", "address": ...})`` from A to B followed by
+``email(action="reply", input={...})`` on the receiving side must route back to the
 original sender's absolute path — not collapse to the ambiguous bare name and
 self-deliver inside the responder's own network.
 """

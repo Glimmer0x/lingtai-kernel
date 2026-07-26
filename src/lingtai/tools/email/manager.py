@@ -470,7 +470,7 @@ class EmailManager:
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
                               "using stale notification IDs. Call "
-                              "email(action=\"check\", unread_only=true) to see "
+                              "email(action=\"check\", input={\"filter\": {\"unread_only\": true}}) to see "
                               "current pending mail.")
 
         return result
@@ -530,7 +530,7 @@ class EmailManager:
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
                               "using stale notification IDs. Call "
-                              "email(action=\"check\", unread_only=true) to see "
+                              "email(action=\"check\", input={\"filter\": {\"unread_only\": true}}) to see "
                               "current pending mail.")
         return result
 
@@ -613,8 +613,9 @@ class EmailManager:
                     f"from our own agent_id={own_id!r}. The original "
                     "sender likely lives in a different .lingtai/ network "
                     "that shares the same bare address. Resend with "
-                    "email(action='send', mode='abs', address='<absolute "
-                    "path of the original sender>') instead."
+                    "email(action='send', input={'mode': 'abs', 'address': "
+                    "'<absolute path of the original sender>', 'message': "
+                    "'<reply body>'}) instead."
                 )
             }
 

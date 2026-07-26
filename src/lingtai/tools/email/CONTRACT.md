@@ -1,169 +1,147 @@
 ---
 name: email-contract
 tool: email
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/schema.py
+  - src/lingtai/tools/email/manager.py
+  - src/lingtai/tools/email/primitives.py
+  - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/_settings.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. If behavior and this
-  contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits.
+  Keep related_files as repo-relative paths to real files. The code is the
+  behavior source; update this contract in the same change as breaking public
+  action/input edits. The nested input contract is closed and has no flat
+  compatibility aliases.
 ---
 
 # Email capability contract
 
-`email` is the agent's filesystem-based mailbox: send, read, reply, search,
-archive, and manage a private contact book. There is no separate `mail`
-intrinsic — delivery, IMAP/SMTP bridging, and read tracking all route through
-this one tool. The implementation lives in `src/lingtai/tools/email/`; the code is the
-source of truth.
+`email` is the internal LingTai filesystem mailbox. It is not internet email:
+Gmail, Outlook, IMAP, SMTP, DNS, and external addresses belong to the `imap`
+MCP addon. The public tool name and internal mailbox behavior remain unchanged.
 
-## Routing Card
+## Public call boundary
 
-**Use this when:**
-- You are editing the internal mailbox tool: send/check/read/reply/search/
-  archive/delete or the contact book.
-- You are reviewing mailbox on-disk layout, unread digest republishing, or the
-  duplicate-send loop guard.
-- You need the ambiguous-reply (`#145`) return-route handling or the abs/peer
-  send modes.
+Every public call has exactly this shape:
 
-**Do not use this for:**
-- Notification surface reads/dismissals: use the `notification` tool
-  (`src/lingtai/tools/notification/CONTRACT.md`). The email tool only *publishes* its
-  unread digest to `.notification/email.json`; it does not own dismissal verbs.
-- Cron/scheduled sends: recurring sends were removed in favor of cron. The email
-  tool is request/response only.
-- Code navigation only: read `src/lingtai/tools/email/ANATOMY.md`.
+```python
+email(action="<closed action>", input={<action-specific fields>}, reasoning="<optional root metadata>")
+```
 
-**Fast paths:** action list -> §Tool surface; mailbox layout -> §State &
-storage; abs/peer reply routing -> §Anchored claims.
+`action` and `input` are required. `input` is an object selected from the
+closed action union below; every branch rejects extra keys. `reasoning` is
+optional root metadata injected only by `BaseAgent`; it is not in the raw email
+schema and is never nested in `input`. The tool does not advertise or own an
+email `summary` field. There is no flat field alias, omitted-action default,
+action healing, coercion, or `unread` public action.
 
-## Scope
+The raw schema (`schema.py:get_schema`) contains only root `action` and
+`input`, requires both, and sets root and branch `additionalProperties: false`.
+Provider envelopes retain that nested schema (Responses may canonicalize
+`oneOf` to its provider-compatible `anyOf`). The installed manual is a real
+read-only `manual` action:
 
-- Canonical tool name: `email`.
-- `email(action='unread', ...)` is reserved for kernel-synthesized unread-mail
-  digests and is rejected when invoked directly (use `check`).
-- Non-goals: the standalone `notification` verbs, scheduling, external calendar/
-  Gmail MCP bridges.
+```python
+email(action="manual", input={})
+```
 
-## Tool surface
+## Action surface and exact fields
 
-The schema (`src/lingtai/tools/email/schema.py`) accepts `action` from a fixed enum plus
-shared address/filter fields. Dispatch is `EmailManager.handle`
-(`src/lingtai/tools/email/manager.py`).
+All fields not listed for an action are rejected before mailbox, contact, or
+transport dispatch. Optional fields are omitted rather than invented; the
+manager's existing defaults apply.
 
-| Action | Required inputs | Optional inputs | Success output | Error shapes |
-|---|---|---|---|---|
-| `send` | `address` (str or list) | `subject`, `message`, `cc`, `bcc`, `attachments`, `delay`, `mode` (`peer`/`abs`), `type` | `{status: "sent", to, cc, bcc, delay}` | `{error: "address is required"}`; `{error: "invalid mode: ..."}`; `{error, limit_chars, actual_chars}` on body > 50k chars; `{status: "blocked", warning}` on duplicate loop |
-| `check` | — | `folder` (`inbox`/`sent`/`archive`), `n`, `filter{sort,from,subject,contains,after,before,unread_only,has_attachments,truncate}` | `{status: "ok", total, showing, emails: [...]}`, plus `truncated_by_budget` when a 10k-token cap trims | (returns ok with empty list) |
-| `read` | `email_id` (str or list) | `folder` | `{status: "ok", emails: [...]}`, plus `not_found` + `hint` for stale ids | `{error: "email_id is required"}` |
-| `dismiss` | `email_id` (str or list) | — | `{status: "ok", dismissed: [...]}`, plus `already_handled`, `not_found`, `hint` | `{error: "email_id is required"}` |
-| `reply` | `email_id`, `message` | `subject`, `cc`, `bcc` | send result (`{status: "sent", ...}`) | `{error: "email_id is required for reply"}`; `{error: "message is required for reply"}`; `{error: "Email not found: ..."}`; ambiguous-route `{error: ...}` |
-| `reply_all` | `email_id`, `message` | `subject`, `cc`, `bcc` | send result (`{status: "sent", ...}`) | same as `reply` |
-| `search` | `query` (regex) | `folder` | `{status: "ok", total, emails: [...]}` | `{error: "query is required for search"}`; `{error: "Invalid regex: ..."}` |
-| `archive` | `email_id` (str or list) | — | `{status: "ok", archived: [...]}`, plus `not_found` + `hint` | `{error: "email_id is required"}` |
-| `delete` | `email_id` (str or list) | `folder` (`inbox`/`archive`) | `{status: "ok", deleted: [...]}`, plus `not_found` + `hint` | `{error: "email_id is required"}`; `{error: "Cannot delete from folder: ..."}` |
-| `contacts` | — | — | `{status: "ok", contacts: [...]}` | — |
-| `add_contact` | `address`, `name` | `note` | `{status: "added"/"updated", contact}` | `{error: "address is required"}`; `{error: "name is required"}` |
-| `remove_contact` | `address` | — | `{status: "removed", address}` | `{error: "address is required"}`; `{error: "Contact not found: ..."}` |
-| `edit_contact` | `address` | `name`, `note` | `{status: "updated", contact}` | `{error: "address is required"}`; `{error: "Contact not found: ..."}` |
+| Action | Required input | Optional input and established defaults |
+|---|---|---|
+| `send` | `address` (string or list of strings), `message` (string) | `subject` string; `cc`, `bcc`, `attachments` (string arrays); `delay` integer default `0`; `mode` enum `peer`/`abs`, default `peer`; `type` enum `normal`, default `normal` |
+| `check` | none | `folder` enum `inbox`/`sent`/`archive`, default `inbox`; `n` integer default `10` (non-positive means all); `filter` closed object with `sort` (`newest`/`oldest`, default `newest`), `from`, `subject`, `contains`, `after`, `before` strings, `unread_only`, `has_attachments` booleans, and `truncate` integer default `500` (non-positive keeps the full preview) |
+| `read` | `email_id` (string or list of strings) | `folder` enum `inbox`/`sent`/`archive` |
+| `dismiss` | `email_id` (string or list of strings) | none |
+| `reply` | `email_id`, `message` (strings; `email_id` also accepts a string list and uses its first item) | `subject`, `cc`, `bcc` |
+| `reply_all` | `email_id`, `message` | `subject`, `cc`, `bcc` |
+| `search` | `query` string (case-insensitive regex) | `folder` enum `inbox`/`sent`/`archive`; omitted searches `inbox` and `sent` (the foundation implementation does not include archive by default) |
+| `archive` | `email_id` (string or list) | none |
+| `delete` | `email_id` (string or list) | `folder` enum `inbox`/`archive`, default `inbox`; `sent` is read-only |
+| `contacts` | none | none |
+| `add_contact` | `address` string, `name` string | `note` string |
+| `remove_contact` | `address` string | none |
+| `edit_contact` | `address` string | `name` and/or `note` strings |
+| `manual` | none | none; reads only installed `email-manual/SKILL.md` |
 
-Missing/absent `action` returns `{error: "action is required"}`; an unrecognized
-action returns `{error: "Unknown email action: ..."}`. `email(action='unread')`
-returns an explicit reserved-action `{status: "error", message: ...}` from the
-module dispatcher before reaching the manager. When `boot()` has not run,
-`handle()` returns `{error: "Internal: email manager not initialized..."}`.
+Address `peer` resolves a bare agent name in the current `.lingtai` network;
+`abs` treats the address as an absolute working-directory path and embeds a
+return route. `cc` and `bcc` are recipient arrays; BCC is retained only in the
+sender's sent record. Attachments are path strings passed through unchanged.
+The 50,000-character internal body limit is enforced at send time. Duplicate
+identical sends are blocked after the established guard threshold.
 
-## State & storage
+## Results and errors
 
-All paths are relative to the agent working directory (`agent._working_dir`).
+The manager's established success/error payloads are preserved behind the
+canonical dispatcher:
+
+- `send` returns `{status: "sent", to, cc, bcc, delay}`; oversize returns
+  `error`, `limit_chars`, and `actual_chars`; duplicate loops return
+  `{status: "blocked", warning}`.
+- `check` returns `{status: "ok", total, showing, emails}` and may add
+  `truncated_by_budget`.
+- `read` returns `{status: "ok", emails}` and may add `not_found` and `hint`;
+  inbox records are marked read.
+- `dismiss` returns `{status: "ok", dismissed}` and may add
+  `already_handled`, `not_found`, and `hint`, without returning bodies.
+- `reply`/`reply_all` return the established send result, preserving reply
+  subject, anchoring, abs return-route, recipient, CC, and BCC behavior.
+- `search` returns `{status: "ok", total, emails}`; missing query and invalid
+  regex keep the established error messages.
+- `archive` returns `{status: "ok", archived}` and optional `not_found`/`hint`.
+- `delete` returns `{status: "ok", deleted}` and optional `not_found`/`hint`;
+  deleting `sent` returns the established folder error.
+- Contacts retain their established `added`/`updated`/`removed` and not-found
+  result shapes.
+
+Canonical envelope/type errors are returned before any mailbox or contact seam.
+Every success, canonical validation error, manager error, and manual/degraded
+result carries a fresh `current_setting` snapshot from the Agent-owned
+`settings/email.json`. This snapshot is diagnostic-only and behavior-neutral:
+missing is normal, `{"schema_version": 1}` is the only valid file, and unknown,
+secret, duplicate, malformed, unstable, oversized, symlink, and non-regular
+settings never select behavior or leak content. The snapshot exposes only
+bounded source/revision/hash metadata, a no-op marker, a generic change hint,
+and a bounded settings error when applicable.
+
+## State and routing ownership
+
+The manager remains the sole mailbox behavior owner. Paths are relative to the
+Agent working directory:
 
 ```text
-mailbox/inbox/<uuid>/message.json     — received mail (one dir per message)
-mailbox/sent/<uuid>/message.json      — sent copies (send + reply/reply_all)
-mailbox/archive/<uuid>/message.json   — mail moved out of inbox by archive
-mailbox/read.json                     — read-tracking id set (JSON)
-mailbox/contacts.json                 — contact book (list of {address,name,note})
-.notification/email.json              — republished unread digest (producer-owned)
+mailbox/inbox/<uuid>/message.json
+mailbox/sent/<uuid>/message.json
+mailbox/archive/<uuid>/message.json
+mailbox/read.json
+mailbox/contacts.json
+.notification/email.json
 ```
 
-- `read`/`dismiss`/`reply`/`reply_all` mark inbox ids read and call
-  `_rerender_unread_digest`, which rewrites `.notification/email.json`.
-- `archive`/`delete` remove ids from the read set (`mailbox/read.json`) and, for
-  inbox mutations, rerender the digest.
-- `send` writes one `sent/<uuid>/message.json` per call (a single record even
-  for multi-recipient/cc/bcc) and spawns per-recipient `_mailman` delivery
-  threads; `bcc` is stored in the sent record but not exposed to recipients.
-- Contacts are written atomically via a tempfile + `os.replace`.
+`read`, `dismiss`, `archive`, and inbox `delete` preserve the existing read-state
+and unread-digest rerender behavior. `send` writes one sent record and starts
+one daemon `_mailman` delivery thread per recipient. `reply` and `reply_all`
+resolve `_return_route`, absolute sender paths, or peer addresses exactly as
+before; `reply_all` excludes self and the primary reply target from its CC fanout.
+The public dispatcher flattens only after validation to call the internal
+`EmailManager`; that internal implementation detail is not a second public
+schema.
 
-## Cross-platform invariants
+## Ownership boundary
 
-- All mailbox and contact file access is via `pathlib.Path` and
-  `shutil.move`/`shutil.rmtree`; no shell-outs. DOCUMENT: contact writes use
-  `tempfile.mkstemp` + `os.replace` for atomicity — `os.replace` is atomic on a
-  single filesystem on both POSIX and Windows.
-- Delivery runs on daemon `threading.Thread` workers (`_mailman`); no
-  subprocess/PTY. DOCUMENT (do not change).
-- All message JSON is read/written with `encoding="utf-8"`. DOCUMENT.
-- `mode='abs'` uses the absolute `str(working_dir)` as the return address and
-  embeds a `_return_route` so cross-network replies resolve unambiguously.
-  DOCUMENT — this is a path-as-address assumption, not a platform behavior.
-
-## Anchored claims
-
-| Claim | Source | Test |
-|---|---|---|
-| The email intrinsic registers exactly one `email` tool (no separate `mail` intrinsic) | `src/lingtai/tools/email/__init__.py:boot` | `tests/test_layers_email.py::test_email_intrinsic_no_mail_intrinsic` |
-| `send` routes through the mailman delivery thread | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_send_through_mailman` |
-| A cc'd send writes exactly one `sent/` record | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_send_cc_one_sent_record` |
-| Bodies over the 50k-char hard limit are refused at send time | `src/lingtai/tools/email/manager.py:_send` (`EMAIL_BODY_CHAR_LIMIT`) | `tests/test_layers_email.py::test_email_send_rejects_body_over_hard_limit` |
-| Identical consecutive sends are blocked as a loop | `src/lingtai/tools/email/manager.py:_send` | `tests/test_layers_email.py::test_email_blocks_identical_consecutive_send` |
-| `read` marks inbox mail read | `src/lingtai/tools/email/manager.py:_read` / `primitives._mark_read` | `tests/test_layers_email.py::test_email_read_marks_as_read` |
-| `dismiss` marks read without returning bodies and rerenders the digest | `src/lingtai/tools/email/manager.py:_dismiss` | `tests/test_layers_email.py::test_email_dismiss_marks_read_and_returns_no_bodies`, `tests/test_layers_email.py::test_email_dismiss_rerenders_notification` |
-| `archive` moves inbox mail into `archive/` | `src/lingtai/tools/email/manager.py:_archive` | `tests/test_layers_email.py::test_email_archive_moves_to_archive` |
-| `delete` refuses the `sent` folder | `src/lingtai/tools/email/manager.py:_delete` | `tests/test_layers_email.py::test_email_delete_from_sent_rejected` |
-| `search` compiles the query as a regex and rejects bad patterns | `src/lingtai/tools/email/manager.py:_search` | `tests/test_layers_email.py::test_email_search_invalid_regex` |
-| Scheduled/recurring sends are removed from the schema and not routed | `src/lingtai/tools/email/schema.py` | `tests/test_layers_email.py::test_email_schedule_removed_from_schema`, `tests/test_layers_email.py::test_email_schedule_payload_is_not_routed` |
-| Sender identity is carried on inbound mail and surfaced on read | `src/lingtai/tools/email/manager.py:_inject_identity` | `tests/test_email_identity.py` |
-| Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
-
-## Verification matrix
-
-| Invariant | Automated test | Manual check | Risk if broken |
-|---|---|---|---|
-| One `email` tool, no `mail` alias | `tests/test_layers_email.py::test_email_intrinsic_no_mail_intrinsic` | Boot an agent and inspect registered tools | Duplicate/ghost mail surface confuses routing |
-| Read-state mutations rerender `.notification/email.json` | `tests/test_layers_email.py::test_email_dismiss_rerenders_notification` | Read a message, inspect `.notification/email.json` | Stale unread badge; dropped-mail illusion |
-| Oversize bodies refused at send, not truncated at read | `tests/test_layers_email.py::test_email_send_rejects_body_over_hard_limit` | Send a >50k-char body | Oversize payloads bloat persistent notifications |
-| Duplicate-send loop guard holds | `tests/test_layers_email.py::test_email_blocks_identical_consecutive_send` | Send the same message twice in a row | Runaway send loops |
-| Abs replies do not self-misroute | `tests/test_email_abs_reply_route.py` | Reply to mail from a same-named agent in another network | Replies silently land in own inbox (#145) |
-
-Run before merging email changes:
-
-```bash
-python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py -q
-```
-
-## Schema and glossary ownership
-
-- **Canonical identifiers:** function names, JSON property names, action/enum
-  values, required fields, defaults, and bounds are canonical English literals.
-  The schema (`get_schema()`) and description (`get_description()`) are
-  language-independent; the optional `lang` argument is accepted for source
-  compatibility but ignored.
-- **Provider wire:** provider adapters send the global `WIRE_TOOL_DESCRIPTION`
-  constant as the top-level tool description; `FunctionSchema.description`
-  holds the full canonical prose rendered into `## tools`.
-- **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
-  and `glossary-wen.md`. Each has strict YAML frontmatter
-  (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,
-  `language: <lang>`). English body is empty; zh/wen bodies contain concise
-  terminology mappings that quote immutable English identifiers and never offer
-  localized aliases.
-- **Fallback:** exact normalized language lookup, then English, then no
-  appendix. Fail-closed for localized text; fail-open for tool availability.
-- **Update triggers:** changing a function name, action/enum value, property
-  name, or user-visible concept requires reviewing all three glossary files in
-  the same PR.
-- **Validation:** `python -m lingtai.tools.glossary_validator --check`.
+- `schema.py` owns canonical identifiers and action-specific JSON Schema.
+- `__init__.py` owns strict envelope validation, settings evidence, manual
+  loading, and dispatch; it does not reimplement mailbox semantics.
+- `manager.py` and `primitives.py` own established mailbox, delivery, reply,
+  filter, archive/delete, contact, and notification behavior.
+- `manual/SKILL.md`, `ANATOMY.md`, and the three owned glossaries teach the same
+  nested public form. Real IMAP/MCP prose is intentionally not rewritten as
+  internal `email` guidance.

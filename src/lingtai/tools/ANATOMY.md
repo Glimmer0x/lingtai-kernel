@@ -4,6 +4,8 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/_settings.py
@@ -30,6 +32,9 @@ capability names and lazy adapters.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:40-359`).
+- `email/` — public internal-mail composition owner for canonical action/input
+  dispatch, settings evidence, and the installed manual
+  (`src/lingtai/tools/email/ANATOMY.md`).
 - `web_search/` — public `web` composition owner for search, browse, settings,
   and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`

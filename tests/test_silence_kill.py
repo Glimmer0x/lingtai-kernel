@@ -194,8 +194,9 @@ def test_non_admin_can_send_normal_mail(tmp_path):
     agent._mail_service = mock_mail
 
     result = agent._intrinsics["email"]({
-        "action": "send", "address": "127.0.0.1:8001",
-        "subject": "hello", "message": "hi there",
+        "action": "send", "input": {
+            "address": "127.0.0.1:8001", "subject": "hello", "message": "hi there",
+        },
     })
     assert result["status"] == "sent"
 

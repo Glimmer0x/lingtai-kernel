@@ -13,7 +13,7 @@ occurrence of these keys — it does not strip, filter, or otherwise omit an
 older holder's content. Only the newest holder in history is current/
 actionable; older holders remain visible in replay as historical traces that
 must not be acted on, and the producer channel (e.g. ``telegram.read``,
-``email.read``) remains the source of truth for actionable channel content.
+``email(action="read", input={...})``) remains the source of truth for actionable channel content.
 
 This is SHARED semantics, not a Codex special case: the converters
 (``to_anthropic`` / ``to_openai`` / ``to_responses_input`` / ``to_gemini``)

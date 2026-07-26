@@ -287,7 +287,7 @@ def test_mail_read_by_id(tmp_path):
         "received_at": "2026-03-18T10:00:00Z",
     }))
     # Use email intrinsic (was mail) — schema renamed `id` to `email_id`.
-    result = agent._intrinsics["email"]({"action": "read", "email_id": [msg_id]})
+    result = agent._intrinsics["email"]({"action": "read", "input": {"email_id": [msg_id]}})
     assert len(result["emails"]) == 1
     assert result["emails"][0]["message"] == "first"
 
@@ -295,7 +295,7 @@ def test_mail_read_by_id(tmp_path):
 def test_mail_read_no_ids_returns_error(tmp_path):
     """email read without email_id should return an error."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["email"]({"action": "read"})
+    result = agent._intrinsics["email"]({"action": "read", "input": {}})
     assert "error" in result
 
 

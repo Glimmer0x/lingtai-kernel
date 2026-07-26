@@ -2025,8 +2025,9 @@ def test_attach_active_notifications_first_payload_attaches(tmp_path):
             "data": {"email_ids": ["email-1"]},
             "instructions": (
                 "High-attention email hook: full unread content lives in "
-                "notification_persistent.email. Prefer email.dismiss after handling; "
-                "use email.read/reply for source-of-truth mailbox actions. When "
+                "notification_persistent.email. Prefer email(action='dismiss', input={'email_id': [...]}) after handling; "
+                "use email(action='read', input={...}) or email(action='reply', input={...}) "
+                "for source-of-truth mailbox actions. When "
                 "handled through the email tool, the producer mirror updates or "
                 "clears this notification."
             ),

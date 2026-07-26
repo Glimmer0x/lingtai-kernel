@@ -230,8 +230,9 @@ NOTIFICATION_PERSISTENT_EMAIL_CONTEXT_COMMENT = (
     "_meta.agent_meta.notifications.attention.email. The canonical path is "
     "_meta.agent_meta.notifications.persistent.email. Bodies "
     "are injected in full up to the 50,000 character send-layer limit; prefer "
-    "email.dismiss after handling content, and use email.read/reply for "
-    "source-of-truth actions."
+    "email(action='dismiss', input={'email_id': [...]}) after handling content, "
+    "and use email(action='read', input={...}) or email(action='reply', input={...}) "
+    "for source-of-truth actions."
 )
 NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
     "This legacy email body exceeded the current 50,000 character send-layer "
@@ -2938,8 +2939,9 @@ def sanitize_email_notification_after_persistent(notification_payload: dict) -> 
     sanitized["data"] = {"email_ids": email_ids}
     sanitized["instructions"] = (
         "High-attention email hook: full unread content lives in "
-        "notification_persistent.email. Prefer email.dismiss after handling; "
-        "use email.read/reply for source-of-truth mailbox actions. When "
+        "notification_persistent.email. Prefer email(action='dismiss', input={'email_id': [...]}) after handling; "
+        "use email(action='read', input={...}) or email(action='reply', input={...}) "
+        "for source-of-truth mailbox actions. When "
         "handled through the email tool, the producer mirror updates or "
         "clears this notification."
     )

@@ -18,7 +18,7 @@ def test_responses_input_replays_thinking_block_as_reasoning_summary():
     iface.add_assistant_message([
         ThinkingBlock(text="Need to inspect the inbox before answering."),
         TextBlock(text="I'll check first."),
-        ToolCallBlock(id="call_123", name="email", args={"action": "check"}),
+        ToolCallBlock(id="call_123", name="email", args={"action": "check", "input": {}}),
     ])
     iface.add_tool_results([
         ToolResultBlock(id="call_123", name="email", content={"count": 0}),

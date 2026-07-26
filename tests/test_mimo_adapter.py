@@ -124,7 +124,7 @@ class TestRealReasoningPreserved:
             [
                 ThinkingBlock(text="user is asking about inbox"),
                 TextBlock(text="checking"),
-                ToolCallBlock(id="call_1", name="email", args={"action": "check"}),
+                ToolCallBlock(id="call_1", name="email", args={"action": "check", "input": {}}),
             ],
             model="mimo-v2.5-pro",
             provider="mimo",
@@ -165,7 +165,7 @@ class TestFallbackForMissingThinkingBlock:
         iface.add_assistant_message(
             [
                 TextBlock(text="let me check"),
-                ToolCallBlock(id="restored_call", name="email", args={"action": "check"}),
+                ToolCallBlock(id="restored_call", name="email", args={"action": "check", "input": {}}),
             ],
             model="mimo-v2.5-pro",
             provider="mimo",
@@ -197,7 +197,7 @@ class TestFallbackForMissingThinkingBlock:
         iface.add_system("system prompt")
         iface.add_user_message("hi")
         iface.add_assistant_message(
-            [ToolCallBlock(id="call_1", name="email", args={"action": "check"})],
+            [ToolCallBlock(id="call_1", name="email", args={"action": "check", "input": {}})],
             model="mimo-v2.5-pro",
             provider="mimo",
         )
@@ -239,7 +239,7 @@ class TestFallbackForMissingThinkingBlock:
         iface.add_assistant_message(
             [
                 ThinkingBlock(text="real reasoning here"),
-                ToolCallBlock(id="call_1", name="email", args={"action": "check"}),
+                ToolCallBlock(id="call_1", name="email", args={"action": "check", "input": {}}),
             ],
             model="mimo-v2.5-pro",
             provider="mimo",
@@ -267,7 +267,7 @@ class TestFallbackForMissingThinkingBlock:
         iface.add_system("system prompt")
         iface.add_user_message("hi")
         iface.add_assistant_message(
-            [ToolCallBlock(id="call_1", name="email", args={"action": "check"})],
+            [ToolCallBlock(id="call_1", name="email", args={"action": "check", "input": {}})],
             model="mimo-v2.5-pro",
             provider="mimo",
         )

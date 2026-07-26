@@ -1,7 +1,7 @@
 """End-to-end integration tests for system_notification tool-call pairs.
 
 These tests exercise the full path: producer (_enqueue_system_notification)
-→ tc_inbox → splice into chat → dismiss (voluntary OR via email.read auto-
+→ tc_inbox → splice into chat → dismiss (voluntary OR via email(action="read", input={...}) auto-
 dismiss).
 
 Uses ChatInterface + TCInbox directly with a stub-agent harness; the kernel's
@@ -98,7 +98,7 @@ def test_arrival_splices_notification_pair():
 def test_arrival_then_email_read_auto_dismiss():
     """Auto-dismiss path removed — email arrivals now use single-slot unread-digest.
     This test verifies that the old auto-dismiss flow is no longer present:
-    email.read does NOT call system._dismiss for mail notifications."""
+    email(action="read", input={...}) does NOT call system._dismiss for mail notifications."""
     agent = _StubAgent()
     item = _make_email_notification("notif_b", "mail_002")
     agent._tc_inbox.enqueue(item)

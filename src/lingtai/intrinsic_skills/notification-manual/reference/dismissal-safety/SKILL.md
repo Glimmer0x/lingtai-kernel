@@ -24,7 +24,7 @@ maintenance: |
 
 Use a producer-specific verb first when a notification mirrors producer-owned
 state. For example, handle email unread state with
-`email(action='read', ...)` or `email(action='dismiss', ...)`; generic channel
+`email(action='read', input={'email_id': [...]})` or `email(action='dismiss', input={'email_id': [...]})`; generic channel
 dismissal would clear only the high-attention mirror.
 
 For a dismissible notification-owned surface, choose one atomic target:

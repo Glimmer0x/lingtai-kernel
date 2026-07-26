@@ -75,7 +75,7 @@ def test_remove_pair_by_notif_id_handles_only_notification_pairs():
     chat = ChatInterface()
     # Regular tool call (e.g. agent calling email.check)
     chat.add_assistant_message(content=[
-        ToolCallBlock(id="call_real", name="email", args={"action": "check"}),
+        ToolCallBlock(id="call_real", name="email", args={"action": "check", "input": {}}),
     ])
     chat.add_tool_results([
         ToolResultBlock(id="call_real", name="email", content="{...}"),

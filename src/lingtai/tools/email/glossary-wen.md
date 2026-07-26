@@ -15,4 +15,5 @@ maintenance: |
 ---
 **名相对照**
 
-- `email`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `email`：原 locale catalog 未载 model-facing 本地名；召名、`action` 枚举、`input` 之分支与字段皆仍书 canonical English。
+- `reasoning`：惟 BaseAgent 所加之 root metadata；不得入 `input`，亦不得作 flat 参名。

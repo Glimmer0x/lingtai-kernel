@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/email/CONTRACT.md
+  - src/lingtai/tools/email/__init__.py
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
