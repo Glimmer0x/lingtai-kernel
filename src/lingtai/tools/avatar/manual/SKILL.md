@@ -1,9 +1,9 @@
 ---
 name: avatar-manual
 description: |
-  Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when: you are about to spawn an avatar; an avatar you spawned goes quiet; you need to decide between avatar, daemon, or bash; or you are an avatar and need to know how to escalate to your parent. Covers spawn types, naming rules, discipline, escalation protocol, and the parent_prompt contract.
-version: 1.0.0
-last_changed_at: 2026-07-19T00:00:00Z
+  Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when you are about to spawn an avatar, an avatar goes quiet, you need to choose between avatar/daemon/bash, or you need escalation guidance.
+version: 2.0.0
+last_changed_at: 2026-07-26T00:00:00Z
 related_files:
 - src/lingtai/tools/avatar/__init__.py
 - src/lingtai/tools/avatar/ANATOMY.md
@@ -16,152 +16,136 @@ maintenance: |
 
 ## 1. What Is an Avatar
 
-An avatar (他我) is a **fully independent agent process** spawned from you. It:
+An avatar (他我) is a **fully independent agent process** spawned from you. It
+inherits the relevant `init.json` configuration, boots on your default preset,
+is recorded in `delegates/ledger.jsonl`, and communicates through mail or email.
+Once spawned it is detached, with its own working directory, history, and life.
 
-- Inherits your `init.json` (model config, capabilities, covenant, language)
-- Boots on your **default** preset (not your active preset — this keeps the avatar's "home" stable in the network)
-- Is recorded in `delegates/ledger.jsonl`
-- Communicates with you via `mail` or `email`
+Use avatar only for work that needs persistence and learning. Use `daemon` when
+you need only an ephemeral conclusion, and `bash` for one-off commands.
 
-Once spawned, it is **detached** — a new life. It has its own working directory, its own conversation history, its own molts. It does not share your context window.
+## 2. The public call shape
 
-### Avatar vs Daemon vs Bash
+The avatar-owned public call is always a closed root `action` plus nested `input`,
+with optional root `reasoning` injected by `BaseAgent`:
 
-Pick avatar only for work that needs *persistence and learning* — a specialist
-that accumulates knowledge across sessions and survives until sleep/suspend.
-Use `daemon` when you only need the *conclusion* (ephemeral, fire-and-forget)
-and `bash` for one-off commands. The full body-selection model lives in
-`system-manual` → `reference/substrate-manual/SKILL.md` §1.
-
-## 2. Spawn Types
-
-| Type | What it gets | When to use |
-|------|-------------|-------------|
-| `shallow` (default, 初生) | `init.json` only — blank slate | Most tasks. The avatar starts clean and learns what it needs. |
-| `deep` (二重身) | Full copy of your lingtai (character), pad, and knowledge | When the avatar needs to hit the ground running with your accumulated knowledge. |
-
-## 3. Naming Rules
-
-The `name` field (required) doubles as the avatar's working-directory basename under `.lingtai/`. Constraints:
-
-- Single bare segment: letters (any script), digits, underscore, hyphen only
-- No slashes, no dots, no spaces, no leading `.`
-- Max 64 characters
-
-The avatar's display name (nickname) can be set separately via `psyche(name, nickname, ...)` and has no such constraints.
-
-## 4. The `reasoning` Field — Mission Briefing
-
-The `reasoning` parameter you write on the `avatar(action="spawn")` call **automatically becomes the avatar's first prompt**. Write it as a thorough mission briefing, not just a one-liner rationale. Include:
-
-- What the task is
-- Why it matters
-- What files/paths/resources are relevant
-- Who to contact (parent address, collaborators)
-- What "done" looks like
-- Any constraints or gotchas
-
-This is the most important part of the spawn. A vague briefing produces a confused avatar.
-
-## 5. Spawn Discipline
-
-Every `avatar(action="spawn")` call creates an independent process that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
-
-1. **Never include `avatar(action="spawn")` in a parallel batch** with unrelated tool calls.
-2. **Re-read your `reasoning` field before invoking** (§4).
-3. **For inspection or one-off commands, use `bash` or `system`** — not `avatar`.
-4. **Use `dry_run=true` to preview** a spawn without creating a process. Sanity-check the name, type, working directory, and mission before committing.
-5. **Use `confirm=true`** to acknowledge you have double-checked the mission and intend to spawn. Required when the mission looks empty/very short/test-like.
-
-## 6. Caring for Avatars After Spawn
-
-### Record in pad
-
-After spawning, record the avatar's address (working-directory name), the
-mission you gave it, and why you delegated. Pad is the roster of delegations you
-are accountable for — update it when the avatar reports back or completes.
-(Pad practice itself: `psyche-manual` §5.)
-
-### When an avatar goes quiet
-
-**Do not send probe mails to check on it.** Instead, report upstream: email your own parent, who can decide whether to `system(cpr)` the avatar, escalate further, or accept the loss. Failures propagate up the delegation chain naturally.
-
-### The parent_prompt contract
-
-Every avatar receives this system-level prompt on spawn:
-
-> "[system] You are an avatar of {parent_name}, whose address is {parent_address}. Please keep this in your psyche memory so you remember who spawned you. When you complete your mission, encounter problems you cannot resolve, or need to report back, email your parent at the address above."
-
-This is automatic — you do not need to repeat it in your reasoning.
-
-## 7. Avatar Escalation (for Avatars)
-
-If you are an avatar (your `admin` block is empty or all admin privileges are false) and you hit a problem you cannot resolve, **mail your parent**. This is non-optional. Silence looks like success and starves your parent of signal.
-
-**What counts as "should report to parent":**
-
-- **Blocker you cannot unblock** — missing credentials, a tool that refuses you, an external service down, a dependency your parent owns
-- **Scope creep or ambiguity** — the task as written doesn't match what you're finding; you need a decision, not a guess
-- **Budget pressure** — you are close to a molt, context/tool budget is tight, or the task looks bigger than you were briefed for
-- **Broken peers** — another avatar in your sibling group is STUCK, unresponsive, or producing bad output that affects your work
-- **Security or safety concerns** — anything that smells wrong (suspicious file, unexpected credentials, destructive instruction from an unknown sender)
-- **Surprising findings the parent would want** — even good news counts if it changes the plan
-
-**Be concrete in your report:** what you were doing, what went wrong, what you tried, what you need from them. Then either continue on a safe fallback, go `system(sleep)`, or idle — whatever the parent's standing orders say. Do not silently retry forever and do not molt with an unreported blocker.
-
-## 8. The `comment` Field — Persistent System Note
-
-The `comment` parameter is a persistent system-level note injected into the avatar's system prompt (rendered last, after memory). Key properties:
-
-- **Not inherited from parent** — defaults to empty
-- **Survives everything**: molt, refresh, sleep/wake
-- Use ONLY for instructions the avatar must **always** remember — critical constraints, environment setup notes, safety rules
-
-Leave empty unless you have something the avatar should never forget.
-
-## 9. Network Rules (`avatar(action="rules")`)
-
-The `rules` action writes a `.rules` file to your directory and distributes it to **all descendants** in the avatar tree. Properties:
-
-- Requires **karma** privilege (admin)
-- Rules are injected into the system prompt (after covenant, before tools)
-- Persist across molts
-- Plain text — one rule per line
-- These are **non-negotiable constraints**, not suggestions
-
-Example:
-```
-Always report findings via email.
-Do not spawn more than 3 avatars.
+```text
+avatar(action="spawn", input={"name": "researcher"}, reasoning="...mission briefing...")
+avatar(action="spawn", input={"name": "clone", "type": "deep", "comment": "", "dry_run": true, "confirm": false}, reasoning="preview this reviewed mission")
+avatar(action="rules", input={"rules_content": "Always report findings."}, reasoning="distribute the reviewed rule")
+avatar(action="manual", input={}, reasoning="load the installed avatar manual")
 ```
 
-## Cleanup / Footprint
+`action` and `input` are both required. Do not omit `action`, flatten nested
+fields, or move `reasoning` into `input`. Avatar-owned prose uses no flat or
+omitted-action compatibility form. `reasoning` is Agent metadata, not a nested
+avatar option; for `spawn` it becomes the avatar's first mission prompt.
 
-Avatars leave independent agent directories under the `.lingtai/` network plus
-parent-side delegation records such as `delegates/ledger.jsonl`. These are lives,
-not cache files. Do not delete an avatar directory directly unless the user has
-explicitly approved retiring that avatar and you have captured any handoff,
-knowledge, or files worth preserving. Prefer lifecycle tools (`lull`, `suspend`,
-`nirvana` when appropriate and authorized) over filesystem deletion.
+## 3. Spawn types and input ownership
 
-Footprint check (read-only, records the audit from the parent agent directory):
+`avatar(action="spawn", input={...}, reasoning="...")` requires
+`input.name`. Spawn owns only these nested fields:
 
-```bash
-python3 - <<'PY'
-import json, time
-from pathlib import Path
-agent = Path.cwd(); network = agent.parent if agent.parent.name == ".lingtai" else agent / ".lingtai"
-avatars = [p for p in network.iterdir() if p.is_dir() and (p / ".agent.json").exists()] if network.is_dir() else []
-def size(p): return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
-rows = [(p, size(p)) for p in avatars]
-total = sum(s for _, s in rows)
-print(f"agent dirs: {len(rows)}; bytes: {total}")
-for p, s in sorted(rows, key=lambda r: r[1], reverse=True): print(f"{s:>12}  {p.name}")
-log = agent / "logs" / "cleanup.jsonl"; log.parent.mkdir(parents=True, exist_ok=True)
-log.open("a", encoding="utf-8").write(json.dumps({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "tool": "avatar", "dry_run": True, "candidates": len(rows), "bytes": total, "human_approved": False, "summary": "avatar network footprint audit"}) + "\n")
-PY
+- `name`: a single bare sibling-directory segment; letters (any script),
+  digits, underscore, and hyphen only; no dots, slashes, spaces, or leading
+  dot; maximum 64 characters.
+- `type`: `shallow` (default, `初生`) copies `init.json` only; `deep`
+  (`二重身`) copies durable identity and knowledge.
+- `comment`: optional persistent system note, not inherited.
+- `dry_run`: optional preview with no directory, files, or process.
+- `confirm`: optional acknowledgement for the mission-quality gate.
+
+`rules_content` belongs only to the `rules` action. Do not include it in a
+spawn input.
+
+## 4. The root `reasoning` field — mission briefing
+
+The root `reasoning` metadata on
+`avatar(action="spawn", input={"name": "..."}, reasoning="...")` becomes the
+avatar's first prompt. Write a thorough mission briefing: task, importance,
+relevant paths/resources, parent/collaborator contact, done criteria, and
+constraints. Re-read it before invoking the tool.
+
+The mission-quality gate refuses empty, very short (<20 characters), or
+placeholder/debug-like missions unless `confirm=true`; `dry_run=true` is exempt.
+
+## 5. Spawn discipline
+
+Every ordinary spawn call creates an independent process and consumes resources
+until lifecycle management sleeps or suspends it. Therefore:
+
+1. Never put `avatar(action="spawn", input={...}, reasoning="...")` in a
+   parallel batch with unrelated calls.
+2. Re-read the root `reasoning` mission before invoking.
+3. Use `bash` or `system` for inspection and one-off commands.
+4. Use `avatar(action="spawn", input={"name": "...", "dry_run": true}, reasoning="...")`
+   to preview without creating a process.
+5. Use `confirm=true` only after reviewing the mission and intending to spawn.
+
+## 6. Caring for avatars
+
+After a spawn, record its address, mission, and delegation purpose in your pad.
+If an avatar goes quiet, do not send probe mails: report upstream so the parent
+can decide whether to use lifecycle tools or accept the loss.
+
+Every avatar receives a system-level parent prompt identifying its parent address.
+The avatar should email its parent when it completes, encounters an unresolved
+problem, or needs to report back.
+
+## 7. Escalation for avatars
+
+If your admin block is empty or all privileges are false and you hit a blocker,
+mail your parent. Report concrete facts: what you were doing, what failed, what
+you tried, and what decision or help you need. Report ambiguity, budget
+pressure, broken peers, safety concerns, and surprising findings rather than
+silently retrying forever.
+
+## 8. Persistent `comment`
+
+`comment` is a persistent system-level note injected into the avatar prompt. It
+is not inherited and survives molt, refresh, sleep, and wake. Use it only for
+instructions the avatar must always remember.
+
+## 9. Network rules
+
+`avatar(action="rules", input={"rules_content": "..."}, reasoning="...")` requires
+at least one truthy admin privilege. Its input owns only `rules_content`.
+The action writes a `.rules` signal to the caller and distributes it to all
+ledger-discovered descendants. Rules are non-negotiable plain-text constraints,
+not suggestions. This is a live filesystem side effect; use a deterministic
+fake service in tests and never point validation at a live network.
+
+## 10. Manual action and installed content
+
+`avatar(action="manual", input={}, reasoning="load guidance")` is read-only. It
+loads the real installed `avatar-manual` file from the current agent:
+
+```text
+<agent>/.library/intrinsic/capabilities/avatar/SKILL.md
 ```
 
-Recommended cadence: after spawning new specialists, before pruning a network,
-and monthly for busy orchestrators. Any destructive cleanup requires explicit
-user consent after a dry-run list of avatars and sizes.
+It does not spawn, write rules, or append a ledger entry. If the installed file
+is missing, the result is degraded and includes the installed path so the
+initializer problem is visible.
+
+## 11. Settings evidence
+
+Every avatar call rereads the Agent-owned `settings/avatar.json` v1 placeholder.
+Missing, valid, byte-distinct revisions, and invalid content are evidence only;
+they never select behavior or change this manual/prompt. Every success, manual,
+malformed, and service-error result includes secret-free `current_setting`
+evidence. Secret values, raw bytes, and host paths are not returned.
+
+## 12. Safety and footprint
+
+Avatars create independent directories and records; do not delete them directly
+without explicit retirement authority. Production spawn and rules operations
+have real side effects. Tests and harnesses must patch a candidate-owned fake
+launcher/service and prove malformed action/input calls make zero service calls.
+
+Before any separately authorized retirement or cleanup, audit the footprint
+read-only: the sibling agent directory, the parent's `delegates/ledger.jsonl`
+rows, live heartbeat/process evidence, `.rules` propagation state, and any
+shared-artifact references. Record what was inspected and the exact paths an
+operator authorized. A completed task, a failed boot, a dry-run preview, or the
+fact that an avatar directory looks temporary is never deletion permission.

@@ -74,7 +74,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert result["status"] == "ok"
         assert "address" in result
         assert result["address"]  # filesystem path (non-empty string)
@@ -86,7 +86,7 @@ class TestAvatarManager:
         from lingtai.agent import Agent
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities={"bash": {"yolo": True}, "avatar": {}})
-        result = parent._tool_handlers["avatar"]({"action": "spawn", "name": "child", "confirm": True})
+        result = parent._tool_handlers["avatar"]({"action": "spawn", "input": {"name": "child", "confirm": True}})
         assert result["status"] == "ok"
         # New architecture: avatars run as their own processes; introspection
         # is via the avatar's on-disk init.json, not an in-process _peers map.
@@ -104,7 +104,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"], covenant="Be helpful and concise.")
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert result["status"] == "ok"
 
     def test_spawn_no_admin(self, tmp_path):
@@ -113,7 +113,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"], admin={"karma": True})
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert result["status"] == "ok"
         child_init = json.loads((parent._working_dir.parent / "helper" / "init.json").read_text())
         child_admin = child_init.get("manifest", {}).get("admin", {})
@@ -133,9 +133,9 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        r1 = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        r1 = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert r1["status"] == "ok"
-        r2 = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        r2 = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert "error" in r2 or r2.get("status") == "already_active"
 
     def test_spawn_does_not_copy_identity_files(self, tmp_path):
@@ -154,7 +154,7 @@ class TestAvatarManager:
         (knowledge_dir / "knowledge.json").write_text('{"entries": []}')
 
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "blank", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "blank", "confirm": True}})
         assert result["status"] == "ok"
         child_dir = parent._working_dir.parent / "blank"
         # Character and knowledge should NOT be copied
@@ -167,7 +167,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "clone", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "clone", "confirm": True}})
         assert result["status"] == "ok"
 
     def test_ledger_records_spawn(self, tmp_path):
@@ -176,7 +176,7 @@ class TestAvatarManager:
         parent = Agent(service=make_mock_service(), agent_name="parent", working_dir=tmp_path / "test",
                             capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        mgr.handle({"action": "spawn", "name": "clone", "confirm": True})
+        mgr.handle({"action": "spawn", "input": {"name": "clone", "confirm": True}})
         ledger = (parent._working_dir / "delegates" / "ledger.jsonl").read_text().strip()
         record = json.loads(ledger)
         assert record["name"] == "clone"
@@ -230,7 +230,7 @@ class TestMissionQualityGate:
         """Spawn with no _reasoning and no confirm should be refused with a preview."""
         parent = self._parent(tmp_path)
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper"})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper"}})
         assert result["status"] == "confirmation_needed"
         assert "warning" in result
         assert "preview" in result
@@ -243,7 +243,7 @@ class TestMissionQualityGate:
     def test_spawn_with_short_mission_returns_confirmation_needed(self, tmp_path):
         parent = self._parent(tmp_path)
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "_reasoning": "test"})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper"}, "_reasoning": "test"})
         assert result["status"] == "confirmation_needed"
         assert result["preview"]["mission"] == "test"
         assert result["preview"]["mission_chars"] == 4
@@ -252,7 +252,7 @@ class TestMissionQualityGate:
         parent = self._parent(tmp_path)
         mgr = parent.get_capability("avatar")
         # No mission, but confirm=True acknowledges the risk.
-        result = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert result["status"] == "ok"
         assert (parent._working_dir.parent / "helper").is_dir()
 
@@ -261,7 +261,7 @@ class TestMissionQualityGate:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "spawn",
-            "name": "helper",
+            "input": {"name": "helper"},
             "_reasoning": "Investigate the heartbeat regression and report back via mail",
         })
         assert result["status"] == "ok"
@@ -269,7 +269,7 @@ class TestMissionQualityGate:
     def test_dry_run_returns_preview_without_spawning(self, tmp_path):
         parent = self._parent(tmp_path)
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "dry_run": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "dry_run": True}})
         assert result["status"] == "dry_run"
         assert result["preview"]["name"] == "helper"
         assert result["preview"]["type"] == "shallow"
@@ -285,7 +285,7 @@ class TestMissionQualityGate:
         parent = self._parent(tmp_path)
         mgr = parent.get_capability("avatar")
         # Empty mission + no confirm + dry_run=True → returns dry_run, not confirmation_needed.
-        result = mgr.handle({"action": "spawn", "name": "helper", "dry_run": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "dry_run": True}})
         assert result["status"] == "dry_run"
 
     def test_dry_run_preview_reports_real_mission_safe(self, tmp_path):
@@ -293,8 +293,7 @@ class TestMissionQualityGate:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "spawn",
-            "name": "helper",
-            "dry_run": True,
+            "input": {"name": "helper", "dry_run": True},
             "_reasoning": "Investigate the heartbeat regression and report back via mail",
         })
         assert result["status"] == "dry_run"
@@ -304,14 +303,14 @@ class TestMissionQualityGate:
     def test_schema_exposes_dry_run_and_confirm(self):
         from lingtai.tools.avatar import get_schema
         sch = get_schema("en")
-        assert "dry_run" in sch["properties"]
-        assert sch["properties"]["dry_run"]["type"] == "boolean"
-        assert "confirm" in sch["properties"]
-        assert sch["properties"]["confirm"]["type"] == "boolean"
-        assert "rules_content" in sch["properties"]
-        assert sch["required"] == ["action"]
-        assert not {"oneOf", "anyOf", "allOf", "not"} & set(sch)
+        branches = sch["properties"]["input"]["anyOf"]
+        spawn_props = branches[0]["properties"]
+        assert "dry_run" in spawn_props and spawn_props["dry_run"]["type"] == "boolean"
+        assert "confirm" in spawn_props and spawn_props["confirm"]["type"] == "boolean"
+        assert "rules_content" in branches[1]["properties"]
+        assert sch["required"] == ["action", "input"]
         assert sch["properties"]["action"]["enum"] == ["spawn", "rules", "manual"]
+        assert not {"oneOf", "allOf", "not"} & set(sch)
 
     def test_description_points_to_avatar_manual_after_prompt_compaction(self):
         """The terse tool description should route safety guidance to the manual.
@@ -326,9 +325,10 @@ class TestMissionQualityGate:
         schema = get_schema("en")
         assert "avatar-manual" in desc
         assert "WARNING" not in desc
-        assert "confirm" in schema["properties"]
-        assert "dry_run" in schema["properties"]
-        assert "action" in schema["properties"]
+        spawn_properties = schema["properties"]["input"]["anyOf"][0]["properties"]
+        assert "confirm" in spawn_properties
+        assert "dry_run" in spawn_properties
+        assert set(schema["properties"]) == {"action", "input"}
 
 
 class TestSetupAvatar:
@@ -420,7 +420,7 @@ class TestUnifiedAvatarTool:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "spawn",
-            "name": "helper",
+            "input": {"name": "helper"},
             "_reasoning": "Investigate the heartbeat regression and report back via mail",
         })
         assert result["status"] == "ok"
@@ -441,9 +441,9 @@ class TestUnifiedAvatarTool:
 
         # Even with a fully valid spawn payload (name + confirm), omitting
         # 'action' must fail deterministically rather than silently spawning.
-        result = mgr.handle({"name": "helper2", "confirm": True})
+        result = mgr.handle({"input": {"name": "helper2", "confirm": True}})
         assert "error" in result
-        assert result["error"] == "unknown action: '', only 'spawn', 'rules', or 'manual' is supported"
+        assert result["error"] == "avatar requires root action and input"
         assert result.get("status") != "ok"
 
         # No process/filesystem/ledger mutation happened.
@@ -457,17 +457,17 @@ class TestUnifiedAvatarTool:
         no_admin = Agent(service=make_mock_service(), agent_name="worker",
                           working_dir=tmp_path / "worker", capabilities=["avatar"], admin={})
         mgr = no_admin.get_capability("avatar")
-        result = mgr.handle({"action": "rules", "rules_content": "No deleting."})
+        result = mgr.handle({"action": "rules", "input": {"rules_content": "No deleting."}})
         assert "error" in result
 
         admin = Agent(service=make_mock_service(), agent_name="admin",
                        working_dir=tmp_path / "admin", capabilities=["avatar"],
                        admin={"karma": True})
         mgr2 = admin.get_capability("avatar")
-        empty_result = mgr2.handle({"action": "rules", "rules_content": ""})
+        empty_result = mgr2.handle({"action": "rules", "input": {"rules_content": ""}})
         assert "error" in empty_result
 
-        ok_result = mgr2.handle({"action": "rules", "rules_content": "Be concise."})
+        ok_result = mgr2.handle({"action": "rules", "input": {"rules_content": "Be concise."}})
         assert ok_result["status"] == "ok"
         assert (admin._working_dir / ".rules").read_text() == "Be concise."
 
@@ -477,7 +477,7 @@ class TestUnifiedAvatarTool:
         no_admin = Agent(service=make_mock_service(), agent_name="worker",
                           working_dir=tmp_path / "worker", capabilities=["avatar"], admin={})
         mgr = no_admin.get_capability("avatar")
-        result = mgr.handle({"action": "spawn", "name": "helper", "confirm": True})
+        result = mgr.handle({"action": "spawn", "input": {"name": "helper", "confirm": True}})
         assert result["status"] == "ok"
 
     def test_manual_returns_exact_body_and_performs_no_mutation(self, tmp_path):
@@ -492,7 +492,7 @@ class TestUnifiedAvatarTool:
             / "src" / "lingtai" / "tools" / "avatar" / "manual" / "SKILL.md"
         ).read_text(encoding="utf-8")
 
-        result = mgr.handle({"action": "manual"})
+        result = mgr.handle({"action": "manual", "input": {}})
         assert result["status"] == "ok"
         assert result["manual"] == manual_source
 
@@ -514,7 +514,7 @@ class TestUnifiedAvatarTool:
         parent = Agent(service=make_mock_service(), agent_name="parent",
                         working_dir=tmp_path / "test", capabilities=["avatar"])
         mgr = parent.get_capability("avatar")
-        result = mgr.handle({"action": "bogus"})
+        result = mgr.handle({"action": "bogus", "input": {}})
         assert "error" in result
         assert "bogus" in result["error"]
 
@@ -529,22 +529,22 @@ class TestUnifiedAvatarTool:
         mgr = parent.get_capability("avatar")
 
         # Payload shaped like a valid rules call, but action omitted.
-        rules_shaped = mgr.handle({"rules_content": "Be concise."})
+        rules_shaped = mgr.handle({"input": {"rules_content": "Be concise."}})
         assert "error" in rules_shaped
-        assert "unknown action: ''" in rules_shaped["error"]
+        assert "requires root action and input" in rules_shaped["error"]
         assert not (parent._working_dir / ".rules").exists()
 
         # Payload shaped like a valid spawn call, but action omitted.
-        spawn_shaped = mgr.handle({"name": "helper3", "confirm": True})
+        spawn_shaped = mgr.handle({"input": {"name": "helper3", "confirm": True}})
         assert "error" in spawn_shaped
-        assert "unknown action: ''" in spawn_shaped["error"]
+        assert "requires root action and input" in spawn_shaped["error"]
         assert not (parent._working_dir.parent / "helper3").exists()
         assert not (parent._working_dir / "delegates" / "ledger.jsonl").exists()
 
         # Entirely empty payload.
         empty = mgr.handle({})
         assert "error" in empty
-        assert "unknown action: ''" in empty["error"]
+        assert "requires root action and input" in empty["error"]
 
     def test_spawn_missing_name_fails_without_affecting_other_actions(self, tmp_path):
         from lingtai.agent import Agent
@@ -553,12 +553,12 @@ class TestUnifiedAvatarTool:
                         admin={"karma": True})
         mgr = parent.get_capability("avatar")
 
-        spawn_result = mgr.handle({"action": "spawn"})
+        spawn_result = mgr.handle({"action": "spawn", "input": {}})
         assert "error" in spawn_result
         assert "name is required" in spawn_result["error"]
 
-        rules_result = mgr.handle({"action": "rules", "rules_content": "Be concise."})
+        rules_result = mgr.handle({"action": "rules", "input": {"rules_content": "Be concise."}})
         assert rules_result["status"] == "ok"
 
-        manual_result = mgr.handle({"action": "manual"})
+        manual_result = mgr.handle({"action": "manual", "input": {}})
         assert manual_result["status"] == "ok"

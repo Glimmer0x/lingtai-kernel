@@ -17,10 +17,13 @@ every spawn event.
 
 Usage:
     Agent(capabilities=["avatar"])
-    # avatar(action="spawn", name="researcher")              — shallow (初生)
-    # avatar(action="spawn", name="clone", type="deep")      — deep (二重身)
-    # avatar(action="rules", rules_content="...")            — distribute rules
-    # avatar(action="manual")                                — read the avatar manual
+    # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
+    # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
+    # avatar(action="rules", input={"rules_content": "..."}, reasoning="...")
+    # avatar(action="manual", input={}, reasoning="read the avatar manual")
+
+The public schema is a closed root ``action`` + required nested ``input``;
+``BaseAgent`` injects optional root ``reasoning`` for model-facing calls.
 """
 from __future__ import annotations
 
@@ -28,15 +31,15 @@ import json
 import os
 import re
 import shutil
-import sys
 import time
-from importlib import resources
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
-from lingtai.kernel.tool_dispatch import dispatch_action
+from .._manual import load_installed_manual
+from .._settings import current_setting, read_settings
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
 
@@ -95,67 +98,98 @@ if TYPE_CHECKING:
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
+_ACTION_FIELDS = {
+    "spawn": ("name", "type", "comment", "dry_run", "confirm"),
+    "rules": ("rules_content",),
+    "manual": (),
+}
+_ALLOWED_ROOT_FIELDS = ("action", "input", "reasoning", "_reasoning")
+
+
 def get_description(lang: str = "en") -> str:
     return (
         "Spawn an independent agent (他我), set network rules for descendants, "
-        "or read the avatar manual. Requires an explicit action — no default. "
-        "action='spawn': inherits init.json, boots on default preset — requires "
-        "'name'. action='rules': distribute rules_content to self + all "
-        "descendants (requires karma). action='manual': return the "
-        "avatar-manual skill body. See avatar-manual skill for full guidance."
+        "or read the avatar manual. Use avatar(action='spawn', input={'name': "
+        "'researcher', 'type': 'shallow', 'comment': '', 'dry_run': False, "
+        "'confirm': True}, reasoning='...') for spawn; spawn input.name is "
+        "required and owns only type/comment/dry_run/confirm. Use "
+        "avatar(action='rules', input={'rules_content': '...'}, reasoning='...') "
+        "to distribute rules, or avatar(action='manual', input={}, "
+        "reasoning='...') to load the installed avatar manual (avatar-manual). BaseAgent injects "
+        "optional root reasoning; action and input are always explicit."
     )
 
 
 def get_schema(lang: str = "en") -> dict:
-    """Schema for the single public ``avatar`` tool.
+    """Return the raw closed ``action`` + required nested ``input`` schema.
 
-    A plain top-level ``type: object`` with an explicit ``action`` enum —
-    deliberately no top-level ``allOf``/``oneOf`` combinator, which some
-    OpenAI-compatible strict tool validators reject. Action-specific required
-    inputs (``name`` for spawn, ``rules_content`` for rules) are validated in
-    the handler, not the schema, so all three actions share one flat property
-    bag.
+    ``BaseAgent`` alone adds the optional root ``reasoning`` property to the
+    model-facing schema. Provider adapters retain their own named envelopes;
+    this function returns only the provider-agnostic raw parameters.
     """
+    spawn_input = {
+        "title": "spawn input",
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "True avatar name and sibling working-directory basename; max 64 characters, no dots, slashes, spaces, or leading dot.",
+            },
+            "type": {
+                "type": "string",
+                "enum": ["shallow", "deep"],
+                "description": "shallow (default) copies init.json only; deep copies durable identity and knowledge.",
+            },
+            "comment": {
+                "type": "string",
+                "description": "Persistent system note for the avatar; not inherited.",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "Preview without creating files or a process.",
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": "Confirm a reviewed mission when the quality gate requires it.",
+            },
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+    rules_input = {
+        "title": "rules input",
+        "type": "object",
+        "properties": {
+            "rules_content": {
+                "type": "string",
+                "description": "Plain-text rules distributed to the caller and descendants.",
+            },
+        },
+        "required": ["rules_content"],
+        "additionalProperties": False,
+    }
+    manual_input = {
+        "title": "manual input",
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["spawn", "rules", "manual"],
-                "description": (
-                    "spawn: create a new avatar — requires 'name'. "
-                    "rules: distribute network rules to self + descendants — "
-                    "requires 'rules_content'. manual: return the avatar-manual "
-                    "skill body; no other inputs used. Required — no default."
-                ),
+                "description": "Required operation: spawn, rules, or manual.",
             },
-            "name": {
-                "type": "string",
-                "description": 'True name for the avatar (required for action=spawn). Also the working-directory basename under .lingtai/. Single segment: letters/digits/underscore/hyphen, max 64 chars.',
-            },
-            "type": {
-                "type": "string",
-                "enum": ["shallow", "deep"],
-                "description": "'shallow' (default): blank slate — init.json only. 'deep': full copy of character, pad, and codex.",
-            },
-            "comment": {
-                "type": "string",
-                "description": "Persistent system note in the avatar's prompt (survives molt/refresh/wake). Not inherited. Leave empty unless you have something the avatar must never forget.",
-            },
-            "dry_run": {
-                "type": "boolean",
-                "description": 'Preview the spawn without creating a process. Use to sanity-check before committing.',
-            },
-            "confirm": {
-                "type": "boolean",
-                "description": 'Confirm you have reviewed the mission and intend to spawn. Required when the mission looks empty/short/test-like.',
-            },
-            "rules_content": {
-                "type": "string",
-                "description": 'Rules content for action=rules. Plain text, one rule per line. Non-negotiable constraints distributed to all descendants.',
+            "input": {
+                "description": "Strict action-specific avatar input.",
+                "anyOf": [spawn_input, rules_input, manual_input],
             },
         },
-        "required": ["action"],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
 
 
@@ -179,26 +213,108 @@ class AvatarManager:
     # Handler
     # ------------------------------------------------------------------
 
-    def handle(self, args: dict) -> dict:
-        return dispatch_action(
-            args,
-            {
-                "spawn": self._spawn,
-                "rules": self._rules,
-                "manual": lambda _args: self._manual(),
-            },
-            unknown=lambda action: {
-                "error": f"unknown action: {action!r}, only 'spawn', 'rules', or 'manual' is supported",
-            },
-        )
+    @staticmethod
+    def _with_setting(result: Mapping[str, Any], diagnostic: dict[str, Any]) -> dict[str, Any]:
+        """Attach one fresh, secret-free settings diagnostic to a result."""
+        value = dict(result)
+        value["current_setting"] = dict(diagnostic)
+        return value
+
+    def handle(self, args: Any) -> dict:
+        """Validate the closed public action/input contract before any service call."""
+        snapshot = read_settings(self._agent, "avatar")
+        diagnostic = current_setting(snapshot, "avatar")
+
+        def error(message: str) -> dict:
+            return self._with_setting({"error": message}, diagnostic)
+
+        if not isinstance(args, Mapping):
+            return error("avatar arguments must be an object")
+        try:
+            root_keys = list(args.keys())
+        except Exception:
+            return error("avatar arguments must be an object")
+        if any(not isinstance(key, str) or key not in _ALLOWED_ROOT_FIELDS for key in root_keys):
+            return error("avatar accepts only root action, input, reasoning, and _reasoning")
+        if "action" not in root_keys or "input" not in root_keys:
+            return error("avatar requires root action and input")
+
+        try:
+            action = args["action"]
+            raw_input = args["input"]
+        except Exception:
+            return error("avatar arguments are malformed")
+        if type(action) is not str or action not in _ACTION_FIELDS:
+            return error(
+                f"unknown action: {action!r}, only 'spawn', 'rules', or 'manual' is supported"
+            )
+        if not isinstance(raw_input, Mapping):
+            return error("avatar input must be an object")
+        try:
+            action_input = dict(raw_input)
+        except Exception:
+            return error("avatar input must be an object")
+        if any(not isinstance(key, str) for key in action_input):
+            return error("avatar input field names must be strings")
+        allowed_fields = _ACTION_FIELDS[action]
+        if any(key not in allowed_fields for key in action_input):
+            return error(f"unsupported avatar input field for action {action!r}")
+
+        if action == "manual":
+            if action_input:
+                return error("manual input must be an empty object")
+            try:
+                result = self._manual()
+            except Exception:
+                result = {
+                    "status": "degraded",
+                    "action": "manual",
+                    "manual": "",
+                    "error": "avatar manual failed",
+                }
+            return self._with_setting(result, diagnostic)
+
+        required = "name" if action == "spawn" else "rules_content"
+        if required not in action_input:
+            return error(f"{required} is required")
+        if action == "rules" and not isinstance(action_input["rules_content"], str):
+            return error("rules_content must be a string")
+        if action == "spawn":
+            if not isinstance(action_input["name"], str):
+                return error("name must be a string")
+            if "type" in action_input and type(action_input["type"]) is not str:
+                return error("type must be a string")
+            if "comment" in action_input and not isinstance(action_input["comment"], str):
+                return error("comment must be a string")
+            if "dry_run" in action_input and type(action_input["dry_run"]) is not bool:
+                return error("dry_run must be a boolean")
+            if "confirm" in action_input and type(action_input["confirm"]) is not bool:
+                return error("confirm must be a boolean")
+
+        # ``ToolExecutor`` removes public root reasoning and preserves it as
+        # ``_reasoning``.  Accepting the plain key here only supports direct
+        # in-process callers; it is not part of the raw public schema.
+        try:
+            reasoning = args.get("_reasoning")
+            if reasoning is None:
+                reasoning = args.get("reasoning")
+        except Exception:
+            reasoning = None
+        if reasoning is not None and not isinstance(reasoning, str):
+            return error("reasoning must be a string")
+        dispatch_args = dict(action_input)
+        dispatch_args["_reasoning"] = reasoning
+        try:
+            result = self._spawn(dispatch_args) if action == "spawn" else self._rules(dispatch_args)
+        except Exception:
+            # Do not expose service exception text, paths, or secrets. The
+            # settings diagnostic remains the only configuration evidence.
+            result = {"error": "avatar service failed"}
+        return self._with_setting(result, diagnostic)
 
     def _manual(self) -> dict:
-        """Return the exact packaged avatar-manual body; performs no mutation."""
-        try:
-            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
-            return {"status": "degraded", "action": "manual", "manual": "", "error": "avatar manual missing"}
-        return {"status": "ok", "action": "manual", "manual": body}
+        """Return the exact installed avatar-manual body; performs no mutation."""
+        return {"action": "manual", **load_installed_manual(self._agent, "avatar")}
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -256,8 +372,9 @@ class AvatarManager:
         # Mission-quality gate. The reasoning field becomes the avatar's first
         # prompt, so an empty / very-short / debug-placeholder mission almost
         # always means an accidental spawn (a real incident: an agent batched
-        # avatar_spawn into a parallel call with mission "test" and a process
-        # was created). Refuse unless the caller explicitly passes confirm=True.
+        # avatar(action="spawn", input={...}, reasoning="test") into a parallel
+        # call and a process was created). Refuse unless the caller explicitly
+        # passes confirm=True.
         # The dry-run path is exempt — its whole purpose is preview without
         # commitment, and forcing confirm=True there would defeat that.
         if not dry_run and not confirm:

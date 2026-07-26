@@ -4,120 +4,129 @@ related_files:
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/CONTRACT.md
-  - src/lingtai/adapters/avatar_launcher.py
-  - src/lingtai/adapters/posix/ANATOMY.md
-  - src/lingtai/adapters/posix/avatar_launcher.py
   - src/lingtai/tools/avatar/manual/SKILL.md
-  - tests/test_avatar_rules.py
   - src/lingtai/tools/avatar/glossary-en.md
   - src/lingtai/tools/avatar/glossary-zh.md
   - src/lingtai/tools/avatar/glossary-wen.md
+  - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_settings.py
+  - src/lingtai/adapters/avatar_launcher.py
+  - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/adapters/posix/avatar_launcher.py
+  - src/lingtai/adapters/windows/ANATOMY.md
+  - src/lingtai/adapters/windows/avatar_launcher.py
+  - tests/test_avatar_rules.py
+  - tests/test_layers_avatar.py
+  - tests/test_avatar_action_input_candidate.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep related_files as repo-relative paths to real files and keep this anatomy
+  connected to neighboring anatomy/manual/contract authorities. If code drifts,
+  update the authoritative source and this map together.
 ---
 # core/avatar
 
-Avatar capability — spawn independent peer agents (分身) as fully detached
-processes. Two modes:
+Avatar is the durable peer-agent capability. It exposes exactly one public tool,
+`avatar`, with a closed root `action` plus required nested `input`. Every
+avatar-owned public example is explicit and includes Agent-injected root
+`reasoning`:
 
-- **Shallow (初生):** Copy `init.json` to a new working dir, strip identity,
-  launch. The avatar gets the same LLM config + capabilities but no history.
-- **Deep (二重身):** Copy identity and durable knowledge (`system/`, `knowledge/`, `exports/`)
-  plus `init.json`, strip name + history. The avatar is a doppelgänger — same
-  character, pad, knowledge — but starts a fresh conversation.
+```text
+avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
+avatar(action="rules", input={"rules_content": "..."}, reasoning="...")
+avatar(action="manual", input={}, reasoning="load guidance")
+```
 
-Both modes launch `lingtai-agent run <dir>` as a detached process. The avatar is an
-independent life — its existence does not depend on yours.
+The raw avatar `get_schema()` contains only `action` and `input`. `BaseAgent`
+adds optional root `reasoning` when it constructs the model-facing
+`FunctionSchema.parameters`; reasoning never enters an input branch.
+Avatar-owned prose does not describe flat or omitted-action forms. Sibling tools
+remain outside this migration boundary.
 
 ## Components
 
-- `avatar/__init__.py` — validation, preparation, boot policy, ledger, rules,
-  schemas, and setup. The core class is `AvatarManager`.
-- `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
-  opaque-handle Port.
+- `avatar/__init__.py` — strict action/input schema and runtime validation,
+  settings evidence, installed-manual route, spawn preparation/boot/ledger,
+  rules distribution, and setup. `AvatarManager` is the core class.
+- `avatar/_launcher.py` — immutable launch request/receipt and the opaque
+  launcher Port.
+- `avatar/manual/SKILL.md` — installed avatar-manual source body and public
+  operational guidance.
+- `CONTRACT.md` — canonical public contract and provider-envelope notes.
+- `adapters/avatar_launcher.py` — launcher selection boundary.
+- `adapters/posix/avatar_launcher.py` and `adapters/windows/avatar_launcher.py`
+  — platform-specific process/session ownership. Their neighboring anatomy files
+  define the platform edges; core avatar code must not duplicate them.
 
-## Public API
+## Preserved runtime edges
 
-The capability exposes one public tool, `avatar`, dispatched by an `action`
-enum:
+The public schema change does not alter the existing lifecycle graph:
 
-| Action | Description |
-|------|-------------|
-| `spawn` | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
-| `rules` | Set rules content and distribute via `.rules` signal files to self + all descendants. |
-| `manual` | Read-only: returns the exact `manual/SKILL.md` body. No mutation. |
-
-`action` has no default — it is required both by the schema
-(`"required": ["action"]`) and at runtime, matching the established action-tool
-convention already used by `knowledge`, `mcp`, `skills`, `notification`,
-`system`, `soul`, and `daemon`. Omitting `action` fails deterministically via
-the same `dispatch_action` unknown-action envelope as an unrecognized value;
-it never falls through to `spawn`.
-
-`avatar` uses a single plain top-level `type: object` schema with an explicit
-`action` enum, not a top-level `allOf`/`oneOf` combinator — some
-OpenAI-compatible strict tool validators reject top-level JSON Schema
-combinators. Action-specific required inputs beyond `action` itself (`name`
-for spawn, `rules_content` for rules) are validated in the handler, not the
-schema.
-
-## Internal Module Layout
-
-```
-avatar/__init__.py
-  ├── AvatarManager.__init__        — stores parent agent ref
-  ├── handle()                      — public dispatcher for the avatar tool
-  │                                    (action: spawn | rules | manual)
-  ├── _manual()                     — reads the packaged manual/SKILL.md body
-  │
-  │  Spawn pipeline:
-  ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
-  ├── _make_avatar_init()           — builds avatar's init.json from parent's (strips identity, reroots paths)
-  ├── _prepare_deep()               — copies system/ + knowledge/ + exports/ + combo.json for deep mode
-  ├── _launch()                     — resolves argv and delegates to the launcher Port
-  ├── _wait_for_boot()              — polls .agent.heartbeat or Port exit truth
-  │
-  │  Ledger:
-  ├── _append_ledger()              — appends spawn event to delegates/ledger.jsonl
-  ├── _read_ledger()                — reads all ledger records
-  │
-  │  Rules distribution:
-  ├── _rules()                      — admin-gated rules update, distributes via .rules signal files
-  ├── _walk_avatar_tree()           — recursively discovers all descendants from ledger files
-  └── _distribute_rules_to_descendants() — writes .rules signal file to every descendant
+```text
+validated spawn input + root reasoning
+  → safe sibling destination and composed init
+  → optional shallow/deep durable copy and identity/history stripping
+  → LaunchRequest through injected AvatarLauncher Port
+  → heartbeat/boot decision
+  → release opaque process handle
+  → append registration outcome in delegates/ledger.jsonl
+  → propagate existing .rules signal through the ledger tree
 ```
 
-## Key Invariants
+`dry_run` stops before directory/process/ledger side effects. Platform-specific
+process APIs remain below the POSIX/Windows launcher adapters. Confirmation,
+duplicate/liveness, boot-failure, and admin-rule gates remain owned by the
+existing manager methods and their tests; only the public argument envelope and
+settings evidence change here.
 
-- **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
-- **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
-- **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
-- **Preset stability:** Avatars always spawn on the parent's DEFAULT preset, not its currently-active one. Materialized `llm` + `capabilities` are stripped so the avatar re-materializes from the preset on first boot.
-- **Relative path re-rooting:** Preset paths (`default`, `active`, `allowed`) that are relative are re-rooted against the parent's working dir so they remain valid from the avatar's different directory.
-- **Liveness check:** Before spawning, existing ledger entries are observed through a target-bound `PosixAgentPresenceStoreAdapter` and Core `observe_alive()` policy. If a live avatar with the same name exists, the spawn is refused with `already_active`.
-- **Boot verification:** After launching, `_wait_for_boot()` polls for `.agent.heartbeat` or Port exit truth within 5 seconds. If the process exits before handshaking, stderr is captured and the failure is reported. Port release after observation never kills a live slow avatar.
-- **Deep copy scope guard:** `_prepare_deep()` asserts `dst.parent == src.parent` to prevent rmtree from reaching outside the network root.
-- **Mission-quality gate (issue #33):** Before any filesystem mutation, `_spawn` runs `_mission_looks_unsafe(reasoning)` — empty / sub-20-char / debug-placeholder missions return `{"status": "confirmation_needed", ...}` unless `confirm=true`. The dry-run path is exempt (its purpose is preview without commitment).
-- **Dry-run (issue #33):** `dry_run=true` short-circuits after parent `init.json` is loaded and before any working dir is created or process launched, returning `{"status": "dry_run", "preview": {...}}`. The preview includes whether the mission would have tripped the quality gate.
+## Dispatch anatomy
 
-## Dependencies
+```text
+AvatarManager.handle(args)
+  ├─ read settings/avatar.json (fresh v1 placeholder snapshot)
+  ├─ validate root mapping/action/input and action-owned nested keys
+  ├─ action=manual → load_installed_manual(agent, "avatar")
+  ├─ action=spawn  → _spawn({nested fields, _reasoning})
+  └─ action=rules  → _rules({rules_content})
+      └─ every result gets secret-free current_setting evidence
+```
 
-- `lingtai.i18n` — `t()` for localized strings
-- `lingtai.kernel.agent_presence` + `lingtai.adapters.posix.agent_presence` — ordered Core liveness policy and the target-bound production presence adapter
-- `lingtai.kernel.handshake` — `resolve_address()` for ledger-based tree walking
-- `lingtai.venv_resolve` — `resolve_venv()`, `venv_python()` for resolving the Python executable to launch the avatar
-- `lingtai.agent.Agent` — parent agent type (TYPE_CHECKING only)
+The strict checks happen before `_spawn`, `_rules`, launcher calls, or rules
+writes. Manual is read-only. A malformed or cross-action call cannot reach an
+avatar service seam.
 
-## Composition
+## Action ownership
 
-- **Parent:** `src/lingtai/tools/` (tool package).
-- **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` via `lingtai.kernel.tool_dispatch.dispatch_action`. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
+| Action | Required nested input | Owned optional nested input |
+|---|---|---|
+| `spawn` | `name` | `type`, `comment`, `dry_run`, `confirm` |
+| `rules` | `rules_content` | none |
+| `manual` | empty object | none |
 
-Platform process mechanics are in `adapters/avatar_launcher.py` and the
-POSIX reference adapter. Unsupported Windows selection fails loudly; a future
-Windows adapter and native acceptance remain outside this re-cut.
+Spawn retains shallow/deep copy, mission-quality gate, duplicate liveness,
+path-scope, dry-run, boot heartbeat, detached launcher, ledger, and descendant
+rule propagation semantics. Rules retains its independent admin gate and
+signal-file distribution. No unlisted action input is introduced.
+
+## Settings evidence
+
+`read_settings(agent, "avatar")` rereads the fixed Agent-owned
+`settings/avatar.json` on every call. The strict v1 placeholder is metadata-only:
+missing, valid, byte-distinct revisions, and invalid content cannot change
+behavior or prompt text. All success/manual/malformed/service-error results
+carry `current_setting`; invalid content contributes only a bounded,
+secret-free error marker.
+
+## Installed manual edge
+
+`action="manual"` reads the actual initialized agent path
+`<agent>/.library/intrinsic/capabilities/avatar/SKILL.md` through the
+shared installed-manual loader. It does not substitute the source package body,
+construct a launcher, write a signal, or mutate the agent.
+
+## Side-effect boundary
+
+The production spawn and rules paths can have live effects. Focused tests must
+inject deterministic fake launchers/services and prove malformed calls make
+zero service calls. Never invoke real avatar spawning, rules distribution,
+process creation, network modification, or descendant config writing during
+validation.

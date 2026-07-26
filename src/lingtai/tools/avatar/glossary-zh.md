@@ -15,11 +15,13 @@ maintenance: |
 ---
 **术语对照**
 
-- `avatar`：唯一公开工具，以 `action` 分派。详见 avatar-manual 技能。
-- `action`：必填，无默认值。`spawn`（化出独立他我，继承 init.json，用默认预设启动）｜`rules`（设置网络法则并分发给所有后代，需 karma）｜`manual`（只读，返回 avatar 手册全文）。
-- `name`：他我之真名（action=spawn 时必填）。兼作 .lingtai/ 下目录名。单段：字母/数字/下划线/连字符，最长64字。
-- `type`：'shallow'（默认，初生）：白纸，仅 init.json。'deep'（二重身）：完整复制灵台、简、典。
-- `comment`：写入他我系统提示之持久注解（跨凝蜕/刷新/休眠不变）。不承自父。非必要勿填。
-- `dry_run`：预览化出而不生进程。用于提交前审查。
-- `confirm`：确认已审阅任务并决意化出。任务空白/过短/似试时必填。
-- `rules_content`：action=rules 所需之法则内容。纯文，每行一则。不可协商之约束，分发一切后代。
+- `avatar`：唯一公开工具，以 `action` 分派，根含必填 `input`。
+- `action`：根级必填，无默认值。`spawn`（化出独立他我）｜`rules`（设置网络法则）｜`manual`（只读，返回已安装手册）。
+- `input`：根级必填之严格动作输入；各动作只纳其所属字段。
+- `reasoning`：Agent 注入之可选根级元数据，非 `input` 字段；用于 spawn 任务简报。
+- `name`：他我之真名（`spawn` 的 `input` 中必填）。兼作 .lingtai/ 下目录名。单段：字母/数字/下划线/连字符，最长64字。
+- `type`：`spawn.input` 之 'shallow'（默认，初生）或 'deep'（二重身）。
+- `comment`：`spawn.input` 之持久系统注解。不承自父。
+- `dry_run`：`spawn.input` 之预览开关，不生进程。
+- `confirm`：`spawn.input` 之任务确认开关。
+- `rules_content`：`rules.input` 所需之法则内容；`spawn` 不拥有此字段。
