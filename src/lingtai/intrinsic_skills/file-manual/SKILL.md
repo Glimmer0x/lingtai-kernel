@@ -79,7 +79,7 @@ citations easier. If a file may be generated, minified, huge, or noisy, search
 first and read only the relevant region:
 
 ```python
-grep({"pattern": "class Agent|def handle", "path": "/abs/path/src", "glob": "*.py", "max_matches": 50})
+grep({"action": "grep", "input": {"pattern": "class Agent|def handle", "path": "/abs/path/src", "glob": "*.py", "max_matches": 50, "summary": False}, "reasoning": "locate the handler before reading it"})
 read({"file_path": "/abs/path/src/module.py", "offset": 40, "limit": 80})
 ```
 
@@ -112,7 +112,7 @@ inspect with `read`.
 
 ```python
 glob({"pattern": "**/*.py", "path": "/abs/path/project"})
-grep({"pattern": "read_text\\(", "path": "/abs/path/project/src", "glob": "*.py", "max_matches": 100})
+grep({"action": "grep", "input": {"pattern": "read_text\\(", "path": "/abs/path/project/src", "glob": "*.py", "max_matches": 100, "summary": False}, "reasoning": "find Python text reads before inspecting matches"})
 ```
 
 ## File paths and privacy
@@ -125,16 +125,21 @@ content or attach/export a file through the appropriate communication channel.
 
 ## Manual versus ordinary calls
 
-Normal file work is primary. Each file tool has two explicit modes:
+Normal file work is primary. Follow each tool's current public schema. The
+migrated `grep` tool has two explicit root actions: use
+`{"action":"grep","input":{"pattern":"TODO","summary":false},"reasoning":"find pending work"}`
+for an ordinary search, or
+`{"action":"manual","input":{},"reasoning":"load the installed file guide"}`
+for this installed manual. Its omitted-action and flat-root forms are not
+supported; Agent-injected `reasoning` stays at the root and exact-boolean
+`summary` stays inside `input`.
 
-- **Ordinary work:** for backward compatibility, omit `action` or set it to the
-  tool name: `action="read"`, `"write"`, `"edit"`, `"glob"`, or `"grep"`.
-  Supply the ordinary arguments shown in that tool's schema.
-- **Manual lookup:** use `action="manual"` as a one-time entry when you need the
-  installed workflow guide. It returns documentation and performs no file
-  operation. `write`, `edit`, `glob`, and `grep` return this manual; `read`
-  returns `read-manual`.
+Other file tools may document their own ordinary arguments and rollout state. A
+manual lookup is always a one-time explicit `action="manual"` entry when that
+tool exposes it; it returns documentation and performs no file operation.
+`write`, `edit`, `glob`, and `grep` return this manual; `read` returns
+`read-manual`.
 
-After a manual result, continue the original task with an ordinary call. Do not
-request the same manual again. Repeating an identical manual call is an error loop,
-not progress.
+After a manual result, continue the original task with the tool's documented
+ordinary action. Do not request the same manual again. Repeating an identical
+manual call is an error loop, not progress.

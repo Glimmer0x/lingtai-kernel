@@ -1,147 +1,184 @@
 ---
 name: grep-contract
 tool: grep
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/grep/__init__.py
+  - src/lingtai/tools/grep/ANATOMY.md
   - src/lingtai/tools/_file_paths.py
+  - src/lingtai/tools/_settings.py
+  - src/lingtai/services/file_io.py
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
-  contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits.
+  contract disagree, the code is the source of truth; fix both in one change and
+  bump contract_version on breaking public edits.
 ---
 
 # Grep capability contract
 
-`grep` searches file contents by regex under a search root, pushing the glob
-filter into the injected `FileIOService` (`agent._file_io.grep`) so excluded files
-are pruned before read. The implementation lives in `src/lingtai/tools/grep/__init__.py`;
-the code is the source of truth.
+`grep` searches file contents by regex under a search root, pushing the basename
+`glob` filter into the injected `FileIOService` (`agent._file_io.grep`) so
+excluded files are pruned before read. The implementation lives in
+`src/lingtai/tools/grep/__init__.py`; the code is the source of truth.
 
 ## Routing Card
 
 **Use this when:**
-- You are editing the grep wrapper's argument handling, its glob-filter
-  pass-through, or the truncation / traversal-stats surfacing (Issue #164).
-- You need the exact match shape and how the `truncated` signal is computed.
+- Editing the closed action/input routing, strict validation, or settings
+  diagnostic for the grep wrapper.
+- Reviewing glob-filter pass-through or truncation/traversal-stat surfacing.
 
 **Do not use this for:**
 - Finding files by name/pattern: read `src/lingtai/tools/glob/CONTRACT.md`.
-- Reading a specific file: read `src/lingtai/tools/read/CONTRACT.md`.
-- The regex engine, traversal budgets, or size/binary skips: those live in
+- Reading one file: read `src/lingtai/tools/read/CONTRACT.md`.
+- Regex engine, traversal budgets, or size/binary skips: read
   `src/lingtai/services/file_io.py` / `file_io_sidecar.py`.
 
-**Fast paths:** tool schema -> §Tool surface; match shape & `truncated` ->
-§Tool surface; glob-filter semantics -> §Tool surface.
+**Fast paths:** schema and routing → §Tool surface; settings evidence → §Settings;
+match shape and truncation → §Tool surface; FileIO semantics → §Cross-platform
+invariants.
 
 ## Scope
 
 - Canonical tool name: `grep`.
 - Registered via `capabilities=["grep"]` or the `file` sugar.
-- Non-goals: no file writes, no filename-only search, no context lines beyond the
-  matched line. Returns matching `{file, line, text}` records.
+- Non-goals: no file writes, no filename-only search, and no context lines beyond
+  matched lines. Returns `{file, line, text}` records.
+- Public compatibility with omitted `action`, omitted `input`, flat arguments, and
+  aliases is intentionally removed.
 
 ## Tool surface
 
-`handle_grep` has two modes:
+The raw tool-owned schema is a closed root object with exactly the required root
+keys `action` and `input`. `BaseAgent` alone adds optional root `reasoning` to the
+model-facing schema; the executor may pass that same metadata to the direct
+handler as `_reasoning`. Neither metadata field enters `input` or FileIO.
 
-- **Ordinary:** omit `action` (backward compatible) or set
-  `action="grep"`; both forms run the same grep operation.
-- **Manual:** `action="manual"` returns the installed `file-manual` without
-  attempting to search file content.
+`action` is exactly one of `grep` and `manual`, and `input` is a closed,
+action-specific object:
 
-The schema lists `grep` before `manual`. Any other explicit action
-returns a plain error before file I/O. After a manual response, the caller
-continues the original task with an ordinary call rather than repeating the
-manual.
+- **Ordinary:**
+  `{"action":"grep","input":{"pattern":"TODO","path":"src","glob":"*.py","max_matches":200,"summary":false},"reasoning":"find pending Python TODOs"}`
+  searches under the agent workdir by default. `input.pattern` is a non-empty
+  regex string; `input.path` is an optional file/directory root; `input.glob` is
+  an optional basename filter defaulting to `"*"`; `input.max_matches` defaults
+  to `200`; and nested `input.summary` is an exact-boolean a-priori summary
+  control defaulting to `false`.
+- **Manual:**
+  `{"action":"manual","input":{},"reasoning":"load the installed file guide"}`
+  returns the real installed `file-manual` body and path without searching.
 
-The tool-facing names differ from the service kwargs: the schema exposes
-`glob` and `max_matches`, which the handler maps to the service's
-`glob_filter` and `max_results`.
+The raw schema has no root `reasoning` property; BaseAgent's model-facing schema
+adds it without changing the root required list. No flat arguments, omitted
+`action`/`input`, unknown keys, compatibility aliases, malformed/non-mapping
+payloads, or unhashable action values are accepted. These errors are returned
+before target FileIO.
 
-| Call | Required inputs | Optional inputs | Success output | Error shapes |
+| Call | Required inputs | Optional inputs | Success output | Error shape |
 |---|---|---|---|---|
-| `grep` | `pattern: string` | `path: string` (defaults to `agent._working_dir`), `glob: string` (default `"*"`), `max_matches: int` (default 200), `summary: bool` (default false) | `{matches: [{file, line, text}], count, truncated}` plus traversal fields when the walk was cut short | see below |
+| `grep` | `input.pattern: string` | `input.path: string`, `input.glob: string` (default `"*"`), `input.max_matches: integer` (default `200`), `input.summary: boolean` (default `false`) | `{matches: [{file, line, text}], count, truncated}` plus traversal fields when partial, and `current_setting` | `{status: "error", message: "...", current_setting}` |
+| `manual` | empty `input` | none | installed manual result plus `current_setting` | same settings-bearing error envelope if loading fails |
 
-Glob-filter semantics: `glob` values `None`, `""`, or `"*"` mean "no filter"
-(the handler passes `glob_filter=None`); any other value is pushed into the
-service so non-matching files are pruned before stat/read. `truncated` is `true`
-when the (already glob-pruned) scan returned at least `max_matches` results, and
-is additionally forced `true` (with `truncated_reason` and a `traversal` block of
-`{visited, elapsed_ms, dirs_pruned, files_skipped_size, files_skipped_binary}`)
-when the service's `last_traversal.truncated_reason` is set.
+Nested `input.summary=true` is orchestration metadata only. The handler still
+performs the ordinary search; `ToolExecutor` logs the raw result first and then
+may replace what the model sees with a reasoning-guided summary. It never changes
+path, regex, glob filtering, max-match behavior, or returned raw fields. Root
+`summary` is not in the canonical schema and is never a summary opt-in.
 
-**Error shapes** (plain dicts, not exceptions):
-- `{"status": "error", "message": "pattern is required"}` — empty/missing pattern.
-- `{"status": "error", "message": "Grep failed: <exc>"}` — any search error.
+`glob` values `"*"` and `""` mean no basename filter and are passed to FileIO as
+`None`; any other string is passed as `glob_filter`. `truncated` is true when the
+service returns at least `max_matches` records, and is also forced true when the
+service reports a traversal truncation reason. In the latter case the result
+carries `truncated_reason` and `traversal` with `visited`, `elapsed_ms`,
+`dirs_pruned`, `files_skipped_size`, and `files_skipped_binary`.
+
+## Settings
+
+Every invocation rereads the strict Agent-owned `settings/grep.json` placeholder
+before validating, loading the manual, resolving a path, or calling FileIO. The
+only valid file content is the JSON object `{"schema_version": 1}`. This v1
+placeholder is metadata-only: it selects no backend, regex mode, filter, cap,
+manual, or other behavior. There are no fabricated grep settings or options.
+
+Every success, manual, malformed-input, and FileIO-error result carries a fresh,
+secret-free `current_setting` snapshot. It truthfully reports `source` as
+`missing`, `settings/grep.json`, or `settings_error`; a bounded
+`settings_revision` and `settings_hash`; `configurable: false`, `placeholder:
+"no-op"`, and a `change_hint` naming `settings/grep.json`. Invalid files carry
+only a bounded `settings_error`; settings contents, secrets, and absolute host
+paths are never disclosed. Changing a valid file changes only this diagnostic,
+not grep behavior or prompt/schema text.
+
+## Error shapes
+
+All public errors are plain dictionaries, never raised by the handler:
+
+- Missing/empty pattern: `{"status":"error","message":"pattern is required",...}`.
+- Wrong root/input/action/field/type: a strict routing/type message with
+  `current_setting`; no target FileIO call has occurred.
+- Search/path failure: `{"status":"error","message":"Grep failed: <exc>",...}`.
 
 ## State & storage
 
 None owned. `grep` is read-only over the filesystem and holds no persistent state.
-It reads `agent._file_io.last_traversal` only to surface truncation metadata.
+It reads `agent._file_io.last_traversal` only to surface service statistics and
+rereads the Agent-owned settings placeholder per invocation.
 
 ## Cross-platform invariants
 
-Do not change any of the following; documented for reviewers only.
+Do not change these source-truth behaviors:
 
-- **Path handling:** relative `path` (search root) is resolved against
-  `agent._working_dir` via `resolve_workdir_path` (`src/lingtai/tools/_file_paths.py`);
-  absolute roots pass through unchanged. Default root is the workdir.
-- **Sidecar resolution:** recursive `grep` is one of the two operations routed
-  through the Rust search sidecar when present; `default_file_io_service`
-  autodiscovers a packaged/dev-tree binary and soft-falls back to the Python
-  backend (see `src/lingtai/services/file_io_sidecar.py` resolution order). Both
-  backends share traversal / size / exclusion defaults.
-- **Encoding / skips:** oversized and binary files are skipped by the service and
-  counted in `files_skipped_size` / `files_skipped_binary`.
+- **Path handling:** relative `input.path` resolves against `agent._working_dir`
+  through `resolve_workdir_path`; absolute roots pass through unchanged. The
+  default root is the workdir.
+- **FileIO routing:** all searches use the injected `FileIOService`; the optional
+  Rust sidecar and Python backend share the public contract.
+- **Filter ordering:** non-matching basenames are pruned before stat/read by the
+  service; the wrapper does not post-filter results.
+- **Encoding/skips:** UTF-8 text is searched; oversized and binary/unreadable
+  files are skipped and counted in traversal stats.
+- **Ordering and shape:** the service owns match ordering; the wrapper maps each
+  result to `{"file": path, "line": line_number, "text": line}` unchanged.
 
 ## Anchored claims
 
-| Claim | Source `src/lingtai/tools/grep/...` | Test |
+| Claim | Source | Focused validation |
 |---|---|---|
-| Grep returns matching lines through the capability | `__init__.py` (`handle_grep`) | `tests/test_layers_file.py::test_grep_via_capability` |
-| Grep failures return a `{status: error}` dict | `__init__.py` (`handle_grep`) | `tests/test_layers_file.py::test_grep_error_shape` |
-| The glob filter prunes non-matching files before read | `__init__.py` (`handle_grep`, `service_glob`) | `tests/test_services_file_io.py::TestFileIOService::test_glob_filter_via_tool_wrapper_prunes_before_read` |
-| `max_matches` caps results at the service layer | `__init__.py` (`max_matches` → `max_results`) | `tests/test_services_file_io.py::TestFileIOService::test_grep_max_results` |
-| Grep routes through the injected FileIOService | `__init__.py` (`handle_grep`) | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` |
+| Raw schema is closed action/input and has ordinary/manual branches | `__init__.py:get_schema` | `tests/test_grep_action_input.py` |
+| BaseAgent adds only root reasoning | `kernel/base_agent/tools.py` + grep schema | focused Agent schema test |
+| Provider envelopes preserve named parameters/input_schema | provider adapters + `FunctionSchema` | focused envelope test |
+| Description, prompt section, and installed manual show canonical reasoning examples | `get_description`, file manual | focused prompt/manual test |
+| Malformed and unhashable calls fail before FileIO | `handle_grep` | strict handler test |
+| Real LocalFileIO regex/filter/skip/error semantics remain source-truth | `services/file_io.py` | LocalFileIO focused test |
+| Settings are reread, strict, secret-free, and behavior/prompt invariant | `_settings.py`, `handle_grep` | settings focused test |
+| Nested summary is raw-first; root summary is rejected/ignored | `tool_result_summary.py`, executor | serial/parallel summary tests |
 
 ## Verification matrix
 
-| Invariant | Automated test | Manual check | Risk if broken |
-|---|---|---|---|
-| Regex matching returns expected lines | `tests/test_layers_file.py::test_grep_via_capability` | `grep` a known token under a tree | Missed or spurious matches |
-| Glob filter prunes before read | `tests/test_services_file_io.py::TestFileIOService::test_glob_filter_via_tool_wrapper_prunes_before_read` | `grep` with `glob="*.py"` on a mixed tree | Wasted reads / wrong scope |
-| `max_matches` cap and `truncated` flag | `tests/test_services_file_io.py::TestFileIOService::test_grep_max_results` | `grep` a common token with a low `max_matches` | Callers assume results are complete |
-| Oversized / binary files skipped | `tests/test_services_file_io.py::TestFileIOService::test_grep_skips_oversized_files` | `grep` a tree with a large binary | Budget exhaustion / crashes |
-| Grep routes through FileIOService | `tests/test_layers_file.py::test_file_capability_uses_file_io_service` | Boot with `capabilities=["grep"]` and confirm `agent._file_io` is used | Sidecar/backend selection bypassed |
+| Invariant | Validation | Risk if broken |
+|---|---|---|
+| Exact-candidate imports and filenames are used | `sys.path.insert(0, candidate/src)` plus `__file__` assertions | sibling source accidentally tested |
+| Provider schema boundaries remain stable | Chat, Responses, Anthropic envelope assertions | provider drift or nested reasoning leak |
+| Local search preserves regex/filter/truncation/error behavior | actual `LocalFileIOService` tree and invalid regex calls | incorrect matches or hidden partial results |
+| Strict calls do not touch FileIO | recording service and malformed/unhashable inputs | malformed model calls read files |
+| Settings missing/valid/hot/invalid are truthful and inert | retained workspaces and sentinel nonleak checks | secret leakage or fabricated behavior |
+| Summary semantics are nested, exact, raw-first, and tool-error bypassed | retained serial/parallel executor calls | raw loss, wrong summary, or error masking |
 
-Run before merging:
-
-```bash
-python -m pytest tests/test_layers_file.py tests/test_services_file_io.py -q
-```
+Use direct `unittest` or retained harnesses for this candidate. Do not use pytest,
+bytecode compilation, automatic cleanup, or temporary-file lifecycles.
 
 ## Schema and glossary ownership
 
-- **Canonical identifiers:** function names, JSON property names, action/enum
-  values, required fields, defaults, and bounds are canonical English literals.
-  The schema (`get_schema()`) and description (`get_description()`) are
-  language-independent; the optional `lang` argument is accepted for source
-  compatibility but ignored.
-- **Provider wire:** provider adapters send the global `WIRE_TOOL_DESCRIPTION`
-  constant as the top-level tool description; `FunctionSchema.description`
-  holds the full canonical prose rendered into `## tools`.
-- **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
-  and `glossary-wen.md`. Each has strict YAML frontmatter
-  (`kind: tool-glossary`, `schema_version: 1`, `tool_package: tools.<pkg>`,
-  `language: <lang>`). English body is empty; zh/wen bodies contain concise
-  terminology mappings that quote immutable English identifiers and never offer
-  localized aliases.
-- **Fallback:** exact normalized language lookup, then English, then no
-  appendix. Fail-closed for localized text; fail-open for tool availability.
-- **Update triggers:** changing a function name, action/enum value, property
-  name, or user-visible concept requires reviewing all three glossary files in
-  the same PR.
-- **Validation:** `python -m lingtai.tools.glossary_validator --check`.
+- Canonical identifiers, property names, action values, required fields, and
+  defaults are English literals owned by `get_schema()` and this contract.
+- Provider adapters preserve named envelopes: Chat uses
+  `function.parameters`, Responses uses `parameters`, Anthropic uses
+  `input_schema`, and internal `FunctionSchema` uses `parameters`.
+- This package owns `glossary-en.md`, `glossary-zh.md`, and `glossary-wen.md`.
+  English body remains empty; zh/wen provide concise terminology mappings only.
+- The shared installed `file-manual` is the manual returned by grep; grep-owned
+  examples in it use canonical nested input and visibly include root reasoning.
+- Validate glossary resources with `python -m lingtai.tools.glossary_validator --check`
+  when performing the parent validation (without pytest).

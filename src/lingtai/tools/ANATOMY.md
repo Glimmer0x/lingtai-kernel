@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/_settings.py
   - src/lingtai/tools/browser/ANATOMY.md
+  - src/lingtai/tools/grep/ANATOMY.md
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
