@@ -3,13 +3,32 @@
 import inspect
 import os
 
-from lingtai.llm.service import LLMService
+from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW, LLMService
 
 
 def test_context_window_stored():
     """context_window should be accepted and stored."""
     sig = inspect.signature(LLMService.__init__)
     assert "context_window" in sig.parameters
+
+
+def test_context_window_default_and_invalid_values_normalize_to_conservative():
+    _register_recording_adapter("context-test")
+
+    assert (
+        LLMService(provider="context-test", model="m")._context_window
+        == CONSERVATIVE_CONTEXT_WINDOW
+    )
+    for invalid in (None, 0, -1, False, True):
+        svc = LLMService(
+            provider="context-test",
+            model="m",
+            context_window=invalid,
+        )
+        assert svc._context_window == CONSERVATIVE_CONTEXT_WINDOW
+
+    svc = LLMService(provider="context-test", model="m", context_window=123_456)
+    assert svc._context_window == 123_456
 
 
 def test_adapter_base_class_has_no_multimodal_methods():

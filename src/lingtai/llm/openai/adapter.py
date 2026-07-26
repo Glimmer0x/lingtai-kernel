@@ -1330,6 +1330,11 @@ class OpenAIChatSession(ChatSession):
         loose string-match heuristics used by compatible vendors (DeepSeek,
         Together, Groq, etc.) that often only signal via the message body.
         """
+        if isinstance(exc, openai.APIError) and not isinstance(exc, openai.BadRequestError):
+            # Some compatible endpoints surface this overflow as a generic
+            # APIError. Keep this deliberately narrow: arbitrary APIError or
+            # generic "context window" text is not a retryable overflow.
+            return "input exceeds the context window" in (str(exc) or "").lower()
         if not isinstance(exc, openai.BadRequestError):
             return False
         # Canonical OpenAI code on the body's error object.

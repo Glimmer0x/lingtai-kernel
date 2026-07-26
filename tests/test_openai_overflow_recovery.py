@@ -88,6 +88,24 @@ def test_detects_message_only_overflow_compat_provider():
     assert OpenAIChatSession._is_context_overflow_error(err) is True
 
 
+def test_detects_generic_api_error_with_strong_overflow_phrase():
+    err = openai.APIError(
+        message="provider rejected request: input exceeds the context window",
+        request=MagicMock(),
+        body={},
+    )
+    assert OpenAIChatSession._is_context_overflow_error(err) is True
+
+
+def test_does_not_detect_generic_api_error_for_weak_context_text():
+    err = openai.APIError(
+        message="context window service is temporarily unavailable",
+        request=MagicMock(),
+        body={},
+    )
+    assert OpenAIChatSession._is_context_overflow_error(err) is False
+
+
 def test_does_not_detect_unrelated_400():
     err = openai.BadRequestError(
         message="invalid tool schema",
@@ -99,6 +117,11 @@ def test_does_not_detect_unrelated_400():
 
 def test_does_not_detect_non_bad_request():
     err = RuntimeError("network down")
+    assert OpenAIChatSession._is_context_overflow_error(err) is False
+
+
+def test_does_not_detect_runtime_error_with_strong_overflow_phrase():
+    err = RuntimeError("input exceeds the context window")
     assert OpenAIChatSession._is_context_overflow_error(err) is False
 
 
@@ -214,6 +237,32 @@ def test_recovery_succeeds_after_one_trim():
 
     result, dropped, rounds = session._run_with_overflow_recovery(do_call)
     assert result == "result"
+    assert rounds == 1
+    assert dropped >= 1
+
+
+def test_recovery_succeeds_after_generic_api_error_strong_phrase():
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=20)
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    attempts = {"n": 0}
+    err = openai.APIError(
+        message="provider rejected request: input exceeds the context window",
+        request=MagicMock(),
+        body={},
+    )
+
+    def do_call():
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise err
+        return "result"
+
+    result, dropped, rounds = session._run_with_overflow_recovery(do_call)
+    assert result == "result"
+    assert attempts["n"] == 2
     assert rounds == 1
     assert dropped >= 1
 

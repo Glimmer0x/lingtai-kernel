@@ -27,6 +27,10 @@ from lingtai.kernel.llm.service import LLMService as LLMServiceABC
 from .base import LLMAdapter
 
 
+# Conservative fallback used when a caller has no valid model context window.
+CONSERVATIVE_CONTEXT_WINDOW = 272_000
+
+
 def _generate_session_id() -> str:
     """Generate a unique lingtai session ID."""
     return f"st_{uuid.uuid4().hex[:12]}"
@@ -220,11 +224,17 @@ class LLMService(LLMServiceABC):
         base_url: str | None = None,
         key_resolver: Callable[[str], str | None] | None = None,
         provider_defaults: dict | None = None,
-        context_window: int = 1_000_000,
+        context_window: int = CONSERVATIVE_CONTEXT_WINDOW,
     ) -> None:
         self._provider = provider.lower()
         self._model = model
-        self._context_window = context_window
+        self._context_window = (
+            context_window
+            if isinstance(context_window, int)
+            and not isinstance(context_window, bool)
+            and context_window > 0
+            else CONSERVATIVE_CONTEXT_WINDOW
+        )
         self._base_url = base_url
         self._key_resolver = key_resolver or (lambda p: os.environ.get(f"{p.upper()}_API_KEY"))
         self._provider_defaults = provider_defaults or {}

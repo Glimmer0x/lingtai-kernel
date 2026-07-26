@@ -21,7 +21,11 @@ from lingtai.kernel.config_resolve import (
     load_env_file,
 )
 from lingtai.init_reader import InitReadStatus, read_init, reader_callbacks
-from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
+from lingtai.llm.service import (
+    CONSERVATIVE_CONTEXT_WINDOW,
+    LLMService,
+    build_provider_defaults_from_manifest_llm,
+)
 from lingtai.agent import Agent
 from lingtai.kernel.process_match import match_agent_run
 
@@ -90,12 +94,19 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     provider_defaults = build_provider_defaults_from_manifest_llm(
         llm, max_rpm=max_rpm, working_dir=working_dir
     )
+    context_window = m.get("context_limit")
+    if (
+        not isinstance(context_window, int)
+        or isinstance(context_window, bool)
+        or context_window <= 0
+    ):
+        context_window = CONSERVATIVE_CONTEXT_WINDOW
     service = LLMService(
         provider=llm["provider"],
         model=llm["model"],
         api_key=api_key,
         base_url=llm.get("base_url"),
-        context_window=m.get("context_limit", 200_000),
+        context_window=context_window,
         provider_defaults=provider_defaults,
     )
 

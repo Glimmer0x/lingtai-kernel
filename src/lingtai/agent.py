@@ -18,7 +18,11 @@ from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
-from lingtai.llm.service import LLMService, build_provider_defaults_from_manifest_llm
+from lingtai.llm.service import (
+    CONSERVATIVE_CONTEXT_WINDOW,
+    LLMService,
+    build_provider_defaults_from_manifest_llm,
+)
 from lingtai.kernel.prompt import build_system_prompt
 
 
@@ -1482,6 +1486,13 @@ class Agent(BaseAgent):
         new_provider = llm["provider"]
         new_model = llm["model"]
         new_base_url = llm.get("base_url")
+        new_context_window = m.get("context_limit")
+        if (
+            not isinstance(new_context_window, int)
+            or isinstance(new_context_window, bool)
+            or new_context_window <= 0
+        ):
+            new_context_window = CONSERVATIVE_CONTEXT_WINDOW
 
         # Default 60 matches AgentConfig.max_rpm — existing agents whose
         # init.json predates this field cooperatively share the network-wide
@@ -1525,11 +1536,13 @@ class Agent(BaseAgent):
             or new_provider != self.service.provider
             or new_model != self.service.model
             or new_base_url != getattr(self.service, "_base_url", None)
+            or new_context_window != getattr(self.service, "_context_window", None)
             or new_provider_defaults_bucket != cur_provider_defaults_bucket
         ):
             self.service = LLMService(
                 provider=new_provider, model=new_model,
                 api_key=api_key, base_url=new_base_url,
+                context_window=new_context_window,
                 provider_defaults=new_provider_defaults,
             )
             self._session._llm_service = self.service

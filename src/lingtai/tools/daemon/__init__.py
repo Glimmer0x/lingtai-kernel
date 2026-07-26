@@ -1199,7 +1199,7 @@ def get_schema(lang: str = "en") -> dict:
                         "context_token_limit": {
                             "type": "integer",
                             "minimum": 1,
-                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool') or the native 'mimo' provider; every other provider and every external CLI backend ignores this field. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via the provider's standalone compaction and continues the same tool loop. For Codex a standalone-compaction failure is non-fatal (that turn's compaction is skipped and the loop continues on full history); for 'mimo' it is a HARD failure that propagates to the caller instead of silently continuing on full history or falling back to a different wire. Omit to inherit the parent service's resolved context window as the threshold. Must be a positive integer.",
+                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool') or the native 'mimo' provider; every other provider and every external CLI backend ignores this field. This threshold does not set daemon context. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via the provider's standalone compaction and continues the same tool loop. For Codex a standalone-compaction failure is non-fatal (that turn's compaction is skipped and the loop continues on full history); for 'mimo' it is a HARD failure that propagates to the caller instead of silently continuing on full history or falling back to a different wire. Omit to use the daemon session's own resolved context window as the separate provider-compaction threshold: for an explicit preset, valid canonical manifest.llm.context_limit or 272,000 fallback; for implicit/no-preset, a valid inherited parent effective window or 272,000 fallback. Must be a positive integer.",
                         },
                     },
                     "required": ["task", "tools"],
@@ -2270,9 +2270,15 @@ class DaemonManager:
         base_url = getattr(parent_service, "_base_url", None)
         if base_url is not None and not isinstance(base_url, str):
             base_url = str(base_url)
-        context_window = getattr(parent_service, "_context_window", 1_000_000)
-        if not isinstance(context_window, (int, float)):
-            context_window = 1_000_000
+        from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
+
+        context_window = getattr(parent_service, "_context_window", None)
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
+            context_window = CONSERVATIVE_CONTEXT_WINDOW
         bucket = parent_defaults.get(provider, {})
         if not isinstance(bucket, dict):
             bucket = {}
@@ -2575,12 +2581,19 @@ class DaemonManager:
             base_defaults = effective_llm["_provider_defaults"]
         else:
             base_defaults = self._llm_defaults_from_manifest(effective_llm)
+        context_window = effective_llm.get("context_limit")
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
+            context_window = effective_llm.get("context_window")
         return {
             "provider": effective_llm["provider"],
             "model": effective_llm["model"],
             "api_key_env": api_key_env,
             "base_url": effective_llm.get("base_url"),
-            "context_window": effective_llm.get("context_window"),
+            "context_window": context_window,
             "provider_defaults": base_defaults or None,
         }
 
@@ -2779,6 +2792,21 @@ class DaemonManager:
             base_defaults = effective_preset_llm["_provider_defaults"]
         else:
             base_defaults = self._llm_defaults_from_manifest(effective_preset_llm)
+        from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
+
+        context_window = effective_preset_llm.get("context_limit")
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
+            context_window = effective_preset_llm.get("context_window")
+        if (
+            not isinstance(context_window, int)
+            or isinstance(context_window, bool)
+            or context_window <= 0
+        ):
+            context_window = CONSERVATIVE_CONTEXT_WINDOW
         service_kwargs = {
             "provider": provider,
             "model": effective_model,
@@ -2794,8 +2822,7 @@ class DaemonManager:
         # the primary key) and the parent's context window.
         if "key_resolver" in effective_preset_llm:
             service_kwargs["key_resolver"] = effective_preset_llm["key_resolver"]
-        if "context_window" in effective_preset_llm:
-            service_kwargs["context_window"] = effective_preset_llm["context_window"]
+        service_kwargs["context_window"] = context_window
         service = LLMService(**service_kwargs)
 
         session = service.create_session(
@@ -2818,7 +2845,7 @@ class DaemonManager:
         for candidate in (
             session_context_window,
             getattr(service, "_context_window", 0),
-            effective_preset_llm.get("context_window", 0),
+            context_window,
         ):
             if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
                 context_window = candidate
