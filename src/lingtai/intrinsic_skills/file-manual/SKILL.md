@@ -74,17 +74,30 @@ committing or storing it as a durable LingTai asset.
 
 ## Reading safely
 
-Prefer `read` for known text files; its line numbers make later edits and
-citations easier. If a file may be generated, minified, huge, or noisy, search
-first and read only the relevant region:
+Prefer the strict nested `read` action for known text files; its line numbers
+make later edits and citations easier. If a file may be generated, minified,
+huge, or noisy, search first and read only the relevant region:
 
 ```python
 grep({"pattern": "class Agent|def handle", "path": "/abs/path/src", "glob": "*.py", "max_matches": 50})
-read({"file_path": "/abs/path/src/module.py", "offset": 40, "limit": 80})
+read({"action": "read", "input": {"file_path": "/abs/path/src/module.py", "offset": 40, "limit": 80, "summary": False}, "reasoning": "inspect the relevant source window"})
 ```
 
 For the cap model, continuation via `next_offset`, and `line_truncated`
-handling, read `read-manual` rather than improvising.
+handling, read `read-manual` rather than improvising. The public `read` call is
+closed: use `action="read"` with nested `input`, or `action="manual"` with
+`input={}` for the installed read guide; do not use omitted-action or flat-root
+forms.
+
+### The `read` action/input contract
+
+The public `read` call requires root `action` and nested `input`. A normal read
+requires nested `file_path`; `offset`, `limit`, `max_chars`, and exact-boolean
+`summary` remain nested read options, with defaults documented by `read-manual`.
+The manual route is `action="manual"` with an empty `input` and performs no
+file-target read. `BaseAgent` may add root `reasoning` as metadata, but reasoning
+is not a nested read field. Do not add compatibility aliases or flatten the
+input.
 
 ## Writing and editing safely
 
@@ -125,16 +138,18 @@ content or attach/export a file through the appropriate communication channel.
 
 ## Manual versus ordinary calls
 
-Normal file work is primary. Each file tool has two explicit modes:
+Normal file work is primary. Follow each tool's current public schema. The
+migrated `read` tool has two explicit root actions: use `action="read"` with the
+nested ordinary input described above, or use `action="manual"` with `input={}`
+for the installed read guide. Its omitted-action and flat-root forms are not
+supported.
 
-- **Ordinary work:** for backward compatibility, omit `action` or set it to the
-  tool name: `action="read"`, `"write"`, `"edit"`, `"glob"`, or `"grep"`.
-  Supply the ordinary arguments shown in that tool's schema.
-- **Manual lookup:** use `action="manual"` as a one-time entry when you need the
-  installed workflow guide. It returns documentation and performs no file
-  operation. `write`, `edit`, `glob`, and `grep` return this manual; `read`
-  returns `read-manual`.
+Other file tools may document their own ordinary arguments and rollout state.
+A manual lookup is always an explicit `action="manual"` one-time entry when that
+tool exposes it; it returns documentation and performs no file operation.
+`write`, `edit`, `glob`, and `grep` return this manual; `read` returns
+`read-manual`.
 
-After a manual result, continue the original task with an ordinary call. Do not
-request the same manual again. Repeating an identical manual call is an error loop,
-not progress.
+After a manual result, continue the original task with the tool's documented
+ordinary action. Do not request the same manual again. Repeating an identical
+manual call is an error loop, not progress.

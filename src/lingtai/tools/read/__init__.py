@@ -4,13 +4,15 @@ Usage: Agent(capabilities=["read"]) or capabilities=["file"]
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 from .._file_paths import resolve_workdir_path
 from .._manual import load_installed_manual
+from .._settings import current_setting, read_settings
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -22,6 +24,12 @@ PROVIDERS = {"providers": [], "default": "builtin"}
 # ``max_chars`` per read call; values above the runtime ceiling are clamped.
 DEFAULT_READ_CAP_CHARS: int = 100_000
 READ_HARD_CAP_CHARS: int = PREVENTIVE_MAX_CHARS
+
+_ACTION_FIELDS = {
+    "read": ("file_path", "offset", "limit", "max_chars", "summary"),
+    "manual": (),
+}
+_ALLOWED_ROOT_FIELDS = ("action", "input", "reasoning", "_reasoning")
 
 
 def _valid_cap(value: object) -> int | None:
@@ -42,7 +50,7 @@ def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
     ``max_chars`` lets the caller intentionally ask for smaller or larger chunks
     than the read default while the runtime hard cap remains the ceiling that
     prevents provider-visible tool-result blowups. Invalid per-call values are
-    ignored and use the 50k read default.
+    ignored and use the read default, preserving the pre-migration read math.
     """
     runtime_cap = _runtime_hard_cap(agent)
     requested_cap = _valid_cap(requested_max_chars)
@@ -52,22 +60,97 @@ def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
 
 
 def get_description(lang: str = "en") -> str:
-    return "Read the contents of a text file. Normal reads are the primary operation: omit action for the legacy ordinary call or use action='read' explicitly. Returns numbered lines. Text files only — cannot read binary, images, or audio. Use action='manual' once to return the installed read-manual skill; after the manual result, continue the original ordinary read instead of repeating manual, because repeated identical manual calls are an error loop. Before using read for ordinary reads, especially for large files, complete-content workflows, truncation, or line_truncated handling, read that manual. If the file is non-UTF-8 or needs careful search/edit workflow, read file-manual first. Use offset/limit for line windows and optional max_chars to choose the per-call character budget. Default read budget is 100 000 characters; max_chars can raise/lower that per call but is clamped by the non-configurable runtime hard cap of 200 000 characters. A successful read can still be truncated: check truncated=true, cap_chars, returned_chars, next_offset, remaining_lines_estimate, and line_truncated. Continue with next_offset until done. If line_truncated=true, the shown physical line is only a prefix; next_offset skips to the next line and does not recover the hidden tail. Use the read-manual's bash/Python metadata/stats workflow (file size, line count, longest line) and targeted grep/sed/Python processing for such content."
+    return (
+        "Read the contents of a text file. Use read(action='read', input={'file_path': "
+        "'...', 'offset': 1, 'limit': 2000, 'max_chars': 100000, 'summary': False}, "
+        "reasoning='...') for an ordinary text read. The nested input is strict and "
+        "closed; file_path is required, offset is 1-based with default 1, limit "
+        "defaults to 2000 lines, and max_chars is clamped by the 200 000 runtime "
+        "hard cap. Returns numbered lines and continuation metadata when capped; "
+        "check truncated, cap_chars, returned_chars, next_offset, "
+        "remaining_lines_estimate, and line_truncated. Before large or continued "
+        "reads, load the installed guide with read(action='manual', input={}, "
+        "reasoning='...'). This tool reads text files only and cannot read binary, "
+        "images, or audio."
+    )
 
 
 def get_schema(lang: str = "en") -> dict:
+    """Return the raw closed action/input schema.
+
+    ``BaseAgent`` adds the optional root ``reasoning`` property when it builds
+    the model-facing schema. It is metadata, not a read action input.
+    """
     return {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["read", "manual"], "description": "Omit action for the legacy ordinary read, use action='read' for an explicit ordinary read, or use action='manual' once for the installed read-manual skill."},
-            "file_path": {"type": "string", "description": "Absolute path to the file to read. Required for ordinary reads; omit for action='manual'."},
-            "offset": {"type": "integer", "description": 'Line number to start from (1-based)', "default": 1},
-            "limit": {"type": "integer", "description": 'Max lines to read', "default": 2000},
-            "max_chars": {"type": "integer", "description": 'Optional per-call character budget for read content. Defaults to 100 000; values above the runtime hard cap are clamped to 200 000. Use read-manual before setting this for large files.'},
-            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
+            "action": {
+                "type": "string",
+                "enum": ["read", "manual"],
+                "description": "Required operation: read a file or return the installed manual.",
+            },
+            "input": {
+                "description": "Strict action-specific read input.",
+                "anyOf": [
+                    {
+                        "title": "read input",
+                        "type": "object",
+                        "properties": {
+                            "file_path": {
+                                "type": "string",
+                                "description": "Path to the text file to read.",
+                            },
+                            "offset": {
+                                "type": "integer",
+                                "description": "Line number to start from (1-based).",
+                                "default": 1,
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to read.",
+                                "default": 2000,
+                            },
+                            "max_chars": {
+                                "type": "integer",
+                                "description": (
+                                    "Optional per-call character budget for read content. "
+                                    "Defaults to 100 000; values above the runtime hard cap "
+                                    "are clamped to 200 000."
+                                ),
+                            },
+                            "summary": {
+                                "type": "boolean",
+                                "description": (
+                                    "Optional a-priori summary control. Default false; when "
+                                    "true, preserve the raw result before replacing the "
+                                    "model-visible result with a generated summary."
+                                ),
+                                "default": False,
+                            },
+                        },
+                        "required": ["file_path"],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "title": "manual input",
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                ],
+            },
         },
-        "required": [],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
+
+
+def _with_setting(result: Mapping[str, Any], diagnostic: dict[str, Any]) -> dict[str, Any]:
+    """Attach one fresh, secret-free settings diagnostic to a public result."""
+    value = dict(result)
+    value["current_setting"] = dict(diagnostic)
+    return value
 
 
 def _apply_cap(
@@ -130,25 +213,75 @@ def _apply_cap(
 def setup(agent: "BaseAgent") -> None:
     """Set up the read capability on an agent."""
 
-    def handle_read(args: dict) -> dict:
-        action = args.get("action")
+    def handle_read(args: Any) -> dict:
+        # Settings are evidence only, but must be reread before every operation,
+        # including malformed and manual calls. No target FileIO operation occurs
+        # before the canonical action/input checks below.
+        snapshot = read_settings(agent, "read")
+        diagnostic = current_setting(snapshot, "read")
+
+        def error(message: str) -> dict:
+            return _with_setting({"status": "error", "message": message}, diagnostic)
+
+        if not isinstance(args, Mapping):
+            return error("read arguments must be an object")
+        try:
+            root_keys = list(args.keys())
+        except Exception:
+            return error("read arguments must be an object")
+        if any(not isinstance(key, str) or key not in _ALLOWED_ROOT_FIELDS for key in root_keys):
+            return error("read accepts only root action, input, reasoning, and _reasoning")
+        if "action" not in root_keys or "input" not in root_keys:
+            return error("read requires root action and input")
+
+        action = args["action"]
+        if not isinstance(action, str) or action not in _ACTION_FIELDS:
+            return error(f"Unsupported action for read: {action!r}")
+
+        raw_input = args["input"]
+        if not isinstance(raw_input, Mapping):
+            return error("read input must be an object")
+        try:
+            action_input = dict(raw_input)
+        except Exception:
+            return error("read input must be an object")
+        if any(not isinstance(key, str) for key in action_input):
+            return error("read input field names must be strings")
+        allowed_fields = _ACTION_FIELDS[action]
+        if any(key not in allowed_fields for key in action_input):
+            return error(f"unsupported read input field for action {action!r}")
+
         if action == "manual":
-            return load_installed_manual(agent, "read-manual")
-        if action is not None and action != "read":
-            return {"status": "error", "message": f"Unsupported action for read: {action!r}"}
-        path = args.get("file_path", "")
-        if not path:
-            return {"status": "error", "message": "file_path is required"}
-        path = resolve_workdir_path(agent, path)
-        offset = args.get("offset", 1)
-        limit = args.get("limit", 2000)
-        max_chars = args.get("max_chars")
+            if action_input:
+                return error("manual input must be an empty object")
+            return _with_setting(load_installed_manual(agent, "read-manual"), diagnostic)
+
+        if "file_path" not in action_input:
+            return error("file_path is required")
+        file_path = action_input["file_path"]
+        if not isinstance(file_path, str):
+            return error("file_path must be a string")
+        if not file_path:
+            return error("file_path is required")
+
+        for field in ("offset", "limit"):
+            if field in action_input and type(action_input[field]) is not int:
+                return error(f"{field} must be an integer")
+        if "max_chars" in action_input and type(action_input["max_chars"]) is not int:
+            return error("max_chars must be an integer")
+        if "summary" in action_input and type(action_input["summary"]) is not bool:
+            return error("summary must be a boolean")
+
+        path = resolve_workdir_path(agent, file_path)
+        offset = action_input.get("offset", 1)
+        limit = action_input.get("limit", 2000)
+        max_chars = action_input.get("max_chars")
         try:
             content = agent._file_io.read(path)
         except FileNotFoundError:
             # Spill-aware messaging: if the missing file is under
             # tmp/tool-results/, it was an ephemeral sidecar artifact
-            # that has been cleaned up.  Give a specific hint instead
+            # that has been cleaned up. Give a specific hint instead
             # of the generic "File not found".
             # Normalize to collapse ".." components so that e.g.
             # tmp/tool-results/../not-a-spill.txt is NOT misclassified
@@ -161,18 +294,15 @@ def setup(agent: "BaseAgent") -> None:
                 rel = Path(path)
             parts = rel.parts
             if len(parts) >= 3 and parts[0] == "tmp" and parts[1] == "tool-results":
-                return {
-                    "status": "error",
-                    "message": (
-                        "Spill artifact expired: this tmp/tool-results/ sidecar file "
-                        "no longer exists. The original tool result content is "
-                        "unavailable. Use the preview from the manifest or rerun the "
-                        "source tool."
-                    ),
-                }
-            return {"status": "error", "message": f"File not found: {path}"}
-        except Exception as e:
-            return {"status": "error", "message": f"Cannot read {path}: {e}"}
+                return error(
+                    "Spill artifact expired: this tmp/tool-results/ sidecar file "
+                    "no longer exists. The original tool result content is "
+                    "unavailable. Use the preview from the manifest or rerun the "
+                    "source tool."
+                )
+            return error(f"File not found: {path}")
+        except Exception as exc:
+            return error(f"Cannot read {path}: {exc}")
         lines = content.splitlines(keepends=True)
         start = max(0, offset - 1)
         numbered, extra = _apply_cap(lines, start, limit, _resolve_call_cap(agent, max_chars))
@@ -182,6 +312,12 @@ def setup(agent: "BaseAgent") -> None:
             "lines_shown": len(numbered.splitlines()) if numbered else 0,
         }
         result.update(extra)
-        return result
+        return _with_setting(result, diagnostic)
 
-    agent.add_tool("read", schema=get_schema(), handler=handle_read, description=get_description(), glossary_package=__package__)
+    agent.add_tool(
+        "read",
+        schema=get_schema(),
+        handler=handle_read,
+        description=get_description(),
+        glossary_package=__package__,
+    )
