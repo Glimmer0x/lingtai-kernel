@@ -210,7 +210,7 @@ a default wait loop. If waiting for a human or peer, ensure the current state is
 in pad/knowledge and then sleep or stop the turn.
 
 **Idle care for unverified long-running work.** Before entering idle, if you have
-launched any async/long-running child — a backgrounded `shell(async=true)` agent
+launched any async/long-running child — a backgrounded `shell(action="run", input={"async": true, ...})` agent
 CLI, a daemon emanation, a scheduled job, a PR/CI run — whose health you have not
 just verified, do **not** hand yourself entirely to its completion/IDLE
 notification. Arm at least one self-wake (a `.notification/cron.json` reminder or

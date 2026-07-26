@@ -71,7 +71,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     web_manager = web_tool.setup(agent)
 
     calls = {
-        "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
+        "shell": ("shell", lambda: shell_manager.handle({"action": "manual", "input": {}})),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
@@ -94,6 +94,11 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
+        elif tool_name == "shell":
+            assert result["status"] == "ok"
+            assert result["manual"] == body
+            assert result["manual_path"] == str(path)
+            assert result["current_setting"]["source"] == "missing"
         else:
             assert result == {
                 "status": "ok",
@@ -124,7 +129,10 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         action = schema["properties"]["action"]
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
-    assert shell_tool.get_schema()["required"] == []
+    shell_schema = shell_tool.get_schema()
+    assert shell_schema["required"] == ["action", "input"]
+    assert set(shell_schema["properties"]) == {"action", "input"}
+    assert len(shell_schema["properties"]["input"]["anyOf"]) == 4
     assert psyche_tool.get_schema()["required"] == ["action"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input"]

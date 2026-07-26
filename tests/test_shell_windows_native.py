@@ -41,7 +41,7 @@ class _NotificationSink:
 
 
 def _manager(root: Path) -> ShellManager:
-    agent = SimpleNamespace(_notification_store=_NotificationSink())
+    agent = SimpleNamespace(_notification_store=_NotificationSink(), _working_dir=root)
     return ShellManager(
         policy=ShellPolicy.yolo(),
         working_dir=str(root),
@@ -53,7 +53,7 @@ def _poll_terminal(manager: ShellManager, job_id: str, timeout: float = 15.0) ->
     deadline = time.monotonic() + timeout
     latest: dict = {"status": "not-polled"}
     while time.monotonic() < deadline:
-        latest = manager.handle({"action": "poll", "job_id": job_id})
+        latest = manager.handle({'action': 'poll', 'input': {'job_id': job_id}})
         if latest.get("status") == "done":
             return latest
         assert latest.get("status") == "running", latest
@@ -76,14 +76,7 @@ def _ps_literal(path: Path) -> str:
 
 def test_native_powershell_sync_captures_streams_and_exact_native_exit(tmp_path):
     manager = _manager(tmp_path)
-    result = manager.handle({
-        "command": (
-            "Write-Output 'native-stdout'; "
-            "[Console]::Error.WriteLine('native-stderr'); "
-            "& $env:ComSpec /d /c exit 7"
-        ),
-        "timeout": 10,
-    })
+    result = manager.handle({'action': 'run', 'input': {'command': "Write-Output 'native-stdout'; [Console]::Error.WriteLine('native-stderr'); & $env:ComSpec /d /c exit 7", 'timeout': 10}})
 
     assert result["status"] == "ok"
     assert result["exit_code"] == 7
@@ -96,45 +89,28 @@ def test_native_powershell_sync_captures_streams_and_exact_native_exit(tmp_path)
 def test_native_powershell_failure_and_sync_timeout_are_explicit(tmp_path):
     manager = _manager(tmp_path)
 
-    failed = manager.handle({"command": "Write-Error 'powershell-failure'", "timeout": 10})
+    failed = manager.handle({'action': 'run', 'input': {'command': "Write-Error 'powershell-failure'", 'timeout': 10}})
     assert failed["status"] == "ok"
     assert failed["exit_code"] == 1
     assert failed["ok"] is False
     assert "powershell-failure" in failed["stderr"]
 
-    sticky_native_then_powershell = manager.handle({
-        "command": (
-            "& $env:ComSpec /d /c exit 7; "
-            "Write-Error 'final-powershell-failure'"
-        ),
-        "timeout": 10,
-    })
+    sticky_native_then_powershell = manager.handle({'action': 'run', 'input': {'command': "& $env:ComSpec /d /c exit 7; Write-Error 'final-powershell-failure'", 'timeout': 10}})
     assert sticky_native_then_powershell["status"] == "ok"
     assert sticky_native_then_powershell["exit_code"] == 1
 
-    native_then_success = manager.handle({
-        "command": "& $env:ComSpec /d /c exit 7; Write-Output 'final-success'",
-        "timeout": 10,
-    })
+    native_then_success = manager.handle({'action': 'run', 'input': {'command': "& $env:ComSpec /d /c exit 7; Write-Output 'final-success'", 'timeout': 10}})
     assert native_then_success["status"] == "ok"
     assert native_then_success["exit_code"] == 0
 
-    timed_out = manager.handle({"command": "Start-Sleep -Seconds 10", "timeout": 0.5})
+    timed_out = manager.handle({'action': 'run', 'input': {'command': 'Start-Sleep -Seconds 10', 'timeout': 0.5}})
     assert timed_out["status"] == "error"
     assert "timed out" in timed_out["message"].lower()
 
 
 def test_native_powershell_async_poll_preserves_streams_and_exit_code(tmp_path):
     manager = _manager(tmp_path)
-    started = manager.handle({
-        "command": (
-            "Write-Output 'async-stdout'; "
-            "[Console]::Error.WriteLine('async-stderr'); "
-            "& $env:ComSpec /d /c exit 7"
-        ),
-        "async": True,
-        "reminder": 30,
-    })
+    started = manager.handle({'action': 'run', 'input': {'command': "Write-Output 'async-stdout'; [Console]::Error.WriteLine('async-stderr'); & $env:ComSpec /d /c exit 7", 'async': True, 'reminder': 30}})
 
     assert started["status"] == "ok", started
     terminal = _poll_terminal(manager, started["job_id"])
@@ -200,15 +176,13 @@ def test_native_job_object_cancel_after_root_exit_terminates_descendant_tree(tmp
         "exit 0"
     )
 
-    started = manager.handle({
-        "command": parent_script,
-        "async": True,
-        "reminder": 30,
-    })
+    started = manager.handle({'action': 'run', 'input': {'command': parent_script, 'async': True, 'reminder': 30}})
     assert started["status"] == "ok", started
     _wait_for_file(ready)
-    cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
-    assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
+    cancelled = manager.handle({'action': 'cancel', 'input': {'job_id': started['job_id']}})
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["job_id"] == started["job_id"]
+    assert cancelled["current_setting"]["source"] == "missing"
 
     state_path = tmp_path / "system" / "jobs" / started["job_id"] / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -237,16 +211,14 @@ def test_native_job_object_cancel_terminates_descendant_tree(tmp_path):
         "Wait-Process -Id $child.Id"
     )
 
-    started = manager.handle({
-        "command": parent_script,
-        "async": True,
-        "reminder": 30,
-    })
+    started = manager.handle({'action': 'run', 'input': {'command': parent_script, 'async': True, 'reminder': 30}})
     assert started["status"] == "ok", started
     _wait_for_file(ready)
 
-    cancelled = manager.handle({"action": "cancel", "job_id": started["job_id"]})
-    assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}
+    cancelled = manager.handle({'action': 'cancel', 'input': {'job_id': started['job_id']}})
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["job_id"] == started["job_id"]
+    assert cancelled["current_setting"]["source"] == "missing"
 
     state_path = tmp_path / "system" / "jobs" / started["job_id"] / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))

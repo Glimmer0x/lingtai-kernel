@@ -110,11 +110,11 @@ read("daemons/em-3-20260427-094215-abc123/daemon.json")
 # → state=running, turn=8, current_tool=null, tool_call_count=15, tokens.input=22000
 
 # Last few lines of the transcript
-shell("tail -n 20 daemons/em-3-20260427-094215-abc123/history/chat_history.jsonl")
+shell(action="run", input={"command": "tail -n 20 daemons/em-3-20260427-094215-abc123/history/chat_history.jsonl"})
 # → assistant: "Found a potential SQL injection in db.py:42. Continuing..."
 
 # Recent tool activity
-shell("tail -n 10 daemons/em-3-20260427-094215-abc123/logs/events.jsonl")
+shell(action="run", input={"command": "tail -n 10 daemons/em-3-20260427-094215-abc123/logs/events.jsonl"})
 # → series of read/grep events on src/db/, src/auth/
 ```
 

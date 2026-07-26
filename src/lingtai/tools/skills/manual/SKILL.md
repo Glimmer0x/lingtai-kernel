@@ -163,7 +163,7 @@ load-bearing — the catalog still finds skills without them.
 catalog:
 
 ```
-shell({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
+shell(action="run", input={"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
 ```
 
 On a hit: rename, or adapt the existing skill instead of forking a second one.

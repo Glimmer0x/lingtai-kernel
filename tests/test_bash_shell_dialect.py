@@ -26,7 +26,7 @@ def manager(tmp_path, dialect=None, policy=None):
     return BashManager(
         policy=policy or BashPolicy.yolo(),
         working_dir=str(tmp_path),
-        agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path)),
+        agent=SimpleNamespace(_notification_store=notification_store_for(tmp_path), _working_dir=tmp_path),
         dialect=dialect,
     )
 
@@ -114,14 +114,14 @@ def test_selected_dialect_drives_policy_and_sync_execution(tmp_path):
     dialect = MarkerDialect()
     policy = BashPolicy(deny=["blocked"])
     mgr = manager(tmp_path, dialect=dialect, policy=policy)
-    assert mgr.handle({"command": "marker"})["status"] == "error"
-    result = mgr.handle({"command": "echo"})
+    assert mgr.handle({'action': 'run', 'input': {'command': 'marker'}})["status"] == "error"
+    result = mgr.handle({'action': 'run', 'input': {'command': 'echo'}})
     assert result["stdout"] == "dialect-marker"
 
 
 def test_async_state_persists_dialect_invocation_and_raw_command(tmp_path):
     mgr = manager(tmp_path, dialect=MarkerDialect())
-    started = mgr.handle({"command": "echo original", "async": True, "reminder": 30})
+    started = mgr.handle({'action': 'run', 'input': {'command': 'echo original', 'async': True, 'reminder': 30}})
     assert started["status"] == "ok"
     state_path = tmp_path / "system" / "jobs" / started["job_id"] / "state.json"
     state = json.loads(state_path.read_text())
@@ -133,7 +133,7 @@ def test_async_state_persists_dialect_invocation_and_raw_command(tmp_path):
         if json.loads(state_path.read_text()).get("status") == "completed":
             break
         time.sleep(0.02)
-    result = mgr.handle({"action": "poll", "job_id": started["job_id"]})
+    result = mgr.handle({'action': 'poll', 'input': {'job_id': started['job_id']}})
     assert result["status"] == "done"
     assert result["stdout"] == "dialect-marker"
 

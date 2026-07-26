@@ -58,7 +58,7 @@ invariants.
 ## Scope
 
 - Canonical tool name: `shell` (the retained implementation package is `lingtai.tools.bash`).
-- One public tool exposes three actions: `run` (default), `poll`, `cancel`.
+- One public tool exposes four actions: `run`, `poll`, `cancel`, and read-only `manual`. All calls use explicit `action` plus nested `input`; there is no implicit default action on the raw wire.
 - Policy is file-based (`bash_policy.json` is the POSIX default; Windows selects the reviewed `powershell_policy.json`). `yolo=True` at setup
   installs an allow-everything policy (unsandboxed command set) and is the
   documented default for trusted agents. Two policy modes exist: **allowlist**
@@ -71,20 +71,24 @@ does not stream output incrementally (async jobs are polled, not streamed).
 
 ## Tool surface
 
-`get_schema` marks `reminder` required at the top schema level to satisfy the
-provider-facing required-option contract. Provider-validated sync `run`,
-`poll`, and `cancel` calls therefore also carry `reminder` on the wire, but the
-handler consumes and validates it only for async `run`; sync `run`, `poll`, and
-`cancel` ignore it. Direct async runtime calls that omit it still default to
-1800 seconds for compatibility. The handler enforces per-action requirements
-for `command` and `job_id`. `action` defaults to `run`.
+`get_schema` is the canonical strict root contract: exactly `action` and
+`input` are public properties, both are required, and root/input objects reject
+unknown fields. The `input.anyOf` branches are closed action-specific objects:
+`run` requires `input.command` and admits `timeout`, `working_dir`, `async`,
+`reminder`, and the executor-owned a-priori `summary` control; `poll` and
+`cancel` require only `input.job_id`; `manual` requires
+an empty `input` object. There are no flat compatibility aliases. BaseAgent
+adds its optional root `reasoning` property to the provider-facing copy and
+strips it before dispatch; it is not shell-owned. Every handler result carries a
+fresh `current_setting` diagnostic from Agent-owned `settings/shell.json`.
 
-| Action | Required inputs | Optional inputs | Success output | Error shapes |
+| Action | Required nested input | Optional nested input | Success output | Error shapes |
 |---|---|---|---|---|
-| `run` (sync) | Provider schema: `command`, `reminder`; runtime consumes `command` only | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
-| `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
-| `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
-| `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
+| `run` (sync) | `{"action":"run","input":{"command":"..."}}` | `timeout` (default 30), `working_dir`, `async` (false), `reminder`, `summary` (false) | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?, current_setting}` | `{status: "error", message, current_setting}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
+| `run` (async) | `input.command`, `input.async: true` | `input.working_dir`, `input.reminder` (default 1800), `input.summary` (false) | `{status: "ok", job_id, pid, message, handoff, current_setting}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message, current_setting}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `input.reminder`, plus `Failed to start async job: ...` |
+| `poll` | `{"action":"poll","input":{"job_id":"..."}}` | none | running: `{status: "running", job_id, pid?, current_setting}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?, current_setting}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr, current_setting}` | `{status: "error", message, current_setting}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
+| `cancel` | `{"action":"cancel","input":{"job_id":"..."}}` | none | `{status: "cancelled", job_id, current_setting}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message, current_setting}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
+| `manual` | `{"action":"manual","input":{}}` | none | `{status: "ok", manual, manual_path, current_setting}` from the initialized installed shell manual; this is read-only | `{status: "degraded", manual: "", manual_path, error, current_setting}` if the installed manual is missing |
 
 Fidelity fields are additive and keyed off `exit_code`: `ok` is `True` only when
 `exit_code == 0`; `command_status` is `"success"`/`"failed"`; `warning` is
@@ -96,12 +100,18 @@ inner failure is surfaced through the additive fields, not by changing `status`.
 Unknown/invalid `job_id` values containing `/`, `\`, or `..` are rejected before
 any filesystem access (path-traversal guard).
 
-`reminder` is a finite non-negative number of seconds used only for async
-`run`; booleans, non-numeric values, non-finite values (`NaN`, `Infinity`),
+`input.reminder` is a finite non-negative number of seconds used only for
+async `run`; booleans, non-numeric values, non-finite values (`NaN`, `Infinity`),
 negative values, and values larger than `threading.TIMEOUT_MAX` are rejected
-because the timer backend cannot accept them safely. The schema default is 1800
-seconds. Direct runtime calls that omit it still get 1800 seconds, so older
-callers keep working even though providers see the field as required.
+because the timer backend cannot accept them safely. The nested schema default is
+1800 seconds and omitted direct canonical calls also get 1800 seconds. `poll`
+and `cancel` do not accept a reminder field.
+
+`input.summary` is an optional boolean on `run`. Only the exact value `true`
+requests the executor's a-priori model-visible summary; the raw shell result is
+still logged first and root `reasoning` drives what the summary retains. Because
+this is a migrated canonical tool, root `summary` is not accepted or consulted.
+`poll`, `cancel`, and `manual` do not admit a summary field.
 
 Agents following an async success `handoff` MUST treat Task Card guidance as
 conditional: use the Task Card only when Telegram is connected and a Task Card
@@ -292,7 +302,9 @@ for cancellation correctness.
 | Policy is enforced on async runs too | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_policy_applies_to_async` |
 | Neutral process refs are strict/JSON-safe, unknown identity is never same, and the POSIX adapter owns spawn plus exact wait | `src/lingtai/tools/bash/_async_process.py`, `src/lingtai/adapters/posix/bash_process.py` | `tests/test_bash_async_process_contract.py` |
 | Manager policy consumes neutral refs before v3 compatibility fields and refuses unverifiable cancellation | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_running_result_prefers_neutral_command_ref_over_legacy_fields`, `::test_cancel_refuses_unverifiable_neutral_supervisor_ref` |
-| Async `reminder` defaults to 1800 for omitted direct calls while schema marks it required | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_schema_requires_reminder_with_runtime_default` |
+| Canonical root is exactly `action` + strict nested `input`, with closed run/poll/cancel/manual branches and BaseAgent-owned reasoning injection | `src/lingtai/tools/bash/__init__.py`, `src/lingtai/kernel/base_agent/tools.py` | `tests/test_shell_action_input_candidate.py` |
+| Every result fresh-reads strict v1 Agent-owned `settings/shell.json` and reports no-op `current_setting`; no adjustable shell options are fabricated | `src/lingtai/tools/_settings.py`, `src/lingtai/tools/bash/__init__.py` | `tests/test_shell_action_input_candidate.py` |
+| `manual` reads the installed shell skill through the real read-only loader | `src/lingtai/tools/bash/__init__.py`, `src/lingtai/tools/_manual.py` | `tests/test_intrinsic_manual_actions.py`, `tests/test_shell_action_input_candidate.py` |
 | Last-resort deadlines are measured from successful async return, and a bounded durable handoff blocks both pre-adapter-spawn and durable-`running` pre-return publication windows while retaining crash fallback | `src/lingtai/tools/bash/__init__.py`, `_async_supervisor.py` | `tests/test_bash_async.py::test_reminder_deadline_starts_at_successful_async_return`, `::test_return_handoff_blocks_fallback_while_parent_popen_is_delayed`, `::test_return_handoff_blocks_fallback_after_running_before_return_arm`, `::test_owner_resuming_after_handoff_expiry_cannot_report_start_success`, `::test_stale_pre_return_reminder_timer_defers_to_latest_deadline` |
 | Supervisor terminal truth, bounded start-lease recovery, parent-reaper/fresh-manager handling of an actual preclaim supervisor exit, PID identity refusal, and sink-idempotent completion wake survive manager loss | `src/lingtai/tools/bash/_async_supervisor.py`, `__init__.py` | `tests/test_bash_async.py::TestBashAsyncRelaunchDurability`, `::test_owned_parent_reaps_actual_supervisor_exit_before_start_claim`, `::test_fresh_manager_recovers_actual_preclaim_exit_after_owner_loss`, `::test_legacy_live_pid_remains_running_and_uncancellable` |
 | Reminder validation rejects non-finite and backend-unsafe delays | `src/lingtai/tools/bash/__init__.py` | `tests/test_bash_async.py::test_async_reminder_rejects_invalid_values` |

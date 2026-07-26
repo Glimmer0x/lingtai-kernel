@@ -20,6 +20,9 @@ from lingtai.tools.bash import BashManager, BashPolicy, _working_dir_contained
 class _SyncOnlyAgent:
     """Stand-in agent for synchronous manager runs."""
 
+    def __init__(self):
+        self._working_dir = None
+
 
 # ---------------------------------------------------------------------------
 # Direct unit tests of the module-level helper
@@ -73,8 +76,10 @@ def test_nested_working_dir_is_accepted(tmp_path):
     sandbox = tmp_path / "agent"
     nested = sandbox / "sub" / "deep"
     nested.mkdir(parents=True)
-    mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(sandbox))
-    result = mgr.handle({"command": "pwd", "working_dir": str(nested)})
+    agent = _SyncOnlyAgent()
+    agent._working_dir = sandbox
+    mgr = BashManager(agent=agent, policy=BashPolicy.yolo(), working_dir=str(sandbox))
+    result = mgr.handle({"action": "run", "input": {"command": "pwd", "working_dir": str(nested)}})
     assert result["status"] == "ok"
     assert str(nested.resolve()) in result["stdout"]
 
@@ -87,7 +92,9 @@ def test_sibling_prefix_dir_is_rejected(tmp_path):
     sibling = tmp_path / "agent-bb"
     sandbox.mkdir()
     sibling.mkdir()
-    mgr = BashManager(agent=_SyncOnlyAgent(), policy=BashPolicy.yolo(), working_dir=str(sandbox))
-    result = mgr.handle({"command": "pwd", "working_dir": str(sibling)})
+    agent = _SyncOnlyAgent()
+    agent._working_dir = sandbox
+    mgr = BashManager(agent=agent, policy=BashPolicy.yolo(), working_dir=str(sandbox))
+    result = mgr.handle({"action": "run", "input": {"command": "pwd", "working_dir": str(sibling)}})
     assert result["status"] == "error"
     assert "under agent working directory" in result["message"]

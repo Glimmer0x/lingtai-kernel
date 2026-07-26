@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
 from .._manual import load_installed_manual
+from .._settings import current_setting, read_settings
 
 from ._async_supervisor import (
     load_state,
@@ -249,53 +250,94 @@ def get_description(
             "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
             "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
             "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
-            "Supports async mode (async=true → job_id, then poll/cancel). Call shell(action='manual') to return the installed shell-manual skill. Before ordinary shell work, read that manual — it covers async hygiene and advanced usage; no exceptions.")
+            "Use shell(action='run', input={'command': '...'}) for ordinary work. Supports async mode (input.async=true → job_id, then action='poll'/'cancel' with input.job_id). Use input.summary=true for an a-priori summary when exact raw output is unnecessary. Call shell(action='manual', input={}) to return the installed shell-manual skill. Before ordinary shell work, read that manual — it covers async hygiene and advanced usage; no exceptions.")
 
 
 def get_schema(lang: str = "en") -> dict:
+    """Return the strict public ``shell(action, input)`` contract.
+
+    The action-specific payloads are intentionally closed.  ``reasoning`` is
+    injected by ``BaseAgent`` into the provider-facing copy of this schema; it
+    is not a shell-owned parameter and therefore does not appear here.
+    """
+    run_input = {
+        "title": "run input",
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Shell command to execute."},
+            "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds (default: 30, only for synchronous execution).",
+                "default": 30,
+            },
+            "working_dir": {
+                "type": "string",
+                "description": "Working directory for the command (optional). Leave it out (or pass an empty string) to use the agent working directory. Must be inside the agent working directory sandbox; paths outside it are rejected. For external repos/paths, keep working_dir at the agent dir and put an explicit cd in command, e.g. cd /absolute/path && ...",
+            },
+            "async": {
+                "type": "boolean",
+                "description": "Run in the background and return a durable job_id (default: false).",
+                "default": False,
+            },
+            "reminder": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Async last-resort wake delay in seconds (default: 1800).",
+                "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
+            },
+            "summary": {
+                "type": "boolean",
+                "description": (
+                    "Optional a-priori summary control. Default false; when true, "
+                    "preserve the raw result before replacing the model-visible "
+                    "result with a generated summary driven by root reasoning."
+                ),
+                "default": False,
+            },
+        },
+        "required": ["command"],
+        "additionalProperties": False,
+    }
+    poll_input = {
+        "title": "poll input",
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "Durable job ID returned by an async run."},
+        },
+        "required": ["job_id"],
+        "additionalProperties": False,
+    }
+    cancel_input = {
+        "title": "cancel input",
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string", "description": "Durable job ID returned by an async run."},
+        },
+        "required": ["job_id"],
+        "additionalProperties": False,
+    }
+    manual_input = {
+        "title": "manual input",
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": ["run", "poll", "cancel", "manual"],
-                "description": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job, 'manual' returns the installed shell-manual skill",
-                "default": "run",
+                "description": "Action to perform: run, poll, cancel, or the read-only installed manual.",
             },
-            "command": {
-                "type": "string",
-                "description": 'The shell command to execute',
-            },
-            "timeout": {
-                "type": "number",
-                "description": 'Timeout in seconds (default: 30, only for sync execution)',
-                "default": 30,
-            },
-            "working_dir": {
-                "type": "string",
-                "description": 'Working directory for the command (optional). Leave it out (or pass an empty string) to use the agent working directory. Must be inside the agent working directory sandbox; paths outside it are rejected. For external repos/paths, keep working_dir at the agent dir and put an explicit cd in command, e.g. cd /absolute/path && ...',
-            },
-            "async": {
-                "type": "boolean",
-                "description": "Run command in background and return immediately with a job_id (default: false, only for action='run')",
-                "default": False,
-            },
-            "reminder": {
-                "type": "number",
-                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job is still non-terminal when the durable deadline expires, publish a system notification reminding you to poll it; exact completion suppresses this stale watchdog and publishes the shell completion wake instead.",
-                "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
-            },
-            "job_id": {
-                "type": "string",
-                "description": 'Job ID for poll/cancel actions (returned by async run)',
-            },
-            "summary": {
-                "type": "boolean",
-                "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.',
-                "default": False,
+            "input": {
+                "anyOf": [run_input, poll_input, cancel_input, manual_input],
+                "description": "Strict action-specific input object.",
             },
         },
-        "required": [],  # action-specific inputs are enforced by the handler; manual needs none
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
 
 
@@ -493,14 +535,75 @@ class ShellManager:
         return delay, None
 
     def handle(self, args: dict) -> dict:
-        action = args.get("action", "run")
+        """Dispatch one strict canonical call and attach a fresh setting snapshot.
+
+        The provider schema owns the canonical shape, but this boundary also
+        validates it for direct/in-process callers.  Only BaseAgent's private
+        runtime fields may accompany the two public root fields; flat command,
+        job, timeout, and reminder aliases are deliberately not accepted.
+        """
+        snapshot = read_settings(self._agent, "shell")
+        diagnostic = current_setting(snapshot, "shell")
+
+        def finish(result: dict) -> dict:
+            value = dict(result)
+            value["current_setting"] = dict(diagnostic)
+            return value
+
+        if not isinstance(args, dict):
+            return finish({"status": "error", "message": "shell arguments must be an object"})
+        unknown_root = set(args) - {"action", "input", "_reasoning", "_tc_id"}
+        if unknown_root:
+            return finish({
+                "status": "error",
+                "message": f"Unsupported shell argument(s): {', '.join(sorted(map(str, unknown_root)))}",
+            })
+        action = args.get("action")
+        if not isinstance(action, str) or action not in {"run", "poll", "cancel", "manual"}:
+            return finish({"status": "error", "message": "action must be one of: run, poll, cancel, manual"})
+        payload = args.get("input")
+        if not isinstance(payload, dict):
+            return finish({"status": "error", "message": "input is required and must be an object"})
+
+        allowed = {
+            "run": {"command", "timeout", "working_dir", "async", "reminder", "summary"},
+            "poll": {"job_id"},
+            "cancel": {"job_id"},
+            "manual": set(),
+        }[action]
+        unknown_input = set(payload) - allowed
+        if unknown_input:
+            return finish({
+                "status": "error",
+                "message": f"Unsupported {action} input field(s): {', '.join(sorted(map(str, unknown_input)))}",
+            })
+        if action == "run":
+            command = payload.get("command")
+            if not isinstance(command, str):
+                return finish({"status": "error", "message": "command is required and must be a string"})
+            timeout = payload.get("timeout", 30)
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout):
+                return finish({"status": "error", "message": "timeout must be a finite number of seconds"})
+            if "working_dir" in payload and not isinstance(payload["working_dir"], str):
+                return finish({"status": "error", "message": "working_dir must be a string"})
+            if "async" in payload and not isinstance(payload["async"], bool):
+                return finish({"status": "error", "message": "async must be a boolean"})
+            if "summary" in payload and not isinstance(payload["summary"], bool):
+                return finish({"status": "error", "message": "summary must be a boolean"})
+            if payload.get("async", False) and "reminder" in payload:
+                reminder = payload["reminder"]
+                if isinstance(reminder, bool) or not isinstance(reminder, (int, float)):
+                    return finish({"status": "error", "message": "reminder must be a finite non-negative number of seconds"})
+                _, reminder_error = self._validate_reminder(reminder)
+                if reminder_error:
+                    return finish(reminder_error)
         if action == "manual":
-            return load_installed_manual(self._agent, "shell")
+            return finish(load_installed_manual(self._agent, "shell"))
         if action == "poll":
-            return self._handle_poll(args)
+            return finish(self._handle_poll(payload))
         if action == "cancel":
-            return self._handle_cancel(args)
-        return self._handle_run(args)
+            return finish(self._handle_cancel(payload))
+        return finish(self._handle_run(payload))
 
     def _handle_run(self, args: dict) -> dict:
         command = args.get("command", "")
@@ -817,7 +920,7 @@ class ShellManager:
                     }
                 return {
                     "status": "ok", "job_id": job_id, "pid": pid,
-                    "message": f'Job started. Use shell(action="poll", job_id="{job_id}") to check.',
+                    "message": f'Job started. Use shell(action="poll", input={{"job_id": "{job_id}"}}) to check.',
                     "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details.",
                 }
             if state and self._terminal(state.get("status")):
@@ -1011,7 +1114,7 @@ class ShellManager:
     def _publish_async_reminder(self, job_id: str) -> bool:
         body = (
             f"Shell async job {job_id} may still be running. "
-            f"Poll it with shell(action=\"poll\", job_id=\"{job_id}\")."
+            f"Poll it with shell(action=\"poll\", input={{\"job_id\": \"{job_id}\"}})."
         )
         agent = self._agent
         if hasattr(agent, "_enqueue_system_notification"):

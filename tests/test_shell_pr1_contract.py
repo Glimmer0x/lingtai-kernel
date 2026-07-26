@@ -111,10 +111,10 @@ def test_powershell_parenthesized_policy_rejects_before_invocation(tmp_path, pol
     manager = ShellManager(
         policy=policy,
         working_dir=str(tmp_path),
-        agent=SimpleNamespace(),
+        agent=SimpleNamespace(_working_dir=tmp_path),
         dialect=dialect,
     )
-    denied = manager.handle({"command": r"Write-Output (Remove-Item -LiteralPath .\victim)"})
+    denied = manager.handle({'action': 'run', 'input': {'command': 'Write-Output (Remove-Item -LiteralPath .\\victim)'}})
     assert denied["status"] == "error"
     assert "not allowed" in denied["message"]
     assert "Remove-Item" in denied["message"]
@@ -142,10 +142,10 @@ def test_powershell_backtick_escaped_command_fails_closed_before_invocation(
     manager = ShellManager(
         policy=policy,
         working_dir=str(tmp_path),
-        agent=SimpleNamespace(),
+        agent=SimpleNamespace(_working_dir=tmp_path),
         dialect=dialect,
     )
-    denied = manager.handle({"command": command})
+    denied = manager.handle({'action': 'run', 'input': {'command': command}})
     assert denied["status"] == "error"
     assert "does not support this syntax" in denied["message"]
     assert "refusing to run" in denied["message"]
@@ -157,19 +157,19 @@ def test_powershell_policy_is_case_insensitive_and_dynamic_syntax_fails_closed(t
     manager = ShellManager(
         policy=policy,
         working_dir=str(tmp_path),
-        agent=SimpleNamespace(),
+        agent=SimpleNamespace(_working_dir=tmp_path),
         dialect=PowerShellDialect(executable="pwsh"),
     )
-    denied = manager.handle({"command": "remove-item file.txt"})
+    denied = manager.handle({'action': 'run', 'input': {'command': 'remove-item file.txt'}})
     assert denied["status"] == "error"
     assert "not allowed" in denied["message"]
-    dynamic = manager.handle({"command": "& $command"})
+    dynamic = manager.handle({'action': 'run', 'input': {'command': '& $command'}})
     assert dynamic["status"] == "error"
-    expandable = manager.handle({"command": '& "$command" victim'})
+    expandable = manager.handle({'action': 'run', 'input': {'command': '& "$command" victim'}})
     assert expandable["status"] == "error"
-    static = manager.handle({"command": "& Remove-Item victim"})
+    static = manager.handle({'action': 'run', 'input': {'command': '& Remove-Item victim'}})
     assert static["status"] == "error"
-    quoted_static = manager.handle({"command": "& 'Remove-Item' victim"})
+    quoted_static = manager.handle({'action': 'run', 'input': {'command': "& 'Remove-Item' victim"}})
     assert quoted_static["status"] == "error"
 
 

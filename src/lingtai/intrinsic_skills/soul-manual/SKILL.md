@@ -104,7 +104,7 @@ switch.
   means enabled, `status: disabled` means the env var is not set. You can also
   run `soul(action='config', ...)` and read `soul_flow_enabled` in the result.
 - **Check the env from a shell:**
-  `shell({"command": "printenv LINGTAI_SOUL_FLOW_ENABLED"})` — empty output
+  `shell(action="run", input={"command": "printenv LINGTAI_SOUL_FLOW_ENABLED"})` — empty output
   means unset (disabled).
 - **Enabled but no fires?** Fires only happen while you are IDLE and only after
   `delay_seconds` elapses. Confirm `delay_seconds` is a small, sane value and

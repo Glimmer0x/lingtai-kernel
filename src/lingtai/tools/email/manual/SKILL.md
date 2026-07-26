@@ -165,7 +165,7 @@ Use this for: TODOs you want to remember after a memory rotation, breadcrumbs ab
 
 Add `delay=<seconds>` to defer delivery. The outbox entry is written immediately; the `_mailman` daemon thread sleeps until the deadline, then dispatches. Combined with self-send this gives you cheap one-shot alarms without standing up a cron; the notification is delivered exactly once.
 
-Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. It is one of the escape hatches when a repeated-call `_advisory` says you may be polling the same thing: write one concrete reminder, then yield/idle.
+Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll", input={"job_id": "..."})`, `daemon(check)`, a channel read, or nothing at all. It is one of the escape hatches when a repeated-call `_advisory` says you may be polling the same thing: write one concrete reminder, then yield/idle.
 
 **Recurring work is not an email feature.** The internal `email` tool has no recurring scheduling API. For repeating reminders or agent-side scheduled work, use a host scheduler (cron, launchd, systemd, or an event watcher) via `shell-manual` → `reference/scheduled-work/SKILL.md`; for a single lightweight wakeup that does not need mailbox state, `shell-manual` → `reference/notification-reminders/SKILL.md` owns the `.notification/cron.json` pattern.
 
