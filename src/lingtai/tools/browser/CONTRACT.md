@@ -50,9 +50,11 @@ actual initial timings, warnings, and `untrusted_content: true`. Page text is
 data, never instructions.
 
 All failures are `{status: "failed", request_id, stage, error_code, message,
-retryable, recommended_action, partial}` with sanitized bounded messages. There
-is no search, dynamic renderer, PDF, session/cookie/auth, persistence, forms,
-robots, credential, proxy, or hidden fallback behavior.
+retryable, recommended_action, partial}` with sanitized bounded messages. When
+known, the envelope also carries the numeric `http_status`; callers must not
+parse the English `message` to recover it. There is no search, dynamic renderer,
+PDF, session/cookie/auth, persistence, forms, robots, credential, proxy, or
+hidden fallback behavior.
 
 ## Port
 
@@ -95,8 +97,9 @@ inject a fake Port.
   The snapshot link target retains the full canonical URL; each returned ref is
   re-minted from it on every success response. `max_chars` is an
   actual integer in `[1, 100000]` and limits block text only; oversized blocks
-  split losslessly at deterministic character offsets and do not consume the
-  link budget.
+  split losslessly at deterministic character offsets, including into the
+  remaining budget after earlier blocks already occupy a page, and do not
+  consume the link budget.
 - Cursor HMAC keys, snapshots, and link references live only for this Agent and
   process/task lifetime. Bounded LRU eviction fails loudly with a typed stale
   cursor/reference error; continuation re-mints its links from the snapshot's

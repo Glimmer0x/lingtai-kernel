@@ -36,11 +36,12 @@ socket transport lives outside this package and is selected only by `setup()`.
 
 - `BrowserManager`, `setup()`, `get_schema()` — model-facing route, registration, and lazy composition (`src/lingtai/tools/browser/__init__.py:38-108`).
 - `BrowserEngine` — per-Agent orchestration for target validation, deadline-aware fetch/extract, provenance, pagination, bounded links, and typed results (`src/lingtai/tools/browser/core.py:116-339`).
+- `BrowserFailure` — sanitized failure envelope with an optional numeric HTTP status when the fetch/extract stage knows it (`src/lingtai/tools/browser/core.py:26-67`).
 - `BrowserPort`, `ResolvedTarget`, `TransportResponse`, `TransportError` — Core-owned outbound boundary, remaining DNS deadline, and typed Adapter errors (`src/lingtai/tools/browser/port.py:14-64`).
 - `resolve_and_check()` and redirect helpers — scheme, userinfo, malformed URL, deadline-aware DNS-answer and SSRF policy (`src/lingtai/tools/browser/netpolicy.py:43-224`).
 - `fetch()` — one end-to-end-deadline bounded one-hop Port call and manual redirect loop (`src/lingtai/tools/browser/fetcher.py:56-136`).
 - `extract_html()` / `extract_plain_text()` — declared-codec decoding plus deterministic semantic/container blocks and links using the stdlib parser (`src/lingtai/tools/browser/extractor.py:145-220`).
-- `CursorCodec` / `paginate_blocks()` — HMAC snapshot/mode cursors and lossless bounded pages (`src/lingtai/tools/browser/cursor.py:22-143`).
+- `CursorCodec` / `paginate_blocks()` — HMAC snapshot/mode cursors and lossless bounded pages; oversized next blocks use the remaining page budget at deterministic character offsets (`src/lingtai/tools/browser/cursor.py:22-143`).
 - `InMemorySnapshotStore` / `RefStore` — bounded per-Agent LRU snapshots and independently evictable refs; snapshot links retain full canonical targets (`src/lingtai/tools/browser/snapshots.py:33-86`, `src/lingtai/tools/browser/refstore.py:8-37`).
 - `VettedHttpTransport` — outside production Adapter for pinned HTTP(S) requests and single-in-flight bounded DNS lookup (`src/lingtai/adapters/browser_transport.py:17-165`).
 

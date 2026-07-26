@@ -134,11 +134,12 @@ def paginate_blocks(
             index += 1
             offset = 0
             continue
-        if not page and len(remaining) > max_chars:
-            page.append(_fragment(block, offset, remaining[:max_chars]))
-            return PageResult(page, index, offset + max_chars, True)
-        if page and total + len(remaining) > max_chars:
-            break
+        available = max_chars - total
+        if available <= 0:
+            return PageResult(page, index, offset, True)
+        if len(remaining) > available:
+            page.append(_fragment(block, offset, remaining[:available]))
+            return PageResult(page, index, offset + available, True)
         page.append(block if offset == 0 else _fragment(block, offset, remaining))
         total += len(remaining)
         index += 1

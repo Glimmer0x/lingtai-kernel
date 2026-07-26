@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from lingtai.tools.browser.core import BrowserEngine, _content_metadata
-from lingtai.tools.browser.extractor import extract_html, extract_plain_text
+from lingtai.tools.browser.cursor import paginate_blocks
+from lingtai.tools.browser.extractor import Block, extract_html, extract_plain_text
 from lingtai.tools.browser.port import ResolvedTarget, TransportError, TransportResponse
 from lingtai.tools.browser.refstore import RefStore
 from lingtai.tools.browser.snapshots import InMemorySnapshotStore
@@ -53,6 +54,65 @@ def test_safe_redirect_preserves_requested_and_final_provenance():
     assert result["redirect_chain"] == ["https://public.example/start"]
 
 
+def test_remaining_budget_fragments_large_block_after_small_prefix_losslessly():
+    blocks = [Block("prefix", "paragraph", "abc"), Block("large", "paragraph", "0123456789")]
+    pages = []
+    page = paginate_blocks(blocks, start_index=0, max_chars=5)
+    pages.append(page)
+    assert [block.id for block in page.blocks] == ["prefix", "large#0"]
+    assert [block.text for block in page.blocks] == ["abc", "01"]
+    assert page.next_index == 1
+    assert page.next_char_offset == 2
+    assert sum(len(block.text) for block in page.blocks) == 5
+
+    while page.has_more:
+        page = paginate_blocks(
+            blocks,
+            start_index=page.next_index,
+            start_char_offset=page.next_char_offset,
+            max_chars=5,
+        )
+        pages.append(page)
+
+    assert all(page.blocks for page in pages)
+    assert [block.id for page in pages for block in page.blocks] == [
+        "prefix",
+        "large#0",
+        "large#2",
+        "large#7",
+    ]
+    assert "".join(block.text for page in pages for block in page.blocks) == "abc0123456789"
+    assert all(sum(len(block.text) for block in page.blocks) <= 5 for page in pages)
+
+
+def test_exact_fit_page_does_not_emit_empty_or_duplicate_fragment():
+    blocks = [Block("prefix", "paragraph", "abcde"), Block("large", "paragraph", "0123456789")]
+    first = paginate_blocks(blocks, start_index=0, max_chars=5)
+    assert [block.id for block in first.blocks] == ["prefix"]
+    assert first.next_index == 1
+    assert first.next_char_offset == 0
+    assert first.has_more is True
+
+    second = paginate_blocks(
+        blocks,
+        start_index=first.next_index,
+        start_char_offset=first.next_char_offset,
+        max_chars=5,
+    )
+    third = paginate_blocks(
+        blocks,
+        start_index=second.next_index,
+        start_char_offset=second.next_char_offset,
+        max_chars=5,
+    )
+    fragments = [block for page in (first, second, third) for block in page.blocks]
+    assert [block.id for block in fragments] == ["prefix", "large#0", "large#5"]
+    assert all(block.text for block in fragments)
+    assert "".join(block.text for block in fragments) == "abcde0123456789"
+    assert all(sum(len(block.text) for block in page.blocks) <= 5 for page in (first, second, third))
+    assert third.has_more is False
+
+
 def test_output_cap_splits_blocks_without_overflow():
     class LongPort:
         def resolve(self, hostname: str, *, timeout_s: float):
@@ -81,6 +141,21 @@ def test_http_failures_are_typed_and_retryable_only_when_transient():
     assert result["status"] == "failed"
     assert result["error_code"] == "HTTP_STATUS"
     assert result["retryable"] is True
+    assert result["http_status"] == 503
+
+
+def test_unsupported_content_preserves_known_http_status():
+    class PdfPort:
+        def resolve(self, hostname: str, *, timeout_s: float):
+            return ("93.184.216.34",)
+
+        def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
+            return TransportResponse(200, {"Content-Type": "application/pdf"}, b"%PDF", False, url)
+
+    result = BrowserEngine(PdfPort()).handle({"url": "https://public.example/report.pdf"})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "CONTENT_TYPE_UNSUPPORTED"
+    assert result["http_status"] == 200
 
 
 def test_link_ref_eviction_is_loud_and_never_refetches():

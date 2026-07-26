@@ -59,6 +59,8 @@ class BrowserFailure(Exception):
             "recommended_action": recommended,
             "partial": False,
         }
+        if self.http_status is not None:
+            result["http_status"] = self.http_status
         if self.snapshot_id is not None:
             result["snapshot_id"] = self.snapshot_id
         return result
