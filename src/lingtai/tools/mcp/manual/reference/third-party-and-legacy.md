@@ -19,7 +19,7 @@ For any non-curated MCP — typically `npx`/`uvx`-launched servers from the broa
    the install command, env vars, and config schema before writing any config.
 2. Append a single JSON record to `mcp_registry.jsonl` (one line, atomic write). For the schema, see `lingtai-kernel-anatomy reference/file-formats.md` §6.5.
 3. Add an `init.json` `mcp.<name>` activation entry.
-4. Run `system(action="refresh")`.
+4. Run `system(action="refresh", input={})`.
 
 Benefits: gives you the `<homepage>` field (used by `SKILL.md` §Reading an MCP's README → fallback URL), allow-listing, and registry health diagnostics via `mcp(action="info")`.
 

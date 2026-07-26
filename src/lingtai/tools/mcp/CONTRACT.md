@@ -36,7 +36,7 @@ source of truth.
   `src/lingtai/services/mcp_registry.py`.
 - Code navigation only: read `src/lingtai/tools/mcp/ANATOMY.md`.
 - Actually registering an MCP: edit `mcp_registry.jsonl` with `write`/`edit`,
-  then call `system(action="refresh")`.
+  then call `system(action="refresh", input={})`.
 
 **Fast paths:** tool schema -> §Tool surface; registry file location & writers ->
 §State & storage; the `lingtai.tools → lingtai` lazy back-edge -> §Scope.

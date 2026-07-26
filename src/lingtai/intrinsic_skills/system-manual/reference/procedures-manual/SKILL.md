@@ -84,7 +84,7 @@ force a rebuild.
 
 `reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
 `context.rebuild` stamp and the one proactive
-`system(action="summarize", rebuild=true)` call it permits, the 1.0
+`system(action="summarize", input={"rebuild": true})` call it permits, the 1.0
 once-per-episode forced rebuild, the `reconstruction.warning`, the persistent
 overflow `Molt IMMEDIATELY` line, and the task-boundary molt threshold. Do not
 loop rebuild/summarize. If summarize or a rebuild still cannot bring context

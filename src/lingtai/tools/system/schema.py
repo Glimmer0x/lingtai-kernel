@@ -1,58 +1,159 @@
-"""Schema — tool registration (get_description, get_schema)."""
+"""Public schema and description for the ``system`` intrinsic."""
 from __future__ import annotations
 
 
+_ACTIONS = [
+    "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
+    "nirvana", "presets", "summarize", "manual",
+]
+
+
 def get_description(lang: str = "en") -> str:
-    return 'Runtime inspection, lifecycle control, synchronization, and inter-agent management.\n\nSelf-actions (no permissions needed): sleep, refresh, summarize.\nKarma actions (require admin.karma=True): lull, interrupt, suspend, cpr, clear.\nNirvana (require admin.karma=True AND admin.nirvana=True): nirvana.\n\nNotification verbs (check/dismiss) are NOT here — they live on the standalone notification tool. Call system(action="manual") to return the installed system-manual skill.'
+    return (
+        "Runtime inspection, lifecycle control, synchronization, and inter-agent "
+        "management. The public shape is system(action=..., input={...}); every "
+        "action has its own strict input object. Self-actions (no permissions "
+        "needed): sleep, refresh, summarize, manual, presets. Karma actions "
+        "(require admin.karma=True): lull, interrupt, suspend, cpr, clear. Nirvana "
+        "requires admin.karma=True and admin.nirvana=True. Notification verbs do "
+        "not live here; use the standalone notification tool. Call "
+        "system(action='manual', input={}) for the installed system-manual skill."
+    )
+
+
+def _empty_input(description: str) -> dict:
+    return {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+        "description": description,
+    }
+
+
+def _string(name: str, description: str, *, min_length: int | None = None) -> dict:
+    result = {"type": "string", "description": description}
+    if min_length is not None:
+        result["minLength"] = min_length
+    return result
+
+
+def _bool(name: str, description: str) -> dict:
+    return {"type": "boolean", "description": description}
+
+
+def _object_input(properties: dict, description: str, *, required: tuple[str, ...] = ()) -> dict:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+        "description": description,
+    }
+
+
+def _input_branch(action: str, input_schema: dict) -> dict:
+    """Name one closed action-specific input branch for provider schemas."""
+    branch = dict(input_schema)
+    branch["title"] = f"{action} input"
+    return branch
+
+
+def _summarize_input() -> dict:
+    item = {
+        "type": "object",
+        "properties": {
+            "tool_call_id": _string("tool_call_id", "Prior tool-result block id.", min_length=1),
+            "summary": _string("summary", "Agent-authored compact replacement text."),
+        },
+        "required": ["tool_call_id", "summary"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": item,
+                "minItems": 1,
+                "description": "One or more prior tool-result blocks to summarize.",
+            },
+            "rebuild": _bool(
+                "rebuild",
+                "Request a provider-context rebuild after recording the summaries.",
+            ),
+        },
+        "required": [],
+        "additionalProperties": False,
+        "anyOf": [
+            {"required": ["items"]},
+            {
+                "properties": {
+                    "rebuild": {
+                        "enum": [True],
+                        "description": "Rebuild pending summaries.",
+                    },
+                },
+                "required": ["rebuild"],
+            },
+        ],
+        "description": (
+            "Record agent-authored summaries. Use items, or pass rebuild=true "
+            "alone for a pure rebuild of already-pending summaries."
+        ),
+    }
 
 
 def get_schema(lang: str = "en") -> dict:
+    """Return the raw public schema; reasoning is injected by BaseAgent only."""
+    reason = _string("reason", "Reason for the requested operation.")
+    address = _string("address", "Target agent address (working-directory path).", min_length=1)
+    refresh = _object_input(
+        {
+            "reason": reason,
+            "preset": _string("preset", "Optional authorized preset to activate before refresh."),
+            "revert_preset": _bool("revert_preset", "Return to the configured default preset."),
+        },
+        "Refresh from init.json; optional preset selection is handled by refresh.",
+    )
+    sleep = _object_input(
+        {"reason": reason, "force": _bool("force", "Sleep despite pending notifications.")},
+        "Put this agent to sleep.",
+    )
+    target = _object_input(
+        {"address": address}, "Target another agent.", required=("address",)
+    )
+    clear = _object_input(
+        {"address": address, "reason": reason},
+        "Force a full molt on another agent.",
+        required=("address",),
+    )
+    branches = [
+        _input_branch("refresh", refresh),
+        _input_branch("sleep", sleep),
+        _input_branch("lull", target),
+        _input_branch("interrupt", target),
+        _input_branch("suspend", target),
+        _input_branch("cpr", target),
+        _input_branch("clear", clear),
+        _input_branch("nirvana", target),
+        _input_branch("presets", _empty_input("List available presets.")),
+        _input_branch("summarize", _summarize_input()),
+        _input_branch("manual", _empty_input("Return the installed system manual; read-only.")),
+    ]
     return {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "summarize", "manual"],
-                "description": "refresh: rebuild from init.json — same identity, preserved conversation. Reloads MCP, capabilities, addons, LLM, prompt sections. See system-manual.\n\npresets: list available presets with tags, connectivity, capabilities. See system-manual.\n\nsleep: go to sleep until mail wakes you. Self only.\n\nlull: put another agent to sleep (karma).\n\nsuspend: freeze another agent (karma).\n\ncpr: resuscitate suspended agent (karma).\n\ninterrupt: cancel another agent's turn (karma).\n\nclear: force molt on another agent (karma). See system-manual.\n\nnirvana: permanently destroy an agent (karma + nirvana). See system-manual.\n\nsummarize: record an agent-authored compact replacement for one or more prior tool-result blocks in runtime history. Pass items=[{tool_call_id, summary}, ...]. The original result remains in events.jsonl; the active provider context may still contain the old raw result until a rebuild applies it (manual rebuild=true, or the runtime's forced rebuild at the 1.0 full-context hard boundary). Use after digesting a large result to free context budget. Pass rebuild=true (default false) to also request a provider-context rebuild that applies the pending summaries now; rebuild=true with no items is a pure rebuild of already-pending summaries. Do not loop rebuild/summarize. Choose the tool_call_ids to compress from _meta.agent_meta.agent_state.current_tool_result_chars.top_results (the ranked list of the largest formal results in context) — large results are surfaced there, not pushed as notifications. (Legacy: if a stale large_tool_result reminder still exists in system.json, a successful summarize of its tool_call_id also clears it.) To read or dismiss notifications, use the notification tool. manual returns the installed system-manual skill without changing runtime state.",
+                "enum": _ACTIONS,
+                "description": "The system operation to perform.",
             },
-            "reason": {
-                "type": "string",
-                "description": 'Reason for sleep, refresh, or clear (logged to event log; for clear, becomes the source tag in the recovery summary).',
-            },
-            "address": {
-                "type": "string",
-                "description": "Target agent's address (working directory path). Required for interrupt, lull, suspend, cpr, clear, nirvana.",
-            },
-            "preset": {
-                "type": "string",
-                "description": "Optional preset to swap to before refreshing. A preset is a {LLM, capabilities} bundle from your library. Use action='presets' to list. Swap is light and reversible. If current context exceeds target preset's context_limit, swap is refused — molt first.",
-            },
-            "revert_preset": {
-                "type": "boolean",
-                "description": "Optional. Pass true with action='refresh' to swap back to your default preset (manifest.preset.default — typically the one your agent was created with). Cannot be used together with the 'preset' argument. Useful as a 'home button' after experimenting with another preset, without needing to remember your default's name. Errors if no default is configured.",
-            },
-            "rebuild": {
-                "type": "boolean",
-                "description": "For action='summarize' (default false): request a provider-context rebuild that makes recorded summaries active in the active provider context now. With items, summaries are recorded first and then the rebuild is requested; with no items, it is a pure rebuild using the already-pending summaries. When false (the default), summarize only records compact replacements in runtime history and does NOT rebuild the active provider context — the old raw result may still ride the current continuation until a rebuild applies it (a manual rebuild=true, or the 1.0 full-context hard boundary where the runtime forces a rebuild regardless of pending). Prefer one tactical rebuild=true call when context is high (>=0.85 / the context.rebuild hint) or a fresh context is worth the cache-miss cost; do not loop rebuild. Note: rebuild=false with no items is an invalid no-op.",
-            },
-            "items": {
-                "type": "array",
-                "description": "Required for action='summarize' unless rebuild=true (a bare rebuild=true rebuilds already-pending summaries with no items). List of items to summarize, each with 'tool_call_id' (the id of the prior tool-result block) and 'summary' (your agent-authored summary text). Supports multiple items per call. The original result is NOT deleted — it remains retrievable from events.jsonl by tool_call_id.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "tool_call_id": {
-                            "type": "string",
-                            "description": "The id of the prior tool-result block to summarize.",
-                        },
-                        "summary": {
-                            "type": "string",
-                            "description": "Your agent-authored summary of that tool result.",
-                        },
-                    },
-                    "required": ["tool_call_id", "summary"],
-                },
+            "input": {
+                "description": "Action-specific input; see the selected action branch.",
+                "anyOf": branches,
             },
         },
-        "required": ["action"],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }

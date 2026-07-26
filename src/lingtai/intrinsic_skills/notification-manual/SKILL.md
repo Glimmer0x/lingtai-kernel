@@ -82,7 +82,7 @@ producer state, delivery fingerprints, or acknowledgement state.
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
-| Tool-result ranking, digest quality, `system(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../system-manual/reference/summarize-manual/SKILL.md` |
+| Tool-result ranking, digest quality, `system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]})`, recovery by `tool_call_id`, summarize versus molt | `../system-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
 | Runtime/kernel update nudges | `../system-manual/reference/runtime-update-checks/SKILL.md` |
 

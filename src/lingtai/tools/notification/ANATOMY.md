@@ -110,7 +110,7 @@ adaptation, and installed-manual retrieval.
   action (`src/lingtai/kernel/base_agent/__init__.py:1255-1461`;
   `src/lingtai/kernel/base_agent/__init__.py:1562-1800`).
 - Large tool results are ranked and compacted through
-  `system(action="summarize")`. Notification dismissal retains only the legacy
+  `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`. Notification dismissal retains only the legacy
   reminder escape hatch described by the manual.
 - Changes to notification read/dismiss semantics must also check
   `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md`; changes to Port behavior

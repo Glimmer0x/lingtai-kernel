@@ -157,5 +157,5 @@ Before resting with pending work:
 1. Update pad with the current state and what the reminder should inspect.
 2. Set one `cron` notification reminder at a sensible check time.
 3. Include a concise state sentence and a concrete `todo`.
-4. Rest (`system(action="sleep")`) or end the turn.
+4. Rest (`system(action="sleep", input={})`) or end the turn.
 5. On wake: handle the `cron` reminder, then `notification(action="dismiss_channel", channel="cron")`.

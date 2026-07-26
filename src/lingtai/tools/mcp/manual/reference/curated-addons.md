@@ -34,7 +34,7 @@ LingTai's first-party email and chat integrations. They now ship inside the `lin
 
 3. **Create the config file** at the path referenced by the env var (e.g. `.secrets/imap.json`). Use the schema from the addon docs — copy it verbatim, don't paraphrase.
 
-4. **Run `system(action="refresh")`.** The `mcp` capability decompresses the catalog record into `mcp_registry.jsonl`, the loader spawns the subprocess, and the omnibus tool (`imap`, `telegram`, etc.) appears in your tool surface.
+4. **Run `system(action="refresh", input={})`.** The `mcp` capability decompresses the catalog record into `mcp_registry.jsonl`, the loader spawns the subprocess, and the omnibus tool (`imap`, `telegram`, etc.) appears in your tool surface.
 
 ## Module names
 
@@ -59,7 +59,7 @@ Use this checklist as the Telegram setup acceptance test. It is intentionally se
 
 3. **Separate outbound from inbound proof.** Startup `getMe` and one deliberate direct send prove only outbound Bot API reachability. They do not prove that the listener is receiving updates or that inbound events reach the host agent. Do not call the Bot API `getUpdates` yourself while the Telegram listener may own long polling; a second poller can contend for updates and invalidate the test.
 
-4. **Make one controlled lifecycle change.** After editing a sidecar or Telegram config, perform exactly one controlled `system(action="refresh")` or one controlled relaunch, then inspect the resulting child and mount. Do not start a duplicate parent. A passing readiness check requires the live Telegram MCP child/server **and** its account mounted after that single transition.
+4. **Make one controlled lifecycle change.** After editing a sidecar or Telegram config, perform exactly one controlled `system(action="refresh", input={})` or one controlled relaunch, then inspect the resulting child and mount. Do not start a duplicate parent. A passing readiness check requires the live Telegram MCP child/server **and** its account mounted after that single transition.
 
 5. **Prove the complete inbound/reply path.** Have an allowed-user producer send a fresh test message. Verify the producer's inbound read reaches the host (LICC inbox delivery or `telegram(action="read", chat_id=<chat-id>)`), then reply on that same channel with `telegram(action="reply", message_id=<inbound-message-id>, text=<sanitized-test-reply>)` or the equivalent channel send. An account listing, `getMe`, or an outbound send alone is not end-to-end proof.
 
@@ -126,7 +126,7 @@ WeChat has unique pitfalls that catch agents off-guard. Walk this checklist on e
 
 5. **Refresh the MCP** after bootstrap writes credentials:
    ```
-   system(action="refresh")
+   system(action="refresh", input={})
    ```
 
 6. **Test the connection**:

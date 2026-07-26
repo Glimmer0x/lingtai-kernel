@@ -37,7 +37,7 @@ Add one line to the per-agent `mcp_registry.jsonl` (copy
 
 Activate the same `command` and `args` from `init.json` under
 `mcp.nokv-workbench` with `"type": "stdio"` — copy `assets/init-snippet.json`.
-Where the registry file lives, how to edit it, and how `system(action="refresh")`
+Where the registry file lives, how to edit it, and how `system(action="refresh", input={})`
 applies the change belong to `mcp-manual`; only the NoKV-specific arguments
 are documented here.
 

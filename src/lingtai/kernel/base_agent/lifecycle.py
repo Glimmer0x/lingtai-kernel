@@ -399,7 +399,7 @@ def _heartbeat_loop(agent) -> None:
             agent._cancel_event.set()
             agent._log("interrupt_received", source="signal_file")
 
-        # .refresh = full refresh with relaunch (identical to system(action='refresh'))
+        # .refresh = full refresh with relaunch (identical to system(action='refresh', input={}))
         refresh_file = agent._working_dir / ".refresh"
         if refresh_file.is_file():
             taken_file = agent._working_dir / ".refresh.taken"
@@ -699,7 +699,7 @@ def _perform_refresh(
     """Refresh = .refresh handshake + deferred relaunch.
 
     Self-sufficient across all call sites — heartbeat, tool-call (intrinsic
-    ``system(action='refresh')``), and AED preset-fallback in ``turn.py`` all
+    ``system(action='refresh', input={})``), and AED preset-fallback in ``turn.py`` all
     call directly. Two filesystem signals drive the watcher subprocess:
 
       1. ``.refresh.taken`` must exist before the watcher's ack deadline.

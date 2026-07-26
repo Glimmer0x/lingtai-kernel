@@ -10,7 +10,7 @@ maintenance: |
 
 ## Updating, deregistering
 
-- **Update**: edit the matching line in `mcp_registry.jsonl` in place. Same schema. Then `system(action="refresh")`.
+- **Update**: edit the matching line in `mcp_registry.jsonl` in place. Same schema. Then `system(action="refresh", input={})`.
 - **Deregister**: remove the matching line. Note: this does NOT stop a running MCP — to deactivate, also remove the entry from `init.json`'s `mcp` section.
 
 ## Diagnosing problems
@@ -33,7 +33,7 @@ Check the exact field name spelling — `email_password` not `password`, `bot_to
 The `command` path in your `init.json` `mcp.<name>` entry doesn't have the executable. For Python addons, confirm the venv path is correct (typically `~/.lingtai-tui/runtime/venv/bin/python`). For `npx`/`uvx` servers, confirm those tools are on `PATH`.
 
 **Tools not appearing in your tool surface**
-You forgot to `system(action="refresh")` after editing config. Refresh and re-check `mcp(action="info")`.
+You forgot to `system(action="refresh", input={})` after editing config. Refresh and re-check `mcp(action="info")`.
 
 **HTTP 401 / 403 from an http-type server**
 API key missing or malformed in the `headers` field. Format is usually `"Authorization": "Bearer <key>"`. Check the MCP's README for the exact header name and value format.

@@ -4,7 +4,7 @@ description: >-
   Detailed operational guide for tool-result summarization across LingTai's
   three context-compression / continuation modes: a-priori reasoning-guided
   (summary=true on bash/read/grep/daemon/glob), a-posteriori agent-guided
-  (system(action="summarize")), and molt. Covers what tool-result summarization
+  (system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})), and molt. Covers what tool-result summarization
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
@@ -20,7 +20,7 @@ maintenance: |
 
 # Summarize Manual
 
-`system(action="summarize")` is context hygiene for completed tool results. It
+`system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})` is context hygiene for completed tool results. It
 records an agent-authored compact replacement for one or more prior tool-result
 blocks in runtime history. It does **not** delete the original event; the raw
 result remains in logs for fallback, and the active provider continuation may
@@ -42,7 +42,7 @@ is canonical.
 | Mode | Trigger | When the raw is hidden | Authored by |
 |---|---|---|---|
 | **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep`/`daemon`/`glob` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
-| **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
+| **A posteriori** — agent-guided | `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})` | *after* you have already seen and digested it | you |
 | **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
 
 Sections 1–6 below are mostly about the a-posteriori `summarize` action; §1a
@@ -83,7 +83,7 @@ assumption-driven compression chosen *before* you inspect the result. Prefer it
 when you can state the narrow facts to retain before the call, because it avoids
 spending context on raw bulk at all. The runtime discards everything outside what
 your `reasoning` named, with no chance for you to notice what mattered, so it is
-**not** a substitute for a-posteriori `system(action="summarize")` when the
+**not** a substitute for a-posteriori `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})` when the
 important facts are unknowable before inspection, especially for
 high-information-density results — daemon outputs, code reviews, long reports,
 or anything whose important facts you cannot name in advance.
@@ -150,7 +150,7 @@ counted in `over_threshold_count`). `agent_meta` is a complete current final-car
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.
-3. On a later step, call `system(action="summarize")` on the completed prior
+3. On a later step, call `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})` on the completed prior
    result. Do not try to summarize the current result in the same tool batch
    before it exists.
 4. Batch several already-digested results in one summarize call when convenient.
@@ -228,7 +228,7 @@ summarize would discard cache benefit.
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
   is worth the cost, make one proactive tactical
-  `system(action="summarize", rebuild=true)` call. `rebuild=true` **with** new
+  `system(action="summarize", input={"rebuild": true})` call. `rebuild=true` **with** new
   items records those summaries and then applies the pending set; `rebuild=true`
   **with no items** is a pure rebuild that applies the already-pending summaries.
   Do not loop rebuild/summarize calls.
@@ -242,7 +242,7 @@ summarize would discard cache benefit.
   future crossing can force exactly once again. Both automatic paths — the
   pre-request boundary check and the immediate post-`summarize` release — share
   this one latch, so they cannot double-fire. (Explicit
-  `system(action="summarize", rebuild=true)` is independent and always available.)
+  `system(action="summarize", input={"rebuild": true})` is independent and always available.)
   If pending summaries exist,
   they are applied and their markers marked done. `summarize` is the only
   historical tool-result body replacement a rebuild applies; the fresh replay
@@ -317,7 +317,7 @@ Bad uses:
 ## 6 · Summarize is not molt
 
 Neither summary mode is a molt. Both a-priori (`summary=true`) and a-posteriori
-(`system(action="summarize")`) reduce active-context bulk for selected tool
+(`system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`) reduce active-context bulk for selected tool
 results. Neither updates pad, character, knowledge, skills, or the
 session-journal, and neither sheds the conversation.
 

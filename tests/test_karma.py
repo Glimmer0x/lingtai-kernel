@@ -61,7 +61,7 @@ class TestSystemIntrinsicKarma:
     def test_interrupt_requires_karma_admin(self, tmp_path):
         agent = _make_agent(tmp_path, admin={})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "interrupt", "address": "/some/path"})
+        result = handle(agent, {"action": "interrupt", "input": {"address": "/some/path"}})
         assert "error" in result
 
     def test_interrupt_with_karma_admin(self, tmp_path):
@@ -74,7 +74,7 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "interrupt", "address": str(target_dir)})
+        result = handle(agent, {"action": "interrupt", "input": {"address": str(target_dir)}})
         assert result["status"] == "interrupted"
         assert (target_dir / ".interrupt").is_file()
 
@@ -88,7 +88,7 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "lull", "address": str(target_dir)})
+        result = handle(agent, {"action": "lull", "input": {"address": str(target_dir)}})
         assert result["status"] == "asleep"
         assert (target_dir / ".sleep").is_file()
 
@@ -104,13 +104,13 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "lull", "address": str(target_dir)})
+        result = handle(agent, {"action": "lull", "input": {"address": str(target_dir)}})
         assert "error" in result
 
     def test_interrupt_self_rejected(self, tmp_path):
         agent = _make_agent(tmp_path, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "interrupt", "address": str(agent.working_dir)})
+        result = handle(agent, {"action": "interrupt", "input": {"address": str(agent.working_dir)}})
         assert "error" in result
 
     def test_nirvana_requires_nirvana_admin(self, tmp_path):
@@ -118,7 +118,7 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "nirvana", "address": "/some/path"})
+        result = handle(agent, {"action": "nirvana", "input": {"address": "/some/path"}})
         assert "error" in result
 
     def test_nirvana_with_nirvana_admin(self, tmp_path):
@@ -131,14 +131,14 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True, "nirvana": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "nirvana", "address": str(target_dir)})
+        result = handle(agent, {"action": "nirvana", "input": {"address": str(target_dir)}})
         assert result["status"] == "nirvana"
         assert not target_dir.exists()
 
     def test_nirvana_self_rejected(self, tmp_path):
         agent = _make_agent(tmp_path, admin={"karma": True, "nirvana": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "nirvana", "address": str(agent.working_dir)})
+        result = handle(agent, {"action": "nirvana", "input": {"address": str(agent.working_dir)}})
         assert "error" in result
 
     def test_cpr_rejects_alive_target(self, tmp_path):
@@ -151,7 +151,7 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "cpr", "address": str(target_dir)})
+        result = handle(agent, {"action": "cpr", "input": {"address": str(target_dir)}})
         assert "error" in result
         assert "already running" in result["message"]
 
@@ -165,7 +165,7 @@ class TestSystemIntrinsicKarma:
         sender_base.mkdir()
         agent = _make_agent(sender_base, admin={"karma": True})
         from lingtai.tools.system import handle
-        result = handle(agent, {"action": "cpr", "address": str(target_dir)})
+        result = handle(agent, {"action": "cpr", "input": {"address": str(target_dir)}})
         assert "error" in result
         assert "not supported" in result["message"].lower()
 
@@ -282,7 +282,7 @@ class TestSelfSleepPendingNotificationsGuard:
             "data": {"count": 1},
         })
 
-        result = handle(agent, {"action": "sleep", "reason": "test"})
+        result = handle(agent, {"action": "sleep", "input": {"reason": "test"}})
 
         assert result.get("status") == "ok"
         # Refusal message, not the sleep confirmation
@@ -306,7 +306,7 @@ class TestSelfSleepPendingNotificationsGuard:
             "priority": "normal", "data": {"count": 1},
         })
 
-        result = handle(agent, {"action": "sleep", "reason": "no unread mail"})
+        result = handle(agent, {"action": "sleep", "input": {"reason": "no unread mail"}})
 
         assert agent.state != AgentState.ASLEEP, (
             "kernel#112 regression: agent must not sleep with mail waiting"
@@ -323,7 +323,11 @@ class TestSelfSleepPendingNotificationsGuard:
         })
 
         result = handle(agent, {
-            "action": "sleep", "reason": "really tired", "force": True,
+            "action": "sleep",
+            "input": {
+                "reason": "really tired",
+                "force": True,
+            },
         })
 
         assert result.get("status") == "ok"
@@ -336,7 +340,7 @@ class TestSelfSleepPendingNotificationsGuard:
         agent = _make_agent(tmp_path)
         agent._notification_fp = ()
 
-        result = handle(agent, {"action": "sleep", "reason": "idle"})
+        result = handle(agent, {"action": "sleep", "input": {"reason": "idle"}})
 
         assert result.get("status") == "ok"
         assert agent.state == AgentState.ASLEEP
@@ -356,7 +360,7 @@ class TestSelfSleepPendingNotificationsGuard:
         # Pretend the notification heartbeat has already injected + committed
         agent._notification_fp = fingerprint_notifications(agent.working_dir)
 
-        result = handle(agent, {"action": "sleep", "reason": "all caught up"})
+        result = handle(agent, {"action": "sleep", "input": {"reason": "all caught up"}})
 
         assert result.get("status") == "ok"
         assert agent.state == AgentState.ASLEEP

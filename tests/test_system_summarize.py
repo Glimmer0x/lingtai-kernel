@@ -1,4 +1,4 @@
-"""Tests for system(action='summarize') — agent-authored context summarization.
+"""Tests for system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]}) — agent-authored context summarization.
 
 Covers:
 - schema registration: summarize in action enum
@@ -756,7 +756,7 @@ def test_handle_dispatches_summarize(tmp_path):
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
-    result = agent._intrinsics["system"]({"action": "summarize", "items": []})
+    result = agent._intrinsics["system"]({"action": "summarize", "input": {"items": []}})
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
     assert result["status"] == "error"
     assert "items" in result.get("message", "")

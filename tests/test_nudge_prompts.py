@@ -25,7 +25,7 @@ def test_installed_runtime_mismatch_routes_authorized_refresh():
     assert "not a release download or migration" in detail
     assert "explicit human/config-owner authorization for refresh" in detail
     assert "this nudge is not authorization" in detail
-    assert "system(action='refresh')" in detail
+    assert "system(action='refresh', input={})" in detail
 
 
 @pytest.mark.parametrize(
@@ -40,7 +40,7 @@ def test_non_installed_newer_mismatch_is_diagnostic_only(running, installed):
     assert payload["suggested_action"] == "inspect-runtime-interpreter-and-import-paths"
     assert "Do not refresh, downgrade, install" in payload["detail"]
     assert "already on disk" not in payload["detail"]
-    assert "system(action='refresh')" not in payload["detail"]
+    assert "system(action='refresh', input={})" not in payload["detail"]
 
 
 def test_package_update_points_to_installer_and_requires_authorization():
@@ -121,5 +121,5 @@ def test_source_drift_payload_keeps_facts_without_release_migration_route():
     detail = payload["detail"]
     assert "explicit human/config-owner authorization for refresh" in detail
     assert detail.index("explicit human/config-owner authorization") < detail.index(
-        "system(action='refresh')"
+        "system(action='refresh', input={})"
     )

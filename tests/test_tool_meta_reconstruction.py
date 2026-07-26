@@ -86,7 +86,7 @@ _EVENT = {
         "Context changed from 100000 tokens (100%) before to 70000 tokens (70%) "
         "after. Reaching the full-context boundary means waiting until context was "
         "full was not ideal — when context is high, prefer a proactive "
-        "system(action='summarize', rebuild=true) at the 85% rebuild hint instead of "
+        "system(action='summarize', input={'rebuild': true}) at the 85% rebuild hint instead of "
         "letting the emergency boundary force it. If the rebuilt context is still "
         "above the 75% recovery target, tend durable stores and molt. See "
         "meta_guidance, substrate, and procedures."

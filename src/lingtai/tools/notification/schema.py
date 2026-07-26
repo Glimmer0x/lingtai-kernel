@@ -11,7 +11,7 @@ from __future__ import annotations
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
     "Legacy: the kernel no longer raises large_tool_result reminders — large "
     "results are ranked under _meta.agent_meta.agent_state.current_tool_result_chars and "
-    "compacted via system(action=summarize). Any large_tool_result event still "
+    "compacted via system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]}). Any large_tool_result event still "
     "present (e.g. persisted before this change or pre-molt) can be dismissed "
     "as an escape hatch. Dismissal only clears the notification surface; the "
     "original result stays in chat history and events.jsonl. See "
@@ -25,7 +25,7 @@ LARGE_RESULT_FORCE_NOTE = (
 
 
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nUse check to read all channels, dismiss_channel to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='manual') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nUse check to read all channels, dismiss_channel to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='manual') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]})."
 
 
 def get_schema(lang: str = "en") -> dict:

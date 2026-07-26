@@ -4,7 +4,7 @@ Three call sites reach `_perform_refresh` directly:
 
   1. Heartbeat — has already renamed `.refresh` → `.refresh.taken` and
      intends to call `_shutdown.set()` immediately after our return.
-  2. `system(action='refresh')` intrinsic — has done neither.
+  2. `system(action='refresh', input={})` intrinsic — has done neither.
   3. AED preset-fallback in `turn.py` — has done neither.
 
 `_perform_refresh` therefore normalizes the on-disk handshake itself

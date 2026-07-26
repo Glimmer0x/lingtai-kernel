@@ -64,7 +64,7 @@ def test_system_manual_does_not_add_a_competing_preset_manual():
 
 # Case-sensitive anchors: literal identifiers/paths that must match exactly.
 REQUIRED_SUBSTRATE_ANCHORS_EXACT = [
-    "system(action=\"presets\")",
+    "system(action=\"presets\", input={})",
     "tasks[].preset",
     "exact path",
     "stem lookup",

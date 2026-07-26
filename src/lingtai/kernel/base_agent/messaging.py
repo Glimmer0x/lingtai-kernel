@@ -214,7 +214,7 @@ def _rescan_large_tool_results(agent) -> int:
     are surfaced as a ranked list under
     ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` (see
     :func:`meta_block.current_tool_result_chars`) and digested via
-    ``system(action="summarize")``.  Nothing is published or injected here.
+    ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})``.  Nothing is published or injected here.
 
     The function is kept (and still called from the turn-boundary
     housekeeping trio) as a stable seam so the call sites and their error

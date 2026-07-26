@@ -33,7 +33,7 @@ and source — route to the current authority instead of memorizing snapshots.
    `tools` vs `skills` vs `mcp` semantics, and the shared parent
    [`reference/cli-backends/SKILL.md`](../../../SKILL.md) ("LingTai backend
    tool surface") for how this backend curates tools.
-2. **Preset selection and inspection** — run `system(action="presets")` for
+2. **Preset selection and inspection** — run `system(action="presets", input={})` for
    the live tier/connectivity/capability listing (guidance:
    `system-manual` → `reference/substrate-manual/SKILL.md`). A per-task
    `preset` must be a `.json`/`.jsonc` path exactly as returned by that
@@ -69,7 +69,7 @@ and source — route to the current authority instead of memorizing snapshots.
 ```
 
 Every field above resolves live: the preset path comes from
-`system(action="presets")`, skill paths resolve against the parent working
+`system(action="presets", input={})`, skill paths resolve against the parent working
 directory, and the MCP registration is started as a task-scoped client whose
 tools appear only for this run (secret `env`/`headers` values are redacted
 in prompts).

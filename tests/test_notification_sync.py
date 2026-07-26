@@ -185,7 +185,7 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 # §13.5 — `notification(action="check")` voluntary call
 #
 # The read verb moved off `system` onto the standalone `notification` tool.
-# `system(action="notification")` is no longer a valid action.
+# `system(action="notification", input={})` is no longer a valid action.
 # ---------------------------------------------------------------------------
 
 
@@ -241,7 +241,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
 
 
 def test_system_notification_action_is_removed(tmp_path: Path) -> None:
-    """system(action="notification") is no longer a valid action."""
+    """system(action="notification", input={}) is no longer a valid action."""
     from lingtai.tools.system import handle
 
     @dataclass
@@ -252,7 +252,7 @@ def test_system_notification_action_is_removed(tmp_path: Path) -> None:
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "notification"})
+    res = handle(_Stub(), {"action": "notification", "input": {}})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
 
@@ -941,7 +941,7 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     result_block = entries[1].content[0]
     assert isinstance(call_block, ToolCallBlock)
     # The kernel-synthesized delivery pair impersonates a voluntary
-    # notification(action="check") read — not system(action="notification").
+    # notification(action="check") read — not system(action="notification", input={}).
     assert call_block.name == "notification"
     assert call_block.args["action"] == "check"
     assert isinstance(result_block, ToolResultBlock)

@@ -122,7 +122,7 @@ The end-to-end path is:
    `pip install --upgrade lingtai` is not the normal user instruction; pip/venv
    commands below are diagnostic or developer verification only.
 10. **Refresh and verify — kernel lifecycle plus the operator.**
-    After authorized writes are validated, `system(action="refresh")` requests a
+    After authorized writes are validated, `system(action="refresh", input={})` requests a
     deferred relaunch only when the runtime can build a valid launch command and
     has a configured refresh watcher. Without a launch command it returns
     without relaunching; without a refresh watcher it raises. Diagnose either

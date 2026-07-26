@@ -1,4 +1,4 @@
-"""system(action='summarize') — agent-authored context summarization.
+"""system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]}) — agent-authored context summarization.
 
 Replaces the context-visible content of prior main-agent tool-result blocks
 with a compact agent-authored summary, while preserving the original payload
@@ -25,7 +25,7 @@ SUMMARIZE_MARKER = "lingtai_agent_summarized_result"
 # Explicit lifecycle status stamped in each summarize marker block. A marker is
 # `pending` from the moment it is recorded until the summaries it belongs to are
 # actually applied to the provider context — either by a manual
-# `system(action="summarize", rebuild=true)` or by the 1.0 hard forced rebuild —
+# `system(action="summarize", input={"rebuild": true})` or by the 1.0 hard forced rebuild —
 # at which point it flips to `done`. Marker blocks stay in local history after
 # being applied, so this status (NOT mere presence) is the source of truth for
 # "still pending". Markers written before this field existed carry no status and
@@ -367,7 +367,7 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
         body = (
             "Two ways to apply the pending summaries: let the runtime force a rebuild "
             "at the 1.0 hard context boundary (it applies pending summaries then), OR "
-            "make one tactical system(action='summarize', rebuild=true) call proactively "
+            "make one tactical system(action='summarize', input={'rebuild': true}) call proactively "
             "— preferably when context is high (>=0.85 / the runtime rebuild hint) or a "
             "fresh context is worth the cache-miss cost. Proactive is better: the 1.0 "
             "forced path is the emergency boundary. "
@@ -387,7 +387,7 @@ def _build_summarize_only_reconstruction(snapshot: dict, totals: dict) -> str:
 
 
 def _summarize(agent, args: dict) -> dict:
-    """Handle system(action='summarize').
+    """Handle system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]}).
 
     Expected args shape::
 
@@ -434,10 +434,10 @@ def _summarize(agent, args: dict) -> dict:
             "message": (
                 "The summarize notification threshold cannot be changed at runtime. "
                 "It is configured via manifest.summarize_notification_threshold in "
-                "init.json and takes effect after system(action='refresh'). "
+                "init.json and takes effect after system(action='refresh', input={}). "
                 "To handle pending large-result notifications without changing the "
                 "threshold: summarize/digest all pending large-result cases in one "
-                "deliberate batch using system(action='summarize', items=[...]), or "
+                "deliberate batch using system(action='summarize', input={'items': [...]}), or "
                 "tolerate the repeated reminders until you update the persistent "
                 "config and refresh."
             ),
@@ -458,10 +458,10 @@ def _summarize(agent, args: dict) -> dict:
             "status": "error",
             "reason": "missing_items",
             "message": (
-                "system(action='summarize') requires a non-empty 'items' list, "
+                "system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]}) requires a non-empty 'items' list, "
                 "each with 'tool_call_id' and 'summary'. To rebuild provider "
                 "context using already-pending summaries without recording new "
-                "ones, call system(action='summarize', rebuild=true) with no items. "
+                "ones, call system(action='summarize', input={'rebuild': true}) with no items. "
                 "rebuild=false with no items is an invalid no-op."
             ),
             "notification_threshold_chars": current_threshold,

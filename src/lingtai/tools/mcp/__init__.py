@@ -113,7 +113,7 @@ _DESCRIPTION = (
     "(registration contract, file paths, schema), and call `info` for the current "
     "registry health snapshot; no exceptions. To register, deregister, or update MCPs, edit "
     "mcp_registry.jsonl directly with write/edit and call "
-    "system(action=\"refresh\")."
+    "system(action=\"refresh\", input={})."
 )
 
 _SCHEMA = {

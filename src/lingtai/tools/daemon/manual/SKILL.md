@@ -149,11 +149,11 @@ files, not standalone top-level skills.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set
-    (the same fail-closed normalized path check `system(action="refresh")`
+    (the same fail-closed normalized path check `system(action="refresh", input={})`
     uses); an unauthorized path is refused before load/connectivity/capability
     checks, run-dir creation, scheduling, or dispatch. Being present in the
     saved/library directory is not by itself authorization — call
-    `system(action="presets")` first and pass one of the exact paths it
+    `system(action="presets", input={})` first and pass one of the exact paths it
     returns. Omitting `preset` inherits the parent's regular (non-MCP)
     effective surface instead of a fresh independent default, and does not
     perform this allowlist check at all. External CLI backends skip LingTai

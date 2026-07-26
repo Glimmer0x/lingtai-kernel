@@ -3,7 +3,7 @@
 Large tool results no longer raise ``large_tool_result`` system notifications.
 They are ranked through ``_meta.agent_meta.current_tool_result_chars`` (see
 ``tests/test_large_result_no_notification.py`` and ``tests/test_meta_block.py``)
-and digested via ``system(action="summarize")``.
+and digested via ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})``.
 
 This file pins what survives that removal:
 

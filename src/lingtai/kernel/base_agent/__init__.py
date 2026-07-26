@@ -2355,7 +2355,7 @@ class BaseAgent:
         Large tool results no longer raise a ``large_tool_result`` system
         notification here.  They are ranked instead through
         ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` and digested
-        via ``system(action="summarize")`` (see meta_block.current_tool_result_chars).
+        via ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`` (see meta_block.current_tool_result_chars).
         """
         return None
 
@@ -2436,7 +2436,7 @@ class BaseAgent:
         results are surfaced as a ranked list under
         ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` (see
         :func:`meta_block.current_tool_result_chars`) and digested via
-        ``system(action="summarize")``.  The result still flows into normal
+        ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})``.  The result still flows into normal
         tool-result history and the char-ranking; it simply creates no
         ``.notification/system.json`` event.
 

@@ -347,7 +347,8 @@ def build_tool_meta_overflow_comment(tool_call_id: str | None) -> dict:
         ),
         "after_consuming": (
             "After you have consumed what you need, call "
-            "system(action=\"summarize\") for this tool_call_id to replace the "
+            f"system(action=\"summarize\", input={{\"items\": [{{\"tool_call_id\": \"{call_id}\", \"summary\": \"<summary>\"}}]}}) "
+            "for this tool_call_id to replace the "
             "visible payload with your own agent-authored summary."
         ),
     }
@@ -582,7 +583,7 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     in-context formal results exceed it).  Together with ``top_results`` these
     let the agent see what counts as "large" and how many candidates exist —
     the context the removed ``large_tool_result`` notification used to carry —
-    so it can decide what to ``system(action="summarize")``.
+    so it can decide what to ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})``.
     """
     threshold = getattr(
         agent, "_summarize_notification_threshold", DEFAULT_LARGE_RESULT_THRESHOLD
@@ -994,7 +995,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     stamped under ``_meta.agent_meta.agent_state.context.rebuild`` whenever context is at/above
     ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
     agent may explicitly request a rebuild via
-    ``system(action='summarize', rebuild=true)`` instead of letting the
+    ``system(action='summarize', input={'rebuild': true})`` instead of letting the
     1.0 hard boundary force one.
     """
     if "system" not in getattr(agent, "_intrinsics", set()):
@@ -1009,7 +1010,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         "context now above 85%: recording summaries does NOT itself rebuild the "
         "active provider context. If recorded summaries are worth making active "
         "sooner, you MAY pay for a provider-context rebuild via "
-        "system(action='summarize', rebuild=true) (with or without new items). This "
+        "system(action='summarize', input={'rebuild': true}) (with or without new items). This "
         "is a permitted option, not a requirement; if you do nothing, the runtime "
         "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
         "Preferring a proactive rebuild here avoids the emergency forced path. Keep "

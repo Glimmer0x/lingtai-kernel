@@ -8,7 +8,7 @@ machine-generated guidance hint under ``_meta.tool_meta.comment.overflow`` that
     ``tool_call_id`` (NOT an external ``saved_path``/sidecar file),
   * explains retrieval (grep / ``lingtai-agent log query`` / delegate to a
     daemon/subagent), and
-  * recommends ``system(action="summarize")`` after consuming the result.
+  * recommends ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`` after consuming the result.
 
 It must be exactly one comment topic (``overflow``) — never split into parallel
 ``comment.retrieval`` / ``comment.summarize`` headings — and must not disturb the

@@ -1174,7 +1174,7 @@ def get_schema(lang: str = "en") -> dict:
                         },
                         "preset": {
                             "type": "string",
-                            "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets'). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",
+                            "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets', input={}). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",
                         },
                         "backend_options": {
                             "type": "object",
@@ -1204,7 +1204,7 @@ def get_schema(lang: str = "en") -> dict:
                     },
                     "required": ["task", "tools"],
                 },
-                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'shell']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets') output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
+                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'shell']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets', input={}) output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
             },
             "id": {
                 "type": "string",
@@ -4085,7 +4085,7 @@ class DaemonManager:
                         "status": "error",
                         "message": (
                             f"preset {requested!r} is not in this agent's allowed "
-                            f"list — call system(action='presets') to see what's available"
+                            f"list — call system(action='presets', input={{}}) to see what's available"
                         ),
                     }
 
@@ -4283,7 +4283,7 @@ class DaemonManager:
 
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
                 "group_id": group_id,
-                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
+                "handoff": "While waiting, go idle or call system(action='sleep', input={}); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
 
     def _handle_emanate_cli(
         self,
@@ -4539,7 +4539,7 @@ class DaemonManager:
                   tasks=[{"task": s["task"][:80], "tools": s.get("tools", [])} for s in tasks])
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
                 "group_id": group_id, "backend": backend,
-                "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
+                "handoff": "While waiting, go idle or call system(action='sleep', input={}); the terminal result will arrive and wake you as a notification; read daemon-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details."}
 
     @staticmethod
     def _truncate_list_string(value: object, limit: int = 500) -> object:

@@ -670,7 +670,7 @@ class Agent(BaseAgent):
 
         Side effect: every init.json mcp entry whose name was registered
         is recorded in ``self._mcp_init_specs``. The ``_retry_failed_mcps``
-        helper consults this dict on ``system(action="refresh")`` to detect
+        helper consults this dict on ``system(action="refresh", input={})`` to detect
         and re-spawn MCPs whose subprocess died (issue #34).
         """
         import json
@@ -803,7 +803,7 @@ class Agent(BaseAgent):
         config. Returns a report dict ``{retried: [...], recovered: [...],
         still_failed: [...], healthy: [...]}``.
 
-        Why this exists: ``system(action="refresh")`` is the documented
+        Why this exists: ``system(action="refresh", input={})`` is the documented
         "fix config → refresh" recovery path for curated addons (imap,
         telegram, feishu, wechat). Without this retry, an MCP that exited
         during initial boot stays dead until full process restart — see

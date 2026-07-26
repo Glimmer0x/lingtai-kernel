@@ -613,7 +613,7 @@ def _modify(agent, mutate) -> None:
                 "Call notification(action='dismiss_channel', channel='nudge') to "
                 "acknowledge and clear ALL nudges at once. Individual nudges "
                 "may also describe a specific action to take (e.g. "
-                "system(action='refresh') for a kernel upgrade)."
+                "system(action='refresh', input={}) for a kernel upgrade)."
             ),
             "data": {"nudges": new_entries},
         }, True, None

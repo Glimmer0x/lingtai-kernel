@@ -254,7 +254,7 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
     })
     assert result["status"] == "dispatched"
     assert result["handoff"] == (
-        "While waiting, go idle or call system(action='sleep'); the terminal result "
+        "While waiting, go idle or call system(action='sleep', input={}); the terminal result "
         "will arrive and wake you as a notification; read daemon-manual and "
         "notification-manual for details. If Telegram is connected and a Task Card "
         "is available for the current turn, use it to report progress; call "

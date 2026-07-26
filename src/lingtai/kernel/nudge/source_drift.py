@@ -4,7 +4,7 @@ A long-running packaged agent process may have imported old code before a new
 kernel package landed on disk.  This nudge re-runs the same dual fingerprint
 that was captured at startup (git rev + source digest) and compares with
 ``agent._runtime_fingerprint``.  When the two disagree, the running interpreter
-is stale: only a full process relaunch (``system(action='refresh')``) picks up
+is stale: only a full process relaunch (``system(action='refresh', input={})``) picks up
 new code.
 
 Editable/source/dev installs are intentionally skipped.  In a development

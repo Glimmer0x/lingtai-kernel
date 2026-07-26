@@ -77,7 +77,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
-        "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
+        "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual", "input": {}})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
         "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),
         "edit": ("file-manual", lambda: agent.handlers["edit"]({"action": "manual"})),
@@ -155,7 +155,7 @@ def test_missing_installed_manual_degrades_without_side_effects(tmp_path: Path) 
         / "SKILL.md"
     )
 
-    assert system_tool.handle(agent, {"action": "manual"}) == {
+    assert system_tool.handle(agent, {"action": "manual", "input": {}}) == {
         "status": "degraded",
         "manual": "",
         "manual_path": str(expected_path),

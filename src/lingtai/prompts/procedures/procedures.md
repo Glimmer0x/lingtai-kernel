@@ -68,7 +68,7 @@ Below the full-context boundary, pending summarized history is normal; keep
 working, do not assume the old raw block has left the current continuation, and
 do not use `refresh` to force it. Once context is at/above `0.85`, the runtime
 stamps `_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is worth
-the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
+the cost, make one proactive tactical `system(action="summarize", input={"rebuild": true})`
 call (with new items to record and apply, or with no items to apply
 already-pending summaries); applied summaries flip to `status: done`. At context
 usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
@@ -128,8 +128,8 @@ producer's old cadence.
 
 ### Preset Swap and Daemon Task Preset
 
-To switch your own model/capabilities, call `system(action="presets")` for
-your exact `allowed` paths, then `system(action="refresh", preset=<path>)` (or
+To switch your own model/capabilities, call `system(action="presets", input={})` for
+your exact `allowed` paths, then `system(action="refresh", input={"preset": <path>})` (or
 `revert_preset=true`) — a config/prompt/MCP edit needs this refresh, not
 `summarize`. For a daemon task, pass `tasks[].preset` as an explicit path
 already in your `allowed` set (an unauthorized path is refused before

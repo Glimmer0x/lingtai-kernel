@@ -30,7 +30,7 @@ the code is the source of truth.
 
 **Do not use this for:**
 - Provider-context rebuild after summarizing: that is `system(action=
-  'summarize', rebuild=true)` (`src/lingtai/tools/system/CONTRACT.md`). Molt sheds
+  'summarize', input={'rebuild': true})` (`src/lingtai/tools/system/CONTRACT.md`). Molt sheds
   *history*; summarize rebuilds the *active context* from pending summaries.
 - Notification dismissal (including the post-molt reminder): the reminder is
   dismissed via the `notification` tool (`src/lingtai/tools/notification/CONTRACT.md`).

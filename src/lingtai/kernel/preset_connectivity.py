@@ -1,4 +1,4 @@
-"""Preset connectivity checks for the system(action='presets') listing.
+"""Preset connectivity checks for the system(action='presets', input={}) listing.
 
 Two-tier check:
 1. Credential check (free): is the api_key_env set in the environment?

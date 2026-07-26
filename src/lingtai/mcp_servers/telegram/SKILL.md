@@ -164,7 +164,7 @@ To dynamically add a command such as `/tokenstats` to a bot's Telegram menu:
    }
    ```
 
-3. Run `system(action="refresh")` (or restart the agent). On startup the
+3. Run `system(action="refresh", input={})` (or restart the agent). On startup the
    addon calls Telegram Bot API `setMyCommands` best-effort; failure is logged
    but does not block the bot.
 4. Verify with the Telegram `/` picker or `lingtai://status` / `telegram.accounts`;

@@ -145,7 +145,7 @@ def _refresh(agent, args: dict) -> dict:
                 "status": "error",
                 "message": (
                     f"preset {preset_name!r} is not in this agent's allowed "
-                    f"list — call system(action='presets') to see what's available"
+                    f"list — call system(action='presets', input={{}}) to see what's available"
                 ),
             }
 
@@ -170,7 +170,7 @@ def _refresh(agent, args: dict) -> dict:
                        requested=preset_name,
                        reason="not_found")
             return {"status": "error",
-                    "message": f"preset {preset_name!r} not found — call system(action='presets') to see available presets"}
+                    "message": f"preset {preset_name!r} not found — call system(action='presets', input={{}}) to see available presets"}
         except (ValueError, OSError, NotImplementedError, RuntimeError) as e:
             agent._log("preset_swap_failed",
                        requested=preset_name,
@@ -208,7 +208,7 @@ def _presets(agent, args: dict) -> dict:
 
     Each preset's `name` is its **path** (~/.lingtai-tui/presets/foo.json
     style when under $HOME, otherwise absolute) — that's the same string an
-    agent passes to `system(action='refresh', preset=...)` to swap. Two
+    agent passes to `system(action='refresh', input={'preset': ...})` to swap. Two
     libraries each containing `cheap.json` appear as two distinct entries
     with different paths — no collisions, no shadowing.
 

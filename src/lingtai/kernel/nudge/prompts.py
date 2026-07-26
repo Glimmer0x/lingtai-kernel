@@ -70,7 +70,7 @@ def _render_installed_runtime_mismatch(facts: NudgeFacts) -> dict[str, Any]:
             "refresh opportunity, not a release download or migration. Obtain "
             "explicit human/config-owner authorization for refresh; this nudge "
             "is not authorization. Finish or checkpoint active work, then call "
-            "system(action='refresh') only when that authorized relaunch is safe."
+            "system(action='refresh', input={}) only when that authorized relaunch is safe."
         ),
         "running": facts.running,
         "installed": facts.installed,
@@ -156,11 +156,11 @@ def _render_source_drift(facts: NudgeFacts) -> dict[str, Any]:
             "On-disk source has changed since this process started. "
             f"Drift: {drift}. No urgency — finish the current task first, then "
             "obtain explicit human/config-owner authorization for refresh. Once "
-            "authorized, use system(action='refresh') when convenient to relaunch "
+            "authorized, use system(action='refresh', input={}) when convenient to relaunch "
             "with the latest code. This source-drift reminder does not by itself "
             "imply a release migration or grant refresh authority."
         ),
-        "suggested_action": "system(action='refresh')",
+        "suggested_action": "system(action='refresh', input={})",
         "startup_fingerprint": facts.startup_fingerprint,
         "disk_fingerprint": facts.disk_fingerprint,
     }

@@ -110,7 +110,7 @@ Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
 history now, offers an explicit proactive rebuild path at 0.85 via
-`system(action="summarize", rebuild=true)`, and otherwise the runtime forces a
+`system(action="summarize", input={"rebuild": true})`, and otherwise the runtime forces a
 rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
 do not refresh just to "apply" a summarize.
 
@@ -157,7 +157,7 @@ canonical.
 1. **A priori — reasoning-guided** (`summary=true` on
    `bash`/`read`/`grep`/`daemon`/`glob`): the raw is replaced by a
    `reasoning`-driven generated summary *before* it enters your context.
-2. **A posteriori — agent-guided** (`system(action="summarize")`): replace a
+2. **A posteriori — agent-guided** (`system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`): replace a
    result you have *already seen* and digested with your own summary.
 3. **Molt — context-pressure-triggered** (§5): the whole-conversation
    continuation / reset.
@@ -410,7 +410,7 @@ There are two distinct catalog concepts, plus a separate worker path (below):
    what to allow. This is a **TUI/library authoring helper, not runtime
    authorization**, and it is **not** a directory scan available at agent
    runtime.
-2. **Main-agent catalog** (`system(action="presets")`) reads only
+2. **Main-agent catalog** (`system(action="presets", input={})`) reads only
    `manifest.preset.allowed` and returns those exact paths with
    description/LLM/capability metadata and fresh connectivity. It is
    **allowed-only**: it must never be described as "all presets in the
@@ -424,9 +424,9 @@ requires both `active` and `default` to be members of `allowed`.
 
 ### Main-agent swap, revert, and refresh sequence
 
-1. Call `system(action="presets")` and choose an exact returned path — not a
+1. Call `system(action="presets", input={})` and choose an exact returned path — not a
    shorthand or a name outside `allowed`.
-2. Call `system(action="refresh", preset=<path>)` for a named swap, or
+2. Call `system(action="refresh", input={"preset": <path>})` for a named swap, or
    `revert_preset=true` to read `manifest.preset.default` instead. An empty
    optional `preset` string normalizes to absent; supplying both a non-empty
    `preset` and `revert_preset` is a conflict.
@@ -437,7 +437,7 @@ requires both `active` and `default` to be members of `allowed`.
    (LLM/config/capabilities/MCP/prompt reconstruction, preserving conversation
    history where a live session exists).
 4. A config, prompt, MCP, or capability edit needs `refresh` to take effect;
-   `system(action="summarize")` alone does not reconstruct the runtime and
+   `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})` alone does not reconstruct the runtime and
    must not be used as a refresh substitute.
 
 ### Daemon task worker path — explicit, omitted, and external CLI
@@ -460,7 +460,7 @@ directory is not authorization:
   is refused with a clear error before the gate reads or resolves anything
   else. The allowlist is read at all only when at least one task in the batch
   actually requests an explicit preset — the daemon schema recommends using a
-  path returned by `system(action="presets")`, and that returned path is
+  path returned by `system(action="presets", input={})`, and that returned path is
   exactly what passes the gate.
 - Omitting `tasks[].preset` means the daemon task inherits the **parent's
   regular (non-MCP) effective surface** — a parent-derived preset, not a fresh
@@ -488,15 +488,15 @@ the daemon call itself cannot mutate `manifest.preset.allowed`:
    entry in `manifest.preset.allowed`, preserving every existing entry and
    the existing `active`/`default` values — `allowed` must remain a
    non-empty list containing both `active` and `default`.
-3. Have the agent refresh (`system(action="refresh")`) so the edited
+3. Have the agent refresh (`system(action="refresh", input={})`) so the edited
    `init.json` is re-read and the new entry takes effect.
-4. Call `system(action="presets")` and confirm the exact path now appears in
+4. Call `system(action="presets", input={})` and confirm the exact path now appears in
    the allowed-only catalog it returns.
 5. Pass that exact returned path — not a shorthand, not the pre-authorization
    path string, and not a directory-scan result — in `tasks[].preset`.
 
 Skipping step 2 (for example, saving the file into the library directory
-without editing `allowed`) does not authorize it: `system(action="presets")`
+without editing `allowed`) does not authorize it: `system(action="presets", input={})`
 still will not list it, and an `emanate` call using its path is refused by
 the gate above.
 

@@ -204,14 +204,14 @@ class ChatSession(ABC):
         """
         return None
     def on_history_summarized(self, summarized_ids: list[str]) -> None:
-        """Hook called after `system(action='summarize')` mutates chat history."""
+        """Hook called after `system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]})` mutates chat history."""
 
         return None
 
     def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
         """Request a provider-context rebuild without mutating chat history.
 
-        Used by ``system(action='summarize', rebuild=true)`` (the ``reason``
+        Used by ``system(action='summarize', input={'rebuild': true})`` (the ``reason``
         default remains the internal ``summarize_rebuild_only`` epoch-reset label).
         Adapters with continuation/cache state can start a fresh full replay on the
         next model request and return True; adapters that always rebuild or have no

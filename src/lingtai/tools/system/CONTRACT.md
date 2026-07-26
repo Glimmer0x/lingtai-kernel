@@ -1,10 +1,12 @@
 ---
 name: system-contract
 tool: system
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/_settings.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -47,21 +49,31 @@ storage; summarize semantics -> §Anchored claims.
 
 ## Tool surface
 
+The canonical public call is `system(action=..., input={...}, reasoning=...)`.
+`action` and `input` are required at the root; `reasoning` is optional and is
+injected only by `BaseAgent` into the Agent-facing `FunctionSchema`. The raw
+system schema contains no reasoning property. `input` is a closed `anyOf` of
+named action-specific object branches, and dispatch validates the same closure
+again. Flat fields and omitted action/input are rejected; there is no healing or
+legacy fallback. Provider envelopes keep their existing tool name, call id, and
+argument field names.
+
 Schema (`src/lingtai/tools/system/schema.py`) requires `action` from a fixed enum.
-Dispatch is the `handle()` table in `src/lingtai/tools/system/__init__.py`.
+Dispatch is the single `handle()` table in `src/lingtai/tools/system/__init__.py`.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
 | `sleep` | — | `reason`, `force` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`) | — |
-| `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
-| `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
-| `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported/failed) |
-| `interrupt` | `address` | `reason` | `{status: "interrupted", address}` | `{error: True, message}` (as above) |
+| `lull` | `address` | — | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
+| `suspend` | `address` | — | `{status: "suspended", address}` | `{error: True, message}` (as above) |
+| `cpr` | `address` | — | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported/failed) |
+| `interrupt` | `address` | — | `{status: "interrupted", address}` | `{error: True, message}` (as above) |
 | `clear` | `address` | `reason` | `{status: "cleared", address, source}` | `{error: True, message}` (as above) |
-| `nirvana` | `address` | `reason` | `{status: "nirvana", address}` | `{error: True, message}` (requires karma AND nirvana; shutdown-timeout error) |
+| `nirvana` | `address` | — | `{status: "nirvana", address}` | `{error: True, message}` (requires karma AND nirvana; shutdown-timeout error) |
 | `presets` | — | — | `{status: "ok", active, available: [...]}` | `{status: "error", message}` on unreadable init.json |
-| `summarize` | `items` (list of `{tool_call_id, summary}`) *or* `rebuild=true` | `rebuild` (bool) | `{status: "ok"/"partial", mode: "summarize"/"rebuild", summarized, failed, items, context, ...}` | `{status: "error", reason: "missing_items"/"runtime_threshold_change_not_supported"/"no_chat_session"}`; per-item errors (`not_found`, `already_summarized`, `missing_tool_call_id`, `missing_summary`) |
+| `summarize` | `input.items` (list of `{tool_call_id, summary}`) *or* `input.rebuild=true` | `input.rebuild` (bool) | `{status: "ok"/"partial", mode: "summarize"/"rebuild", summarized, failed, items, context, ...}` | malformed nested input is rejected before dispatch; runtime errors include `no_chat_session`, `not_found`, and `already_summarized` |
+| `manual` | — | — | `{status: "ok", manual, manual_path}` | `{status: "degraded", manual: "", error}` when the initialized manual is unavailable; read-only |
 
 Unknown/absent `action` returns `{status: "error", message: "Unknown system
 action: ..."}`. Notification verbs (`check`, `dismiss_channel`,
@@ -71,6 +83,13 @@ are **not** in the enum and dispatch to the unknown-action error.
 The karma gate (`_check_karma_gate`) requires `admin.karma=True` for the
 five control verbs and `admin.karma AND admin.nirvana` for `nirvana`; it also
 rejects a missing address, a self-target, and a non-agent target.
+
+Every system result carries a fresh `current_setting` block from the Agent-owned
+`settings/system.json` reader. The file is strict version 1 and accepts only
+`{"schema_version": 1}`. Missing, valid, byte-distinct hot, and malformed files
+are reported as source/revision/hash evidence only; this is a versioned no-op
+placeholder, never a system behavior selector, and diagnostics never echo file
+contents or secrets.
 
 ## State & storage
 
@@ -129,7 +148,7 @@ content with a `lingtai_agent_summarized_result` marker), persists via
 | `nirvana` requires karma AND nirvana | karma gate in `src/lingtai/tools/system/karma.py:_check_karma_gate` | Call `nirvana` with only karma | Irreversible deletion by under-privileged agent |
 | `summarize` preserves the original in events.jsonl | `tests/test_system_summarize.py::test_summarize_replaces_block_content` | Summarize a result, grep events.jsonl by tool_call_id | Loss of original tool output |
 | `summarize` rebuild flips pending markers done | `tests/test_system_summarize.py::test_rebuild_true_with_items_records_marks_done_then_rebuilds` | Summarize then rebuild; inspect marker status | Pending compaction never applied |
-| No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Duplicate notification surfaces diverge |
+| No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check', input={})` | Duplicate notification surfaces diverge |
 
 Run before merging system changes:
 

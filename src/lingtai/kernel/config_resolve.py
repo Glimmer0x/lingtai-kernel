@@ -81,7 +81,7 @@ def load_env_file(path: str | Path, *, overwrite: bool = False) -> None:
     By default, existing process environment variables are preserved so a
     caller's explicit shell environment wins at initial boot. Pass
     ``overwrite=True`` for deliberate config reloads (notably
-    ``system(action="refresh")``) so edits to the agent's env_file replace
+    ``system(action="refresh", input={})``) so edits to the agent's env_file replace
     stale values inherited by the relaunched process.
     """
     env_path = Path(path).expanduser()

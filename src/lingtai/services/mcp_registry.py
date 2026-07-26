@@ -425,7 +425,7 @@ def _build_registry_xml(
     lines = [
         "The following MCP servers are registered for this agent. To activate "
         "one, add an entry under `mcp` in your init.json and run "
-        "system(action=\"refresh\"). See the mcp-manual skill in "
+        "system(action=\"refresh\", input={}). See the mcp-manual skill in "
         ".library/intrinsic/capabilities/mcp/ for the full registration "
         "contract. When you need install or config instructions for a "
         "specific MCP, fetch its <homepage> README via web_read or "

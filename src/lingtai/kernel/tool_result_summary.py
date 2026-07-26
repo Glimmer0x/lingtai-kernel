@@ -1,7 +1,7 @@
 """A-priori (reasoning-driven) tool-result summarization.
 
 This is the *a-priori* sibling of the agent-authored *a-posteriori*
-``system(action='summarize')`` path (``intrinsics/system/summarize.py``).
+``system(action='summarize', input={'items': [{'tool_call_id': '<id>', 'summary': '<summary>'}]})`` path (``intrinsics/system/summarize.py``).
 
 Difference in timing and authorship:
 

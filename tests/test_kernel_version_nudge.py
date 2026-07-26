@@ -60,7 +60,7 @@ def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypat
     assert "skill" not in entry
     assert "install_url" not in entry
     assert "already on disk" in entry["detail"]
-    assert "system(action='refresh')" in entry["detail"]
+    assert "system(action='refresh', input={})" in entry["detail"]
     assert "skill.md" not in entry["detail"]
 
 

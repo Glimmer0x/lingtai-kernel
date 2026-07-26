@@ -26,7 +26,7 @@ in `init.json`, builds a YAML catalog, and injects it into your system prompt.
 
 **The one rule behind everything below:** a skill exists for you only after it is
 (1) installed into a scanned skill root and (2) picked up by
-`system({"action": "refresh"})`. A shared URL, a temporary clone, or a file you
+`system({"action": "refresh", "input": {}})`. A shared URL, a temporary clone, or a file you
 just wrote is not yet in the catalog. Every write/install step in this manual
 ends with a refresh.
 
@@ -102,7 +102,7 @@ temporary clone as loaded. The default flow is local-first:
 2. **Validate before trusting it** — run the bundled validator (below) against
    the installed folder and inspect `SKILL.md` frontmatter plus any referenced
    `scripts/`, `assets/`, or `references/`.
-3. **Refresh** — call `system({"action": "refresh"})`. Until refresh succeeds
+3. **Refresh** — call `system({"action": "refresh", "input": {}})`. Until refresh succeeds
    the skill is only a file on disk.
 4. **Load it by catalog entry** — `read` the cataloged `location:` and follow any
    nested references. Record the commit or source URL in your task notes when it

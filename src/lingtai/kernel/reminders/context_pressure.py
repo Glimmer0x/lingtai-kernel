@@ -471,7 +471,7 @@ def render_forced_rebuild_warning(
         f"boundary. Context changed from {before_str} before to {after_str} after. "
         f"Reaching the full-context boundary means waiting until context was full was "
         f"not ideal — when context is high, prefer a proactive "
-        f"system(action='summarize', rebuild=true) at the {high_text} rebuild hint "
+        f"system(action='summarize', input={'rebuild': true}) at the {high_text} rebuild hint "
         f"instead of letting the emergency boundary force it. If the rebuilt context "
         f"is still above the {recovery_text} recovery target, tend durable stores and "
         f"molt. See meta_guidance, substrate, and procedures."

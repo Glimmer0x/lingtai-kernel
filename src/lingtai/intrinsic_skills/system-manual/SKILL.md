@@ -69,7 +69,7 @@ selects that topic.
   description: |
     Nested system-manual reference and canonical owner of tool-result
     summarization: the three compression modes (a-priori `summary=true`,
-    a-posteriori `system(action="summarize")`, molt), summarize cadences,
+    a-posteriori `system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})`, molt), summarize cadences,
     delayed provider reconstruction and the 0.85/1.0 rebuild boundaries,
     original-result recovery by `tool_call_id`, and summarize versus molt.
 - name: sqlite-log-query
@@ -117,7 +117,7 @@ selects that topic.
 | Need / keywords | Read |
 |---|---|
 | Expanded substrate; body/extensions; bash vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
-| `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets")` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
+| `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets", input={})` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |

@@ -5,7 +5,7 @@ the Codex flag-discovery page: a small progressive-disclosure knowledge
 entrypoint. Unlike CLI backend pages it discloses *knowledge routing*, not
 flags — `backend="lingtai"` is the in-process ChatSession default with no
 external CLI and no `backend_options` surface, so the page must route agents
-to the live authorities (daemon-manual router, `system(action="presets")`
+to the live authorities (daemon-manual router, `system(action="presets", input={})`
 preset inspection, tools/skills/MCP inheritance rules, CONTRACT.md)
 and must never grow into a duplicated rules catalog or invent a flag
 surface. Runtime behavior itself is covered by ``tests/test_daemon.py`` and
@@ -83,7 +83,7 @@ def test_lingtai_child_routes_to_live_authorities():
     # The page routes to current authorities instead of restating rules.
     for phrase in (
         "daemon-manual",
-        'system(action="presets")',
+        'system(action="presets", input={})',
         "reference/substrate-manual/SKILL.md",
         "CONTRACT.md",
         "auto-inherited",

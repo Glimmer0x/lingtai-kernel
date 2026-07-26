@@ -63,7 +63,7 @@ For any MCP server, relative to this agent:
 2. **Officially registered** — appears as a line in `mcp_registry.jsonl` (sibling to `init.json`). The system prompt's `<registered_mcp>` lists it.
 3. **Active** — the MCP server subprocess is running, its tools are mounted in your tool surface.
 
-Promotion path: catalog → registry → active. You move things along by editing files and calling `system(action="refresh")`.
+Promotion path: catalog → registry → active. You move things along by editing files and calling `system(action="refresh", input={})`.
 
 ## Pick a sub-skill
 
@@ -166,4 +166,4 @@ PY
 Recommended cadence: after adding/removing MCP servers, when `.mcp_inbox` grows,
 and before sharing a project. Cleanup requires explicit user consent after the
 dry-run report, and the audit/apply step must be recorded in `logs/cleanup.jsonl`. Prefer deregistering/updating registry files followed by
-`system(action="refresh")` over deleting registry state by hand.
+`system(action="refresh", input={})` over deleting registry state by hand.

@@ -60,7 +60,7 @@ def test_system_wired_in_agent(tmp_path):
 
 # ---------------------------------------------------------------------------
 # agent.status() — internal Python API; writes .status.json for TUI/portal.
-# The LLM-callable system(action="show") was removed; identity now ships in
+# The LLM-callable system(action="show", input={}) was removed; identity now ships in
 # the cached system prompt and runtime metadata ships on every tool result via _meta.
 # These tests cover the status() shape contract that TUI/portal depend on.
 # ---------------------------------------------------------------------------
@@ -163,9 +163,9 @@ def test_status_context_null_without_session(tmp_path):
 
 
 def test_system_show_action_rejected(tmp_path):
-    """system(action='show') was removed; calling it must error, not silently no-op."""
+    """system(action='show', input={}) was removed; calling it must error, not silently no-op."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "show"})
+    result = agent._intrinsics["system"]({"action": "show", "input": {}})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
 
@@ -180,7 +180,7 @@ def test_system_show_action_rejected(tmp_path):
 def test_system_nap_returns_unknown_action(tmp_path):
     """nap is no longer a valid system action."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "nap", "seconds": 1})
+    result = agent._intrinsics["system"]({"action": "nap", "input": {"seconds": 1}})
     assert result["status"] == "error"
     assert "Unknown system action" in result["message"]
 
@@ -192,7 +192,7 @@ def test_system_nap_returns_unknown_action(tmp_path):
 
 def test_system_self_sleep(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", admin={"karma": True}, workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "sleep", "reason": "need bash"})
+    result = agent._intrinsics["system"]({"action": "sleep", "input": {"reason": "need bash"}})
     assert result["status"] == "ok"
     assert agent._asleep.is_set()
     agent.stop(timeout=1.0)
@@ -211,7 +211,7 @@ def test_system_refresh(tmp_path):
     signal-file + watcher-subprocess pattern.)
     """
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "refresh", "reason": "new tools"})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"reason": "new tools"}})
     assert result["status"] == "ok"
     # The signal file is the contract; the heartbeat loop keys off it.
     # Note: BaseAgent._build_launch_cmd returns None by default, so no
@@ -227,7 +227,7 @@ def test_system_refresh(tmp_path):
 
 def test_system_unknown_action(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["system"]({"action": "bogus"})
+    result = agent._intrinsics["system"]({"action": "bogus", "input": {}})
     assert result["status"] == "error"
 
 
@@ -325,7 +325,7 @@ def test_base_agent_load_preset_hook_fails_loud_when_uncomposed(tmp_path):
 
 
 def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
-    """system(action='refresh', preset='ghost') with `ghost` not in `allowed`
+    """system(action='refresh', input={'preset': 'ghost'}) with `ghost` not in `allowed`
     returns error and logs preset_swap_refused_unauthorized — the activate
     path never runs because authorization is checked first."""
     import json
@@ -357,11 +357,11 @@ def test_refresh_with_unauthorized_preset_returns_error(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda name: activate_calls.append(name))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "preset": "ghost"})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"preset": "ghost"}})
 
     assert result["status"] == "error"
     assert "ghost" in result["message"]
-    assert "presets" in result["message"]  # guidance: call system(action='presets')
+    assert "presets" in result["message"]  # guidance: call system(action='presets', input={})
     events = [e for e, _ in log_events]
     assert "preset_swap_refused_unauthorized" in events
     assert activate_calls == []  # never reached
@@ -408,7 +408,7 @@ def test_refresh_with_missing_allowed_denies(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "preset": "minimax"})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"preset": "minimax"}})
 
     assert result["status"] == "error"
     assert "minimax" in result["message"]
@@ -429,14 +429,14 @@ def test_refresh_with_malformed_allowed_denies(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_activate_preset",
                         lambda n: activate_calls.append(n))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "preset": "minimax"})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"preset": "minimax"}})
 
     assert result["status"] == "error"
     assert activate_calls == []
 
 
 def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeypatch):
-    """system(action='refresh', preset='minimax') calls _activate_preset then _perform_refresh."""
+    """system(action='refresh', input={'preset': 'minimax'}) calls _activate_preset then _perform_refresh."""
     agent = _make_test_agent_for_presets(tmp_path, active_preset="minimax")
 
     activate_calls = []
@@ -446,8 +446,12 @@ def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeyp
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh",
-                                           "preset": "minimax"})
+    result = agent._intrinsics["system"]({
+        "action": "refresh",
+        "input": {
+            "preset": "minimax",
+        },
+    })
 
     assert activate_calls == ["minimax"]
     assert perform_calls == [True]
@@ -455,7 +459,7 @@ def test_refresh_with_known_preset_calls_activate_then_perform(tmp_path, monkeyp
 
 
 def test_refresh_no_preset_arg_unchanged(tmp_path, monkeypatch):
-    """system(action='refresh') with no preset arg behaves as today (no _activate_preset call)."""
+    """system(action='refresh', input={}) with no preset arg behaves as today (no _activate_preset call)."""
     agent = _make_test_agent_for_presets(tmp_path)
 
     activate_calls = []
@@ -465,14 +469,14 @@ def test_refresh_no_preset_arg_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    agent._intrinsics["system"]({"action": "refresh"})
+    agent._intrinsics["system"]({"action": "refresh", "input": {}})
 
     assert activate_calls == []  # not called
     assert perform_calls == [True]
 
 
 def test_refresh_empty_preset_is_no_swap(tmp_path, monkeypatch):
-    """system(action='refresh', preset='') is treated as no swap requested.
+    """system(action='refresh', input={'preset': ''}) is treated as no swap requested.
 
     Tool-call providers sometimes serialize optional string fields as ""
     instead of omitting them. Without normalization, an empty string flows
@@ -488,7 +492,7 @@ def test_refresh_empty_preset_is_no_swap(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "preset": ""})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"preset": ""}})
     assert result["status"] == "ok"
     assert activate_calls == []  # empty string must not request a swap
     assert perform_calls == [True]
@@ -505,14 +509,14 @@ def test_refresh_whitespace_preset_is_no_swap(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "preset": "   \t\n"})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"preset": "   \t\n"}})
     assert result["status"] == "ok"
     assert activate_calls == []
     assert perform_calls == [True]
 
 
 def test_presets_action_lists_full_library(tmp_path):
-    """system(action='presets') returns all explicitly allowed presets."""
+    """system(action='presets', input={}) returns all explicitly allowed presets."""
     import json
     plib = tmp_path / "presets"
     plib.mkdir()
@@ -531,7 +535,7 @@ def test_presets_action_lists_full_library(tmp_path):
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="alpha")
 
-    result = agent._intrinsics["system"]({"action": "presets"})
+    result = agent._intrinsics["system"]({"action": "presets", "input": {}})
 
     assert result["status"] == "ok"
     # `active` preserves manifest spelling; available names are display-shortened.
@@ -579,7 +583,7 @@ def test_presets_action_strips_credentials(tmp_path):
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="secret")
 
-    result = agent._intrinsics["system"]({"action": "presets"})
+    result = agent._intrinsics["system"]({"action": "presets", "input": {}})
 
     secret = result["available"][0]
     assert set(secret["llm"].keys()) == {"provider", "model"}
@@ -600,7 +604,7 @@ def test_presets_action_empty_library(tmp_path):
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib,
                                           active_preset="nonexistent")
 
-    result = agent._intrinsics["system"]({"action": "presets"})
+    result = agent._intrinsics["system"]({"action": "presets", "input": {}})
 
     assert result["status"] == "ok"
     assert result["available"] == []
@@ -617,7 +621,7 @@ def test_refresh_with_preset_handles_not_implemented(tmp_path):
     with _mock.patch.object(agent, "_perform_refresh",
                             lambda: perform_calls.append(True)):
         result = agent._intrinsics["system"](
-            {"action": "refresh", "preset": "anything"})
+            {"action": "refresh", "input": {"preset": "anything"}})
     assert result["status"] == "error"
     assert "anything" in result["message"]
     assert perform_calls == []  # refresh NOT triggered
@@ -658,7 +662,7 @@ def test_refresh_revert_preset_swaps_to_default(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"revert_preset": True}})
 
     assert result["status"] == "ok"
     assert activate_default_calls == [True]
@@ -671,8 +675,10 @@ def test_refresh_revert_preset_with_preset_arg_errors(tmp_path):
 
     result = agent._intrinsics["system"]({
         "action": "refresh",
-        "preset": "minimax",
-        "revert_preset": True,
+        "input": {
+            "preset": "minimax",
+            "revert_preset": True,
+        },
     })
 
     assert result["status"] == "error"
@@ -718,8 +724,10 @@ def test_refresh_empty_preset_with_revert_preset_treats_empty_as_absent(
 
     result = agent._intrinsics["system"]({
         "action": "refresh",
-        "preset": "",
-        "revert_preset": True,
+        "input": {
+            "preset": "",
+            "revert_preset": True,
+        },
     })
     assert result["status"] == "ok"
     assert activate_default_calls == [True]
@@ -758,7 +766,7 @@ def test_refresh_revert_preset_when_no_preset_configured_errors(tmp_path, monkey
     # Don't actually relaunch on _perform_refresh
     monkeypatch.setattr(agent, "_perform_refresh", lambda: None)
 
-    result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"revert_preset": True}})
     assert result["status"] == "error"
     msg = result["message"].lower()
     assert "default" in msg or "no preset" in msg or "configured" in msg
@@ -778,7 +786,7 @@ def test_refresh_revert_preset_false_is_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": False})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"revert_preset": False}})
 
     assert result["status"] == "ok"
     assert activate_default_calls == []  # not called
@@ -810,7 +818,7 @@ def test_refresh_revert_preset_when_active_equals_default_still_succeeds(tmp_pat
     monkeypatch.setattr(agent, "_perform_refresh",
                         lambda: perform_calls.append(True))
 
-    result = agent._intrinsics["system"]({"action": "refresh", "revert_preset": True})
+    result = agent._intrinsics["system"]({"action": "refresh", "input": {"revert_preset": True}})
 
     assert result["status"] == "ok"
     assert activate_default_calls == [True]  # called even though it's effectively a no-op
@@ -851,7 +859,7 @@ def test_presets_action_includes_connectivity(tmp_path, monkeypatch):
     monkeypatch.delenv("BETA_KEY", raising=False)
 
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib, active_preset="alpha")
-    result = agent._intrinsics["system"]({"action": "presets"})
+    result = agent._intrinsics["system"]({"action": "presets", "input": {}})
 
     assert result["status"] == "ok"
     by_name = {p["name"]: p for p in result["available"]}
@@ -890,7 +898,7 @@ def test_presets_action_marks_unreachable_when_probe_fails(tmp_path, monkeypatch
                         lambda host, port, timeout: (_ for _ in ()).throw(OSError("DNS fail")))
 
     agent = _make_test_agent_for_presets(tmp_path, presets_path=plib, active_preset="broken")
-    result = agent._intrinsics["system"]({"action": "presets"})
+    result = agent._intrinsics["system"]({"action": "presets", "input": {}})
 
     by_name = {p["name"]: p for p in result["available"]}
     broken_name = home_shortened(str(plib / "broken.json"))

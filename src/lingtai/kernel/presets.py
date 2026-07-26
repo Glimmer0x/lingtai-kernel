@@ -584,7 +584,7 @@ def materialize_active_preset(
 # `description.tier` is a five-rung cost/quality ladder stored as plain
 # numeric strings 1..5 — higher is better. The TUI renders these as
 # locale-appropriate chips. Agents read the full description block via
-# `system(action='presets')` and pick presets accordingly.
+# `system(action='presets', input={})` and pick presets accordingly.
 TIER_VALUES = ("1", "2", "3", "4", "5")
 
 

@@ -1882,7 +1882,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
                 "errors": [],
             }
 
-        # Mid-batch cancel: a tool we just ran (e.g. system(action="sleep"))
+        # Mid-batch cancel: a tool we just ran (e.g. system(action="sleep", input={}))
         # set _cancel_event, meaning the agent has decided to stop this
         # turn. Commit the tool_results to the wire so the assistant turn
         # we just sent has matching pairs (no dangling tool_calls), then

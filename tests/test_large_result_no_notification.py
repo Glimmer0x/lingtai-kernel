@@ -2,7 +2,7 @@
 
 Per the agent-meta-large-result-ranking change, large tool results are ranked
 through ``_meta.agent_meta.current_tool_result_chars.top_results`` and digested
-via ``system(action="summarize")``.  The kernel no longer publishes or injects
+via ``system(action="summarize", input={"items": [{"tool_call_id": "<id>", "summary": "<summary>"}]})``.  The kernel no longer publishes or injects
 ``source="large_tool_result"`` system notifications — neither at tool-execution
 time (``_maybe_notify_large_tool_result``) nor at the turn boundary
 (``_rescan_large_tool_results``).  These tests pin that contract:
