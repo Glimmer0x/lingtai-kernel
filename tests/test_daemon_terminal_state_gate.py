@@ -13,15 +13,14 @@ terminal state now publishes the compact daemon notification, including short
 successful results.
 
 The once-only terminal-notification dedupe and the run_dir-authoritative
-classification are exercised in tests/test_daemon.py and must remain intact;
-a regression test for the dedupe lives here too.
+classification are exercised in tests/test_daemon_detached_supervisor.py,
+which drives the live detached-supervisor notification path end-to-end.
 """
-import queue
 import threading
 import time
 from unittest.mock import MagicMock
 
-from lingtai.tools.daemon import DaemonManager, _classify_terminal_state
+from lingtai.tools.daemon import _classify_terminal_state
 
 
 # ---------------------------------------------------------------------------
@@ -193,164 +192,3 @@ class TestClassifyFallbackSignals:
         """'[intercepted]' is a guard-handled normal exit, not a terminal abort."""
         entry = _make_entry(run_dir_state=None)
         assert _classify_terminal_state(entry, True, "[intercepted]", 3600.0) == "done"
-
-
-# ---------------------------------------------------------------------------
-# Integration: _on_emanation_done uses the gate AND preserves dedupe
-# ---------------------------------------------------------------------------
-
-def _make_agent(tmp_path):
-    from lingtai.agent import Agent
-    from lingtai.kernel.config import AgentConfig
-    svc = MagicMock()
-    svc.provider = "mock"
-    svc.model = "mock-model"
-    svc.create_session = MagicMock()
-    svc.make_tool_result = MagicMock()
-    return Agent(
-        svc,
-        working_dir=tmp_path / "daemon-agent",
-        capabilities=["daemon"],
-        config=AgentConfig(),
-    )
-
-
-def _real_run_dir(agent, em_id, task="test task"):
-    from lingtai.tools.daemon.run_dir import DaemonRunDir
-    return DaemonRunDir(
-        parent_working_dir=agent._working_dir,
-        handle=em_id,
-        task=task,
-        tools=["file"],
-        model="mock-model",
-        max_turns=30,
-        timeout_s=300.0,
-        parent_addr=agent._working_dir.name,
-        parent_pid=12345,
-        system_prompt="You are a daemon.",
-        call_parameters=None,
-    )
-
-
-class TestOnEmanationDoneIntegration:
-    """Verify the gate is wired into _on_emanation_done end-to-end and that the
-    once-only terminal-notification dedupe (current main) is preserved."""
-
-    def test_timeout_event_notifies_without_run_dir_state(self, tmp_path):
-        """The key #194 case via the *event* fallback: a timed-out run whose
-        run_dir never recorded 'timeout' (e.g. crash before mark_timeout) still
-        notifies with the correct terminal label because timeout_event is set.
-        """
-        from tests._notification_store_helpers import snapshot_notifications
-
-        agent = _make_agent(tmp_path)
-        agent.inbox = queue.Queue()
-        mgr = agent.get_capability("daemon")
-        rd = _real_run_dir(agent, "em-to-event")  # state stays 'running'
-
-        future = MagicMock()
-        future.result.return_value = "[cancelled]"
-        mgr._emanations["em-to-event"] = {
-            "future": future,
-            "task": "test task",
-            "start_time": time.time() - 3601.0,
-            "cancel_event": _make_event(True),
-            "timeout_event": _make_event(True),
-            "run_dir": rd,
-            "timeout_s": 3600.0,
-        }
-
-        mgr._on_emanation_done("em-to-event", "test task", future)
-
-        assert agent.inbox.empty()
-        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-        assert len(events) == 1
-        assert "timeout" in events[0]["body"].lower()
-
-    def test_cancel_event_notifies_without_run_dir_state(self, tmp_path):
-        from tests._notification_store_helpers import snapshot_notifications
-
-        agent = _make_agent(tmp_path)
-        agent.inbox = queue.Queue()
-        mgr = agent.get_capability("daemon")
-        rd = _real_run_dir(agent, "em-cancel-event")
-
-        future = MagicMock()
-        future.result.return_value = "[cancelled]"
-        mgr._emanations["em-cancel-event"] = {
-            "future": future,
-            "task": "test task",
-            "start_time": time.time() - 45.0,
-            "cancel_event": _make_event(True),
-            "timeout_event": _make_event(False),
-            "run_dir": rd,
-            "timeout_s": 3600.0,
-        }
-
-        mgr._on_emanation_done("em-cancel-event", "test task", future)
-
-        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-        assert len(events) == 1
-        assert "cancelled" in events[0]["body"].lower()
-
-    def test_genuine_short_success_notifies(self, tmp_path):
-        """Even a tiny successful result must wake the parent: the daemon
-        terminal notification is the completion signal, not a long-output echo.
-        """
-        from tests._notification_store_helpers import snapshot_notifications
-
-        agent = _make_agent(tmp_path)
-        agent.inbox = queue.Queue()
-        mgr = agent.get_capability("daemon")
-        rd = _real_run_dir(agent, "em-short")
-        rd.mark_done("42")
-
-        future = MagicMock()
-        future.result.return_value = "42"
-        mgr._emanations["em-short"] = {
-            "future": future,
-            "task": "test task",
-            "start_time": time.time() - 2.0,
-            "cancel_event": _make_event(False),
-            "timeout_event": _make_event(False),
-            "run_dir": rd,
-            "timeout_s": 3600.0,
-        }
-
-        mgr._on_emanation_done("em-short", "test task", future)
-
-        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-        assert len(events) == 1
-        assert events[0]["ref_id"] == "em-short"
-        assert "Daemon em-short done." in events[0]["body"]
-        assert "Preview:\n42" in events[0]["body"]
-
-    def test_timeout_terminal_notified_only_once(self, tmp_path):
-        """Dedupe preservation: a timeout surfaced via the event fallback is
-        still delivered exactly once across duplicate done-callbacks."""
-        from tests._notification_store_helpers import snapshot_notifications
-
-        agent = _make_agent(tmp_path)
-        agent.inbox = queue.Queue()
-        mgr = agent.get_capability("daemon")
-        rd = _real_run_dir(agent, "em-once")
-
-        future = MagicMock()
-        future.result.return_value = "[cancelled]"
-        mgr._emanations["em-once"] = {
-            "future": future,
-            "task": "test task",
-            "start_time": time.time() - 3601.0,
-            "cancel_event": _make_event(True),
-            "timeout_event": _make_event(True),
-            "run_dir": rd,
-            "timeout_s": 3600.0,
-        }
-
-        mgr._on_emanation_done("em-once", "test task", future)
-        mgr._on_emanation_done("em-once", "test task", future)
-
-        events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-        daemon_events = [e for e in events if e["ref_id"] == "em-once"]
-        assert len(daemon_events) == 1
-        assert "timeout" in daemon_events[0]["body"].lower()

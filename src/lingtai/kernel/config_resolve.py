@@ -7,12 +7,6 @@ import re
 from pathlib import Path
 
 
-# Module-level: pre-compiled regex for JSONC string literals (matches "..."
-# with escape sequences). Used by load_jsonc to skip over string contents
-# when stripping // comments.
-_JSONC_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
-
-
 def parse_jsonc(text: str) -> dict:
     """Parse JSON or JSONC text (strips // comments and trailing commas).
 
@@ -122,16 +116,6 @@ def _resolve_env_fields(d: dict) -> dict:
     for env_key in env_keys:
         base_key = env_key[: -len("_env")]
         result[base_key] = resolve_env(result.get(base_key), result.pop(env_key))
-    return result
-
-
-def _resolve_file_fields(d: dict) -> dict:
-    """Resolve ``*_file`` keys in a dict using ``resolve_file``."""
-    result = dict(d)
-    file_keys = [k for k in result if k.endswith("_file")]
-    for file_key in file_keys:
-        base_key = file_key[: -len("_file")]
-        result[base_key] = resolve_file(result.get(base_key), result.pop(file_key))
     return result
 
 

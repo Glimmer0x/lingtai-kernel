@@ -1,7 +1,4 @@
 """Tests for per-batch max_turns and timeout overrides on daemon.emanate."""
-import threading
-from unittest.mock import MagicMock, patch
-
 from tests._daemon_helpers import (
     install_fake_detached_owner,
     make_daemon_agent as _make_agent,
@@ -95,62 +92,30 @@ def test_emanate_rejects_negative_max_turns(tmp_path):
     assert "max_turns" in out["message"]
 
 
-def test_emanate_respects_per_batch_timeout(tmp_path):
+def test_emanate_respects_per_batch_timeout(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
 
-    captured = {}
-    def fake_thread_init(target, args, daemon):
-        captured["watchdog_args"] = args
-        # Return an object with a no-op start()
-        m = MagicMock()
-        m.start = MagicMock()
-        return m
-
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.tools.daemon.threading.Thread", side_effect=fake_thread_init), \
-         patch.object(mgr, "_connect_task_mcp_registrations",
-                      return_value=({}, {}, [])):
-        pool = MockPool.return_value
-        pool.submit.return_value = MagicMock(
-            done=MagicMock(return_value=True),
-            exception=MagicMock(return_value=None),
-            add_done_callback=MagicMock(),
-        )
-        out = mgr.handle({"action": "emanate", "timeout": 600,
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate", "timeout": 600,
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    # Watchdog third arg is the timeout
-    assert captured["watchdog_args"][2] == 600.0
+    wait_daemon_terminal(records[0]["run_dir"])
+    assert records[0]["manifest"]["timeout_s"] == 600.0
 
 
-def test_emanate_caps_timeout_at_ceiling(tmp_path):
+def test_emanate_caps_timeout_at_ceiling(tmp_path, monkeypatch):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
 
-    captured = {}
-    def fake_thread_init(target, args, daemon):
-        captured["watchdog_args"] = args
-        m = MagicMock()
-        m.start = MagicMock()
-        return m
-
-    with patch("lingtai.tools.daemon.ThreadPoolExecutor") as MockPool, \
-         patch("lingtai.tools.daemon.threading.Thread", side_effect=fake_thread_init), \
-         patch.object(mgr, "_connect_task_mcp_registrations",
-                      return_value=({}, {}, [])):
-        pool = MockPool.return_value
-        pool.submit.return_value = MagicMock(
-            done=MagicMock(return_value=True),
-            exception=MagicMock(return_value=None),
-            add_done_callback=MagicMock(),
-        )
-        out = mgr.handle({"action": "emanate", "timeout": 99999,
-                          "tasks": [{"task": "x", "tools": ["file"]}]})
+    out = mgr.handle({"action": "emanate", "timeout": 99999,
+                      "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    assert captured["watchdog_args"][2] == mgr._timeout
+    wait_daemon_terminal(records[0]["run_dir"])
+    assert records[0]["manifest"]["timeout_s"] == mgr._timeout
 
 
 def test_emanate_rejects_zero_timeout(tmp_path):

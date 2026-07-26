@@ -466,67 +466,6 @@ def _control_and_deadline_watcher(
         time.sleep(_CONTROL_POLL_INTERVAL_S)
 
 
-_FOLLOWUP_LOCK = threading.Lock()
-_FOLLOWUP_BUFFERS: dict[str, str] = {}
-
-
-def _enqueue_followup(run_dir, message: str) -> None:
-    if not message:
-        return
-    with _FOLLOWUP_LOCK:
-        prior = _FOLLOWUP_BUFFERS.get(run_dir.run_id, "")
-        _FOLLOWUP_BUFFERS[run_dir.run_id] = (prior + "\n" + message) if prior else message
-
-
-def _drain_followup(run_dir) -> str | None:
-    with _FOLLOWUP_LOCK:
-        buf = _FOLLOWUP_BUFFERS.pop(run_dir.run_id, "")
-    return buf or None
-
-
-def _mark_cancelled_or_timeout(run_dir, timeout_event: threading.Event | None) -> str:
-    if timeout_event is not None and timeout_event.is_set():
-        run_dir.mark_timeout()
-    else:
-        run_dir.mark_cancelled()
-    return "[cancelled]"
-
-
-# ---------------------------------------------------------------------
-# lingtai backend
-# ---------------------------------------------------------------------
-
-def _run_shared_backend(run_dir, manifest: dict, cancel_event, timeout_event) -> None:
-    """Compatibility seam: compose the production host for direct callers."""
-    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
-    if os.name == "posix":
-        from lingtai.tools.daemon.posix_process import PosixDaemonProcessPort
-        from lingtai.adapters.posix.interactive_terminal import PosixInteractiveTerminalAdapter
-        process_port = PosixDaemonProcessPort(start_new_session=False)
-        interactive_terminal_port = PosixInteractiveTerminalAdapter(
-            start_new_session=False,
-        )
-    elif os.name == "nt":
-        from lingtai.tools.daemon.process_port import DaemonProcessTerminationScope
-        from lingtai.tools.daemon.windows_process import WindowsDaemonProcessPort
-        process_port = WindowsDaemonProcessPort(
-            termination_scope=DaemonProcessTerminationScope.INHERITED_SUPERVISOR_GROUP,
-        )
-        # ConPTY is out of scope: no interactive terminal port exists on
-        # Windows and the claude-interactive bridge refuses None loudly.
-        interactive_terminal_port = None
-    else:
-        raise RuntimeError(
-            "detached POSIX execution composition is unsupported on this platform"
-        )
-    host = DetachedDaemonExecutionHost(
-        run_dir, manifest, cancel_event, timeout_event,
-        process_port=process_port,
-        interactive_terminal_port=interactive_terminal_port,
-    )
-    host.run_with_events(cancel_event, timeout_event)
-
-
 # ---------------------------------------------------------------------
 # Terminal notification — published directly by this process
 # ---------------------------------------------------------------------
