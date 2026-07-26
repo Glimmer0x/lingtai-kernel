@@ -71,14 +71,33 @@ The `skills` section of your system prompt is a YAML list. Each skill is one
 `SKILL.md`) and a `description:` block scalar. To read a skill's body, `read` the
 file at its `location`.
 
-`skills({"action": "info"})` refreshes/reconciles the catalog and returns a
-runtime snapshot — `skills_dir`/`library_dir`, `catalog_size`, resolved paths
-with exist/skill-count info, and any `problems` (invalid frontmatter, unreadable
-folders) — without the manual body. Use it first when a skill you expect is
-missing. `skills({"action": "manual"})` returns this SKILL.md body instead. A
-`status` of `"degraded"` carries an error message naming the fix — typically a
-missing manual under `intrinsic/capabilities/skills/`, meaning the initializer
-did not install manuals correctly.
+`skills(action="info", input={}, reasoning="refresh the catalog")` refreshes/reconciles
+the catalog and returns a runtime snapshot — `skills_dir`/`library_dir`,
+`catalog_size`, resolved paths with exist/skill-count info, and any `problems`
+(invalid frontmatter, unreadable folders) — without the manual body. Use it first
+when a skill you expect is missing. `skills(action="manual", input={},
+reasoning="read skills guidance")` returns this SKILL.md body instead. A `status`
+of `"degraded"` carries an error message naming the fix — typically a missing
+manual under `intrinsic/capabilities/skills/`, meaning the initializer did not
+install manuals correctly. An `info` result never includes manual-body keys, even
+when degraded; only `manual` can return those keys, with empty strings when its
+installed manual is missing.
+
+## Settings placeholder and current setting
+
+Each `skills` invocation rereads the Agent-owned `settings/skills.json` file before
+validating or dispatching the request. The file is an exact v1 placeholder:
+`{"schema_version": 1}` and no other fields. A missing file is a normal
+placeholder state; a valid file contributes only its source/revision/hash
+metadata; malformed, unstable, non-regular, or oversized files report a bounded
+`settings_error`. None of these states changes catalog scanning, reconciliation,
+manual loading, or any other skills behavior.
+
+Every `info`, `manual`, degraded, malformed-input, and unknown-action result
+contains the truthful `current_setting` returned for that invocation. The reader
+is not cached: edits to `settings/skills.json` are visible on the next call, and
+`current_setting.change_hint` names this hot-reread behavior. `manual` remains the
+installed canonical `SKILL.md` body; settings metadata never replaces it.
 
 To pin a skill's body into your pad so it survives a molt and rides in the cached
 system-prompt prefix:

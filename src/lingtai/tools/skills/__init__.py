@@ -27,10 +27,12 @@ Usage: ``Agent(capabilities={"skills": {"paths": [...]}})`` or via init.json.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lingtai.kernel.tool_dispatch import dispatch_action
+from .._settings import current_setting, read_settings
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
 from lingtai.kernel.i18n import t
@@ -192,7 +194,15 @@ def _skills_manual(agent: "BaseAgent") -> dict:
 # ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
-    return 'SIGNPOST ONLY: this tool does not author, pin, publish, install, or execute skills; `info` only refreshes/reconciles the skills catalog and returns health without the manual body; `manual` returns the skills-manual body. Your per-agent skill catalog. The skills section of your system prompt is a YAML list — one `- name:` block per skill with `location:` and `description:` — covering every skill reachable right now. Before using this tool (authoring, pinning, publishing, or managing skills), read the `skills-manual` skill — call `manual` for its body and `info` for a runtime health snapshot; no exceptions.'
+    return (
+        "SIGNPOST ONLY: this tool does not author, pin, publish, install, or execute skills. "
+        "Use skills(action=\"info\", input={}, reasoning=\"refresh the catalog\") to "
+        "refresh/reconcile the per-agent skills catalog and return runtime health without "
+        "the manual body. Use skills(action=\"manual\", input={}, "
+        "reasoning=\"read skills guidance\") to return the installed skills-manual body. "
+        "The skills section of your system prompt is a YAML list — one `- name:` block per "
+        "reachable skill with `location:` and `description:`."
+    )
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -202,10 +212,32 @@ def get_schema(lang: str = "en") -> dict:
             "action": {
                 "type": "string",
                 "enum": ["info", "manual"],
-                "description": 'info: refresh/reconcile the skills catalog and return runtime health (catalog size, resolved paths, problems) without the manual body. manual: return only the skills-manual skill body.',
+                "description": (
+                    "Required operation: info refreshes the catalog; manual returns "
+                    "the installed skills-manual body."
+                ),
+            },
+            "input": {
+                "anyOf": [
+                    {
+                        "title": "info input",
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                    {
+                        "title": "manual input",
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                        "additionalProperties": False,
+                    },
+                ],
             },
         },
-        "required": ["action"],
+        "required": ["action", "input"],
+        "additionalProperties": False,
     }
 
 
@@ -229,8 +261,47 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
 
     # Register signpost actions. `info` refreshes health; `manual` returns the large manual body.
     def handle_skills(args: dict) -> dict:
-        return dispatch_action(
-            args,
+        setting = current_setting(read_settings(agent, "skills"), "skills")
+
+        def with_setting(result: dict) -> dict:
+            result["current_setting"] = setting
+            return result
+
+        if not isinstance(args, Mapping):
+            return with_setting({
+                "status": "error",
+                "message": "skills arguments must be an object",
+            })
+
+        raw = dict(args)
+        if set(raw) - {"action", "input", "reasoning", "_reasoning"}:
+            return with_setting({
+                "status": "error",
+                "message": "unsupported skills argument",
+            })
+        if "input" not in raw:
+            return with_setting({
+                "status": "error",
+                "message": "input is required",
+            })
+        if not isinstance(raw["input"], Mapping):
+            return with_setting({
+                "status": "error",
+                "message": "input must be an object",
+            })
+
+        # The public schema has two exact empty input branches. Unwrap the
+        # mapping once, but never merge it with root fields or accept a flat
+        # compatibility payload.
+        action_input = dict(raw["input"])
+        if action_input:
+            return with_setting({
+                "status": "error",
+                "message": "input must be an empty object",
+            })
+
+        result = dispatch_action(
+            {"action": raw.get("action", ""), "input": action_input},
             {
                 "info": lambda _args: _skills_info(agent, path_list),
                 "manual": lambda _args: _skills_manual(agent),
@@ -240,6 +311,7 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
                 "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
             },
         )
+        return with_setting(result)
 
     agent.add_tool(
         "skills",

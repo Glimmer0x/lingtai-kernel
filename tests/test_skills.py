@@ -64,33 +64,159 @@ def _write_skill(folder: Path, name: str, desc: str = "test skill"):
 
 
 def test_unknown_action_returns_error(tmp_path):
-    """Only `info` is supported; the exact error envelope is model-visible.
-
-    Locks the unknown-action envelope through the issue #513 dispatch-helper
-    migration: wording, quoting, and key names must stay verbatim.
-    """
+    """Only nested empty inputs are accepted; unknown wording stays exact."""
     agent, _ = _mk_agent(tmp_path)
     try:
         handler = agent._tool_handlers["skills"]
-        assert handler({"action": "list"}) == {
-            "status": "error",
-            "message": "unknown action: 'list', only 'info' or 'manual' is supported",
-        }
+        result = handler({"action": "list", "input": {}})
+        assert result["status"] == "error"
+        assert result["message"] == (
+            "unknown action: 'list', only 'info' or 'manual' is supported"
+        )
+        assert "current_setting" in result
+
         # Missing action key renders the empty-string default, not None.
-        assert handler({}) == {
-            "status": "error",
-            "message": "unknown action: '', only 'info' or 'manual' is supported",
+        result = handler({"input": {}})
+        assert result["message"] == (
+            "unknown action: '', only 'info' or 'manual' is supported"
+        )
+        # Invalid JSON can make `action` unhashable: the router still renders
+        # the unknown-action envelope instead of raising TypeError.
+        for action, rendered in (([], "[]"), ({}, "{}")):
+            result = handler({"action": action, "input": {}})
+            assert result["message"] == (
+                f"unknown action: {rendered}, only 'info' or 'manual' is supported"
+            )
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_schema_requires_closed_nested_empty_input(tmp_path):
+    from lingtai.tools.skills import get_schema
+
+    schema = get_schema()
+    assert set(schema["properties"]) == {"action", "input"}
+    assert schema["required"] == ["action", "input"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["action"]["enum"] == ["info", "manual"]
+    branches = schema["properties"]["input"]["anyOf"]
+    assert [branch["title"] for branch in branches] == ["info input", "manual input"]
+    for branch in branches:
+        assert branch == {
+            "title": branch["title"],
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
         }
-        # Invalid JSON can make `action` unhashable (issue #513 blocker): the
-        # router must render the unknown-action envelope, not raise TypeError.
-        assert handler({"action": []}) == {
-            "status": "error",
-            "message": "unknown action: [], only 'info' or 'manual' is supported",
-        }
-        assert handler({"action": {}}) == {
-            "status": "error",
-            "message": "unknown action: {}, only 'info' or 'manual' is supported",
-        }
+
+
+def test_handler_rejects_action_only_flat_and_nonempty_input(tmp_path, monkeypatch):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["skills"]
+        for args, message in (
+            ({"action": "info"}, "input is required"),
+            ({"action": "info", "paths": []}, "unsupported skills argument"),
+            ({"action": "info", "input": {"paths": []}}, "input must be an empty object"),
+            ({"action": "info", "input": None}, "input must be an object"),
+        ):
+            result = handler(args)
+            assert result["status"] == "error"
+            assert result["message"] == message
+            assert isinstance(result["current_setting"], dict)
+
+        import lingtai.tools.skills as skills_module
+
+        dispatched = []
+
+        def fake_dispatch(args, actions, *, unknown):
+            dispatched.append(args)
+            return {"status": "ok"}
+
+        monkeypatch.setattr(skills_module, "dispatch_action", fake_dispatch)
+        for metadata_key in ("reasoning", "_reasoning"):
+            result = handler(
+                {"action": "info", "input": {}, metadata_key: "refresh the catalog"}
+            )
+            assert result["status"] == "ok"
+            assert dispatched[-1] == {"action": "info", "input": {}}
+            assert metadata_key not in dispatched[-1]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_agent_inventory_and_prompt_use_root_reasoning_only(tmp_path):
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        schemas = {schema.name: schema for schema in agent._build_tool_schemas()}
+        params = schemas["skills"].parameters
+        assert set(params["properties"]) == {"action", "input", "reasoning"}
+        assert params["required"] == ["action", "input"]
+        assert params["additionalProperties"] is False
+        for branch in params["properties"]["input"]["anyOf"]:
+            assert "reasoning" not in branch["properties"]
+
+        full_prompt = agent._build_system_prompt()
+        batches = agent._build_system_prompt_batches()
+        assert 'skills(action="info", input={}, reasoning=' in full_prompt
+        assert any("skills(action=\"manual\", input={}, reasoning=" in batch for batch in batches)
+
+        from lingtai.llm.anthropic.adapter import _build_tools as anthropic_tools
+        from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+
+        schema = schemas["skills"]
+        chat = _build_tools([schema])[0]["function"]["parameters"]
+        responses = _build_responses_tools([schema])[0]["parameters"]
+        anthropic = anthropic_tools([schema])[0]["input_schema"]
+        assert chat == params == responses == anthropic
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_settings_are_reread_and_attached_to_every_result(tmp_path, monkeypatch):
+    import lingtai.tools.skills as skills_module
+    from lingtai.tools._settings import SettingsSnapshot
+
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        reads = []
+        attached = []
+
+        def fake_read(current_agent, tool_name):
+            assert current_agent is agent
+            assert tool_name == "skills"
+            revision = f"sentinel-{len(reads)}"
+            reads.append(revision)
+            return SettingsSnapshot("sentinel", revision, revision)
+
+        def fake_current(snapshot, tool_name):
+            assert tool_name == "skills"
+            value = {"revision": snapshot.revision}
+            attached.append(value)
+            return value
+
+        monkeypatch.setattr(skills_module, "read_settings", fake_read)
+        monkeypatch.setattr(skills_module, "current_setting", fake_current)
+        handler = agent._tool_handlers["skills"]
+        calls = [
+            {"action": "info", "input": {}},
+            {"action": "manual", "input": {}},
+            {"action": "unknown", "input": {}},
+            {"action": "info"},
+        ]
+        manual_path = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
+        )
+        for call in calls:
+            result = handler(call)
+            assert result["current_setting"] is attached[-1]
+            assert result["current_setting"]["revision"] == reads[-1]
+        manual_path.unlink()
+        result = handler({"action": "info", "input": {}})
+        assert result["status"] == "degraded"
+        assert result["current_setting"] is attached[-1]
+        assert len(reads) == len(calls) + 1
     finally:
         agent.stop(timeout=1.0)
 
@@ -593,7 +719,7 @@ def test_skills_scans_absolute_path(tmp_path):
 
     agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert result["paths"][str(extra)]["skills"] == 1
         assert result["catalog_size"] >= 2  # skills-manual + shared-skill
@@ -609,7 +735,7 @@ def test_skills_resolves_relative_path_from_working_dir(tmp_path):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["../.library_shared"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert result["paths"]["../.library_shared"]["exists"] is True
         assert result["paths"]["../.library_shared"]["skills"] == 1
@@ -626,7 +752,7 @@ def test_skills_expands_tilde(tmp_path, monkeypatch):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["~/my-utils"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["paths"]["~/my-utils"]["exists"] is True
     finally:
         agent.stop(timeout=1.0)
@@ -635,7 +761,7 @@ def test_skills_expands_tilde(tmp_path, monkeypatch):
 def test_skills_reports_missing_path_as_not_existing(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"paths": ["/does/not/exist"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["paths"]["/does/not/exist"]["exists"] is False
         assert result["paths"]["/does/not/exist"]["skills"] == 0
     finally:
@@ -650,7 +776,7 @@ def test_skills_reports_missing_path_as_not_existing(tmp_path):
 def test_info_omits_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert "skills_manual" not in result
         assert "library_manual" not in result
     finally:
@@ -660,7 +786,7 @@ def test_info_omits_skills_manual_body(tmp_path):
 def test_manual_returns_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "manual"})
+        result = agent._tool_handlers["skills"]({"action": "manual", "input": {}})
         assert "skills_manual" in result
         assert "library_manual" in result
         assert "name: skills-manual" in result["skills_manual"]
@@ -671,7 +797,7 @@ def test_manual_returns_skills_manual_body(tmp_path):
 def test_info_reports_ok_when_healthy(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert "error" not in result
     finally:
@@ -690,7 +816,7 @@ def test_info_reports_degraded_when_intrinsic_missing(tmp_path):
         assert manual_path.is_file(), "precondition: initializer installed manual"
         manual_path.unlink()
 
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         assert result["status"] == "degraded"
         assert "error" in result
     finally:
@@ -711,7 +837,7 @@ def test_info_surfaces_problems(tmp_path):
         capabilities={"skills": {}},
     )
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}})
         problem_folders = [p["folder"] for p in result["problems"]]
         assert any("broken" in f for f in problem_folders)
     finally:
@@ -884,7 +1010,7 @@ def test_new_knowledge_and_skills_config_registers_both(tmp_path):
         (entry_dir / "KNOWLEDGE.md").write_text(
             "---\nname: new-entry\ndescription: A freshly authored knowledge entry.\n---\nBody.\n"
         )
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}})
         assert result["status"] == "ok"
         assert result["catalog_size"] == 1
         assert "new-entry" in (agent._prompt_manager.read_section("knowledge") or "")
