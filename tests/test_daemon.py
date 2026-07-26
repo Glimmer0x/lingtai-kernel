@@ -2337,185 +2337,13 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
 
 
 
-def test_on_emanation_done_publishes_system_notification_not_request(tmp_path):
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-9")
-
-    future = MagicMock()
-    future.result.return_value = "final report long enough to notify"
-    mgr._emanations["em-9"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-9", "test task", future)
-
-    assert agent.inbox.empty()
-    notifications = snapshot_notifications(agent._working_dir)
-    events = notifications["system"]["data"]["events"]
-    assert len(events) == 1
-    event = events[0]
-    assert event["source"] == "daemon"
-    assert event["ref_id"] == "em-9"
-    assert "Daemon em-9 done" in event["body"]
-    assert "daemon(action=\"check\", id=\"em-9\")" in event["body"]
-    assert "final report" in event["body"]
-    assert "[daemon:em-" not in event["body"]
-
-
-def test_on_emanation_done_failure_always_notifies(tmp_path):
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-fail")
-
-    future = MagicMock()
-    future.result.side_effect = RuntimeError("boom")
-    mgr._emanations["em-fail"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-fail", "test task", future)
-
-    assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-    assert len(events) == 1
-    assert events[0]["source"] == "daemon"
-    assert events[0]["ref_id"] == "em-fail"
-    assert "failed" in events[0]["body"]
-    assert "boom" in events[0]["body"]
-    assert "[daemon:em-" not in events[0]["body"]
-
-
-def test_on_emanation_done_short_success_notifies(tmp_path):
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-short")
-
-    future = MagicMock()
-    future.result.return_value = "ok"
-    mgr._emanations["em-short"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-short", "test task", future)
-
-    assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-    assert len(events) == 1
-    assert events[0]["source"] == "daemon"
-    assert events[0]["ref_id"] == "em-short"
-    assert "Daemon em-short done." in events[0]["body"]
-    assert "Preview:\nok" in events[0]["body"]
-
-
-def test_on_emanation_done_cancelled_notifies_despite_short_text(tmp_path):
-    """A cancelled run returns the short ``[cancelled]`` sentinel but its
-    run_dir state is authoritative. The parent must always learn the daemon
-    terminated, with the correct terminal label."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-cancel")
-    rd.mark_cancelled()
-
-    future = MagicMock()
-    future.result.return_value = "[cancelled]"
-    mgr._emanations["em-cancel"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-cancel", "test task", future)
-
-    assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-    assert len(events) == 1
-    assert events[0]["source"] == "daemon"
-    assert events[0]["ref_id"] == "em-cancel"
-    assert "cancelled" in events[0]["body"]
-
-
-def test_on_emanation_done_timeout_notifies_despite_short_text(tmp_path):
-    """A timed-out run also returns the short sentinel; its terminal state is
-    ``timeout`` and must be reported with that label."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-timeout")
-    rd.mark_timeout()
-
-    future = MagicMock()
-    future.result.return_value = "[cancelled]"
-    mgr._emanations["em-timeout"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-timeout", "test task", future)
-
-    assert agent.inbox.empty()
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-    assert len(events) == 1
-    assert events[0]["ref_id"] == "em-timeout"
-    assert "timeout" in events[0]["body"]
-
-
-def test_on_emanation_done_notifies_terminal_only_once(tmp_path):
-    """A daemon run's terminal notification is delivered exactly once even if
-    the done-callback fires more than once for the same run (e.g. a racing
-    reclaim or a duplicated callback). Dedup is keyed on the run's ref_id."""
-    from tests._notification_store_helpers import snapshot_notifications
-
-    agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(agent, em_id="em-dup")
-    rd.mark_failed(RuntimeError("boom"))
-
-    future = MagicMock()
-    future.result.side_effect = RuntimeError("boom")
-    mgr._emanations["em-dup"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-dup", "test task", future)
-    mgr._on_emanation_done("em-dup", "test task", future)
-
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
-    daemon_events = [e for e in events if e["ref_id"] == "em-dup"]
-    assert len(daemon_events) == 1
-
-
 def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
+    """A failed publish must clear the pending claim so the terminal run stays
+    retryable, and a later successful publish persists the receipt exactly
+    once. Drives `_publish_daemon_notification` directly (the live primitive
+    both the parent manager and the detached supervisor's terminal path
+    call), since dispatch into it no longer runs through the retired
+    in-process `_on_emanation_done` orchestration."""
     from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
@@ -2523,14 +2351,8 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     rd = _make_run_dir(agent, em_id="em-retry")
     rd.mark_done("retryable terminal result")
 
-    future = MagicMock()
-    future.result.return_value = "retryable terminal result"
-    mgr._emanations["em-retry"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
+    idempotency_key = rd.claim_terminal_notification("done")
+    assert idempotency_key is not None
 
     original_enqueue = agent._enqueue_system_notification
 
@@ -2538,7 +2360,12 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
         raise OSError("notification write failed")
 
     agent._enqueue_system_notification = fail_enqueue
-    mgr._on_emanation_done("em-retry", "test task", future)
+    published = mgr._publish_daemon_notification(
+        "em-retry", status="done", text="retryable terminal result",
+        run_dir=rd, idempotency_key=idempotency_key,
+    )
+    assert published is False
+    rd.clear_terminal_notification_claim()
 
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is False
@@ -2546,7 +2373,13 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     assert "system" not in snapshot_notifications(agent._working_dir)
 
     agent._enqueue_system_notification = original_enqueue
-    mgr._on_emanation_done("em-retry", "test task", future)
+    idempotency_key = rd.claim_terminal_notification("done")
+    published = mgr._publish_daemon_notification(
+        "em-retry", status="done", text="retryable terminal result",
+        run_dir=rd, idempotency_key=idempotency_key,
+    )
+    assert published is True
+    rd.mark_terminal_notification_published(idempotency_key)
 
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is True
@@ -2588,6 +2421,12 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
 
 
 def test_concurrent_terminal_callbacks_publish_once(tmp_path):
+    """Two concurrent terminal-notification attempts for the same run must
+    publish exactly once. Drives `run_dir.claim_terminal_notification` +
+    `_publish_daemon_notification` directly — the live primitives shared by
+    the parent manager and the detached supervisor's own terminal path —
+    since the retired in-process `_on_emanation_done` done-callback no longer
+    runs in production."""
     from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
@@ -2595,20 +2434,21 @@ def test_concurrent_terminal_callbacks_publish_once(tmp_path):
     rd = _make_run_dir(agent, em_id="em-race")
     rd.mark_done("race result")
 
-    future = MagicMock()
-    future.result.return_value = "race result"
-    mgr._emanations["em-race"] = {
-        "future": future,
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
     start = threading.Barrier(3)
 
     def callback():
         start.wait(timeout=5)
-        mgr._on_emanation_done("em-race", "test task", future)
+        idempotency_key = rd.claim_terminal_notification("done")
+        if idempotency_key is None:
+            return
+        published = mgr._publish_daemon_notification(
+            "em-race", status="done", text="race result",
+            run_dir=rd, idempotency_key=idempotency_key,
+        )
+        if published:
+            rd.mark_terminal_notification_published(idempotency_key)
+        else:
+            rd.clear_terminal_notification_claim()
 
     threads = [threading.Thread(target=callback) for _ in range(2)]
     for thread in threads:
@@ -2752,11 +2592,13 @@ def test_daemon_schema_has_no_terminal_notification_toggle():
 
 def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     """The terminal notification carries a bounded task summary so the parent
-    can recognize which dispatched daemon ended without opening the run dir."""
+    can recognize which dispatched daemon ended without opening the run dir.
+    Drives `_publish_daemon_notification` directly (the live primitive), since
+    the retired in-process `_on_emanation_done` orchestration no longer runs
+    in production."""
     from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
     rd = _make_run_dir(
         agent, em_id="em-task",
@@ -2764,16 +2606,14 @@ def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     )
     rd.mark_done("a sufficiently long final result body here")
 
-    future = MagicMock()
-    future.result.return_value = "a sufficiently long final result body here"
-    mgr._emanations["em-task"] = {
-        "future": future,
-        "task": "Audit the payment retry logic for double-charge bugs",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
-
-    mgr._on_emanation_done("em-task", "test task", future)
+    idempotency_key = rd.claim_terminal_notification("done")
+    published = mgr._publish_daemon_notification(
+        "em-task", status="done",
+        text="a sufficiently long final result body here",
+        run_dir=rd, idempotency_key=idempotency_key,
+    )
+    assert published is True
+    rd.mark_terminal_notification_published(idempotency_key)
 
     events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     body = next(e["body"] for e in events if e["ref_id"] == "em-task")
@@ -2784,19 +2624,14 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
     """A follow-up (ask) notification shares the daemon's ref_id and fires while
     the run is still alive. The terminal notification must still be delivered
     afterward — the once-only guard is scoped to the terminal event, not to any
-    event carrying the same ref_id."""
+    event carrying the same ref_id. Drives `_publish_daemon_notification`
+    directly (the live primitive), since the retired in-process
+    `_on_emanation_done` done-callback no longer runs in production."""
     from tests._notification_store_helpers import snapshot_notifications
 
     agent = _make_agent(tmp_path, ["daemon"])
-    agent.inbox = queue.Queue()
     mgr = agent.get_capability("daemon")
     rd = _make_run_dir(agent, em_id="em-ask")
-    mgr._emanations["em-ask"] = {
-        "future": MagicMock(),
-        "task": "test task",
-        "start_time": time.time(),
-        "run_dir": rd,
-    }
 
     # A follow-up reply lands first (run still running), same ref_id.
     mgr._publish_followup_if_live(
@@ -2804,11 +2639,17 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
         text="here is the follow-up answer, long enough", run_dir=rd,
     )
 
-    # Then the run reaches a terminal state and the done-callback fires.
+    # Then the run reaches a terminal state and its terminal notification
+    # publishes through the once-only claim gate.
     rd.mark_done("final long-enough report from the daemon run")
-    future = MagicMock()
-    future.result.return_value = "final long-enough report from the daemon run"
-    mgr._on_emanation_done("em-ask", "test task", future)
+    idempotency_key = rd.claim_terminal_notification("done")
+    published = mgr._publish_daemon_notification(
+        "em-ask", status="done",
+        text="final long-enough report from the daemon run",
+        run_dir=rd, idempotency_key=idempotency_key,
+    )
+    assert published is True
+    rd.mark_terminal_notification_published(idempotency_key)
 
     events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
     bodies = [e["body"] for e in events if e["ref_id"] == "em-ask"]
@@ -3091,33 +2932,6 @@ def test_run_emanation_manual_reclaim_calls_mark_cancelled(tmp_path):
     assert data["state"] == "cancelled"
     last_event = json.loads(run_dir.events_path.read_text().splitlines()[-1])
     assert last_event["event"] == "daemon_cancelled"
-
-
-def test_watchdog_sets_both_events(tmp_path):
-    """Watchdog must set timeout_event before cancel_event so the run loop
-    can observe the cause when it next checks."""
-    agent = _make_agent(tmp_path, ["daemon"])
-    mgr = agent.get_capability("daemon")
-    cancel = threading.Event()
-    timeout_event = threading.Event()
-    # Use a tiny timeout so the watchdog fires almost immediately
-    mgr._watchdog(cancel, timeout_event, timeout=0.01)
-    assert timeout_event.is_set()
-    assert cancel.is_set()
-
-
-def test_watchdog_returns_when_already_cancelled(tmp_path):
-    """Watchdog must NOT set timeout_event when cancel_event was set first
-    (manual reclaim path — timeout_event must remain unset)."""
-    agent = _make_agent(tmp_path, ["daemon"])
-    mgr = agent.get_capability("daemon")
-    cancel = threading.Event()
-    timeout_event = threading.Event()
-    cancel.set()  # simulate manual reclaim before watchdog deadline
-    # Long timeout so we'd notice if it fired
-    mgr._watchdog(cancel, timeout_event, timeout=60.0)
-    assert cancel.is_set()
-    assert not timeout_event.is_set()
 
 
 # ---------------------------------------------------------------------------

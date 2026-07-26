@@ -21,6 +21,7 @@ import os
 import signal
 import subprocess
 import textwrap
+import threading
 
 import pytest
 import sys
@@ -1656,3 +1657,160 @@ def test_pty_observation_failure_reaps_child_closes_master_and_clears_registry()
         print(json.dumps({"dead": dead, "fd_closed": fd_closed, "registry_empty": adapter.terminate_all() == 0}), flush=True)
     ''')
     assert result == {"dead": True, "fd_closed": True, "registry_empty": True}
+
+
+# ---------------------------------------------------------------------
+# Control-request exactly-once consumption (PR #1035 ask/control fix)
+# ---------------------------------------------------------------------
+#
+# Reproduced incident: a single `daemon.ask` control request submitted while
+# a detached "lingtai" run's tool loop is blocked inside one long provider
+# call got claimed by the control-and-deadline watcher on *every* poll for
+# the rest of the run's lifetime, appending the same message to
+# `pending_followups` dozens of times (the model then saw N identical
+# copies joined into one follow-up) and leaving duplicate entries stranded
+# in `daemon.json` when the run reached a terminal state before the queue
+# was ever drained.
+
+
+def test_pending_requests_excludes_already_done_requests(tmp_path):
+    """`control.pending_requests` must not keep returning a claimed request.
+
+    This is the exact root cause: ``pending_requests`` only filtered out
+    files literally named ``*.done.json`` — it never checked whether a
+    request's *own* ``.done.json`` sibling already existed. A request that
+    was already marked done kept reappearing in every subsequent poll.
+    """
+    from lingtai.kernel.daemon_supervisor import control
+
+    run_dir_path = tmp_path / "em-test"
+    run_dir_path.mkdir(parents=True)
+    req_path = control.submit_request(run_dir_path, "ask", {"message": "hello"})
+
+    assert control.pending_requests(run_dir_path) == [req_path]
+
+    control.mark_request_done(req_path, {"status": "queued"})
+
+    assert control.is_done(req_path) is True
+    assert control.pending_requests(run_dir_path) == [], (
+        "a request already marked done must never be reported as pending again"
+    )
+
+
+def test_repeated_watcher_polls_claim_one_ask_request_exactly_once(tmp_path):
+    """Many watcher poll iterations over one pending ask must enqueue once.
+
+    Drives the real ``_control_and_deadline_watcher`` background thread
+    against a real ``DaemonRunDir`` with a fast poll interval, submits one
+    ``ask`` control request, and lets the watcher poll it dozens of times
+    while the run stays ``running``. Exactly one follow-up may ever be
+    queued and exactly one ``.done.json`` claim may ever be written for
+    that request.
+    """
+    from lingtai.kernel.daemon_supervisor import control
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
+    run_dir.update_state(state="running")
+
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    watcher = threading.Thread(
+        target=supervisor_runtime._control_and_deadline_watcher,
+        args=(run_dir, cancel_event, timeout_event, time.monotonic() + 120.0, ()),
+        daemon=True,
+    )
+    original_poll_interval = supervisor_runtime._CONTROL_POLL_INTERVAL_S
+    supervisor_runtime._CONTROL_POLL_INTERVAL_S = 0.05
+    try:
+        watcher.start()
+        req_path = control.submit_request(run_dir.path, "ask", {"message": "REPRO_TOKEN"})
+
+        # Let the watcher poll the same still-pending-looking request many
+        # times over (many multiples of the poll interval) before the run
+        # ever reaches a terminal state.
+        time.sleep(1.0)
+    finally:
+        cancel_event.set()
+        watcher.join(timeout=5.0)
+        supervisor_runtime._CONTROL_POLL_INTERVAL_S = original_poll_interval
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    pending = state.get("pending_followups")
+    assert pending == ["REPRO_TOKEN"], (
+        f"expected exactly one queued follow-up, got {pending!r}"
+    )
+
+    done_marker = control.done_path(req_path)
+    assert done_marker.exists()
+    assert json.loads(done_marker.read_text()).get("status") == "queued"
+
+
+def test_drain_followups_delivers_single_ask_exactly_once(tmp_path):
+    """End-to-end: one ask, drained once, yields exactly one delivered copy.
+
+    Exercises the same enqueue path the watcher uses, then the same
+    ``drain_followups`` boundary the tool loop uses, proving the queue does
+    not retain (or redeliver) more than the one message that was ever
+    legitimately enqueued.
+    """
+    run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
+    run_dir.update_state(state="running")
+
+    assert run_dir.enqueue_followup("REPRO_TOKEN") is True
+
+    delivered = run_dir.drain_followups()
+    assert delivered == "REPRO_TOKEN"
+
+    # A drained queue must be empty and must not silently regrow.
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert state.get("pending_followups") == []
+    assert run_dir.drain_followups() is None
+
+
+def test_control_receipt_stays_coherent_when_terminal_state_races_ask(tmp_path):
+    """An ask arriving after terminal state must be rejected exactly once.
+
+    If a control request is claimed (checked and processed) exactly once,
+    a run that has already gone terminal produces one clean ``rejected``
+    receipt — never a ``queued`` receipt later clobbered by a ``rejected``
+    rewrite from repeated reprocessing of the same request.
+    """
+    from lingtai.kernel.daemon_supervisor import control
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path, task="stay-running", timeout_s=120.0)
+    run_dir.update_state(state="running")
+
+    req_path = control.submit_request(run_dir.path, "ask", {"message": "TOO_LATE"})
+
+    # The run reaches a terminal state before the watcher ever observes the
+    # request (mirrors a control request racing the run's own natural
+    # completion).
+    run_dir.mark_done("finished before the ask was seen")
+
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    watcher = threading.Thread(
+        target=supervisor_runtime._control_and_deadline_watcher,
+        args=(run_dir, cancel_event, timeout_event, time.monotonic() + 120.0, ()),
+        daemon=True,
+    )
+    original_poll_interval = supervisor_runtime._CONTROL_POLL_INTERVAL_S
+    supervisor_runtime._CONTROL_POLL_INTERVAL_S = 0.05
+    try:
+        watcher.start()
+        time.sleep(0.5)
+    finally:
+        cancel_event.set()
+        watcher.join(timeout=5.0)
+        supervisor_runtime._CONTROL_POLL_INTERVAL_S = original_poll_interval
+
+    done_marker = control.done_path(req_path)
+    assert done_marker.exists()
+    receipt = json.loads(done_marker.read_text())
+    assert receipt.get("status") == "rejected"
+    assert "done" in (receipt.get("error") or "")
+
+    state = DaemonRunDir.read_state_from_disk(run_dir.path)
+    assert not state.get("pending_followups")

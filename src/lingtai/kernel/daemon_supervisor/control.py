@@ -64,7 +64,10 @@ def pending_requests(run_dir: Path) -> list[Path]:
     cdir = control_dir(run_dir)
     if not cdir.is_dir():
         return []
-    return [p for p in sorted(cdir.glob("*.json")) if not p.name.endswith(".done.json")]
+    return [
+        p for p in sorted(cdir.glob("*.json"))
+        if not p.name.endswith(".done.json") and not is_done(p)
+    ]
 
 
 def read_request(path: Path) -> dict:
