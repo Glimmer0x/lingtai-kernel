@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/soul/CONTRACT.md
+  - src/lingtai/tools/soul/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -82,11 +84,12 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today only `web` is on that allowlist, so
-`summarize` is meaningful for the one family that uses this infrastructure; a
+package does not own or enforce. Today `web` and `soul` are on that allowlist,
+so `summarize` is meaningful for both families that use this infrastructure; a
 family adopting `ToolFamily` without also joining the kernel allowlist would
 advertise a model-visible `summarize` control that the kernel silently
-ignores. Calling
+ignores — joining it is part of a migration, not something this package does
+on a family's behalf. Calling
 `handle()` is optional: it validates the envelope (unknown `action`,
 non-boolean `summarize`, unknown root fields, `input` keys outside the
 selected child's own declared schema) before invoking exactly that child's
@@ -95,6 +98,12 @@ entirely and dispatch by hand — `web` uses it internally but still owns its
 own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
+`MANUAL_INPUT_SCHEMA` is the exported canonical strict-empty input object for
+the reserved child, used by `build_manual_child` itself. A family that must
+also declare that branch in a schema-only family SHOULD reference the export
+rather than copy it, so the declared schema and the dispatching child stay one
+definition. `soul` does; `web` predates the export and still declares a local
+copy — collapsing that is `web`'s owner's call, not a conformance failure.
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
 input; its handler loads the existing `load_installed_manual()` shape
 (`status`, `manual` full body, `manual_path`, optionally `error`) and maps it
@@ -137,7 +146,23 @@ flattens the canonical result to Web's pre-migration public shape (`status`,
 `handle()`, not to the generic child or any wrapper registered in place of
 it. `WebManager.handle()` also stamps `current_setting` onto any
 envelope-level failure result (search/browse/unknown-action) before
-returning, unchanged from before. No other built-in family is migrated in
+returning, unchanged from before.
+
+`soul/__init__.py` is the second production Adapter/consumer, and the first
+that is an intrinsic. It demonstrates the module-level composition shape: an
+intrinsic exposes `get_schema()`/`handle(agent, args)` rather than a per-Agent
+manager object, so `get_schema()` composes from a module-level schema-only
+`ToolFamily` (whose construction at import time is also the registry's
+duplicate/reserved-name collision check) and `handle()` builds an agent-bound
+`ToolFamily` per call from the same six child `input_schema` objects. Its
+`manual` child is `build_manual_child(agent, "soul-manual")`, registered
+directly and unwrapped, and `handle()` flattens that canonical result to
+soul's pre-migration flat `status`/`manual`/`manual_path` shape strictly after
+dispatch. `soul` also drops the kernel-injected `_tc_id` before delegating:
+`base_agent._dispatch_tool` adds that transport key to every intrinsic's args
+(a capability like `web` never receives it), so a migrating intrinsic strips it
+at its own Host boundary rather than this package widening `_ROOT_FIELDS` for
+everyone. No other built-in family is migrated in
 this candidate; each remains fully independent of this package until its own
 scoped migration.
 
@@ -241,6 +266,12 @@ using the fake `widget` family. `web`'s own existing suite
 — the last of which now also proves root `allOf` correlation survives
 identically on both Chat Completions and Responses wires)
 remains this migration's Web-specific evidence per `../web_search/CONTRACT.md`.
+`tests/test_tool_family_soul_migration.py` is the equivalent family-specific
+evidence for `soul` (`../soul/CONTRACT.md`), and independently exercises this
+package against an intrinsic consumer: all six child schemas and handlers, the
+closed root on both wires, wrong-branch rejection before handler I/O, envelope
+metadata isolation including `_tc_id`, and the reserved `manual` child's
+no-double-wrap result.
 
 ## Maintenance
 

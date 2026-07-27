@@ -76,7 +76,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
         "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
-        "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
+        "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual", "input": {}})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
         "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),

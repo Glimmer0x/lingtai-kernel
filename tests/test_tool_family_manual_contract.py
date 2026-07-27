@@ -34,9 +34,21 @@ def test_manual_child_reserved_name_is_exactly_manual():
 
 
 def test_manual_child_input_schema_is_strict_empty():
+    # The builder sources its child's schema from the package-owned
+    # ``MANUAL_INPUT_SCHEMA``, which carries the explicit ``required: []`` a
+    # family's own branch declaration would. This asserts the generic builder
+    # only: whether a given consuming family also references the export instead
+    # of declaring its own copy is that family's own choice, checked by that
+    # family's tests.
+    from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
+
     agent = _FakeAgent(Path("/nonexistent"))
     child = build_manual_child(agent, "widget")
-    assert child.input_schema == {"type": "object", "properties": {}, "additionalProperties": False}
+    assert child.input_schema == {
+        "type": "object", "properties": {}, "required": [],
+        "additionalProperties": False,
+    }
+    assert child.input_schema is MANUAL_INPUT_SCHEMA
 
 
 def test_manual_child_actual_handler_returns_body_at_content_text_and_path_at_structured_content(tmp_path):

@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -40,8 +42,11 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer
-  (`src/lingtai/tools/tool_family/ANATOMY.md`).
+  reusable ManualTool builder; `web` is its first real consumer and `soul` its
+  second (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `soul/` — the `soul` intrinsic family: six action-separated children
+  (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
+  model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 
@@ -53,6 +58,10 @@ provider factory only at composition or action boundaries, and imports
 `tool_family` to compose its schema and (optionally) dispatch. The pinned
 browser transport remains an outer adapter. `web_search` is accepted only as a
 one-way configuration input alias and is never emitted as a public name.
+`soul` is a mandatory intrinsic (`INTRINSICS`, not `BUILTIN_TOOLS`) and imports
+`tool_family` statically; because it is a module rather than a per-Agent
+manager object, it composes its schema from a module-level schema-only
+`ToolFamily` and builds an agent-bound one per `handle(agent, args)` call.
 
 ## Composition
 

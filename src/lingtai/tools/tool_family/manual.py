@@ -22,7 +22,19 @@ from typing import Any, Mapping
 from .._manual import load_installed_manual
 from . import ChildTool
 
-__all__ = ["build_manual_child"]
+__all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
+
+# The reserved ``manual`` child's canonical input: strict and empty. Exported
+# so a family that must also *declare* this schema (e.g. in a module-level
+# schema-only ``ToolFamily`` built before an agent exists) references the one
+# owned definition instead of copying it — the schema and the child that
+# dispatches it cannot then drift apart.
+MANUAL_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
 
 
 def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
@@ -68,7 +80,7 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
 
     return ChildTool(
         name="manual",
-        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        input_schema=MANUAL_INPUT_SCHEMA,
         handler=handler,
         title="manual input",
     )
