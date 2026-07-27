@@ -1,6 +1,6 @@
 ---
-name: model-facing-tool-call
-contract_version: 1
+name: lingtai-tool-protocol
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/ANATOMY.md
@@ -12,22 +12,31 @@ related_files:
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
-  This component contract is governed by the root CONTRACT.md. Keep the paired
-  tools Anatomy and cross-contract links reciprocal. Update Agent schema
-  composition, ToolExecutor normalization, the migrated family, wire tests,
-  and this contract together when the canonical call boundary changes. Migrate
-  one real family at a time; do not claim legacy tools already conform.
+  This component contract is governed by the root CONTRACT.md and owns the
+  LingTai Tool Protocol (LTP). Keep the paired tools Anatomy and cross-contract
+  links reciprocal. Update Agent schema composition, ToolExecutor normalization,
+  the migrated family, and this contract together when the canonical call
+  boundary changes. LTP alignment is documentary — this pair is the source of
+  truth, not a central validator. Migrate one real family at a time; do not
+  claim legacy tools already conform.
 ---
-# Model-facing tool call contract
+# LingTai Tool Protocol (LTP)
 
 ## Purpose
 
-Define the future canonical public argument shape for LingTai-owned model-facing
-tools: a **tool family envelope** with the four root blocks `action`, `input`,
-`reasoning`, and `summarize`. This file is normative for the wire interface only.
-It defines no family, compiler, dispatcher, base class, port class, adapter
-class, handler, or result type, and it changes no runtime behavior by itself. It
-is a migration target applied one family at a time.
+Define the **LingTai Tool Protocol (LTP)**: the future canonical public interface
+for LingTai-owned model-facing tools. LTP covers public addressing, ownership,
+boundaries, and the semantics of the envelope, actions, `manual`, and settings.
+
+LTP is LingTai-owned. "Enhanced MCP-like" is a useful mental model, but LTP is
+**not** an MCP extension: it does not rewrite arbitrary MCP schemas and reserves
+nothing in them.
+
+LTP standardizes the public interface only. It does **not** standardize
+implementations, readers, schemas, or lifecycles. This file defines no family,
+compiler, dispatcher, base class, port class, adapter class, handler, or result
+type, and changes no runtime behavior by itself. It is a migration target applied
+one family at a time.
 
 ## Behavior
 
@@ -135,6 +144,47 @@ model-facing schema or nested `input`.
   superficial implementation similarity. A family exists because its actions
   belong to one thing, not because their code looks alike.
 
+### Settings
+
+LTP defines two optional settings levels under the Agent settings root. Both are
+addresses and ownership rules, not a file format or a reader.
+
+`<agent-dir>` is the filesystem working-directory root owned by the Agent
+instance whose LingTai-owned family is invoked. Its LTP settings root is the
+direct child `<agent-dir>/settings/`. This names an address only: it imposes no
+reader, loader, lifecycle, or other runtime requirement.
+
+- `<agent-dir>/settings/<family>.json` — **family-owned** generic settings.
+- `<agent-dir>/settings/<family>.<action>.json` — **action-owned** settings.
+
+Illustratively: `web.json`, `web.search.json`, `web.browse.json`.
+
+- **Grammar.** The two addresses MUST stay unambiguous. Neither a family name nor
+  an action name may contain `.`; the first `.` in the stem therefore separates
+  family from action. A stem with no `.` is the family file; a stem with exactly
+  one `.` is that action's file. No stem carries more than one `.`.
+- **Orthogonal scopes.** A family file MUST NOT embed action blocks, and an
+  action file MUST NOT embed family or generic blocks. There is no include,
+  inherit, overlay, fallback, or override; there is no precedence and no merged
+  settings object. One semantic setting has exactly one owner.
+- **Reading boundary.** One call may be affected by both levels: the family
+  envelope reads and consumes only `<family>.json`, and the selected action reads
+  and consumes only `<family>.<action>.json`. Neither reads the other's file.
+- **Optionality.** A scope that supports no settings has no file. A supported but
+  absent file means the owner's documented defaults apply. A present but invalid
+  file MUST fail loudly at that owner's boundary and MUST NOT be silently
+  ignored.
+- **Per-owner authority.** Every family and action owns its own settings schema,
+  version, and migration; whether it reads hot, at boot, or cached; its cache
+  invalidation; and its error vocabulary. Internal helpers are allowed, but LTP
+  MUST NOT depend on a central reader.
+- **Discovery via `manual`.** A migrated family's `manual` is the settings
+  discovery surface: it states the exact supported files, their schema and
+  defaults, their lifecycle, and what an invalid file does. Where no settings
+  surface exists, the manual says so explicitly rather than staying silent.
+- **Reading is not writing.** Owning the read of a settings file grants no
+  authority to mutate configuration.
+
 ### Implementation independence
 
 Action implementations stay maximally independent. This contract MUST NOT be
@@ -156,23 +206,38 @@ envelope. That is a conforming implementation.
 - Scope is LingTai-owned tool families only. Arbitrary and MCP-provided tool
   schemas are out of scope and untouched; this contract reserves no field name
   in them and MUST NOT overwrite MCP fields.
-- Migration is one family at a time in later PRs, vertically: code, contract,
-  manual, and wire evidence together. Legacy tools are neither mass-renamed nor
-  declared conforming without their own implementation and evidence.
+- Migration is one family at a time in later PRs, vertically: code, contract, and
+  manual together, with the evidence that migration's reviewer asks for. Legacy
+  tools are neither mass-renamed nor declared migrated without their own
+  implementation and documented alignment.
 - Until a family is migrated, its existing runtime and schema are unchanged.
   Adopting this contract by itself causes no wire or runtime behavior change.
 
-## Relationship to current runtime
+### Non-goals
+
+This contract does not introduce, and this PR does not implement: a central LTP
+validator, registry, schema compiler, or universal conformance harness; the old
+result-summarization control nested as `input.summary`; a shared settings or
+`_settings` foundation; runtime schema injection; ToolExecutor changes; test or
+manual rewrites; a provider adapter envelope; MCP migration; or the `file`
+family.
+
+The `input.summary` non-goal bans one thing: carrying the result-summarization
+*control* below root. It does not reserve the word `summary`, and it does not ban
+an unrelated domain field that happens to be named `summary` — see
+`### Envelope`.
+
+### Relationship to current runtime
 
 Nothing here describes shipped behavior beyond what each migrated family already
-proves. In particular, the current a-priori result-summarization flag is read at
+documents. In particular, the current a-priori result-summarization flag is read at
 runtime under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:159`); this contract names the future
 envelope field `summarize`. Reconciling the two is per-family migration work, not
 a claim about today's wire. Unified `web` is the existing conceptual family shape
 — `search | browse | manual` under one name — and is not changed by this file.
-`web` is not yet a migrated family: it exposes no root `summarize` and has not
-been proved against this contract.
+`web` is not yet a migrated family: it exposes no root `summarize`, has no LTP
+settings surface, and has not been aligned to this contract.
 
 Non-normative future illustration: `file` may later become one family with
 actions `read | write | edit | glob | grep | manual`, while all six
@@ -181,41 +246,36 @@ scheduled here, and not claimed.
 
 ## Contract tests
 
-A migrated family must prove: exact final Agent root properties; family-required
-`action` / `input`; closed strict input branches; absence of `reasoning`,
-`_reasoning`, and `summarize` below root; rejection of wrong-branch input keys;
-successful internal `_reasoning` dispatch; unchanged provider envelope semantics;
-Chat and Responses serialization; a hermetic fresh Agent startup and complete
-prompt build; and a real model-facing call after refresh when runtime wiring
-changes. Because root `summarize` is required of every migrated family, every
-migrated family must also prove, for both the single and the parallel call path:
-that the root boolean is retained through post-processing and isolated to the
-call it belongs to; that raw output is durably recorded before any visible
-summary replacement; that error results stay exact and unmodified; and that
-`summarize` never reaches the action implementation.
+**There is no universal LTP validator, registry, schema compiler, or machine-
+enforced conformance suite, and this contract does not introduce one.** Alignment
+to LTP is maintained through this contract and the paired `ANATOMY.md`, reviewed
+per migration — not through a central programmatic gate.
+
+Evidence for a migration is therefore documentary and reviewed: the migrating PR
+shows its final model-facing schema, states which envelope and settings rules it
+satisfies, and updates this contract's related documents where the promise
+changes. A reviewer checks that against the rules above.
+
+Individual families and actions MAY keep their own behavior tests as locally
+chosen evidence, and are encouraged to where the risk warrants it — for example
+around envelope root properties, closed input branches, wrong-branch rejection,
+`summarize` retention and isolation on both the single and parallel call path,
+raw output recorded before any visible replacement, exact error results,
+`summarize` never reaching the action implementation, and loud failure on an
+invalid settings file. LTP does not mandate one universal suite covering these,
+and a family choosing a different local evidence set is not thereby
+non-conforming.
 
 Web's existing focused capability and wire tests are starting evidence for the
 family/action shape only: they cover `action` / `input` / `manual`, and `web`
-does not yet expose the root `summarize` field. They are not a full conformance
-suite. Full conformance for any family, `web` included, awaits that family's
-explicit migration and its own `summarize` proof.
-
-## Non-goals
-
-This contract does not introduce, and this PR does not implement: the old
-result-summarization control nested as `input.summary`; a shared settings or
-`_settings` foundation; runtime schema injection; ToolExecutor changes; test or
-manual rewrites; a provider adapter envelope; MCP migration; or the `file`
-family.
-
-This non-goal bans one thing: carrying the result-summarization *control* below
-root. It does not reserve the word `summary`, and it does not ban an unrelated
-domain field that happens to be named `summary` — see `### Envelope`.
+does not yet expose the root `summarize` field or an LTP settings surface. They
+are not a conformance suite, and no such suite is required to exist.
 
 ## Maintenance
 
 Keep this shared contract directional and concise. Add a family only after a real
-scoped migration has code, contract/manual updates, provider-wire tests, and
-runtime evidence. Do not use this file to mass-normalize legacy schemas, to
-justify a shared implementation framework, or to rename external provider
-protocol fields.
+scoped migration has code, contract/manual updates, and reviewed evidence that it
+meets these rules. LTP alignment is maintained by keeping this contract and the
+paired `ANATOMY.md` honest and current, not by a central validator; do not add
+one here. Do not use this file to mass-normalize legacy schemas, to justify a
+shared implementation framework, or to rename external provider protocol fields.
