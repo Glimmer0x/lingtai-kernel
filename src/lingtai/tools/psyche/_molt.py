@@ -591,13 +591,26 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     # ``{"object": "context", "action": "molt"}`` would now be rejected.
     #
     # ``input`` carries EVERY key ``_CONTEXT_MOLT_INPUT_SCHEMA`` marks required,
-    # with the three the forced path does not use spelled as explicit ``null``.
-    # A strict provider schema expresses an optional field as a
-    # required-nullable property, so a partial ``{"summary": ...}`` object would
-    # not satisfy the schema this same family advertises — teaching an invalid
-    # call to any model that imitates its own history. ``_strip_nulls`` turns
-    # these nulls back into "absent" at dispatch, so the forced path's behavior
-    # is unchanged.
+    # so the block is envelope-shaped and branch-key-exact rather than a partial
+    # object. ``keep_tool_calls``/``keep_last`` are declared nullable, so their
+    # explicit ``null``s are schema-valid.
+    #
+    # It is NOT fully schema-valid, and this comment must not claim otherwise:
+    # ``session_journal_path`` is declared required and NON-nullable
+    # (``"type": "string"``), so the ``None`` below is deliberately
+    # **type-invalid** for that one field. There is no value that is
+    # simultaneously honest and schema-valid here — a forced molt has no journal,
+    # any string would fabricate one, and ``""`` would be type-valid but a lie.
+    # ``null`` is the least-wrong choice: it states the absence truthfully rather
+    # than inventing a path.
+    #
+    # The residual invalidity is bounded. Replayed assistant ``tool_use`` blocks
+    # are not provider-validated, so nothing fails at runtime, and a model that
+    # imitates this exemplar is refused by the unconditional journal gate
+    # (``_context_molt`` below) with an actionable recovery message BEFORE any
+    # context is shed — the designed, fail-loud outcome. ``_strip_nulls`` turns
+    # these nulls back into "absent" at dispatch, so the forced path's own
+    # behavior is unchanged.
     #
     # ``_initiator``/``_source`` stay OUTSIDE ``input`` — they are Host
     # provenance metadata, not action input, and psyche's ``context_molt``

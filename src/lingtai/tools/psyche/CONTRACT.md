@@ -32,9 +32,14 @@ in `src/lingtai/tools/psyche/`; the code is the source of truth.
 `psyche` is migrated to the LingTai Tool Protocol v2 shape defined in
 `src/lingtai/tools/CONTRACT.md` and builds its schema composition and envelope
 dispatch on the generic `src/lingtai/tools/tool_family/` infrastructure. The
-public tool name, every operation, every success/error payload, every log
-event, and every persistence path are exactly what they were before that
-migration; only the argument *shape* changed. The former two-key
+public tool name, every operation, every **operation-level** success payload
+and error, every log event, and every persistence path are exactly what they
+were before that migration — the handlers themselves are untouched. Only the
+argument *shape* changed, and with it the **envelope** layer: envelope
+validation is new (see §Envelope enforcement), and the former
+`Unknown object:` / `Invalid action ... for <obj>` guards are collapsed into one
+`Unknown psyche action:` error. Those envelope-level differences are the
+migration; operation-level parity is what is preserved. The former two-key
 `(object, action)` matrix is now one flat `action` enum — each pre-migration
 pair became exactly one action, the same collapse `notification` made for its
 three atomic dismiss verbs. Nothing was added, dropped, renamed, or merged.
@@ -170,20 +175,42 @@ Host provenance metadata, not action input, and `context_molt`'s `input` schema
 does not declare them.
 
 The synthesized `input` MUST carry **every** key `context_molt`'s schema marks
-required, with the three the forced path does not use spelled as explicit
-`null`. A strict provider schema expresses an optional field as a
-required-nullable property, so a partial `{"summary": ...}` object would not
-satisfy the schema this same family advertises. `_strip_nulls` turns those
-nulls back into "absent" at dispatch, so behavior is unchanged. The same
-obligation binds the agent-initiated path: `_context_molt` replays the agent's
-own call block verbatim into the fresh session, so that block is model-visible
-history too and must be provider-valid.
+required, so the block is envelope-shaped and branch-key-exact rather than a
+partial object. `keep_tool_calls`/`keep_last` are declared nullable, so their
+explicit `null`s are schema-valid.
+
+**The system-forced pair is deliberately NOT fully schema-valid, and this
+contract does not claim it is.** `session_journal_path` is declared required and
+**non-nullable** (`"type": "string"`), so the synthesized `null` is
+*type-invalid* for that one field. This is an accepted, documented residual, not
+an oversight: no value here is simultaneously honest and schema-valid. A forced
+molt has no journal — the kernel synthesized the molt, and there was no agent
+turn to author one. Any string would fabricate a journal path; `""` would be
+type-valid but a lie, and gate-refused anyway. `null` is the least-wrong value
+because it states the absence truthfully. The alternative — declaring the field
+nullable in the public schema — is rejected because it would weaken the
+model-facing advertisement of a hard gate for every caller, to accommodate one
+Host-synthesized exemplar.
+
+The residual is bounded and fails safe. Replayed assistant `tool_use` blocks are
+not provider-validated, so nothing fails at runtime. A model that imitates this
+exemplar and sends `session_journal_path: null` has that null stripped by
+`_strip_nulls` and is then refused by the **unconditional** journal gate with an
+actionable recovery message, **before any context is shed** — `molt_count` and
+history untouched. That refusal is the designed lesson, not a failure mode.
+
+The agent-initiated path carries no such residual: `_context_molt` replays the
+agent's own call block verbatim, and that call was schema-conformant on the way
+in, so the replayed block is fully valid including a real
+`session_journal_path`.
 
 This is not cosmetic: a model imitating its own history and sending the
 pre-migration flat `{"object": "context", "action": "molt"}` succeeded before
 the migration and now fails as an unknown action, and one imitating a partial
-`input` would send a call the advertised schema rejects. Any future producer of
-synthesized `psyche` calls carries the same obligation.
+`input` would send a call the advertised schema rejects on branch keys. Any
+future producer of synthesized `psyche` calls carries the same obligation — and
+the same duty to describe any residual invalidity precisely rather than round it
+up to "valid".
 
 `base_agent.turn._is_context_molt_call` reads only `args["action"]`, the
 post-migration spelling. That is a read path over the live batch, **not** a
@@ -239,8 +266,8 @@ history/chat_history_archive.jsonl     — appended pre-molt history on each mol
 | Cross-action `input` is rejected before any handler I/O | `src/lingtai/tools/psyche/__init__.py:handle` via `tool_family.ToolFamily.handle` | `tests/test_tool_family_psyche_migration.py::test_wrong_branch_input_is_rejected_before_any_handler_io` |
 | `_tc_id` is stripped from the closed root yet still reaches the molt handler, and no other action | `src/lingtai/tools/psyche/__init__.py:handle`, `_MOLT_ENVELOPE_KEYS` | `tests/test_tool_family_psyche_migration.py::test_tc_id_is_isolated_to_the_molt_handler`, `::test_reasoning_and_summarize_never_reach_a_handler` |
 | One public `psyche` root on both wires with the `allOf` action/input correlation intact | `src/lingtai/tools/psyche/__init__.py:get_schema`, `kernel/base_agent/tools.py:_build_tool_schemas` | `tests/test_tool_family_psyche_migration.py::test_one_psyche_root_survives_both_wires_with_action_input_correlation` |
-| The synthesized system-forced molt pair carries the current envelope with every required `input` key present (unused optionals as explicit null), not the flat pre-migration shape or a partial input | `src/lingtai/tools/psyche/_molt.py:context_forget` | `tests/test_tool_family_psyche_migration.py::test_system_forced_molt_synthesizes_the_current_envelope` |
-| The agent's own replayed molt call block is likewise provider-valid strict input | `src/lingtai/tools/psyche/_molt.py:_context_molt` (verbatim replay) | `tests/test_tool_family_psyche_migration.py::test_successful_molt_lifecycle_in_a_disposable_workdir` |
+| The synthesized system-forced molt pair is envelope-shaped and branch-key-exact (every required `input` key present), but intentionally type-invalid on the non-nullable `session_journal_path`; a model imitating it is refused by the journal gate before any shed | `src/lingtai/tools/psyche/_molt.py:context_forget` | `tests/test_tool_family_psyche_migration.py::test_system_forced_molt_synthesizes_the_current_envelope`, `::test_molt_refuses_before_shedding_on_an_invalid_journal` |
+| The agent's own replayed molt call block carries the full strict input the agent actually sent, including a real `session_journal_path` | `src/lingtai/tools/psyche/_molt.py:_context_molt` (verbatim replay) | `tests/test_tool_family_psyche_migration.py::test_successful_molt_lifecycle_in_a_disposable_workdir` |
 | The kernel's molt-batch deferral reads the migrated `action` spelling | `src/lingtai/kernel/base_agent/turn.py:_is_context_molt_call` | `tests/test_tool_family_psyche_migration.py::test_kernel_detects_the_migrated_molt_call_shape` |
 | `psyche` is on the kernel `summarize` allowlist, and its molt `summary` is domain input rather than that control | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_psyche_migration.py::test_psyche_is_on_the_ltp_v2_summarize_allowlist` |
 | The reserved `manual` child returns the canonical result unwrapped; psyche's flat public shape is restored post-dispatch | `src/lingtai/tools/psyche/__init__.py:_adapt_manual_result`, `tool_family/manual.py:build_manual_child` | `tests/test_tool_family_psyche_migration.py::test_manual_child_returns_the_canonical_result_unwrapped`, `::test_manual_public_result_is_flattened_post_dispatch`, `tests/test_intrinsic_manual_actions.py` |

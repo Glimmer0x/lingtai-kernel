@@ -377,8 +377,12 @@ public surface into this envelope: psyche was addressed as an
 `(object, action)` matrix, and each pair became exactly one flat action, the
 same collapse `notification` made for its atomic dismiss verbs. The operation
 inventory is preserved exactly — nothing added, dropped, renamed, or merged —
-and every success payload, error, log event, and persistence path is unchanged;
-only the argument shape moved (see `src/lingtai/tools/psyche/CONTRACT.md`). It
+and every operation-level success payload and error, every log event, and every
+persistence path is unchanged; only the argument shape and the envelope layer
+around it moved. Envelope validation and its errors are necessarily new under
+this contract, and psyche's former two-key unknown-object/invalid-action guards
+became one unknown-action error (see
+`src/lingtai/tools/psyche/CONTRACT.md`). It
 owns no settings file at either level and its manual says so.
 
 Three psyche facts are envelope consequences worth naming here. Its molt

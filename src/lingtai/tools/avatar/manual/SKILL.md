@@ -78,7 +78,7 @@ The `input.name` field (required for `spawn`) doubles as the avatar's working-di
 - No slashes, no dots, no spaces, no leading `.`
 - Max 64 characters
 
-The avatar's display name (nickname) can be set separately via `psyche(name, nickname, ...)` and has no such constraints.
+The avatar's display name (nickname) can be set separately via `psyche(action="name_nickname", input={"content": "<nickname>"}, reasoning="...")` and has no such constraints.
 
 ## 4. The `reasoning` Field — Mission Briefing
 

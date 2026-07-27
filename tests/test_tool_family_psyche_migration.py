@@ -462,7 +462,7 @@ def _molt_agent(tmp_path):
 
 
 def _emit_molt_call(agent, wire_id, action_input):
-    """Append the agent's own molt call to history, in the provider-valid shape.
+    """Append the agent's own molt call to history, in the full strict shape.
 
     `_context_molt` replays this exact block into the fresh session, where it
     becomes model-visible history. So the fixture must emit what a real
