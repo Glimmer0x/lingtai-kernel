@@ -28,7 +28,9 @@ class OpenAIVisionService(VisionService):
             "responses",
         }:
             raise ValueError(
-                "Unsupported OpenAI vision wire; use vision(action='manual')."
+                "Unsupported OpenAI vision wire; use vision(action='manual', "
+                "input={}, reasoning='the active OpenAI vision wire is "
+                "unsupported')."
             )
 
         import openai as _openai

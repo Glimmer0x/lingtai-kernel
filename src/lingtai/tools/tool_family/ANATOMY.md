@@ -65,8 +65,10 @@ this package too — using it is optional, not mandatory).
   path) shape, with `status`/`error` loader facts preserved truthfully. The
   strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
   so a family composing a schema-only `ToolFamily` alongside its dispatching
-  one reuses the same object instead of hand-copying it and drifting (`mcp`
-  does; `manual.py:1-85`).
+  one reuses the same object instead of hand-copying it and drifting (`mcp`,
+  `knowledge`, `file`, and `vision` all do; `manual.py:1-89`). Each
+  `ChildTool` deep-copies `MANUAL_INPUT_SCHEMA` rather than sharing the
+  literal, so one family's schema can never be mutated through another's.
 
 ## Connections
 

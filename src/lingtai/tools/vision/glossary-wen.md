@@ -16,7 +16,10 @@ maintenance: |
 **名相对照**
 
 - `vision`：观象之器——以 LLM 之视觉能力析图。支 JPEG、PNG 与 WebP。可对图发任何问——述其内容、识其文字、解其图表、辨其物象、评其风格与气韵。结合绘相可先生图再析之。
-- `image_path`：图像之路径
-- `question`：关于图像之问
-- `action`：`analyze` 直析，`manual` 惟返只读指引
-- `manual`：使 agent 察当前 preset 身份，于自身 skill catalog 寻相应手册；不自动召 MCP
+- `action`：所择子 Tool 之名，`analyze` 直析，`manual` 惟返只读指引
+- `input`：所择 action 自有之严输
+- `image_path`：`analyze` 之输中图像之路径
+- `question`：`analyze` 之输中关于图像之问，`null` 则用默问
+- `reasoning`：Host 审计之元数据，不入 action 之输
+- `summarize`：Host 呈现层之可选后处开关，不入 action 之输
+- `manual`：族属保留子 Tool 之名，返所安手册全文与其径；使 agent 察当前 preset 身份，于自身 skill catalog 寻相应手册；不自动召 MCP

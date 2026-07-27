@@ -9,6 +9,7 @@ from lingtai.tools import email as email_tool
 from lingtai.tools import psyche as psyche_tool
 from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
+from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 
@@ -50,6 +51,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "soul-manual",
             "system-manual",
             "web",
+            "vision",
             "file-manual",
         )
     }
@@ -63,6 +65,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
     daemon_manager._agent = agent
     web_manager = web_tool.setup(agent)
+    vision_manager = vision_tool.setup(agent)
 
     calls = {
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
@@ -72,6 +75,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
+        "vision": ("vision", lambda: vision_manager.handle({"action": "manual", "input": {}})),
         "file": ("file-manual", lambda: agent.handlers["file"](
             {"action": "manual", "input": {}, "reasoning": "load file guidance"}
         )),
@@ -95,6 +99,15 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
                 "content": [{"type": "text", "text": body}],
                 "structuredContent": {"manual_path": str(path)},
             }
+        elif tool_name == "vision":
+            # vision's family-owned manual keeps its pre-migration
+            # status/action/manual shape and adds the loader's manual_path.
+            assert result == {
+                "status": "ok",
+                "action": "manual",
+                "manual": body,
+                "manual_path": str(path),
+            }
         else:
             assert result == {
                 "status": "ok",
@@ -115,6 +128,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         system_tool,
         web_tool,
         file_tool,
+        vision_tool,
     )
     for module in modules:
         schema = module.get_schema()
@@ -129,6 +143,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     file_schema = file_tool.get_schema()
     assert file_schema["required"] == ["action", "input", "reasoning"]
     assert len(file_schema["properties"]["input"]["oneOf"]) == 6
+    vision_schema = vision_tool.get_schema()
+    assert vision_schema["required"] == ["action", "input", "reasoning"]
+    assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
 
     agent = _StubAgent(tmp_path)
     agent._file_io = _ActionFileIO(tmp_path)

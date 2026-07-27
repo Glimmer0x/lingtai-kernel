@@ -261,17 +261,24 @@ owner. Those five capability names are now unknown and fail loudly; `file`
 surfaces no settings file at either level and says so in its manual (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
+`vision` (`analyze | manual`) is the fifth: it keeps its public tool name and
+both public action values while moving to the same root envelope, with
+`analyze` owning the direct current-preset image request and `manual` the
+family-owned reserved child (see `src/lingtai/tools/vision/CONTRACT.md`). It
+owns no settings file, so the two-level settings addressing rules do not apply
+to it.
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently `web`, `mcp`, `knowledge`, and `file`), so an unmigrated
-tool's own field literally named `summarize` is never reinterpreted as this
-control. That `_LTP_V2_MIGRATED_FAMILIES` set is the single source of truth for
-which families use the canonical spelling; a migrating family adds its public
-name there in the same change, and never introduces a second summarizer. Every
-other LingTai-owned family remains unmigrated and keeps its existing schema and
-settings surface unchanged by this file.
+v2 family (currently `web`, `mcp`, `knowledge`, `file`, and `vision`), so an
+unmigrated tool's own field literally named `summarize` is never reinterpreted
+as this control. That `_LTP_V2_MIGRATED_FAMILIES` set is the single source of
+truth for which families use the canonical spelling; a migrating family adds
+its public name there in the same change, and never introduces a second
+summarizer. Every other LingTai-owned family remains unmigrated and keeps its
+existing schema and settings surface unchanged by this file.
 
 `mcp` is the second migrated family: public tool name `mcp`, actions `info |
 manual`, both taking the canonical strict-empty `input`. The migration changed
@@ -287,10 +294,12 @@ ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
 diagnostics, `mcp` is its second, retaining its own outer `handle_mcp()`
-for its exact pre-migration unknown-action envelope, and `knowledge` is its
+for its exact pre-migration unknown-action envelope, `knowledge` is its
 third, using it the same way with its own outer `handle()` preserving that
-family's exact pre-migration unknown-action result. Using it is never
-required — see its own
+family's exact pre-migration unknown-action result, `file` is its fourth
+(below), and `vision` is its fifth, using it the same way while retaining
+its own outer `handle()` for the family's flat manual/error result shapes.
+Using it is never required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

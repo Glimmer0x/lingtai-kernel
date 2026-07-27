@@ -8,6 +8,8 @@ related_files:
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/CONTRACT.md
+  - src/lingtai/tools/vision/ANATOMY.md
+  - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -44,12 +46,15 @@ capability names and lazy adapters.
   the envelope dispatch, and all five operation implementations in
   `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`
   (`src/lingtai/tools/file/ANATOMY.md`).
+- `vision/` — public `vision` composition owner: one action-separated family
+  with canonical `analyze`/`manual` children over the existing direct
+  provider routing (`src/lingtai/tools/vision/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
-  second, `knowledge` its third, and `file` its fourth
+  second, `knowledge` its third, `file` its fourth, and `vision` its fifth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
@@ -62,9 +67,12 @@ capability names and lazy adapters.
 `Agent` calls registry setup. The public `web` row imports
 `lingtai.tools.web_search` lazily. That owner imports the browser Core and
 provider factory only at composition or action boundaries, and imports
-`tool_family` to compose its schema and (optionally) dispatch. The pinned
-browser transport remains an outer adapter. `web_search` is accepted only as a
-one-way configuration input alias and is never emitted as a public name.
+`tool_family` to compose its schema and (optionally) dispatch. The public
+`vision` row imports `lingtai.tools.vision`, which imports `tool_family` the
+same way and reaches `lingtai.services.vision` only on the selected direct
+route. The pinned browser transport remains an outer adapter. `web_search` is
+accepted only as a one-way configuration input alias and is never emitted as a
+public name.
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
 five operation modules once per manager and reaches the working tree only

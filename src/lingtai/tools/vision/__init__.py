@@ -10,12 +10,23 @@ Usage:
 The local mlx-vlm pseudo-provider remains available through explicit
 ``add_capability(..., provider="local")`` opt-in, but it is intentionally not
 advertised in ``PROVIDERS`` or first-run/check-caps surfaces yet.
+
+``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
+(``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
+children are ``analyze`` and the family-owned reserved ``manual``, composed and
+dispatched by the generic ``lingtai.tools.tool_family`` infrastructure. The
+public tool name and both action values are unchanged; only the call envelope
+moved from flat arguments to ``action``/``input``/``reasoning``/``summarize``.
+Provider routing, credential/identity resolution, and every analyze/manual
+result shape are untouched by that migration.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from importlib import resources
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
+
+from ..tool_family import ChildTool, ToolFamily
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 
 if TYPE_CHECKING:
@@ -27,7 +38,8 @@ def _setup_failure(provider: str, exc: BaseException) -> str:
     """Build explicit manual guidance without exposing exception contents."""
     return (
         f"Direct vision setup failed for provider {provider!r} "
-        f"({type(exc).__name__}); use vision(action='manual')."
+        f"({type(exc).__name__}); use vision(action='manual', input={{}}, "
+        f"reasoning='direct vision setup failed, load the manual route')."
     )
 
 
@@ -115,40 +127,76 @@ PROVIDERS = {
     "fallback_on_inherit": None,  # no agnostic fallback for vision
 }
 
+_ANALYZE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "image_path": {
+            "type": "string",
+            "description": "Path to the image file",
+        },
+        "question": {
+            # Strict OpenAI object branches express an optional field as a
+            # required nullable property. Null means absent, and the analyze
+            # handler then applies the same default prompt it always has.
+            "type": ["string", "null"],
+            "description": (
+                "Question about the image, or null for the default "
+                "\"Describe what you see in this image.\""
+            ),
+        },
+    },
+    "required": ["image_path", "question"],
+    "additionalProperties": False,
+}
+
+def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+    raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+
+def _build_family(
+    analyze_handler: Any = _unused,
+    manual_child: ChildTool | None = None,
+) -> ToolFamily:
+    """Build vision's family from the one canonical child declaration.
+
+    The single source of truth for vision's children: both the module-level
+    schema-only family (which composes the model-facing schema and proves at
+    import time that the registry has no duplicate or reserved-name collision)
+    and each ``VisionManager``'s dispatching family come from here, so child
+    names, schemas, titles, and order cannot drift between the wire surface
+    and the dispatcher. Defaults build the non-dispatching variant; the
+    manager passes its bound ``analyze`` handler and the real reserved
+    ``manual`` child from ``build_manual_child``.
+    """
+    return ToolFamily(
+        "vision",
+        [
+            ChildTool("analyze", _ANALYZE_INPUT_SCHEMA, analyze_handler, title="analyze input"),
+            manual_child
+            or ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+        ],
+    )
+
+
+_FAMILY = _build_family()
+
+
 def get_description(lang: str = "en") -> str:
     return (
-        "Analyze an image with the active preset. OpenRouter/custom first try the "
-        "current OpenAI-compatible route; a real request failure returns a "
-        "sanitized error and points to action='manual' for read-only alternatives. "
+        "Analyze an image with the active preset. Use vision(action='analyze', "
+        "input={'image_path': '...', 'question': null}, reasoning='read the "
+        "image') for the direct request; OpenRouter/custom first try the "
+        "current OpenAI-compatible route. A real request failure returns a "
+        "sanitized error and points to vision(action='manual', input={}, "
+        "reasoning='load vision guidance') for read-only alternatives. "
         "No provider, model, credential, or MCP fallback is automatic."
     )
 
 
 def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "image_path": {"type": "string", "description": 'Path to the image file'},
-            "question": {
-                "type": "string",
-                "description": 'Question about the image',
-                "default": "Describe this image.",
-            },
-            "action": {
-                "type": "string",
-                "enum": ["analyze", "manual"],
-                "default": "analyze",
-                "description": (
-                    "analyze performs the direct request; OpenRouter/custom try the "
-                    "current OpenAI-compatible route even when downstream image "
-                    "support is unknown. On real failure the sanitized tool result "
-                    "points to manual, which returns bundled read-only alternatives."
-                ),
-            },
-        },
-        "required": [],
-    }
-
+    # Composed by the generic ToolFamily infra from ``_build_family``'s child
+    # declaration, never hand-assembled.
+    return _FAMILY.build_schema()
 
 
 class VisionManager:
@@ -163,14 +211,33 @@ class VisionManager:
         self._agent = agent
         self._vision_service = vision_service
         self._manual_reason = manual_reason
+        # Same canonical child declaration the module-level schema-only family
+        # uses, with this instance's bound analyze handler and the real
+        # reserved ``manual`` child registered directly (unwrapped).
+        self._family = _build_family(
+            self._dispatch_analyze, build_manual_child(agent, "vision")
+        )
 
-    def handle(self, args: dict) -> dict:
-        if args.get("action", "analyze") == "manual":
-            return self.manual()
+    def _dispatch_analyze(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
+        """Run the one direct analyze operation on already-validated input.
+
+        The body is the pre-migration ``handle()`` analyze path unchanged:
+        same missing-service guard, relative-path resolution, existence check,
+        default prompt, and success/failure result shapes.
+        """
         if self._vision_service is None:
-            return {"status": "error", "message": self._manual_reason or "Direct vision is unavailable; call vision(action='manual')."}
-        image_path = args.get("image_path", "")
-        question = args.get("question", "Describe what you see in this image.")
+            return {
+                "status": "error",
+                "message": self._manual_reason or (
+                    "Direct vision is unavailable; call vision(action='manual', "
+                    "input={}, reasoning='no direct vision route, load the "
+                    "manual alternatives')."
+                ),
+            }
+        image_path = action_input.get("image_path") or ""
+        question = action_input.get("question")
+        if question is None:
+            question = "Describe what you see in this image."
 
         if not image_path:
             return {"status": "error", "message": "Provide image_path"}
@@ -191,15 +258,62 @@ class VisionManager:
                 }
             return {"status": "ok", "analysis": analysis}
         except Exception as e:
-            return {"status": "error", "message": f"Vision analysis failed ({type(e).__name__}). Call vision(action='manual') for the explicit manual route."}
+            return {
+                "status": "error",
+                "message": (
+                    f"Vision analysis failed ({type(e).__name__}). Call "
+                    "vision(action='manual', input={}, reasoning='the direct "
+                    "vision request failed, load the explicit manual route') "
+                    "for the explicit manual route."
+                ),
+            }
+
+    def _adapt_manual_result(self, mcp_result: dict[str, Any]) -> dict[str, Any]:
+        # Host-owned flattening of the manual child's canonical result into
+        # vision's pre-migration ``status``/``action``/``manual`` shape (plus
+        # the loader's ``manual_path``). See ``handle()`` for the ordering rule.
+        flat: dict[str, Any] = {
+            "status": mcp_result.get("status", "ok"),
+            "action": "manual",
+            "manual": mcp_result["content"][0]["text"],
+            "manual_path": mcp_result["structuredContent"]["manual_path"],
+        }
+        if "error" in mcp_result:
+            flat["error"] = mcp_result["error"]
+        return flat
 
     def manual(self) -> dict:
-        """Return only bundled guidance; never inspect config or invoke a backend."""
-        try:
-            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
-            return {"status": "degraded", "action": "manual", "manual": "", "error": "vision manual missing"}
-        return {"status": "ok", "action": "manual", "manual": body}
+        """Return only installed guidance; never inspect config or invoke a backend.
+
+        Retained as the family's own public manual entry point (callers and
+        tests use it directly). Performs no provider construction, no
+        credential read, and no analyze operation.
+        """
+        return self._adapt_manual_result(self._family.handle({"action": "manual", "input": {}}))
+
+    def handle(self, args: dict | None) -> dict:
+        # Canonical statement of this family's dispatch/presentation ordering.
+        # The generic ``ToolFamily`` dispatcher validates ``action``,
+        # type-checks and strips root ``summarize``, rejects unknown root
+        # fields, and rejects ``input`` keys outside the selected action's own
+        # declared schema (schema conformance alone is not the dispatch-time
+        # authorization boundary — see ``tools/CONTRACT.md`` "Dispatch and
+        # actions") before ``_dispatch_analyze`` or the registered ``manual``
+        # child's handler ever runs, so every envelope failure lands before any
+        # provider I/O. ``self._family.handle`` returns the ``manual`` child's
+        # canonical ``content``/``structuredContent`` result verbatim (no double
+        # wrap); flattening it to vision's public shape is this method's own
+        # Host job, done strictly after dispatch, never inside a registered
+        # child. Envelope failures are normalized to vision's long-standing
+        # ``{"status": "error", "message": ...}`` shape here, rather than by
+        # changing the generic dispatcher's canonical error result.
+        action = args.get("action") if isinstance(args, Mapping) else None
+        result = self._family.handle(args)
+        if action == "manual" and "content" in result:
+            return self._adapt_manual_result(result)
+        if result.get("status") == "failed" and "error_code" in result:
+            return {"status": "error", "message": result["message"]}
+        return result
 
 
 def setup(
@@ -300,11 +414,11 @@ def setup(
                 if cap_max_tokens is not None:
                     svc_kwargs["max_tokens"] = cap_max_tokens
                 if wire_api is None:
-                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active OpenAI-compatible wire has no direct vision route')."
                 elif not llm_model:
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
                 elif not api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
                 else:
                     try:
                         vision_service = OpenAIVisionService(**svc_kwargs)
@@ -322,16 +436,16 @@ def setup(
                 if cap_max_tokens is not None:
                     svc_kwargs["max_tokens"] = cap_max_tokens
                 if not llm_model:
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
                 elif not api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
                 else:
                     try:
                         vision_service = AnthropicVisionService(**svc_kwargs)
                     except Exception as exc:
                         manual_reason = _setup_failure(provider, exc)
             else:
-                manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual')."
+                manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual', input={{}}, reasoning='this provider has no supported direct vision route')."
         else:
             if provider_key in _CODEX_FAMILY:
                 # Codex vision is a standalone Responses request. It may share
@@ -366,7 +480,7 @@ def setup(
                 if explicit_token_path:
                     kwargs["token_path"] = explicit_token_path
                 if not kwargs.get("model"):
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
                 elif codex_route == "direct":
                     # A whitespace-only explicit ``token_path`` is not an identity;
                     # normalize both it and the inherited bucket path once so the
@@ -378,7 +492,7 @@ def setup(
                     if token_path:
                         kwargs["token_path"] = token_path
                     else:
-                        manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual')."
+                        manual_reason = "Codex vision has no explicit current OAuth identity; use vision(action='manual', input={}, reasoning='Codex vision has no explicit current OAuth identity')."
                 else:
                     # Pool route (bucket has no nonblank ``codex_auth_path``).
                     # WeightedAccountSource selects an account from the pool file
@@ -408,7 +522,7 @@ def setup(
                         except NoCandidateError:
                             pass
                     if not kwargs.get("token_path"):
-                        manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual')."
+                        manual_reason = "Codex pool vision has no selected current OAuth identity; use vision(action='manual', input={}, reasoning='Codex pool vision has no selected current OAuth identity')."
                 kwargs.pop("api_compat", None)
                 kwargs.pop("base_url", None)
                 if codex_base_url:
@@ -452,11 +566,11 @@ def setup(
                 if service_provider == "mimo" and same_provider and active_base_url:
                     kwargs.setdefault("base_url", active_base_url)
                 if service_provider in {"openai", "mimo"} and wire_api is None:
-                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active OpenAI-compatible wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active OpenAI-compatible wire has no direct vision route')."
                 elif service_provider == "mimo" and wire_api != "chat_completions":
-                    manual_reason = "The active MiMo wire is not implemented by the direct vision service; use vision(action='manual')."
+                    manual_reason = "The active MiMo wire is not implemented by the direct vision service; use vision(action='manual', input={}, reasoning='the active MiMo wire has no direct vision route')."
                 if service_provider in {"openai", "mimo"} and active_compat == "anthropic":
-                    manual_reason = "The active preset uses an Anthropic wire that this vision route cannot safely adapt; use vision(action='manual')."
+                    manual_reason = "The active preset uses an Anthropic wire that this vision route cannot safely adapt; use vision(action='manual', input={}, reasoning='the active Anthropic wire cannot be safely adapted for direct vision')."
                     vision_service = None
                 if service_provider == "anthropic" and active_headers:
                     kwargs.setdefault("default_headers", active_headers)
@@ -473,9 +587,9 @@ def setup(
                     kwargs.pop("wire_api", None)
                 resolved_api_key = api_key or active_api_key
                 if service_provider not in {"codex", "local"} and not kwargs.get("model"):
-                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current model for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current model for direct vision')."
                 elif service_provider not in {"codex", "local"} and not resolved_api_key:
-                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual')."
+                    manual_reason = f"Provider {provider!r} has no resolved current credential for direct vision; use vision(action='manual', input={{}}, reasoning='no resolved current credential for direct vision')."
                 # Dedicated vision services do not consume the LLM adapter's
                 # transport selector.
                 kwargs.pop("api_compat", None)
@@ -493,7 +607,7 @@ def setup(
                     except Exception as exc:
                         manual_reason = _setup_failure(provider, exc)
     elif vision_service is None:
-        manual_reason = "No direct vision provider was configured; use vision(action='manual')."
+        manual_reason = "No direct vision provider was configured; use vision(action='manual', input={}, reasoning='no direct vision provider is configured')."
 
     mgr = VisionManager(agent, vision_service=vision_service, manual_reason=manual_reason)
     agent.add_tool("vision", schema=get_schema(), handler=mgr.handle, description=get_description(), glossary_package=__package__)
