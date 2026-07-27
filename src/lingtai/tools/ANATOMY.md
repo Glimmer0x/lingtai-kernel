@@ -40,8 +40,14 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer
+  reusable ManualTool builder; `web` and `notification` are its consumers
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `notification/` — mandatory intrinsic owning the public `notification`
+  family: `check`, three atomic dismiss actions, and `manual`
+  (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
+  is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
+  builds its dispatching family per call, because an intrinsic receives `agent`
+  per call rather than owning a manager.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

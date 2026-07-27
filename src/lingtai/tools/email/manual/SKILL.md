@@ -8,9 +8,9 @@ description: >
   self-send time capsules, the full-body persistent notification contract, and
   the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
   recurring schedules are `shell-manual`.
-version: 1.0.1
+version: 1.0.2
 tags: [capabilities, email, communication]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
 - src/lingtai/tools/email/manager.py
 - src/lingtai/tools/email/primitives.py
@@ -126,7 +126,7 @@ Unread email bodies are injected in full into `_meta.agent_meta.notifications.pe
 
 Use `read` when you need to refresh the source-of-truth mailbox record, inspect attachment/metadata details, or deliberately fetch the producer state before a reply/audit. Use `reply`/`reply_all` when answering. Failing to `dismiss`, `read`, `archive`, or `delete` a handled mail keeps the notification reminding you on every heartbeat.
 
-These are the producer-owned verbs for the `email` notification channel; a generic `notification(action='dismiss_channel', channel='email')` would clear only the mirror. See `notification-manual` → `reference/dismissal-safety/SKILL.md`.
+These are the producer-owned verbs for the `email` notification channel; a generic `notification(action='dismiss_channel', input={'channel': 'email', 'force': null, 'reason': null}, reasoning='...')` would clear only the mirror. See `notification-manual` → `reference/dismissal-safety/SKILL.md`.
 
 ### 50,000-character send cap
 

@@ -335,11 +335,20 @@ class TestPostMoltContinuationSignal:
             assert "continue" in instr
             assert "defer" in instr
             assert "obsolete" in instr
-            # Concrete dismiss mechanism + reason-required ack.
+            # Concrete dismiss mechanism + reason-required ack. Since the LTP
+            # v2 migration the taught call carries the reason inside the
+            # action's own ``input`` object (``'reason': 'continue: ...'``),
+            # so match the reason values rather than the old flat
+            # ``reason='continue`` spelling. The exact taught call is
+            # separately proven dispatchable by
+            # ``test_notification_tool.py::test_post_molt_instruction_template_round_trips_through_dispatcher``.
             assert "post-molt" in instr
-            assert "reason='continue" in instr
-            assert "reason='defer" in instr
-            assert "reason='obsolete" in instr
+            assert "'continue: " in instr
+            assert "'defer: " in instr
+            assert "'obsolete: " in instr
+            # The dismissal is taught in the closed envelope shape.
+            assert "input={'channel': 'post-molt'" in instr
+            assert "reasoning=" in instr
             # No-auto-execution must be explicit (non-goal guard).
             assert "not auto-executed" in instr or "not auto" in instr
 

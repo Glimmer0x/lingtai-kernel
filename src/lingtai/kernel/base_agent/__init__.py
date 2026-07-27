@@ -1802,14 +1802,28 @@ class BaseAgent:
         # wire: successful notification sync should be a structured
         # notification(action="check") call/result pair, not a visible
         # synthesized diary/text-input row.
-        # call.args carries injection_seq only — real tool calls don't have
-        # runtime freshness fields in their args (those live in results).
-        # The seq is enough to defeat byte-equality on the assistant turn.
+        # ``notification`` is an LTP v2 family (``tools/CONTRACT.md``): a real
+        # voluntary read is ``{action, input, reasoning}`` with ``check``'s own
+        # strict-empty ``input``. This synthesized call must carry that same
+        # envelope, because the pair is deliberately byte-shape-identical to a
+        # voluntary read (see this method's docstring) — emitting the old flat
+        # ``{action}`` shape would make the kernel's own injection the one
+        # notification call the model could never have produced itself.
+        # ``reasoning`` is required by the family schema, so a truthful
+        # synthetic rationale is supplied rather than omitted.
+        # ``injection_seq`` remains outside the envelope: real tool calls don't
+        # carry runtime freshness fields in their args (those live in results),
+        # and the seq is only there to defeat byte-equality on the assistant
+        # turn. It never reaches the tool — this pair is spliced onto the wire,
+        # not dispatched — and ``notification.handle`` would reject it as an
+        # unknown root field if it ever were.
         call_block = ToolCallBlock(
             id=call_id,
             name="notification",
             args={
                 "action": "check",
+                "input": {},
+                "reasoning": "kernel notification sync",
                 "injection_seq": self._notification_inject_seq,
             },
         )

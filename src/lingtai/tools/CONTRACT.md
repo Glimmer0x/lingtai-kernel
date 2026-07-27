@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/notification/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -235,14 +236,27 @@ documents. `web` (`search | browse | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action reads the action-owned
 `settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+`notification` (`check | dismiss_channel | dismiss_event | dismiss_ref |
+manual`) is the second: its final model-facing root is likewise exactly
+`action`, `input`, `reasoning`, and `summarize`, each action's arguments live
+only in that action's own strict `input` (so `channel` belongs to
+`dismiss_channel`, `event_id` only to `dismiss_event`, and `ref_id` only to
+`dismiss_ref`), and it is the first *intrinsic* to migrate — it therefore
+composes its dispatching family per call rather than owning a per-Agent
+manager (see `src/lingtai/tools/notification/CONTRACT.md`).
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently only `web`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. Every other
-LingTai-owned family remains unmigrated and keeps its existing schema and
+v2 family (currently `web` and `notification`), so an unmigrated tool's own
+field literally named `summarize` is never reinterpreted as this control. Every
+other LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
+
+A family that adopts the LTP v2 envelope MUST be added to that allowlist in the
+same change. `ToolFamily.build_schema` advertises the root `summarize` boolean
+for every family that uses it, so a family migrating without the allowlist entry
+would show the model a control the kernel silently ignores.
 
 `src/lingtai/tools/tool_family/` is optional, generic composition
 infrastructure implementing this envelope (schema composition from a
@@ -250,7 +264,11 @@ infrastructure implementing this envelope (schema composition from a
 ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics. Using it is never required — see its own
+diagnostics, and `notification` is its second, using it the same way while
+retaining a thin outer `handle()` that strips the kernel-injected `_tc_id`
+every intrinsic receives, flattens the reserved `manual` child's canonical
+result to its own pinned public shape, and normalizes the generic
+unknown-action error to its own. Using it is never required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

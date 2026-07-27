@@ -151,7 +151,14 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     assert "system" in snapshot_notifications(tmp_path)
     agent._notification_fp = fingerprint_notifications(tmp_path)
 
-    result = notif_intrinsic.handle(agent, {"action": "dismiss_channel", "channel": "system"})
+    result = notif_intrinsic.handle(
+        agent,
+        {
+            "action": "dismiss_channel",
+            "input": {"channel": "system"},
+            "reasoning": "test",
+        },
+    )
 
     assert result["status"] == "ok"
     assert "system" not in snapshot_notifications(tmp_path)
