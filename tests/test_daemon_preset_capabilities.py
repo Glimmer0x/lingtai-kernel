@@ -137,15 +137,16 @@ def test_instantiate_preset_capabilities_returns_schemas_and_handlers(tmp_path):
     """Preset's capabilities (e.g. 'file' group) instantiate into the sandbox."""
     agent = _make_agent(tmp_path, ["daemon"])  # NOTE: parent has only daemon
     mgr = agent.get_capability("daemon")
-    # File group expands to read/write/edit/glob/grep
+    # ``file`` is one capability registering one tool whose actions are
+    # read/write/edit/glob/grep — no longer a group expanding to five tools.
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {"file": {}},
         {"provider": "mock", "model": "mock"},
     )
-    # Each file sub-capability should register its tool
-    for name in ("read", "write", "edit", "glob", "grep"):
-        assert name in schemas, f"{name} not registered"
-        assert name in handlers, f"{name} handler missing"
+    assert "file" in schemas, "file not registered"
+    assert "file" in handlers, "file handler missing"
+    for retired in ("read", "write", "edit", "glob", "grep"):
+        assert retired not in schemas, f"{retired} must not be a public tool"
 
 
 def test_instantiate_skips_unknown_capability_names(tmp_path):
@@ -160,11 +161,12 @@ def test_instantiate_skips_unknown_capability_names(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"nonsense_capability": {}, "read": {}},
+        {"nonsense_capability": {}, "file": {}},
         {"provider": "mock", "model": "mock"},
     )
     assert "nonsense_capability" not in schemas
-    assert "read" in schemas
+    # ``read`` is a one-way input alias for the ``file`` family.
+    assert "file" in schemas
 
 
 def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
@@ -177,8 +179,7 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {
-            "read": {},
-            "write": {},
+            "file": {},
             "email": {},      # intrinsic — should skip
             "psyche": {},     # intrinsic (also blacklisted) — should skip
             "system": {},     # intrinsic — should skip
@@ -186,8 +187,8 @@ def test_instantiate_skips_intrinsic_names_in_capabilities(tmp_path):
         },
         {"provider": "mock", "model": "mock"},
     )
-    assert "read" in schemas
-    assert "write" in schemas
+    # Both legacy names canonicalize to the one ``file`` family.
+    assert "file" in schemas
     assert "email" not in schemas
     assert "psyche" not in schemas
     assert "system" not in schemas
@@ -208,11 +209,11 @@ def test_instantiate_still_raises_on_broken_known_capability(tmp_path, monkeypat
     monkeypatch.setattr("lingtai.tools.registry.setup_capability", boom)
     try:
         mgr._instantiate_preset_capabilities(
-            {"read": {}},  # known capability — should propagate the failure
+            {"file": {}},  # known capability — should propagate the failure
             {"provider": "mock", "model": "mock"},
         )
     except ValueError as e:
-        assert "read" in str(e)
+        assert "file" in str(e)
         assert "simulated broken setup" in str(e)
     else:
         raise AssertionError("expected ValueError for broken known capability")
@@ -238,10 +239,10 @@ def test_instantiate_skips_broken_unused_known_capability(tmp_path, monkeypatch)
     schemas, handlers = mgr._instantiate_preset_capabilities(
         {"file": {}, "vision": {"provider": "codex", "api_key_env": "IGNORED"}},
         {"provider": "mock", "model": "mock"},
-        required_tools={"read", "write", "edit", "glob", "grep"},
+        required_tools={"file"},
     )
 
-    assert "read" in schemas
+    assert "file" in schemas
     assert "vision" not in schemas
 
 
@@ -274,13 +275,13 @@ def test_instantiate_skips_blacklisted_capabilities(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     schemas, handlers = mgr._instantiate_preset_capabilities(
-        {"daemon": {}, "avatar": {}, "knowledge": {}, "read": {}},
+        {"daemon": {}, "avatar": {}, "knowledge": {}, "file": {}},
         {"provider": "mock", "model": "mock"},
     )
     assert "daemon" not in schemas
     assert "avatar" not in schemas
     assert "knowledge" not in schemas
-    assert "read" in schemas
+    assert "file" in schemas
 
 
 def test_instantiate_resolves_inherit_against_preset_llm(tmp_path):
@@ -328,12 +329,10 @@ def test_build_tool_surface_with_preset_uses_preset_capabilities(tmp_path):
         preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    # Parent didn't have these — they came from the preset
-    assert "read" in names
-    assert "write" in names
-    assert "grep" in names
+    # Parent didn't have this — it came from the preset
+    assert "file" in names
     # Handlers wired up
-    assert "read" in dispatch
+    assert "file" in dispatch
 
 
 def test_build_tool_surface_with_preset_unknown_tool_raises(tmp_path):
@@ -363,10 +362,9 @@ def test_build_tool_surface_omitted_preset_uses_parent(tmp_path):
     mgr = agent.get_capability("daemon")
     schemas, dispatch = mgr._build_tool_surface(["file"])
     names = {s.name for s in schemas}
-    assert "read" in names
-    assert "grep" in names
+    assert "file" in names
     # And the dispatch is the parent's actual handler
-    assert dispatch["read"] is agent._tool_handlers["read"]
+    assert dispatch["file"] is agent._tool_handlers["file"]
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +414,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
     presets_dir.mkdir()
     _write_preset(presets_dir, "wizard_style",
                   capabilities={
-                      "read": {},
-                      "write": {},
+                      "file": {},
                       "email": {},      # intrinsic in capabilities map
                       "psyche": {},     # intrinsic + blacklisted
                   })
@@ -429,7 +426,7 @@ def test_emanate_preset_with_intrinsics_dispatches(tmp_path, monkeypatch):
     preset_path = str(presets_dir / "wizard_style.json")
     with patch.object(preset_connectivity, "_probe_host", return_value=12.5):
         result = mgr.handle({"action": "emanate", "tasks": [
-            {"task": "x", "tools": ["read"], "preset": preset_path},
+            {"task": "x", "tools": ["file"], "preset": preset_path},
         ]})
 
     assert result["status"] == "dispatched", \
@@ -450,7 +447,7 @@ def test_emanate_preset_request_for_email_intrinsic_dispatches(tmp_path, monkeyp
     presets_dir = tmp_path / "presets"
     presets_dir.mkdir()
     _write_preset(presets_dir, "wizard_style",
-                  capabilities={"read": {}, "email": {}})
+                  capabilities={"file": {}, "email": {}})
 
     agent = _make_agent(tmp_path, ["daemon"], presets_dir=presets_dir)
     agent.inbox = queue.Queue()
@@ -621,11 +618,11 @@ def test_build_tool_surface_preset_keeps_full_host_tool_set(tmp_path):
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["read", "write", "edit", "shell", "grep", "glob"],
+        ["file", "shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     names = {s.name for s in schemas}
-    for n in ("read", "write", "edit", "shell", "grep", "glob"):
+    for n in ("file", "shell"):
         assert n in names, f"host tool {n!r} must survive a preset"
         assert n in dispatch
 
@@ -661,16 +658,16 @@ def test_build_tool_surface_preset_capability_overrides_parent_handler(tmp_path)
 
     # Preset re-declares 'read' (gets its own sandbox handler) but omits 'shell'.
     preset_schemas, preset_handlers = mgr._instantiate_preset_capabilities(
-        {"read": {}},
+        {"file": {}},
         {"provider": "mock", "model": "mock"},
     )
     schemas, dispatch = mgr._build_tool_surface(
-        ["read", "shell"],
+        ["file", "shell"],
         preset_surface=(preset_schemas, preset_handlers),
     )
     # read resolves from the preset sandbox, not the parent
-    assert dispatch["read"] is preset_handlers["read"]
-    assert dispatch["read"] is not agent._tool_handlers["read"]
+    assert dispatch["file"] is preset_handlers["file"]
+    assert dispatch["file"] is not agent._tool_handlers["file"]
     # shell falls back to the parent (preset didn't supply it)
     assert dispatch["shell"] is agent._tool_handlers["shell"]
 
@@ -769,7 +766,7 @@ def test_parent_host_tool_floor_is_exactly_shell_and_file(tmp_path):
     provider caps."""
     from lingtai.tools.daemon import _parent_host_tool_floor
     assert _parent_host_tool_floor() == frozenset(
-        {"shell", "read", "write", "edit", "glob", "grep"}
+        {"shell", "file"}
     )
 
 

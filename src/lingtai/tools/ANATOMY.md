@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/file/ANATOMY.md
+  - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -33,14 +35,18 @@ capability names and lazy adapters.
   addressing and ownership rules, and the explicit per-tool migration boundary.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
-  (`src/lingtai/tools/registry.py:40-359`).
+  (`src/lingtai/tools/registry.py:39-344`).
 - `web_search/` — public `web` composition owner for search, browse, settings,
   and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
+- `file/` — sole owner of the public `file` capability: the composed schema,
+  the envelope dispatch, and all five operation implementations in
+  `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`
+  (`src/lingtai/tools/file/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer
+  reusable ManualTool builder; `web` and `file` are its consumers
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
@@ -53,6 +59,14 @@ provider factory only at composition or action boundaries, and imports
 `tool_family` to compose its schema and (optionally) dispatch. The pinned
 browser transport remains an outer adapter. `web_search` is accepted only as a
 one-way configuration input alias and is never emitted as a public name.
+
+The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
+five operation modules once per manager and reaches the working tree only
+through the injected `FileIOService`. Unlike `bash`/`web_search`, the file
+migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
+`grep` are unknown capability names that fail loudly. Capability groups no
+longer exist at all — `file` was `_GROUPS`' only entry, so the map,
+`expand_groups`, and every consumer were deleted rather than left empty.
 
 ## Composition
 
@@ -74,6 +88,9 @@ owned here.
 
 ## Notes
 
-Physical legacy directories and provider-native wire strings remain for
-compatibility. They must not become registry, schema, prompt, check-caps,
-manual, or catalog entries under those old public names.
+Retained physical legacy directories (`bash/`, `web_search/`) and
+provider-native wire strings remain for compatibility. They must not become
+registry, schema, prompt, check-caps, manual, or catalog entries under those old
+public names. The five pre-migration file packages are not among them: they were
+deleted outright into `file/`, so there is no legacy directory, contract,
+glossary, or alias left for that surface.

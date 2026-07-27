@@ -261,17 +261,26 @@ def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatc
     assert mgr._emanations == {}
 
 
-def test_build_tool_surface_expands_groups(tmp_path):
-    """'file' group expands to read/write/edit/glob/grep."""
+def test_build_tool_surface_resolves_file_family(tmp_path):
+    """'file' is one tool whose actions are read/write/edit/glob/grep.
+
+    It used to be a capability group expanding to five separate tools. Those
+    per-operation names are now gone entirely — not aliased — so requesting one
+    is an unknown-tool error.
+    """
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
     schemas, dispatch = mgr._build_tool_surface(["file"])
     names = {s.name for s in schemas}
-    assert "read" in names
-    assert "write" in names
-    assert "edit" in names
-    assert "glob" in names
-    assert "grep" in names
+    assert "file" in names
+    assert "file" in dispatch
+    for retired in ("read", "write", "edit", "glob", "grep"):
+        assert retired not in names
+
+    # The retired per-operation names are not requestable: no alias resolves
+    # them, so a stale task naming them fails loudly instead of half-working.
+    with pytest.raises(ValueError, match="Unknown tools for emanation"):
+        mgr._build_tool_surface(["read", "grep"])
 
 
 def test_build_tool_surface_blacklist(tmp_path):
@@ -287,7 +296,7 @@ def test_build_tool_surface_blacklist(tmp_path):
     assert "daemon" not in names
     assert "avatar" not in names
     assert "avatar" not in dispatch
-    assert "read" in names
+    assert "file" in names
 
 
 def test_build_tool_surface_unknown_tool(tmp_path):
@@ -359,15 +368,15 @@ def test_build_tool_surface_rejects_task_mcp_name_collision(tmp_path):
     """Task-scoped MCP tools must not shadow parent or daemon tool names."""
     agent = _make_agent(tmp_path, ["daemon", "file"])
     mgr = agent.get_capability("daemon")
-    read_schema = FunctionSchema(
-        name="read",
-        description="Conflicting MCP read",
+    file_schema = FunctionSchema(
+        name="file",
+        description="Conflicting MCP file",
         parameters={"type": "object", "properties": {}},
     )
 
     try:
-        mgr._build_tool_surface([], mcp_surface=({"read": read_schema}, {"read": lambda args: {}}))
-        assert False, "Should reject MCP tool collision with parent read tool"
+        mgr._build_tool_surface([], mcp_surface=({"file": file_schema}, {"file": lambda args: {}}))
+        assert False, "Should reject MCP tool collision with parent file tool"
     except ValueError as e:
         assert "collide" in str(e)
 
@@ -1532,9 +1541,13 @@ def test_run_emanation_dispatches_tools(tmp_path, monkeypatch):
     mgr = agent.get_capability("daemon")
 
     mock_handler = MagicMock(return_value={"content": "file text"})
-    agent._tool_handlers["read"] = mock_handler
+    agent._tool_handlers["file"] = mock_handler
 
-    tc = ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-1")
+    tc = ToolCall(
+        name="file",
+        args={"action": "read", "input": {"file_path": "/tmp/x"}, "reasoning": "r"},
+        id="tc-1",
+    )
     resp1 = MagicMock()
     resp1.text = ""
     resp1.tool_calls = [tc]
@@ -1819,7 +1832,7 @@ def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatc
     agent.inbox = queue.Queue()
 
     def deny_read(proposal):
-        if proposal.tool_name == "read":
+        if proposal.tool_name == "file":
             return GuardDecision.deny(
                 check_name="deny_read",
                 reason="daemon read blocked by policy",
@@ -1830,9 +1843,13 @@ def test_run_emanation_uses_tool_call_guard_before_dispatch(tmp_path, monkeypatc
     mgr = agent.get_capability("daemon")
 
     mock_handler = MagicMock(return_value={"content": "file text"})
-    agent._tool_handlers["read"] = mock_handler
+    agent._tool_handlers["file"] = mock_handler
 
-    tc = ToolCall(name="read", args={"file_path": "/tmp/x"}, id="tc-guard")
+    tc = ToolCall(
+        name="file",
+        args={"action": "read", "input": {"file_path": "/tmp/x"}, "reasoning": "r"},
+        id="tc-guard",
+    )
     resp1 = MagicMock()
     resp1.text = ""
     resp1.tool_calls = [tc]
@@ -4287,7 +4304,7 @@ def test_daemon_summary_closure_uses_effective_session_and_accounts_usage(tmp_pa
         service, run_dir, provider="mock", model="daemon-model", endpoint="endpoint",
     )
 
-    assert fn("SUMMARY SYSTEM", "SUMMARY USER", "read", "tc-summary") == "LOCAL SUMMARY"
+    assert fn("SUMMARY SYSTEM", "SUMMARY USER", "file", "tc-summary") == "LOCAL SUMMARY"
     assert service.calls == [{
         "system_prompt": "SUMMARY SYSTEM",
         "tools": None,
@@ -4307,10 +4324,10 @@ def test_daemon_tool_executor_wires_summary_gateway_and_preserves_raw_log(tmp_pa
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
     raw = {"content": "DAEMON-RAW-MARKER"}
-    agent._tool_handlers["read"] = MagicMock(return_value=raw)
+    agent._tool_handlers["file"] = MagicMock(return_value=raw)
     first = LLMResponse(
         text="",
-        tool_calls=[ToolCall(name="read", args={"file_path": "/tmp/x", "summary": True, "reasoning": "retain marker"}, id="tc-daemon-summary")],
+        tool_calls=[ToolCall(name="file", args={"action": "read", "input": {"file_path": "/tmp/x"}, "summarize": True, "reasoning": "retain marker"}, id="tc-daemon-summary")],
         usage=None,
     )
     final = LLMResponse(text="daemon finished", tool_calls=[], usage=None)

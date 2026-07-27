@@ -6,9 +6,9 @@ onto an agent. It owns two layers:
 - :data:`INTRINSICS` — the mandatory-intrinsics mapping injected into
   ``BaseAgent(intrinsics=...)`` (the kernel reads it from ``lingtai.tools.registry``).
 - the dynamic-capability registry: :data:`BUILTIN_TOOLS` (capability name →
-  ``lingtai.tools.<pkg>`` module path), :data:`_GROUPS`, :data:`CORE_DEFAULTS`,
+  ``lingtai.tools.<pkg>`` module path), :data:`CORE_DEFAULTS`,
   :func:`setup_capability`, :func:`apply_core_defaults`,
-  :func:`normalize_capabilities`, :func:`expand_groups`,
+  :func:`normalize_capabilities`,
   :func:`get_all_providers`, :data:`CAPABILITY_UNAVAILABLE`.
 
 Import discipline: capability modules are resolved with ``importlib`` *inside*
@@ -86,20 +86,15 @@ BUILTIN_TOOLS: dict[str, str] = {
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
-    "read": "lingtai.tools.read",
-    "write": "lingtai.tools.write",
-    "edit": "lingtai.tools.edit",
-    "glob": "lingtai.tools.glob",
-    "grep": "lingtai.tools.grep",
+    # Unified public file capability: one package owning the composed schema,
+    # the envelope dispatch, and all five operation implementations. The
+    # pre-migration ``read``/``write``/``edit``/``glob``/``grep`` capabilities
+    # and packages are gone, with no alias — those names now fail loudly.
+    "file": "lingtai.tools.file",
     "vision": "lingtai.tools.vision",
     # Unified public web capability.  ``web_search`` is a one-way input alias
     # below so old presets materialize this single handler.
     "web": "lingtai.tools.web_search",
-}
-
-# Group names that expand to multiple capabilities.
-_GROUPS: dict[str, list[str]] = {
-    "file": ["read", "write", "edit", "glob", "grep"],
 }
 
 # Capabilities that boot by default on every Agent — the always-on floor.
@@ -117,11 +112,7 @@ CORE_DEFAULTS: dict[str, dict] = {
     "avatar": {},
     "daemon": {},
     "mcp": {},
-    "read": {},
-    "write": {},
-    "edit": {},
-    "glob": {},
-    "grep": {},
+    "file": {},
 }
 
 
@@ -162,6 +153,12 @@ def apply_core_defaults(
     return out
 
 
+# One-way configuration input aliases: a retained legacy config key on the left,
+# the canonical public capability it materializes on the right. Never emitted as
+# a public capability or tool name. The five pre-migration file capabilities
+# (``read``/``write``/``edit``/``glob``/``grep``) are deliberately absent — the
+# ``file`` migration was a clean break, so those names are unknown capabilities
+# and fail loudly rather than resolving silently.
 _LEGACY_CAPABILITY_ALIASES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
@@ -293,17 +290,6 @@ def normalize_capabilities(capabilities: dict[str, dict]) -> dict[str, dict]:
     return out
 
 
-def expand_groups(names: list[str]) -> list[str]:
-    """Expand group names (e.g. 'file') into individual capability names."""
-    result = []
-    for name in names:
-        if name in _GROUPS:
-            result.extend(_GROUPS[name])
-        else:
-            result.append(name)
-    return result
-
-
 def setup_capability(agent: "BaseAgent", name: str, **kwargs: Any) -> Any:
     """Look up a capability by *name* and call its ``setup(agent, **kwargs)``.
 
@@ -319,8 +305,7 @@ def setup_capability(agent: "BaseAgent", name: str, **kwargs: Any) -> Any:
     if module_path is None:
         raise ValueError(
             f"Unknown capability: {name!r}. "
-            f"Available: {', '.join(sorted(BUILTIN_TOOLS))}. "
-            f"Groups: {', '.join(sorted(_GROUPS))}"
+            f"Available: {', '.join(sorted(BUILTIN_TOOLS))}."
         )
     mod = importlib.import_module(module_path)
     setup_fn = getattr(mod, "setup", None)
@@ -339,7 +324,7 @@ def get_all_providers() -> dict[str, dict]:
     Used by ``lingtai-agent check-caps`` CLI.
     """
     _USER_FACING: dict[str, str] = {
-        "file": "lingtai.tools.read",
+        "file": "lingtai.tools.file",
         "shell": "lingtai.tools.bash",
         "web": "lingtai.tools.web_search",
         "knowledge": "lingtai.tools.knowledge",

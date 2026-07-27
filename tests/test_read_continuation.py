@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.tools.read import (
+from lingtai.tools.file._read import (
     DEFAULT_READ_CAP_CHARS,
     READ_HARD_CAP_CHARS,
     _apply_cap,
@@ -41,12 +41,24 @@ def _make_mock_service():
     return svc
 
 
+def _read_call(agent, **input_):
+    """Invoke the ``read`` action of the one public ``file`` family.
+
+    ``read`` is no longer its own model-facing root; the read operation and all
+    of its continuation semantics are unchanged and still owned by
+    ``lingtai.tools.file._read``.
+    """
+    return agent._tool_handlers["file"](
+        {"action": "read", "input": input_, "reasoning": "read continuation test"}
+    )
+
+
 def _file_agent(tmp_path, *, config=None):
     return Agent(
         service=_make_mock_service(),
         agent_name="test",
         working_dir=tmp_path / "test",
-        capabilities=["read"],
+        capabilities=["file"],
         config=config,
     )
 
@@ -145,7 +157,7 @@ class TestReadHandler:
         try:
             f = tmp_path / "small.txt"
             f.write_text("line one\nline two\nline three\n", encoding="utf-8")
-            result = agent._tool_handlers["read"]({"file_path": str(f)})
+            result = _read_call(agent, file_path=str(f))
             assert result.get("status") != "error"
             assert "truncated" not in result
             assert result["total_lines"] == 3
@@ -164,7 +176,7 @@ class TestReadHandler:
             n_lines = (DEFAULT_READ_CAP_CHARS // len(line)) * 3
             f.write_text(line * n_lines, encoding="utf-8")
 
-            result = agent._tool_handlers["read"]({"file_path": str(f)})
+            result = _read_call(agent, file_path=str(f))
             assert result.get("truncated") is True
             assert "next_offset" in result
             assert "remaining_lines_estimate" in result
@@ -182,11 +194,11 @@ class TestReadHandler:
             n_lines = (DEFAULT_READ_CAP_CHARS // len(line)) * 3
             f.write_text(line * n_lines, encoding="utf-8")
 
-            r1 = agent._tool_handlers["read"]({"file_path": str(f)})
+            r1 = _read_call(agent, file_path=str(f))
             assert r1.get("truncated") is True
             next_off = r1["next_offset"]
 
-            r2 = agent._tool_handlers["read"]({"file_path": str(f), "offset": next_off})
+            r2 = _read_call(agent, file_path=str(f), offset=next_off)
             # r2 must start after r1 ended — check via content line numbers.
             first_line_r1 = int(r1["content"].split("\t")[0])
             first_line_r2 = int(r2["content"].split("\t")[0])
@@ -203,9 +215,7 @@ class TestReadHandler:
             n_lines = 20
             f.write_text("".join(f"line {i}\n" for i in range(1, n_lines + 1)), encoding="utf-8")
 
-            result = agent._tool_handlers["read"](
-                {"file_path": str(f), "offset": 5, "limit": 3}
-            )
+            result = _read_call(agent, file_path=str(f), offset=5, limit=3)
             assert "5\t" in result["content"]
             assert "6\t" in result["content"]
             assert "7\t" in result["content"]
@@ -251,7 +261,7 @@ def test_read_handler_uses_per_call_max_chars(tmp_path):
     try:
         f = tmp_path / "small-cap.txt"
         f.write_text("".join(f"line-{i:03d} xxxxxxxxxxxxxxxxxxxx\n" for i in range(100)), encoding="utf-8")
-        result = agent._tool_handlers["read"]({"file_path": str(f), "limit": 100, "max_chars": 120})
+        result = _read_call(agent, file_path=str(f), limit=100, max_chars=120)
         assert result["truncated"] is True
         assert result["cap_chars"] == 120
         assert result["returned_chars"] <= 120
@@ -260,19 +270,35 @@ def test_read_handler_uses_per_call_max_chars(tmp_path):
 
 
 def test_read_schema_description_warns_about_cap():
-    """en description must mention read-manual, max_chars, 100k default, and 200k hard cap."""
-    from lingtai.tools.read import get_description
+    """The model-visible file surface must still teach the cap semantics.
+
+    Pre-migration this lived entirely in the standalone ``read`` tool's
+    description. It now spans two live surfaces of the one ``file`` family: the
+    family description carries the truncation/continuation workflow and the
+    read-manual pointer, and the exact 100k/200k numbers live where they are
+    actionable — the ``read`` child's own ``max_chars`` property description.
+    """
+    from lingtai.tools.file import get_description, get_schema
+
     desc = get_description("en")
-    assert "100 000" in desc or "100000" in desc or "100_000" in desc, \
-        "description should mention the 100 000 char read default"
-    assert "200 000" in desc or "200000" in desc or "200_000" in desc, \
-        "description should mention the 200 000 char runtime hard cap"
     assert "max_chars" in desc, \
         "description should mention the per-call max_chars parameter"
-    assert "read-manual" in desc and "Before using read" in desc, \
-        "description should require reading read-manual first"
+    assert "read-manual" in desc, \
+        "description should point at read-manual for pagination depth"
     assert "truncated" in desc, \
         "description should mention the 'truncated' field"
+    assert "next_offset" in desc, \
+        "description should tell the caller how to continue"
+
+    read_branch = next(
+        branch for branch in get_schema()["properties"]["input"]["oneOf"]
+        if branch["title"] == "read input"
+    )
+    max_chars_desc = read_branch["properties"]["max_chars"]["description"]
+    assert "100 000" in max_chars_desc, \
+        "max_chars description should mention the 100 000 char read default"
+    assert "200 000" in max_chars_desc, \
+        "max_chars description should mention the 200 000 char runtime hard cap"
     assert "next_offset" in desc, \
         "description should mention 'next_offset' for continuation"
     assert "line_truncated" in desc, \

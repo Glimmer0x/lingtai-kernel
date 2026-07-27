@@ -136,12 +136,17 @@ class DetachedDaemonExecutionHost:
         from lingtai.tools.registry import BUILTIN_TOOLS, setup_capability
         collector = _ToolCollector(self._agent)
         expanded = DaemonManager._expand_requested_tools(self, manifest.get("tools", []))
-        from lingtai.tools.registry import _GROUPS
-        if expanded.intersection(_GROUPS.get("file", ())):
-            # File handlers dereference the agent-shaped host's injected
-            # FileIOService at execution time. Mirror ordinary Agent
-            # construction, but only when the detached tool surface needs it;
-            # this remains a small host service, not a second Agent/lease.
+        if "file" in expanded:
+            # The ``file`` family's action handlers dereference the
+            # agent-shaped host's injected FileIOService at execution time.
+            # Mirror ordinary Agent construction, but only when the detached
+            # tool surface needs it; this remains a small host service, not a
+            # second Agent/lease. The retired per-operation names (``read``,
+            # ``write``, ``edit``, ``glob``, ``grep``) are NOT canonicalized to
+            # ``file`` — no alias survives — so a stale manifest naming them
+            # neither injects this service nor builds a surface: it is rejected
+            # as an unknown tool (see
+            # ``test_detached_retired_file_tool_names_fail_loudly``).
             from lingtai.services.file_io_sidecar import default_file_io_service
             self._agent._file_io = default_file_io_service(
                 root=self._agent._working_dir,

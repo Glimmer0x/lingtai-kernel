@@ -633,7 +633,7 @@ def test_glossary_owner_preserves_rendered_body_without_metadata():
     sys.path.insert(0, str(ROOT / "src"))
     from lingtai.kernel import tool_glossary
 
-    before = tool_glossary.load_tool_glossary("lingtai.tools.read", "zh")
+    before = tool_glossary.load_tool_glossary("lingtai.tools.file", "zh")
     assert before.strip()
     assert "kind:" not in before
     assert "related_files:" not in before
