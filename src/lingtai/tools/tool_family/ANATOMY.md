@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/avatar/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -58,8 +59,10 @@ this package too — using it is optional, not mandatory).
   dispatches back verbatim, once the returned `ChildTool` is registered
   directly and unwrapped in a family's own `ToolFamily`) is the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
-  path) shape, with `status`/`error` loader facts preserved truthfully
-  (`manual.py:1-74`).
+  path) shape, with `status`/`error` loader facts preserved truthfully. It also
+  exports `MANUAL_INPUT_SCHEMA`, the canonical strict-empty `manual` input this
+  builder uses and a family supplying its own `manual` child can reference
+  instead of restating the literal — `avatar` does (`manual.py`).
 
 ## Connections
 
@@ -82,6 +85,23 @@ diagnostic onto any envelope-level failure result, since a generic
 `ToolFamily` has no knowledge of a specific family's settings diagnostics.
 This division follows `../CONTRACT.md` "Implementation independence": using
 `ToolFamily.handle()` is `web`'s choice, not an inherited requirement.
+
+`avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is the
+second real consumer, and shows partial adoption is conforming: it reuses
+`ChildTool`/`ToolFamily` and the exported `MANUAL_INPUT_SCHEMA` for
+`spawn`/`rules`/`manual` schema composition and dispatch — deriving both its
+schema-only and handler-bound child listings from one `_CHILD_SPECS`
+`(action, schema)` source via its own `_build_family`, so they cannot drift
+apart — but supplies its **own** `manual` handler rather than
+`manual.build_manual_child`, because its manual ships inside its own package
+instead of the agent's installed `.library` catalog. `ToolFamily.handle()`
+returns that child's own canonical flat result verbatim — no double wrap, and
+no post-dispatch adaptation of a manual result at all. `AvatarManager.handle()`
+does two things after dispatch returns that this package deliberately cannot:
+it restores avatar's pinned unknown-action error string in place of the generic
+`ACTION_REQUIRED` envelope failure, and it threads root `_reasoning` (the spawn
+mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
+passes no envelope field to any child.
 
 ## Composition
 

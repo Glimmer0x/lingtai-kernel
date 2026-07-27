@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -95,8 +97,11 @@ entirely and dispatch by hand — `web` uses it internally but still owns its
 own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
-`build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
-input; its handler loads the existing `load_installed_manual()` shape
+`build_manual_child` builds the reserved `manual` `ChildTool` with the
+exported `MANUAL_INPUT_SCHEMA` — the canonical strict-empty `input` schema for
+a family's `manual` child. It is exported so a family supplying its own
+`manual` handler (as `avatar` does) can reference it instead of restating the
+literal, and so the two cannot drift apart. Its handler loads the existing `load_installed_manual()` shape
 (`status`, `manual` full body, `manual_path`, optionally `error`) and maps it
 to the canonical, actually-dispatched result: `content=[{"type": "text",
 "text": <full body>}]` and `structuredContent={"manual_path": <path>}`, with
@@ -137,9 +142,30 @@ flattens the canonical result to Web's pre-migration public shape (`status`,
 `handle()`, not to the generic child or any wrapper registered in place of
 it. `WebManager.handle()` also stamps `current_setting` onto any
 envelope-level failure result (search/browse/unknown-action) before
-returning, unchanged from before. No other built-in family is migrated in
-this candidate; each remains fully independent of this package until its own
-scoped migration.
+returning, unchanged from before.
+
+`avatar/__init__.py` is the second production Adapter/consumer:
+`AvatarManager.__init__` builds a per-instance `ToolFamily` with
+`spawn`/`rules`/`manual` handlers bound to that instance, and
+`AvatarManager.handle()` calls `self._family.handle(args)`. It is a deliberate
+**partial** adoption, which this package permits: `avatar` reuses `ChildTool`
+and `ToolFamily` but *not* `build_manual_child`, because its manual ships inside
+its own package (`avatar/manual/SKILL.md`) rather than the agent's installed
+`.library` intrinsic catalog — `build_manual_child` would report a `.library`
+`manual_path` that family never reads. Its `manual` child is therefore its own
+`ChildTool` returning `avatar`'s own canonical flat result (`status`, `action`,
+`manual`, `manual_path`), which `ToolFamily.handle()` returns verbatim with no
+double wrap and no post-dispatch adaptation. Strictly *after* dispatch,
+`AvatarManager.handle()` normalizes this package's generic `ACTION_REQUIRED`
+envelope failure back to avatar's own pinned unknown-action error string — the
+same Host/presentation-layer ownership boundary `web` uses for
+`current_setting`, and never a change to this package's canonical error shape.
+`avatar` also threads its root `_reasoning` (the spawn mission brief) to its
+`spawn` handler out-of-band, because this package correctly refuses to pass any
+envelope field to a child.
+
+Every other built-in family remains unmigrated and fully independent of this
+package until its own scoped migration.
 
 ## Contract rules
 
@@ -176,8 +202,10 @@ scoped migration.
   shared handler, common request/result types, or a universal domain result
   shape from any consumer family, matching `../CONTRACT.md` "Implementation
   independence" verbatim.
-- `manual.build_manual_child`'s child MUST use the reserved name `manual`, a
-  strict empty `input_schema`, and its handler's actual return value — what
+- `manual.build_manual_child`'s child MUST use the reserved name `manual`, the
+  exported canonical `MANUAL_INPUT_SCHEMA` (a strict empty `input_schema`),
+  which any family supplying its own `manual` child SHOULD reference rather
+  than restate — and its handler's actual return value — what
   `ToolFamily.handle()` dispatches back verbatim — MUST be the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
   path) shape, never the pre-mapping flat `load_installed_manual()` dict.

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.tools.tool_family import RESERVED_MANUAL_NAME, ChildTool, ToolFamily, ToolFamilyError
-from lingtai.tools.tool_family.manual import build_manual_child
+from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 
 class _FakeAgent:
@@ -36,7 +36,16 @@ def test_manual_child_reserved_name_is_exactly_manual():
 def test_manual_child_input_schema_is_strict_empty():
     agent = _FakeAgent(Path("/nonexistent"))
     child = build_manual_child(agent, "widget")
-    assert child.input_schema == {"type": "object", "properties": {}, "additionalProperties": False}
+    # Strict empty: no properties admitted, and closed. Pinned by identity with
+    # the exported canonical constant, so a consumer that references it (this
+    # builder; ``avatar``) cannot drift from a restated literal. This asserts
+    # only the generic constant — it makes no claim about how many families
+    # still keep a local copy, so a family collapsing onto the export is a
+    # separate, independently reviewable change.
+    assert child.input_schema is MANUAL_INPUT_SCHEMA
+    assert child.input_schema == {
+        "type": "object", "properties": {}, "required": [], "additionalProperties": False,
+    }
 
 
 def test_manual_child_actual_handler_returns_body_at_content_text_and_path_at_structured_content(tmp_path):

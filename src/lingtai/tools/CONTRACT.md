@@ -9,15 +9,18 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_result_summary.py
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   LingTai Tool Protocol (LTP). Keep the paired tools Anatomy and cross-contract
   links reciprocal. Update Agent schema composition, ToolExecutor normalization,
-  the migrated family, and this contract together when the canonical call
-  boundary changes. LTP alignment is documentary — this pair is the source of
+  each migrated family, the `_LTP_V2_MIGRATED_FAMILIES` allowlist, and this
+  contract together when the canonical call boundary changes. LTP alignment is documentary — this pair is the source of
   truth, not a central validator. Migrate one real family at a time; do not
   claim legacy tools already conform.
 ---
@@ -235,22 +238,40 @@ documents. `web` (`search | browse | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action reads the action-owned
 `settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+
+`avatar` (`spawn | rules | manual`) is the second family migrated, keeping its
+public name and action values unchanged (see
+`src/lingtai/tools/avatar/CONTRACT.md`, contract_version 4). It owns no
+settings file at either level, and its manual says so explicitly. Two
+avatar-specific facts are worth naming here because they are envelope
+consequences, not local details: its `spawn` mission brief is root `reasoning`
+(never an `input` property, per "Envelope"), and its `rules` action is
+karma-gated while `spawn` and `manual` are not — a family must not hide a
+stronger child action behind a weaker family posture.
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently only `web`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. Every other
-LingTai-owned family remains unmigrated and keeps its existing schema and
-settings surface unchanged by this file.
+v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web` and `avatar`), so an
+unmigrated tool's own field literally named `summarize` is never reinterpreted
+as this control. A family adopting this envelope MUST join that allowlist in the
+same change, or the root `summarize` it advertises to the model would be
+silently ignored. Every other LingTai-owned family remains unmigrated and keeps
+its existing schema and settings surface unchanged by this file.
 
 `src/lingtai/tools/tool_family/` is optional, generic composition
 infrastructure implementing this envelope (schema composition from a
 `ChildTool` registry, dispatch-validation boilerplate, and a reusable
 ManualTool builder) that a family MAY adopt instead of hand-writing the
-equivalent code; `web` is its first consumer, using it for schema composition
-and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics. Using it is never required — see its own
+equivalent code; `web` is its first consumer and `avatar` its second, each
+using it for schema composition and dispatch while retaining its own outer
+`handle()` for family-specific diagnostics (`web` stamps `current_setting`;
+`avatar` restores its pinned unknown-action error envelope). `avatar` reuses
+`ToolFamily` but not `build_manual_child`, because its manual ships inside its
+own package rather than the agent's installed `.library` catalog — adopting
+part of the infrastructure is conforming. Using it is never required — see its
+own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 
@@ -291,6 +312,17 @@ action-owned `settings/web.search.json` surface (see
 `src/lingtai/tools/web_search/CONTRACT.md` Contract tests). They remain one
 family's local evidence, not a conformance suite, and no such suite is required
 to exist.
+
+`tests/test_tool_family_avatar_migration.py` is `avatar`'s own local evidence
+for the same rules, chosen for that family's risk: the closed root, per-action
+child inputs, root `allOf` correlation surviving both wires, cross-action and
+unknown-root-field rejection *before* any handler I/O, `summarize` never
+reaching a child handler and `avatar` actually being on the kernel allowlist,
+the preserved unknown-action envelope, spawn's dry-run/mission-guard/identity
+and path validation, the karma gate and distribution for `rules`, and `manual`
+performing no spawn or rules I/O. Every test there builds its own isolated
+temporary network and fakes the launcher Port, so it neither creates a live
+avatar nor writes a live `.rules` signal.
 
 ## Maintenance
 
