@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Academic Search Pipeline
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > Academic paper search, resolution, and acquisition — from a DOI string to a
 > full PDF with metadata, finding → enrich → get PDF.
 
@@ -490,4 +490,4 @@ pip install pymupdf  # fitz - extract text from downloaded PDFs
 
 ---
 
-*This sub-skill is part of `web-browsing-manual` v3.0. For general web browsing, search strategies, or stealth techniques, see the parent skill and other sub-skills.*
+*This sub-skill is part of `web-manual` v3.0. For general web browsing, search strategies, or stealth techniques, see the parent skill and other sub-skills.*

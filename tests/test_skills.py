@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 from datetime import date, datetime
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -733,6 +734,56 @@ def test_catalog_injected_into_skills_section(tmp_path):
         assert "- name: skills-manual" in prompt
         assert "- name: file-manual" in prompt
         assert "- name: shared-thing" in prompt
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_web_manual_is_one_top_level_catalog_entry_matching_the_tool(tmp_path):
+    # Ownership collapse contract: the generic skill catalogue must expose
+    # exactly one top-level entry for the web tool's manual, named
+    # `web-manual`, with no separate top-level `web-browsing` identity — and
+    # `web(action="manual")` must return the same installed SKILL.md bytes
+    # that catalogue entry was built from. Nested reference/<topic>/SKILL.md
+    # files stay parent-owned drill-down references, never separate
+    # top-level catalogue entries.
+    workdir = tmp_path / "agent"
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"skills": {}, "web": {"provider": "duckduckgo"}},
+    )
+    try:
+        prompt = agent._prompt_manager.read_section("skills") or ""
+        top_level_names = re.findall(r"^- name: (\S+)$", prompt, flags=re.MULTILINE)
+
+        web_entries = [n for n in top_level_names if n == "web-manual" or n.startswith("web-browsing")]
+        assert web_entries == ["web-manual"], (
+            f"expected exactly one top-level 'web-manual' entry and no 'web-browsing*' "
+            f"entry, got: {web_entries}"
+        )
+        assert not any(n.startswith("web-browsing") for n in top_level_names)
+
+        installed_manual_path = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "web" / "SKILL.md"
+        )
+        installed_bytes = installed_manual_path.read_bytes()
+        assert b"name: web-manual" in installed_bytes
+
+        tool_result = agent._tool_handlers["web"]({"action": "manual", "input": {}})
+        assert tool_result["status"] == "ok"
+        assert tool_result["manual"].encode("utf-8") == installed_bytes
+        assert tool_result["manual_path"] == str(installed_manual_path)
+
+        # Nested reference SKILL.md files exist and are parent-owned — they
+        # must not surface as additional top-level catalogue names.
+        nested = [
+            "web-manual-tier-quick-refs",
+            "web-manual-routing-and-sites",
+            "web-manual-maintenance-bundles",
+        ]
+        for name in nested:
+            assert name not in top_level_names
     finally:
         agent.stop(timeout=1.0)
 

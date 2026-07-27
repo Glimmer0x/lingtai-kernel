@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Real-Time Data
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > Financial data, weather, system status, Stack Exchange, Wikipedia.
 
 Real-time data from free, no-key APIs. Every source below is a `requests.get` (or a

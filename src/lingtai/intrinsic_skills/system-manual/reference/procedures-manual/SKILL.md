@@ -13,7 +13,7 @@ description: >
   guidance grows.
 version: 1.3.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: "2026-07-26T20:55:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -250,7 +250,7 @@ Read the named manual before using tools whose developer instructions require it
 
 Use existing producer/tool capabilities before inventing workflows:
 
-- For web fetching/search/scraping, read `web-browsing` before using web search
+- For web fetching/search/scraping, read `web-manual` before using web search
   or ad-hoc scraping.
 - For image understanding, use the `vision` skill/tool route.
 - For shell audio/media work, load the relevant media/listen/minimax skill.

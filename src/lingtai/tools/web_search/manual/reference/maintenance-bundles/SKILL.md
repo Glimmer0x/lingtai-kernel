@@ -1,11 +1,11 @@
 ---
-name: web-browsing-maintenance-bundles
+name: web-manual-maintenance-bundles
 description: >
-  Nested web-browsing reference for maintenance protocol, semantic sweeps,
+  Nested web-manual reference for maintenance protocol, semantic sweeps,
   dirty-first testing, bundled JSON asset files, deep-dive reference files, and the
   explicit decision flowchart.
 version: 1.0.0
-last_changed_at: "2026-06-01T01:47:09-07:00"
+last_changed_at: "2026-07-26T20:55:00-07:00"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: "If you find stale or incorrect information here, use the lingtai-issue-report skill to assemble evidence and obtain per-issue human consent before filing an issue. Never include secrets, credentials, tokens, or private paths."
@@ -13,7 +13,7 @@ maintenance: "If you find stale or incorrect information here, use the lingtai-i
 
 # Web Browsing Maintenance and Assets Reference
 
-Nested web-browsing reference. Open this when changing the skill, validating
+Nested web-manual reference. Open this when changing the skill, validating
 propagation, or choosing which bundled asset/reference file to inspect.
 
 ## Maintenance Protocol

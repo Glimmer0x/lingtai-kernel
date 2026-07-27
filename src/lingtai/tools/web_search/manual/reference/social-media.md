@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Social Media Extraction
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > Reddit, Hacker News, Mastodon, X/Twitter, GitHub data extraction.
 
 本技能专注于从社交媒体平台提取**公开**数据：Reddit、Hacker News、Mastodon、
@@ -394,7 +394,7 @@ r = cached_get("https://www.reddit.com/r/python/hot.json",
 
 ## 10. 与主技能的关系
 
-本技能是 web-browsing 手册的子引用，专注社交媒体公开数据提取。通用网页抓取见
+本技能是 web-manual 手册的子引用，专注社交媒体公开数据提取。通用网页抓取见
 [父技能](../SKILL.md)；新闻与 RSS 见 [news-and-rss.md](./news-and-rss.md)；
 学术论文见 [academic-pipeline.md](./academic-pipeline.md)；反检测与代理见
 [stealth.md](./stealth.md)。

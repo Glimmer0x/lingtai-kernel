@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 5 — AI-Native Search (Tavily / Exa)
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > See also: [search-strategies.md](./search-strategies.md) for comprehensive search strategy guidance.
 
 **When it applies:** You need to *discover* content, not extract a known URL. AI-native search returns clean content with the results.

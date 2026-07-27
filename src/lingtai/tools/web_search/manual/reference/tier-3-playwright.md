@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 3 — Playwright Stealth
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > See also: [stealth.md](./stealth.md) for comprehensive anti-detection techniques.
 
 **When it applies:** JS-rendered pages, login-gated content, sites blocking simple requests.

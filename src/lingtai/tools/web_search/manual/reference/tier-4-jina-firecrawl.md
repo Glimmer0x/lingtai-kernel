@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 4 — API Fallback (Jina Reader / Firecrawl)
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 **When it applies:** Everything else fails. Jina Reader is the universal fallback — it renders JS server-side and returns clean markdown.
 **Tools:** `requests` (Jina Reader) or `firecrawl-py` (Firecrawl).

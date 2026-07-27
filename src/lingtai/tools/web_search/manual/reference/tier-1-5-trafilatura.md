@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 1.5 — Trafilatura Fast Extraction
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 **When it applies:** Any static HTML page — articles, blogs, news, documentation.
 **Tools:** `trafilatura` (**already installed** — no setup needed).

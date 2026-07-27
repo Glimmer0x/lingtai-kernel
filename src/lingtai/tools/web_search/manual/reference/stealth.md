@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Stealth Browsing & Anti-Detection
 
-> Part of the [web-browsing](../SKILL.md) skill, and the deep-dive for Tier 3's
+> Part of the [web-manual](../SKILL.md) skill, and the deep-dive for Tier 3's
 > stealth story — see [tier-3-playwright.md](./tier-3-playwright.md) for the
 > baseline `tier3()` function this reference extends.
 > Browser fingerprinting, User-Agent rotation, proxy strategies, CAPTCHA handling.
@@ -351,6 +351,6 @@ pip install requests[socks]   # SOCKS5 proxy support
 
 ---
 
-This reference is part of the [web-browsing](../SKILL.md) manual. For the main
+This reference is part of the [web-manual](../SKILL.md) manual. For the main
 extraction pipeline, see the parent skill; for academic-specific browsing, see
 [academic-pipeline.md](./academic-pipeline.md).

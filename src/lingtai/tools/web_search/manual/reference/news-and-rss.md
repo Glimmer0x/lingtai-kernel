@@ -6,7 +6,7 @@ maintenance: |
 ---
 # News and RSS Feeds
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > Google News RSS, Reddit JSON news feeds, RSS feed discovery and parsing, paywall boundary handling, news archival via Wayback Machine.
 
 本技能专注于新闻类内容的获取、RSS/Atom 订阅源的发现与解析、付费墙边界处理与新闻归档。
@@ -337,6 +337,6 @@ r = cached_get("https://news.google.com/rss/search",
 
 ## 9. 与主技能的关系
 
-本技能是 web-browsing 手册的子引用，专注新闻获取。通用网页抓取见 [父技能](../SKILL.md)；
+本技能是 web-manual 手册的子引用，专注新闻获取。通用网页抓取见 [父技能](../SKILL.md)；
 社交媒体数据见 [social-media.md](./social-media.md)；学术论文见
 [academic-pipeline.md](./academic-pipeline.md)。

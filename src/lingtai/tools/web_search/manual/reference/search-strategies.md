@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Search Strategies
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 > Decision trees, query optimization, engine comparison, and search+extract workflows.
 
 Choosing the right search engine and crafting the right query. For the Tier-5 auto-router

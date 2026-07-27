@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 2 — BeautifulSoup Structured Extraction
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 **When it applies:** Pages needing structured data extraction (lists, tables, multi-element scraping).
 **Tools:** `requests` + `beautifulsoup4` + `lxml` (all installed).
