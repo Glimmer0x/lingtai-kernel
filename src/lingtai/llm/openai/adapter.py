@@ -995,10 +995,15 @@ def _build_tools(schemas: list[FunctionSchema] | None) -> list[dict] | None:
     ]
 
 
-# Top-level JSON-Schema combinators the Responses API rejects on a
-# function-tool `parameters` root. `enum` is only disallowed at the root —
-# it is valid (and common) inside individual properties.
-_RESPONSES_DISALLOWED_TOP_LEVEL = ("allOf", "oneOf", "anyOf", "not", "enum")
+# JSON-Schema keywords still stripped from a function-tool `parameters`
+# root for the Responses API. `enum` is only disallowed at the root — it is
+# valid (and common) inside individual properties. `anyOf`/`not` at the root
+# remain untested against the live backend and are kept out of caution;
+# `oneOf`/`allOf` were moved off this list after a live non-strict Codex
+# Responses probe on 2026-07-27 accepted a raw root `oneOf` and a raw root
+# `allOf`/`if`/`then` without error on the current route — see
+# `_scrub_responses_schema`'s root-preservation of both.
+_RESPONSES_DISALLOWED_TOP_LEVEL = ("anyOf", "not", "enum")
 
 
 # Keys that, if present on a schema node, already establish its kind so it
@@ -1012,14 +1017,16 @@ _SCHEMA_KIND_KEYS = (
 )
 
 
-def _scrub_responses_schema(node: Any) -> Any:
+def _scrub_responses_schema(node: Any, is_root: bool = False) -> Any:
     """Recursively normalize a JSON schema for the Codex Responses backend.
 
-    Empirically, `/backend-api/codex/responses` rejects three constructs even
+    Empirically, `/backend-api/codex/responses` rejects some constructs even
     when nested inside a property, returning an opaque `server_error`:
 
-      1. `oneOf` / `not` combinators  -> `oneOf` rewritten to the accepted
-         `anyOf`; `not` dropped (no accepted equivalent).
+      1. Nested `oneOf` / `not` combinators -> nested `oneOf` rewritten to the
+         accepted `anyOf`; `not` dropped (no accepted equivalent). This
+         nested rewrite is unchanged and still applies at every depth below
+         the root.
       2. Typeless property schemas    -> a node with a `description` but no
          type-establishing key (see `_SCHEMA_KIND_KEYS`) gets `type:
          "string"`. This covers the nested `secondary.args.*` fields LingTai
@@ -1028,16 +1035,28 @@ def _scrub_responses_schema(node: Any) -> Any:
          e.g. entries in `daemon`'s `tasks[].mcp` array) -> an empty
          `properties: {}` is added. An empty `properties` map is accepted.
 
-    `enum`/`anyOf`/`allOf` are left untouched (the backend accepts them
-    nested). Walks dicts and lists so all fixes apply at any depth.
+    At the schema **root** (`is_root=True`, the top-level `parameters` dict
+    passed in by `_build_responses_tools`), `oneOf` and `allOf` are preserved
+    as-is rather than rewritten/stripped: a live non-strict Codex Responses
+    probe on 2026-07-27 showed the current route accepts a raw root `oneOf`
+    and a raw root `allOf`/`if`/`then` without error. Root `anyOf`/`not`/
+    `enum` remain untested and are still stripped before this function runs
+    (`_RESPONSES_DISALLOWED_TOP_LEVEL`, `_build_responses_tools`).
+    `enum`/`anyOf`/`allOf` nested below the root are left untouched as before
+    (the backend accepts them nested). Walks dicts and lists so all fixes
+    apply at any depth.
     """
     if isinstance(node, dict):
         out: dict = {}
         for key, value in node.items():
-            if key == "oneOf":
+            if key == "oneOf" and not is_root:
                 out["anyOf"] = [_scrub_responses_schema(v) for v in value]
             elif key == "not":
                 continue  # no accepted equivalent — drop it
+            elif key in ("oneOf", "allOf") and is_root:
+                # Root-level: preserved verbatim (recursing into each
+                # branch, which is no longer root), not rewritten/stripped.
+                out[key] = [_scrub_responses_schema(v) for v in value]
             else:
                 out[key] = _scrub_responses_schema(value)
         # Coerce typeless property schemas: a node describing a value (has a
@@ -1058,11 +1077,12 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
     """Convert FunctionSchema list to Responses API tool format.
 
     Responses uses a flat shape (`type: function`, fields hoisted) instead
-    of Chat Completions' nested `{type: function, function: {...}}`. Scrubs
-    top-level combinators the Responses API rejects at the parameters root,
-    then runs `_scrub_responses_schema` to fix the constructs the Codex
-    backend rejects even nested in a property (`oneOf`/`not` combinators and
-    typeless property schemas).
+    of Chat Completions' nested `{type: function, function: {...}}`. Strips
+    the still-untested `_RESPONSES_DISALLOWED_TOP_LEVEL` keys at the
+    parameters root, then runs `_scrub_responses_schema(params, is_root=True)`
+    to preserve root `oneOf`/`allOf` verbatim while still fixing the
+    constructs the Codex backend rejects even nested in a property (nested
+    `oneOf`/`not` combinators and typeless property schemas).
     """
     if not schemas:
         return None
@@ -1071,7 +1091,7 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
         params = dict(s.parameters or {})
         for key in _RESPONSES_DISALLOWED_TOP_LEVEL:
             params.pop(key, None)
-        params = _scrub_responses_schema(params)
+        params = _scrub_responses_schema(params, is_root=True)
         tools.append(
             {
                 "type": "function",

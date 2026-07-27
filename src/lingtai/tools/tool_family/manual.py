@@ -1,0 +1,74 @@
+"""ManualTool stable contract: the family-owned reserved ``manual`` child.
+
+Every LingTai-owned family offers a ``manual`` action (``tools/CONTRACT.md``
+"Dispatch and actions"). This module upgrades the existing ``#1058``
+``load_installed_manual()`` return shape into a stable, reusable, internal
+MCP-compatible contract: a strict empty input, and a canonical child result
+carrying the full installed ``SKILL.md`` body at ``content[0].text`` and the
+model-visible host-local ``manual_path`` at ``structuredContent.manual_path``
+— the two fields the approved v0.4 ManualTool acceptance requires of the
+*actual* child result, not merely of an unused presentational helper. This is
+the real, dispatched-to handler `ToolFamily.handle()` returns verbatim (no
+double wrap): a family wanting the pre-migration flat
+``load_installed_manual()`` shape (``status``, ``manual``, ``manual_path``)
+back out — as ``web`` does — owns that adaptation itself, in its own Host/
+presentation layer, per the no-double-wrap rule (``../CONTRACT.md`` "Dispatch
+and actions"): the child's own canonical/raw result stays canonical.
+"""
+from __future__ import annotations
+
+from typing import Any, Mapping
+
+from .._manual import load_installed_manual
+from . import ChildTool
+
+__all__ = ["build_manual_child"]
+
+
+def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
+    """Map a ``load_installed_manual``-shaped dict to the canonical child result.
+
+    Full body goes to ``content[0].text``; ``manual_path`` goes to
+    ``structuredContent.manual_path`` (model-visible, never only in a
+    ``_meta``-style side channel) — the two fields the approved v0.4
+    acceptance line requires. ``status`` (and ``error``, when the loader
+    reports a missing/degraded manual) are preserved verbatim as truthful
+    loader facts alongside the two MCP-compatible fields; this is not a
+    second wrapper, it is this child's own canonical result shape.
+    """
+    result: dict[str, Any] = {
+        "status": loaded.get("status", "ok"),
+        "content": [{"type": "text", "text": loaded.get("manual", "")}],
+        "structuredContent": {"manual_path": loaded.get("manual_path", "")},
+    }
+    if "error" in loaded:
+        result["error"] = loaded["error"]
+    return result
+
+
+def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
+    """Build the reserved ``manual`` :class:`ChildTool` for one family.
+
+    ``skill_name`` is the installed manual's public destination name (e.g.
+    ``"web"``), matching ``Agent._install_intrinsic_manuals``'s directory
+    mapping. The child's own input is validated as strict empty by
+    :class:`ToolFamily.handle`, matching every other child. This
+    :class:`ChildTool` is the family's actual, registered ``manual`` child —
+    a family MUST register it directly in its own :class:`ToolFamily` so
+    :meth:`ToolFamily.handle` dispatches back its canonical
+    ``content``/``structuredContent`` result verbatim (no double wrap); a
+    family wanting a different public result shape (as ``web`` does) adapts
+    the dispatched result itself, after ``ToolFamily.handle`` returns, in its
+    own Host/presentation layer — never inside this builder or its handler.
+    """
+
+    def handler(_input: Mapping[str, Any]) -> dict[str, Any]:
+        loaded = load_installed_manual(agent, skill_name)
+        return _to_mcp_result(loaded)
+
+    return ChildTool(
+        name="manual",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        handler=handler,
+        title="manual input",
+    )

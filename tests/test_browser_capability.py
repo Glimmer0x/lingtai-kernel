@@ -74,13 +74,13 @@ def test_web_browse_vertical_slice(tmp_path):
         schemas = agent._build_tool_schemas()
         web_schema = next(schema for schema in schemas if schema.name == "web")
         assert set(web_schema.parameters["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert web_schema.parameters["required"] == ["action", "input"]
+        assert web_schema.parameters["required"] == ["action", "input", "reasoning"]
         assert web_schema.parameters["additionalProperties"] is False
         assert all(
             "reasoning" not in branch["properties"]
             and "_reasoning" not in branch["properties"]
             and "summarize" not in branch["properties"]
-            for branch in web_schema.parameters["properties"]["input"]["anyOf"]
+            for branch in web_schema.parameters["properties"]["input"]["oneOf"]
         )
         first = agent._tool_handlers["web"]({
             "action": "browse",
@@ -241,9 +241,9 @@ def test_browser_policy_and_cursor_failures_are_typed_and_sanitized():
 def test_web_schema_includes_strict_action_input():
     schema = get_schema()
     assert schema["properties"]["action"]["enum"] == ["search", "browse", "manual"]
-    assert schema["required"] == ["action", "input"]
+    assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
-    branches = schema["properties"]["input"]["anyOf"]
+    branches = schema["properties"]["input"]["oneOf"]
     assert [branch["title"] for branch in branches] == [
         "search input", "browse input", "manual input",
     ]

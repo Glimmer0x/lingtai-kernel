@@ -495,7 +495,7 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 ### Tool schema conversion
 
 - **CC path** — `_build_tools()` (`adapter.py:975`): `{type: "function", function: {name, description, parameters}}`.
-- **Responses path** — `_build_responses_tools()` (`adapter.py:1055`): `{type: "function", name, description, parameters}` (flat). Scrubs top-level JSON-Schema combinators (`_RESPONSES_DISALLOWED_TOP_LEVEL`, `adapter.py:999`) that the Responses API rejects.
+- **Responses path** — `_build_responses_tools()` (`adapter.py:1076`): `{type: "function", name, description, parameters}` (flat). Strips the still-untested root JSON-Schema keywords (`_RESPONSES_DISALLOWED_TOP_LEVEL` = `anyOf`/`not`/`enum`, `adapter.py:1006`); root `oneOf`/`allOf` are preserved verbatim (`_scrub_responses_schema(..., is_root=True)`, `adapter.py:1020`) since a live non-strict Codex Responses probe on 2026-07-27 showed the current route accepts both without error. Nested `oneOf` below the root is still rewritten to `anyOf`.
 
 ### Reasoning extraction
 

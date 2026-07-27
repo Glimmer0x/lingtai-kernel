@@ -141,13 +141,23 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
     schema = FunctionSchema(name="web", description="web", parameters=get_schema())
     chat = _build_tools([schema])[0]["function"]["parameters"]
     responses = _build_responses_tools([schema])[0]["parameters"]
-    for wire in (chat, responses):
+    # The family composes a nested ``oneOf`` under ``input``. Chat Completions
+    # passes it through unchanged; the Responses backend rewrites any nested
+    # ``oneOf`` to ``anyOf`` (``_scrub_responses_schema``), so each wire is
+    # checked under its own actual combinator key — the branches themselves
+    # stay identical either way.
+    for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
         assert wire["type"] == "object"
-        assert wire["required"] == ["action", "input"]
+        # ``reasoning`` is REQUIRED Host InvocationContext/audit metadata —
+        # the family schema declares it itself (not left to Agent schema
+        # composition's blanket property injection, which never touches
+        # ``required``) so it is required even from ``get_schema()`` alone.
+        assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
-        assert set(wire["properties"]) == {"action", "input", "summarize"}
+        assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
+        assert wire["properties"]["reasoning"]["type"] == "string"
         assert wire["properties"]["summarize"]["type"] == "boolean"
-        branches = wire["properties"]["input"]["anyOf"]
+        branches = wire["properties"]["input"][combinator]
         assert [branch["title"] for branch in branches] == [
             "search input", "browse input", "manual input",
         ]
@@ -161,11 +171,55 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
         assert branches[2]["properties"] == {}
 
 
+def test_web_root_all_of_correlation_survives_chat_and_responses_wires():
+    """Root ``allOf`` schema-level action/input correlation must survive on
+    BOTH wires — Chat Completions (which never strips any root key) and the
+    Responses adapter (which, after this candidate's live-evidence-driven
+    fix, preserves root ``allOf``/``oneOf`` instead of unconditionally
+    stripping them). Responses may still normalize the nested ``input``
+    disclosure surface's ``oneOf`` to ``anyOf``, but the root ``allOf``
+    condition itself — and its exact per-action correlation — must remain
+    identical on both wires, with no child leakage into the root."""
+    from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+    from lingtai.tools.web_search import get_schema
+
+    schema = FunctionSchema(name="web", description="web", parameters=get_schema())
+    chat = _build_tools([schema])[0]["function"]["parameters"]
+    responses = _build_responses_tools([schema])[0]["parameters"]
+
+    for wire in (chat, responses):
+        assert "allOf" in wire
+        conditions = wire["allOf"]
+        assert [c["if"]["properties"]["action"]["const"] for c in conditions] == [
+            "search", "browse", "manual",
+        ]
+        for condition in conditions:
+            assert condition["if"]["required"] == ["action"]
+            then_input = condition["then"]["properties"]["input"]
+            assert then_input["additionalProperties"] is False
+            assert "reasoning" not in then_input.get("properties", {})
+            assert "_reasoning" not in then_input.get("properties", {})
+            assert "summarize" not in then_input.get("properties", {})
+        # No child leakage into the root: only the four public envelope
+        # fields, exactly as before this correlation was added.
+        assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
+        assert wire["required"] == ["action", "input", "reasoning"]
+
+    # The two wires' allOf conditions carry identical per-action correlation
+    # (Chat Completions' allOf is untouched; Responses' allOf is preserved
+    # verbatim by the root-aware scrub).
+    assert chat["allOf"] == responses["allOf"]
+
+
 def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize(tmp_path):
     """A real fresh ``Agent`` startup must prove the exact final closed root:
-    ``action | input | reasoning | summarize``. ``reasoning`` is injected by
-    Agent schema composition (``_build_tool_schemas``); ``summarize`` is owned
-    by web's own schema (LTP v2 is migrated per-family, not by central
+    ``action | input | reasoning | summarize``, with ``reasoning`` REQUIRED.
+    The family's own schema (``ToolFamily.build_schema()``) already declares
+    ``reasoning`` required and describes it identically to what Agent schema
+    composition (``_build_tool_schemas``) re-injects into every tool's
+    ``properties`` uniformly — that injection never touches ``required``, so
+    a family must declare ``reasoning`` required itself. ``summarize`` is
+    owned by web's own schema (LTP v2 is migrated per-family, not by central
     injection). No public ``summary`` alias and no nested branch admits
     ``reasoning``, ``_reasoning``, or ``summarize``.
     """
@@ -183,11 +237,11 @@ def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize
         schemas = _build_tool_schemas(agent)
         web = next(s for s in schemas if s.name == "web")
         params = web.parameters
-        assert params["required"] == ["action", "input"]
+        assert params["required"] == ["action", "input", "reasoning"]
         assert params["additionalProperties"] is False
         assert set(params["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert "summary" not in params["properties"]
-        for branch in params["properties"]["input"]["anyOf"]:
+        for branch in params["properties"]["input"]["oneOf"]:
             assert "reasoning" not in branch["properties"]
             assert "_reasoning" not in branch["properties"]
             assert "summarize" not in branch["properties"]
@@ -215,6 +269,143 @@ def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
         option == {"type": "string"}
         for option in backend_options["additionalProperties"]["anyOf"]
     )
+
+
+def test_openai_responses_root_all_of_if_then_survives():
+    """A live non-strict Codex Responses probe on 2026-07-27 showed a raw
+    root ``allOf``/``if``/``then`` schema is accepted on the current route
+    without error. The adapter must preserve it verbatim rather than
+    stripping it."""
+    from lingtai.llm.openai.adapter import _build_responses_tools
+
+    params = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["search", "manual"]},
+            "input": {"type": "object"},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["action", "input", "reasoning"],
+        "additionalProperties": False,
+        "allOf": [
+            {
+                "if": {"properties": {"action": {"const": "search"}}, "required": ["action"]},
+                "then": {"properties": {"input": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False}}},
+            },
+            {
+                "if": {"properties": {"action": {"const": "manual"}}, "required": ["action"]},
+                "then": {"properties": {"input": {"type": "object", "properties": {}, "additionalProperties": False}}},
+            },
+        ],
+    }
+    tools = _build_responses_tools([FunctionSchema(name="web", description="web", parameters=params)])
+    out = tools[0]["parameters"]
+    assert "allOf" in out
+    assert len(out["allOf"]) == 2
+    assert out["allOf"][0]["if"]["properties"]["action"]["const"] == "search"
+    assert out["allOf"][0]["then"]["properties"]["input"]["properties"] == {"query": {"type": "string"}}
+    assert out["allOf"][1]["if"]["properties"]["action"]["const"] == "manual"
+    assert out["allOf"][1]["then"]["properties"]["input"]["properties"] == {}
+    # Ordinary root fields untouched by the root-combinator handling.
+    assert out["type"] == "object"
+    assert out["required"] == ["action", "input", "reasoning"]
+    assert out["additionalProperties"] is False
+    assert set(out["properties"]) == {"action", "input", "reasoning"}
+
+
+def test_openai_responses_root_one_of_survives_as_one_of():
+    """Companion to the ``allOf`` case: real backend evidence showed a raw
+    root ``oneOf`` is also accepted without error, so it must survive as
+    ``oneOf`` (not be rewritten to ``anyOf``, unlike a nested ``oneOf``)."""
+    from lingtai.llm.openai.adapter import _build_responses_tools
+
+    params = {
+        "type": "object",
+        "oneOf": [
+            {"properties": {"action": {"const": "search"}}},
+            {"properties": {"action": {"const": "manual"}}},
+        ],
+    }
+    tools = _build_responses_tools([FunctionSchema(name="web", description="web", parameters=params)])
+    out = tools[0]["parameters"]
+    assert "oneOf" in out
+    assert "anyOf" not in out
+    assert [branch["properties"]["action"]["const"] for branch in out["oneOf"]] == ["search", "manual"]
+
+
+def test_openai_responses_nested_one_of_still_becomes_any_of_even_with_root_all_of():
+    """A nested ``oneOf`` (e.g. inside an ``allOf`` branch's ``then``, or
+    under a property) must still be rewritten to ``anyOf`` exactly as before
+    — only the schema *root* gets the new preservation behavior."""
+    from lingtai.llm.openai.adapter import _build_responses_tools
+
+    params = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string"},
+            "input": {
+                "oneOf": [
+                    {"type": "object", "properties": {"query": {"type": "string"}}},
+                    {"type": "object", "properties": {}},
+                ],
+            },
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"action": {"const": "search"}}},
+                "then": {
+                    "oneOf": [
+                        {"properties": {"input": {"type": "string"}}},
+                        {"properties": {"input": {"type": "integer"}}},
+                    ],
+                },
+            },
+        ],
+    }
+    tools = _build_responses_tools([FunctionSchema(name="web", description="web", parameters=params)])
+    out = tools[0]["parameters"]
+    # Root allOf preserved as allOf.
+    assert "allOf" in out
+    # Nested oneOf under a property rewritten to anyOf.
+    assert "oneOf" not in out["properties"]["input"]
+    assert "anyOf" in out["properties"]["input"]
+    # Nested oneOf inside an allOf branch's "then" also rewritten to anyOf.
+    then_node = out["allOf"][0]["then"]
+    assert "oneOf" not in then_node
+    assert "anyOf" in then_node
+
+
+def test_openai_responses_root_any_of_not_and_enum_are_still_stripped():
+    """Root ``anyOf``, ``not``, and ``enum`` remain untested against the live
+    backend (only root ``oneOf``/``allOf`` were probed), so they are still
+    stripped from the schema root exactly as before this change — no
+    broadening beyond the evidenced keywords."""
+    from lingtai.llm.openai.adapter import _build_responses_tools
+
+    params = {
+        "type": "object",
+        "properties": {"action": {"type": "string"}},
+        "anyOf": [{"required": ["action"]}],
+        "not": {"required": ["forbidden"]},
+        "enum": ["a", "b"],
+    }
+    tools = _build_responses_tools([FunctionSchema(name="widget", description="widget", parameters=params)])
+    out = tools[0]["parameters"]
+    assert "anyOf" not in out
+    assert "not" not in out
+    assert "enum" not in out
+    assert out["type"] == "object"
+    assert out["properties"] == {"action": {"type": "string"}}
+
+
+def test_openai_responses_ordinary_schema_without_root_combinators_unchanged():
+    """An ordinary schema with none of the root-combinator keywords is
+    completely unaffected by this change — same as before."""
+    from lingtai.llm.openai.adapter import _build_responses_tools
+
+    schemas = _schemas()
+    tools = _build_responses_tools(schemas)
+    assert json.dumps(tools[0]["parameters"], sort_keys=True) == json.dumps(PARAMETERS, sort_keys=True)
 
 
 def test_anthropic_wire_description_and_cache_control():

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
+from ..tool_family import ChildTool, ToolFamily
+from ..tool_family.manual import build_manual_child
 from .settings import SettingsSnapshot, current_setting, read_settings, valid_engine_name
 
 if TYPE_CHECKING:
@@ -26,11 +28,75 @@ PROVIDERS = {
     "fallback_on_inherit": "duckduckgo",
 }
 
-_ACTION_INPUT_FIELDS = {
-    "search": {"query"},
-    "browse": {"url", "link_ref", "cursor", "extract", "max_chars"},
-    "manual": set(),
+_SEARCH_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "Search query."},
+    },
+    "required": ["query"],
+    "additionalProperties": False,
 }
+
+_BROWSE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "url": {
+            "type": ["string", "null"],
+            "description": "Public HTTP(S) URL; use null when link_ref or cursor is supplied.",
+        },
+        "link_ref": {
+            "type": ["string", "null"],
+            "description": "Same-Agent search result reference; use null when not supplied.",
+        },
+        "cursor": {
+            "type": ["string", "null"],
+            "description": "Same-Agent continuation cursor; use null when not supplied.",
+        },
+        "extract": {
+            "type": ["string", "null"],
+            "enum": ["article", None],
+            "description": "Article extraction, or null for the default.",
+        },
+        "max_chars": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 100000,
+            "description": "Maximum returned characters, or null for the default 12000.",
+        },
+    },
+    "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
+    "additionalProperties": False,
+}
+
+_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+
+def _schema_only_family() -> ToolFamily:
+    # A throwaway ``ToolFamily`` used only to compose the model-facing schema
+    # and to prove the fixed three-child registry has no duplicate or
+    # reserved-name collision (``ToolFamilyError`` would raise here, at
+    # import time, rather than shipping silently). ``WebManager`` builds its
+    # own per-instance ``ToolFamily`` in ``__init__`` with real handlers
+    # bound to that instance; this module-level one never dispatches.
+    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+    return ToolFamily(
+        "web",
+        [
+            ChildTool("search", _SEARCH_INPUT_SCHEMA, _unused, title="search input"),
+            ChildTool("browse", _BROWSE_INPUT_SCHEMA, _unused, title="browse input"),
+            ChildTool("manual", _MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+        ],
+    )
+
+
+_FAMILY = _schema_only_family()
 
 
 def get_description(lang: str = "en") -> str:
@@ -44,80 +110,12 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["search", "browse", "manual"],
-                "description": "Required operation: search, browse, or manual.",
-            },
-            "input": {
-                "description": (
-                    "Strict action-specific input; the selected action is validated "
-                    "again at dispatch."
-                ),
-                "anyOf": [
-                    {
-                        "title": "search input",
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Search query."},
-                        },
-                        "required": ["query"],
-                        "additionalProperties": False,
-                    },
-                    {
-                        "title": "browse input",
-                        "type": "object",
-                        "properties": {
-                            "url": {
-                                "type": ["string", "null"],
-                                "description": "Public HTTP(S) URL; use null when link_ref or cursor is supplied.",
-                            },
-                            "link_ref": {
-                                "type": ["string", "null"],
-                                "description": "Same-Agent search result reference; use null when not supplied.",
-                            },
-                            "cursor": {
-                                "type": ["string", "null"],
-                                "description": "Same-Agent continuation cursor; use null when not supplied.",
-                            },
-                            "extract": {
-                                "type": ["string", "null"],
-                                "enum": ["article", None],
-                                "description": "Article extraction, or null for the default.",
-                            },
-                            "max_chars": {
-                                "type": ["integer", "null"],
-                                "minimum": 1,
-                                "maximum": 100000,
-                                "description": "Maximum returned characters, or null for the default 12000.",
-                            },
-                        },
-                        "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
-                        "additionalProperties": False,
-                    },
-                    {
-                        "title": "manual input",
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                        "additionalProperties": False,
-                    },
-                ],
-            },
-            "summarize": {
-                "type": "boolean",
-                "description": (
-                    "Root, cross-cutting result post-processing control; absent "
-                    "or false by default. Not action input."
-                ),
-            },
-        },
-        "required": ["action", "input"],
-        "additionalProperties": False,
-    }
+    # Composed by the generic ToolFamily infra from each child's own
+    # canonical ``input_schema`` (``_SEARCH_INPUT_SCHEMA`` etc. above), rather
+    # than hand-assembled — verified field-equivalent to the pre-migration
+    # schema, except the documented authorized differences, by
+    # ``tests/test_tool_family_web_migration_parity.py``.
+    return _FAMILY.build_schema()
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +157,21 @@ class WebManager:
         self._legacy_fallback_from = legacy_fallback_from
         self._services: dict[str, Any] = {}
         self._service_errors: dict[str, str] = {}
+        self._family = ToolFamily(
+            "web",
+            [
+                ChildTool("search", _SEARCH_INPUT_SCHEMA, self._dispatch_search, title="search input"),
+                ChildTool("browse", _BROWSE_INPUT_SCHEMA, self._dispatch_browse, title="browse input"),
+                # Registered directly, unwrapped: ``ToolFamily.handle()`` must
+                # dispatch this child's own canonical MCP-compatible result
+                # verbatim for ``action="manual"`` (no double wrap). Web's
+                # flat public shape is reconstructed from that canonical
+                # result strictly *after* ``self._family.handle(...)``
+                # returns, in ``handle()`` below — never inside a registered
+                # child.
+                build_manual_child(agent, "web"),
+            ],
+        )
 
     @property
     def browser_engine(self) -> BrowserEngine:
@@ -292,50 +305,87 @@ class WebManager:
         loaded.update({"action": "manual", "current_setting": diagnostic})
         return loaded
 
-    def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
-        raw = dict(args or {})
-        action = raw.get("action")
-        if action not in _ACTION_INPUT_FIELDS:
-            diagnostic = self._no_settings_diagnostic()
-            return self._failure("unknown", None, diagnostic, "ACTION_REQUIRED", "action must be one of search, browse, or manual")
-        # Root ``summarize`` is envelope metadata (LTP v2), not action input.
-        # Validate its type and strip it here so it never reaches an action
-        # implementation or the unknown-argument check below.
-        if "summarize" in raw:
-            summarize = raw.pop("summarize")
-            if not isinstance(summarize, bool):
-                diagnostic = self._no_settings_diagnostic()
-                return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "summarize must be a boolean")
-        # Public ``reasoning`` stays top-level in the Agent schema. ToolExecutor
-        # strips that public field and preserves it internally as ``_reasoning``
-        # before invoking capability handlers.
-        unknown = set(raw) - {"action", "input", "reasoning", "_reasoning"}
-        if unknown:
-            diagnostic = self._no_settings_diagnostic()
-            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "unsupported web argument")
-        action_input = raw.get("input")
-        if not isinstance(action_input, Mapping):
-            diagnostic = self._no_settings_diagnostic()
-            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "input must be an object")
-        action_args = dict(action_input)
-        if set(action_args) - _ACTION_INPUT_FIELDS[action]:
-            diagnostic = self._no_settings_diagnostic()
-            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "unsupported web input field")
+    def _adapt_manual_result(self, mcp_result: dict[str, Any]) -> dict[str, Any]:
+        # ``self._family.handle(...)`` has already dispatched to the
+        # registered ``manual`` child (``build_manual_child``) and returned
+        # its canonical result *verbatim* (no double wrap) — full body at
+        # ``content[0].text``, host-local path at
+        # ``structuredContent.manual_path`` (the two approved v0.4 ManualTool
+        # acceptance fields), plus the loader's truthful ``status``/``error``
+        # facts. Web's own public result shape predates that generic
+        # contract and must stay exactly
+        # ``status``/``manual``/``manual_path``/``action``/``current_setting``
+        # (#1058), so this Host-owned adapter runs strictly *after* dispatch,
+        # here in ``handle()``, to flatten the canonical child result back to
+        # it — never inside a registered child, and never touching
+        # search/browse.
+        flat: dict[str, Any] = {
+            "status": mcp_result.get("status", "ok"),
+            "manual": mcp_result["content"][0]["text"],
+            "manual_path": mcp_result["structuredContent"]["manual_path"],
+            "action": "manual",
+            "current_setting": self._no_settings_diagnostic(),
+        }
+        if "error" in mcp_result:
+            flat["error"] = mcp_result["error"]
+        return flat
+
+    def _strip_nulls(self, action_args: Mapping[str, Any]) -> dict[str, Any]:
         # Strict OpenAI schemas express optional fields as required nullable
-        # properties.  Null means absent to the internal action handlers.
-        dispatch_args = {"action": action, **{key: value for key, value in action_args.items() if value is not None}}
-        if action == "manual":
-            return self.manual(self._no_settings_diagnostic())
-        if action == "search":
-            _, snapshot, diagnostic = self._resolve()
-            return self._search(dispatch_args, snapshot, diagnostic)
-        browse_args = dict(dispatch_args)
+        # properties. Null means absent to the internal action handlers.
+        return {key: value for key, value in action_args.items() if value is not None}
+
+    def _dispatch_search(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
+        dispatch_args = self._strip_nulls(action_input)
+        _, snapshot, diagnostic = self._resolve()
+        return self._search(dispatch_args, snapshot, diagnostic)
+
+    def _dispatch_browse(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
+        browse_args = self._strip_nulls(action_input)
         try:
             result = self._engine.handle(browse_args)
         except Exception:
             result = {"status": "failed", "error_code": "BROWSE_FAILED", "message": "browse failed safely"}
         result["action"] = "browse"
         result["current_setting"] = self._no_settings_diagnostic()
+        return result
+
+    def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
+        # The generic ``ToolFamily`` dispatcher validates ``action``,
+        # type-checks and strips root ``summarize``, rejects unknown root
+        # fields, and rejects ``input`` keys outside the selected action's own
+        # declared schema (schema conformance alone is not the dispatch-time
+        # authorization boundary — see ``tools/CONTRACT.md`` "Dispatch and
+        # actions") before calling ``_dispatch_search``/``_dispatch_browse``/
+        # the registered ``manual`` child's own handler with only that
+        # action's own ``input``. ``self._family.handle(...)`` therefore
+        # returns the ``manual`` child's canonical
+        # ``content``/``structuredContent`` result verbatim (no double wrap)
+        # for a successfully dispatched ``action="manual"`` call; adapting
+        # that to Web's pre-migration public flat shape is this method's own
+        # Host/presentation job, done strictly after dispatch, never inside
+        # the registered child. An envelope-level failure (raised before any
+        # action handler runs) has no web-specific ``current_setting``
+        # diagnostic yet; this stamps one on, matching every action-level
+        # failure/success result. The generic dispatcher's own
+        # ``ACTION_REQUIRED`` envelope error is genuinely generic (its
+        # message lists whatever children a given family registered, and it
+        # never had a web-specific ``action`` to echo); Web's pre-migration
+        # public contract instead always reported the fixed values below,
+        # regardless of the arbitrary string a caller sent, so that
+        # normalization happens here — never by changing the generic
+        # dispatcher's own canonical error shape.
+        action = args.get("action") if isinstance(args, Mapping) else None
+        result = self._family.handle(args)
+        if action == "manual" and "content" in result:
+            result = self._adapt_manual_result(result)
+        elif result.get("error_code") == "ACTION_REQUIRED":
+            result["action"] = "unknown"
+            result["message"] = "action must be one of search, browse, or manual"
+            result["current_setting"] = self._no_settings_diagnostic()
+        elif result.get("status") == "failed" and "current_setting" not in result:
+            result["action"] = action if isinstance(action, str) else "unknown"
+            result["current_setting"] = self._no_settings_diagnostic()
         return result
 
 
