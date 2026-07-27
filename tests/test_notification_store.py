@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import inspect
 import json
+import multiprocessing
+import os
+import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -45,6 +49,21 @@ def _allow_all(_channel: str) -> bool:
 def _posix_store(workdir: Path) -> PosixNotificationStoreAdapter:
     workdir.mkdir(parents=True, exist_ok=True)
     return PosixNotificationStoreAdapter(workdir)
+
+
+def _process_increment_channel(workdir: str, barrier) -> None:
+    store = PosixNotificationStoreAdapter(Path(workdir))
+    barrier.wait(timeout=30)
+
+    def increment(current: dict):
+        # Widen the read/modify/write race between independently composed
+        # Store instances without blocking inside the process lock itself.
+        time.sleep(0.1)
+        return ({"count": int(current.get("count", 0)) + 1}, True, None)
+
+    result = store.compare_update_channel("system", UNCONDITIONAL, increment)
+    if not result.applied:
+        raise RuntimeError(f"channel increment was not applied: {result!r}")
 
 
 @pytest.fixture(params=("fake", "posix"))
@@ -328,6 +347,72 @@ class TestAtomicCoreRedCounterexamples:
             thread.join(timeout=5)
             assert not thread.is_alive()
         assert store.snapshot(_allow_all)["system"]["count"] == 12
+
+    def test_real_adapter_cross_process_channel_updates_are_serialized(self, tmp_path):
+        workdir = tmp_path / "channel-process-concurrency"
+        workdir.mkdir()
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(5)
+        processes = [
+            context.Process(
+                target=_process_increment_channel,
+                args=(str(workdir), barrier),
+            )
+            for _ in range(4)
+        ]
+
+        for process in processes:
+            process.start()
+        barrier.wait(timeout=30)
+        for process in processes:
+            process.join(timeout=30)
+        assert all(not process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0, 0, 0, 0]
+
+        store = PosixNotificationStoreAdapter(workdir)
+        assert store.snapshot(_allow_all)["system"]["count"] == 4
+
+    def test_posix_lock_preserves_acquisition_error(self, tmp_path, monkeypatch):
+        if os.name != "posix":
+            pytest.skip("POSIX flock adapter is unavailable")
+        from lingtai.adapters.posix import notification_store_lock as lock_module
+
+        calls = []
+
+        def fail_acquire(_fileno, operation):
+            calls.append(operation)
+            if operation == lock_module.fcntl.LOCK_EX:
+                raise OSError("acquisition failed")
+
+        monkeypatch.setattr(lock_module.fcntl, "flock", fail_acquire)
+        lock = lock_module.PosixNotificationStoreLockAdapter()
+        with pytest.raises(OSError, match="acquisition failed"):
+            with lock.exclusive(tmp_path):
+                pytest.fail("mutation body ran without the process lock")
+        assert calls == [lock_module.fcntl.LOCK_EX]
+
+    def test_windows_lock_preserves_acquisition_error(self, tmp_path, monkeypatch):
+        from lingtai.adapters.windows.notification_store_lock import (
+            WindowsNotificationStoreLockAdapter,
+        )
+
+        calls = []
+        fake_msvcrt = SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2)
+
+        def fail_acquire(_fileno, operation, _size):
+            calls.append(operation)
+            if operation == fake_msvcrt.LK_NBLCK:
+                raise OSError(5, "acquisition failed")
+
+        fake_msvcrt.locking = fail_acquire
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        lock = WindowsNotificationStoreLockAdapter()
+        with pytest.raises(OSError, match="acquisition failed"):
+            with lock.exclusive(tmp_path):
+                pytest.fail("mutation body ran without the process lock")
+        assert calls == [fake_msvcrt.LK_NBLCK]
 
     def test_concurrent_ack_unions_use_atomic_family_seven(self, tmp_path):
         store = _posix_store(tmp_path / "ack-unions")

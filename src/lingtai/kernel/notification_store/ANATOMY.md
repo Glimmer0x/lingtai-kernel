@@ -3,12 +3,18 @@ related_files:
   - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/notification_store/__init__.py
+  - src/lingtai/kernel/notification_store/_mutation_lock.py
+  - src/lingtai/adapters/notification_store_lock.py
   - src/lingtai/adapters/posix/notification_store.py
+  - src/lingtai/adapters/posix/notification_store_lock.py
+  - src/lingtai/adapters/windows/notification_store_lock.py
   - src/lingtai/kernel/notifications.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/agent.py
   - src/lingtai/cli.py
   - src/lingtai/mcp_servers/telegram/server.py
+  - src/lingtai/tools/daemon/supervisor_runtime.py
+  - tests/test_notification_store.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -30,9 +36,13 @@ The Notification Store is the Core-owned persistence boundary for current
   (`src/lingtai/kernel/notification_store/__init__.py:115-197`).
 - `CompareUpdateResult` and `UpdateAckRefsResult` carry typed operational and
   policy evidence (`src/lingtai/kernel/notification_store/__init__.py:59-75`).
+- `NotificationMutationLockPort` is the Store-private cross-process transaction
+  seam (`src/lingtai/kernel/notification_store/_mutation_lock.py:1-13`). Its
+  platform selector composes native POSIX and Windows implementations
+  (`src/lingtai/adapters/notification_store_lock.py:1-28`).
 - `PosixNotificationStoreAdapter` maps the Port onto the established
-  `.notification/` layout and owns mutation serialization
-  (`src/lingtai/adapters/posix/notification_store.py:57-240`).
+  `.notification/` layout and owns both in-process and native cross-process
+  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:62-257`).
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
   current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:129-186`,
   `src/lingtai/kernel/notifications.py:297-312`,
@@ -42,24 +52,32 @@ The Notification Store is the Core-owned persistence boundary for current
 
 `BaseAgent` receives the Port as a required constructor dependency and uses it
 for sync and delivery (`src/lingtai/kernel/base_agent/__init__.py:304-368`).
-`Agent` and the CLI construct the POSIX adapter at outer composition roots
+`Agent` and the CLI construct the filesystem adapter at outer composition roots
 (`src/lingtai/agent.py:142-151`, `src/lingtai/cli.py:127-140`). The Telegram MCP
-server separately composes one adapter for its manager
-(`src/lingtai/mcp_servers/telegram/server.py:655-663`).
+server and each detached daemon supervisor separately compose Store instances
+(`src/lingtai/mcp_servers/telegram/server.py:655-663`,
+`src/lingtai/tools/daemon/supervisor_runtime.py:600-620`). Those independent
+processes share the native mutation lock for each complete transaction.
 
 ## Composition
 
 The parent map is `src/lingtai/kernel/ANATOMY.md`; the paired normative interface
-is `src/lingtai/kernel/notification_store/CONTRACT.md`. Core depends inward on
-the Port. The POSIX adapter depends on that Port, and outer roots inject it.
+is `src/lingtai/kernel/notification_store/CONTRACT.md`. The Store and
+mutation-lock Port definitions are Core-owned. The filesystem Store adapter
+depends inward on both, composes the platform-selected POSIX or Windows lock,
+and outer roots inject the Store Port.
 
 ## State
 
-Persistent state is the existing `.notification/<channel>.json` protocol plus
-`.notification/large_result_acks.json`. The POSIX adapter holds only its workdir
-and an in-process mutation lock (`src/lingtai/adapters/posix/notification_store.py:63-66`).
-Core retains delivered fingerprints and policy state on the agent, not in the
-adapter.
+Persistent protocol state is the existing `.notification/<channel>.json` plus
+`.notification/large_result_acks.json`. The adapter holds its workdir, an
+in-process mutex, and a platform-selected mutation lock. Native adapters lock
+`.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
+(`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,
+`src/lingtai/adapters/windows/notification_store_lock.py:1-48`). Lock-file
+existence is not authority; OS lock ownership serializes complete mutation
+transactions and releases on process death. Core retains delivered fingerprints
+and policy state on the agent, not in the adapter.
 
 ## Notes
 
