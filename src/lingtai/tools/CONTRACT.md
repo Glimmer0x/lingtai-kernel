@@ -21,6 +21,7 @@ related_files:
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/tools/notification/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -300,17 +301,27 @@ all — its manual says so explicitly (see
 `src/lingtai/tools/skills/CONTRACT.md`). Family boundaries here follow the
 shared-domain rule above: `info` and `manual` are two actions of one skill-
 catalogue authority, not two related tools grouped for convenience.
+
+`notification` (`check | dismiss_channel | dismiss_event | dismiss_ref |
+manual`) is the tenth: its final model-facing root is likewise exactly
+`action`, `input`, `reasoning`, and `summarize`, each action's arguments live
+only in that action's own strict `input` (so `channel` belongs to
+`dismiss_channel`, `event_id` only to `dismiss_event`, and `ref_id` only to
+`dismiss_ref`), and it is the second migrated *intrinsic* — it therefore
+composes its dispatching family per call rather than owning a per-Agent
+manager (see `src/lingtai/tools/notification/CONTRACT.md`).
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, `avatar`, `soul`, `shell`, and `skills`), so an unmigrated
-tool's own field literally named `summarize` is never reinterpreted as this
-control. A family adopting this envelope MUST join that allowlist in the same
-change, or the root `summarize` it advertises to the model would be silently
-ignored. Every other LingTai-owned family remains unmigrated and keeps its
-existing schema and settings surface unchanged by this file.
+`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, and `notification`), so
+an unmigrated tool's own field literally named `summarize` is never
+reinterpreted as this control. A family adopting this envelope MUST join that
+allowlist in the same change, or the root `summarize` it advertises to the
+model would be silently ignored. Every other LingTai-owned family remains
+unmigrated and keeps its existing schema and settings surface unchanged by
+this file.
 
 `mcp` is the second migrated family: public tool name `mcp`, actions `info |
 manual`, both taking the canonical strict-empty `input`. The migration changed
@@ -349,12 +360,17 @@ from a module-level schema-only family and building an agent-bound one per
 `handle(agent, args)` call because an intrinsic module has no per-Agent
 manager instance to hold one, `shell` is its eighth, using it the same
 way while retaining a thin outer `handle()` that narrows the generic
-unknown-action message to its own four actions, and `skills` is its ninth,
+unknown-action message to its own four actions, `skills` is its ninth,
 using it the same way but returning its canonical envelope failures
-verbatim, having no such diagnostics. `avatar` reuses `ToolFamily`
-but not `build_manual_child`, because its manual ships inside its own package
-rather than the agent's installed `.library` catalog — adopting part of the
-infrastructure is conforming. Using it is never required — see its own
+verbatim, having no such diagnostics, and `notification` is its tenth, using
+it the same way while retaining a thin outer `handle()` that strips the
+kernel-injected `_tc_id` every intrinsic receives, flattens the reserved
+`manual` child's canonical result to its own pinned public shape, and
+normalizes the generic unknown-action error to its own. `avatar` reuses
+`ToolFamily` but not `build_manual_child`, because its manual ships inside
+its own package rather than the agent's installed `.library` catalog —
+adopting part of the infrastructure is conforming. Using it is never
+required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

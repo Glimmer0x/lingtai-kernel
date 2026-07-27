@@ -202,7 +202,7 @@ def test_check_action_returns_empty_when_nothing_published(
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check"})
+    res = handle(_Stub(), {"action": "check", "input": {}, "reasoning": "test"})
     # Voluntary call returns a placeholder dict — the live notification
     # payload (if any) is stamped on by the turn loop's meta-block hook,
     # never built by the handler itself. So even with nothing published,
@@ -228,7 +228,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check"})
+    res = handle(_Stub(), {"action": "check", "input": {}, "reasoning": "test"})
     # Handler returns a placeholder only — channel keys MUST NOT appear
     # here. The canonical `notifications` payload is attached later by
     # `attach_active_notifications`, not by this handler. This guarantees

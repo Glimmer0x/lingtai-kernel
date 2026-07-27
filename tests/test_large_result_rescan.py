@@ -321,7 +321,14 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     )
     agent._notification_fp = fingerprint_notifications(tmp_path)
 
-    res = notif_intrinsic.handle(agent, {"action": "dismiss_ref", "ref_id": stale_ref})
+    res = notif_intrinsic.handle(
+        agent,
+        {
+            "action": "dismiss_ref",
+            "input": {"ref_id": stale_ref},
+            "reasoning": "test",
+        },
+    )
 
     assert res["status"] == "ok"
     assert stale_ref in res.get("acked_large_result_refs", [])

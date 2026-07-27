@@ -35,18 +35,28 @@ from tests._notification_helpers import (
 )
 
 
-def _dismiss_channel(agent, channel, **kwargs):
+# Since the LTP v2 migration ``notification`` is a ToolFamily: each action's
+# arguments go in its own strict ``input`` object under the closed
+# ``action``/``input``/``reasoning`` envelope. The three helpers below build
+# that envelope so every test in this file exercises the real dispatch path,
+# including the pre-handler input validation.
+def _call(agent, action, **action_input):
     return notif_intrinsic.handle(
-        agent, {"action": "dismiss_channel", "channel": channel, **kwargs}
+        agent,
+        {"action": action, "input": dict(action_input), "reasoning": "test"},
     )
 
 
+def _dismiss_channel(agent, channel, **kwargs):
+    return _call(agent, "dismiss_channel", channel=channel, **kwargs)
+
+
 def _dismiss_event(agent, **kwargs):
-    return notif_intrinsic.handle(agent, {"action": "dismiss_event", **kwargs})
+    return _call(agent, "dismiss_event", **kwargs)
 
 
 def _dismiss_ref(agent, **kwargs):
-    return notif_intrinsic.handle(agent, {"action": "dismiss_ref", **kwargs})
+    return _call(agent, "dismiss_ref", **kwargs)
 
 
 def test_dismiss_channel_clears_existing_file(tmp_path: Path) -> None:
@@ -91,9 +101,18 @@ def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
 def test_dismiss_validation_errors(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
 
-    missing = notif_intrinsic.handle(agent, {"action": "dismiss_channel"})
+    # A well-formed envelope that simply omits the channel still reaches the
+    # handler and gets the unchanged ``missing_channel`` refusal.
+    missing = _dismiss_channel(agent, None)
     assert missing["status"] == "error"
     assert missing["reason"] == "missing_channel"
+
+    # A malformed envelope (no ``input`` object at all) is a different
+    # failure: LTP v2 requires ``input``, so this is rejected at the envelope
+    # boundary before dispatch rather than being read as "channel omitted".
+    malformed = notif_intrinsic.handle(agent, {"action": "dismiss_channel"})
+    assert malformed["status"] == "failed"
+    assert malformed["error_code"] == "INVALID_ARGUMENT"
 
     for bad in ["", "../escape", "..hidden", "bad/slash"]:
         res = _dismiss_channel(agent, bad)

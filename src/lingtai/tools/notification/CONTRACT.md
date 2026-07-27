@@ -1,11 +1,14 @@
 ---
 name: notification-tool
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/notifications.py
   - src/lingtai/kernel/base_agent/turn.py
@@ -61,10 +64,34 @@ nested references rather than in this contract.
 
 ## Port
 
-The inbound agent-tool Port is named `notification`. Its input is an object with
-required canonical-English `action` and optional dismiss fields `channel`,
-`force`, `event_id`, `ref_id`, and `reason`. The action domain, in order, is:
-`check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`, `manual`.
+The inbound agent-tool Port is named `notification`. It is a migrated LingTai
+Tool Protocol v2 family (`../CONTRACT.md`): its model-facing root is a closed
+object whose properties are exactly `action`, `input`, `reasoning`, and
+`summarize`, with `additionalProperties: false` and `action`, `input`, and
+`reasoning` required. The action domain, in order, is: `check`,
+`dismiss_channel`, `dismiss_event`, `dismiss_ref`, `manual`. Each action value
+is simultaneously the child's canonical name and its dispatch key; there is no
+mapping layer.
+
+`input` is the one strict object for the selected action. The root MUST expose
+every action's exact input shape before invocation and MUST correlate the
+`action` const to that action's own input schema, on both the Chat Completions
+and Responses wires. Per-action inputs are:
+
+- `check` — strictly empty.
+- `dismiss_channel` — `channel` (required), plus nullable `force` and `reason`.
+  `event_id` and `ref_id` are absent from this branch.
+- `dismiss_event` — `event_id`, plus nullable `channel`, `force`, `reason`.
+- `dismiss_ref` — `ref_id`, plus nullable `channel`, `force`, `reason`.
+- `manual` — strictly empty.
+
+Declared optional fields use the provider-compatible nullable representation.
+An explicit `null` MUST be treated as absent by the action implementation, so
+`channel` still defaults to `system` for the targeted verbs and a null `reason`
+does not satisfy the post-molt acknowledgement requirement.
+
+`reasoning` and `summarize` are root-only cross-cutting envelope controls and
+MUST NOT appear in any action's `input` or reach any action implementation.
 
 Observable action contracts are:
 
@@ -84,25 +111,52 @@ Observable action contracts are:
   filesystem/decoding errors propagate.
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
+- An invalid envelope — a non-object `input`, a non-boolean `summarize`, an
+  unknown root field, or an `input` key belonging to another action's branch —
+  returns `{status: "failed", error_code: "INVALID_ARGUMENT", message}` and MUST
+  fail before the selected action's implementation runs.
 
-There is no aggregate `dismiss`, no `summarize`, no `items` property, no source
-checkout fallback, and no compatibility alias.
+Every action's success and error result stays canonical and raw. The Host owns
+only outer invocation and presentation metadata; no action result is nested
+inside another action-result envelope.
+
+There is no aggregate `dismiss`, no `summarize` action, no `items` property, no
+source checkout fallback, and no compatibility alias. No public `parameters`,
+`arguments`, or payload alias is admitted.
 
 ## Adapters
 
 `lingtai.tools.registry.INTRINSICS` is the composition wiring that installs the
 package as a mandatory tool. `handle()` is the driving dispatch adapter for the
-five actions. The turn-loop notification post-hook completes `check` with the
+five actions; it composes schema and envelope dispatch onto the generic
+`lingtai.tools.tool_family` infrastructure, which is optional infrastructure
+rather than a required base class (`../CONTRACT.md` "Implementation
+independence"). The turn-loop notification post-hook completes `check` with the
 single canonical model-visible payload. The three dismiss handlers adapt tool
 arguments into `lingtai.kernel.notifications.dismiss_channel(...,
 invoked_by="notification")`, where notification Core owns allowlists, guards,
 stale checks, protected channels, acknowledgement policy, and Store use.
 
-`_manual` is a bounded installed-resource adapter: it performs one `is_file`
-check and one UTF-8 read at the fixed path. It does not call notification Core,
-`NotificationStorePort`, the post-hook, a producer, or a shared loader. Agent
-initialization copies the bundled first-level `notification-manual` skill tree
-into the installed per-agent intrinsic library.
+The `manual` action is the reserved family child built by
+`tool_family.manual.build_manual_child` over the shared
+`tools/_manual.py::load_installed_manual` loader: one `is_file` check and one
+UTF-8 read at the fixed path. It does not call notification Core,
+`NotificationStorePort`, the post-hook, or a producer. That child's canonical
+`content`/`structuredContent` result is returned by the family dispatcher
+verbatim; flattening it to this Port's pinned `notification_manual` shape is a
+Host presentation step that runs strictly after dispatch, never inside the
+child. Agent initialization copies the bundled first-level
+`notification-manual` skill tree into the installed per-agent intrinsic library.
+
+`handle()` strips the kernel-injected `_tc_id` before envelope validation.
+`base_agent.tools._dispatch_tool` adds that field to every intrinsic's args as
+pre-existing kernel plumbing; it is not a public root field and only psyche's
+molt consumes it.
+
+The kernel's IDLE/ASLEEP notification-sync pair is deliberately
+byte-shape-identical to a voluntary `check`, so its synthesized call args carry
+this same envelope. It is spliced onto the wire rather than dispatched, so it
+is not a second inbound adapter.
 
 ## Contract rules
 
@@ -115,22 +169,41 @@ into the installed per-agent intrinsic library.
 - Dismissal affects notification mirrors only. Producer guards, non-force stale
   refusal, protected-channel refusal, post-molt reasons, and unrelated-event
   preservation remain in force.
-- `system` owns `summarize` and exposes no notification/dismiss alias. The
-  notification tool owns no producer publication action.
+- `system` owns the `summarize` **action** and exposes no notification/dismiss
+  alias. The root `summarize` boolean on this family is the unrelated
+  cross-cutting result post-processing control, not an action. Because this
+  family advertises it, `notification` MUST stay listed in
+  `kernel/tool_result_summary.py::_LTP_V2_MIGRATED_FAMILIES`; otherwise the
+  model would be shown a control the kernel silently ignores. The notification
+  tool owns no producer publication action.
+- `check` and `manual` are read-only. The three dismiss actions mutate
+  notification mirror state. The family MUST NOT present a posture weaker than
+  its strongest action: a read-only annotation for the whole family would hide
+  those mutations and is forbidden.
+- Envelope validation MUST precede action I/O. Cross-action input, unknown root
+  fields, and unknown actions MUST be rejected with a stable typed failure and
+  no notification read or write.
 - Schema descriptions are canonical English and language-independent. Action
   identifiers and properties have no localized aliases. All three owned
-  glossaries require review when this enum changes; the additive `manual` action
-  introduces no new localized concept.
-- Adding `manual` is additive, so `contract_version` remains `1`; a future
-  breaking Port change follows the root version rule.
+  glossaries require review when this enum changes; the LTP v2 envelope
+  restructures how arguments are carried but introduces no new localized
+  concept and no new action value.
+- `contract_version` is `2`: the LTP v2 migration moves every action argument
+  from flat root properties into a per-action `input` object and adds required
+  `reasoning`, which is a breaking Port-contract change for callers even though
+  the tool name, action values, and every result shape are preserved.
 
 ## Contract tests
 
 `tests/test_notification_tool.py` proves mandatory registration and wiring, the
-ordered five-action schema, canonical description, absent aggregate actions,
-manual success/degraded envelopes and fixed path, read-only state/log behavior,
-check placeholder shape, all atomic dismiss semantics, Core guards, and absence
-of system compatibility aliases. `tests/test_system_dismiss.py` protects shared
+ordered five-action schema, the closed LTP v2 root, each action's strict input
+branch and its `allOf` action/input correlation, Chat/Responses wire parity,
+the `manual` branch matching the shared ManualTool child, canonical
+description, absent aggregate actions, manual success/degraded envelopes and
+fixed path, no-double-wrap flattening, read-only state/log behavior, check
+placeholder shape, all atomic dismiss semantics, null-optional defaulting,
+cross-action rejection before I/O, `_tc_id` tolerance, the kernel summarize
+allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_system_dismiss.py` protects shared
 operational dismissal behavior. `tests/test_tools_package_data.py` verifies tool
 and documentation package data. Architecture, Anatomy drift, glossary, and skill
 validators cover the linked document and manual graphs.

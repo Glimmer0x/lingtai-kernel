@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
+  - src/lingtai/tools/notification/CONTRACT.md
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py

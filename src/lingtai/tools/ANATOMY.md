@@ -62,7 +62,8 @@ capability names and lazy adapters.
   and dispatch infrastructure implementing the LTP v2 envelope, and the
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
-  `avatar` its sixth, `soul` its seventh, and `shell` its eighth
+  `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
+  ninth, and `notification` its tenth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
@@ -75,6 +76,12 @@ capability names and lazy adapters.
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
+- `notification/` — mandatory intrinsic owning the public `notification`
+  family: `check`, three atomic dismiss actions, and `manual`
+  (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
+  is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
+  builds its dispatching family per call, because an intrinsic receives `agent`
+  per call rather than owning a manager.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

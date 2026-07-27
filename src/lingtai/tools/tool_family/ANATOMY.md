@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/notification/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep

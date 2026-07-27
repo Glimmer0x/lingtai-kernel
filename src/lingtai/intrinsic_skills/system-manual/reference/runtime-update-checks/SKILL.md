@@ -5,9 +5,9 @@ description: >
   runtime/version/source identity, packaged versus editable/source behavior,
   heartbeat dispatch, nudge persistence and notification delivery, refresh
   versus installation, human confirmation, and post-refresh verification.
-version: 0.2.1
+version: 0.2.2
 tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diagnostics]
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
@@ -171,10 +171,13 @@ fact resolves or the runtime is intentionally skipped.
 After interpreting a nudge, use the narrowest safe action:
 
 ```text
-notification(action="dismiss_channel", channel="nudge")
+notification(action="dismiss_channel",
+             input={"channel": "nudge", "force": null, "reason": null},
+             reasoning="acknowledge the nudges")
 ```
 
-Do not call `notification(action="check")` merely to confirm dismissal. The
+Do not call `notification(action="check", input={})` merely to confirm
+dismissal. The
 generic notification protocol and guarded dismissal rules live in
 `notification-manual`; this reference owns the meaning of these two kinds.
 
