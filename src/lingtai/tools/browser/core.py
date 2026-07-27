@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 from . import netpolicy
 from .cursor import CursorCodec, CursorError, CursorPayload, paginate_blocks, validate_max_chars
-from .extractor import extract_html, extract_plain_text
+from .extractor import UNDECODABLE_CONTENT_WARNING, extract_html, extract_plain_text
 from .fetcher import FetchError, FetchLimits, fetch
 from .port import BrowserPort
 from .refstore import RefStore
@@ -34,6 +34,7 @@ class BrowserFailure(Exception):
         retryable: bool = False,
         http_status: int | None = None,
         snapshot_id: str | None = None,
+        detail: str | None = None,
     ) -> None:
         super().__init__(error_code)
         self.stage = stage
@@ -41,6 +42,7 @@ class BrowserFailure(Exception):
         self.retryable = retryable
         self.http_status = http_status
         self.snapshot_id = snapshot_id
+        self.detail = detail
 
     def to_dict(self, request_id: str) -> dict[str, Any]:
         message = _MESSAGES.get(self.error_code, "The browser request failed safely.")
@@ -49,6 +51,11 @@ class BrowserFailure(Exception):
         recommended = "Retry once if the destination is expected to be temporary." if self.retryable else "Check the URL and stop if the failure persists."
         if self.stage == "policy":
             recommended = "Use a public, direct HTTP(S) URL; do not retry an unsafe destination."
+        if self.detail == UNDECODABLE_CONTENT_WARNING:
+            # The transport succeeded, so URL-checking is the wrong advice: the
+            # body itself was not decodable text.
+            message = "The page returned bytes that are not decodable text, so it contained no readable content."
+            recommended = "The response body was not readable text; use the documented legacy extraction fallback for this URL."
         result: dict[str, Any] = {
             "status": "failed",
             "request_id": request_id,
@@ -216,7 +223,12 @@ class BrowserEngine:
             raise BrowserFailure("extract", "CONTENT_TYPE_UNSUPPORTED", http_status=fetched.http_status)
         extract_ms = max(0, int((time.monotonic() - extract_started) * 1000))
         if not extracted.blocks:
-            raise BrowserFailure("extract", "NO_TEXT_BLOCKS", http_status=fetched.http_status)
+            raise BrowserFailure(
+                "extract",
+                "NO_TEXT_BLOCKS",
+                http_status=fetched.http_status,
+                detail=UNDECODABLE_CONTENT_WARNING if UNDECODABLE_CONTENT_WARNING in extracted.warnings else None,
+            )
         links, links_truncated = self._bounded_links(extracted.links)
         warnings = list(content_warnings)
         warnings.extend(item for item in extracted.warnings if item not in warnings)

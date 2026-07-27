@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 from .settings import SettingsSnapshot, current_setting, read_settings, valid_engine_name
 
 if TYPE_CHECKING:
@@ -68,12 +68,16 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
+# The single source of truth for web's own children: one ``(name, schema,
+# title)`` triple per child, consumed both by the module-level schema-only
+# family below and by ``WebManager.__init__``, which binds real handlers to
+# the same specs. The reserved ``manual`` child is not listed here: its schema
+# is the owner-exported ``MANUAL_INPUT_SCHEMA`` and its real child comes from
+# ``build_manual_child``.
+_CHILD_SPECS: tuple[tuple[str, dict[str, Any], str], ...] = (
+    ("search", _SEARCH_INPUT_SCHEMA, "search input"),
+    ("browse", _BROWSE_INPUT_SCHEMA, "browse input"),
+)
 
 
 def _schema_only_family() -> ToolFamily:
@@ -89,9 +93,8 @@ def _schema_only_family() -> ToolFamily:
     return ToolFamily(
         "web",
         [
-            ChildTool("search", _SEARCH_INPUT_SCHEMA, _unused, title="search input"),
-            ChildTool("browse", _BROWSE_INPUT_SCHEMA, _unused, title="browse input"),
-            ChildTool("manual", _MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            *(ChildTool(name, schema, _unused, title=title) for name, schema, title in _CHILD_SPECS),
+            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
         ],
     )
 
@@ -157,11 +160,14 @@ class WebManager:
         self._legacy_fallback_from = legacy_fallback_from
         self._services: dict[str, Any] = {}
         self._service_errors: dict[str, str] = {}
+        handlers = {"search": self._dispatch_search, "browse": self._dispatch_browse}
         self._family = ToolFamily(
             "web",
             [
-                ChildTool("search", _SEARCH_INPUT_SCHEMA, self._dispatch_search, title="search input"),
-                ChildTool("browse", _BROWSE_INPUT_SCHEMA, self._dispatch_browse, title="browse input"),
+                *(
+                    ChildTool(name, schema, handlers[name], title=title)
+                    for name, schema, title in _CHILD_SPECS
+                ),
                 # Registered directly, unwrapped: ``ToolFamily.handle()`` must
                 # dispatch this child's own canonical MCP-compatible result
                 # verbatim for ``action="manual"`` (no double wrap). Web's
@@ -387,10 +393,6 @@ class WebManager:
             result["action"] = action if isinstance(action, str) else "unknown"
             result["current_setting"] = self._no_settings_diagnostic()
         return result
-
-
-# Retained import compatibility for callers that imported the old class.
-WebSearchManager = WebManager
 
 
 def _specs_from_kwargs(

@@ -59,11 +59,13 @@ def test_registration_is_deterministic_and_ordered():
 
 def test_duplicate_child_name_fails_loudly():
     calls: list[dict] = []
-    with pytest.raises(ToolFamilyError):
+    with pytest.raises(ToolFamilyError, match="duplicate child name 'spin'"):
         ToolFamily("widget", [_spin_child(calls), _spin_child(calls)])
 
 
 def test_manual_reserved_name_collision_fails_loudly():
+    """A repeated reserved ``manual`` child is caught by the duplicate-name check."""
+
     def handler(_input):
         return {"status": "ok"}
 
@@ -72,7 +74,7 @@ def test_manual_reserved_name_collision_fails_loudly():
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=handler,
     )
-    with pytest.raises(ToolFamilyError):
+    with pytest.raises(ToolFamilyError, match=f"duplicate child name '{RESERVED_MANUAL_NAME}'"):
         ToolFamily("widget", [_manual_child(), second_manual])
 
 

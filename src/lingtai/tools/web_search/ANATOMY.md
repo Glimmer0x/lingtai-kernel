@@ -45,7 +45,7 @@ action implementations, settings, and diagnostics.
   validation over the action-owned `settings/web.search.json`
   (`src/lingtai/tools/web_search/settings.py:49-182`).
 - `BrowserEngine` — internal static browse use case, provenance, refs, cursors,
-  SSRF policy, and typed failures (`src/lingtai/tools/browser/core.py:119-315`).
+  SSRF policy, and typed failures (`src/lingtai/tools/browser/core.py:126-327`).
 - `SearchService` adapters — provider implementations behind the internal
   service boundary (`src/lingtai/services/websearch/__init__.py:20-70`).
 - `manual/SKILL.md` — sole installed `web-manual` route

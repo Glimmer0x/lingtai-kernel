@@ -98,8 +98,8 @@ class ChildTool:
 class ToolFamily:
     """One model-facing aggregate tool composed from a fixed child registry.
 
-    Construction validates the registry (deterministic order, unique names,
-    a reserved-name collision on ``manual`` fails loudly). :meth:`build_schema`
+    Construction validates the registry (deterministic order, unique names —
+    which also covers a repeated reserved ``manual`` child). :meth:`build_schema`
     recomputes the composed model-facing schema on every call rather than
     caching one at construction. :meth:`handle` is the family/Host dispatch
     boilerplate: it validates ``action``, strips and validates ``summarize``,
@@ -115,7 +115,6 @@ class ToolFamily:
         if not children:
             raise ToolFamilyError(f"ToolFamily {name!r} must register at least one child")
         seen: dict[str, ChildTool] = {}
-        manual_count = 0
         for child in children:
             if not isinstance(child, ChildTool):
                 raise ToolFamilyError(f"ToolFamily {name!r} child must be a ChildTool")
@@ -125,13 +124,6 @@ class ToolFamily:
                 raise ToolFamilyError(
                     f"ToolFamily {name!r} has a duplicate child name {child.name!r}"
                 )
-            if child.name == RESERVED_MANUAL_NAME:
-                manual_count += 1
-                if manual_count > 1:
-                    raise ToolFamilyError(
-                        f"ToolFamily {name!r} has a reserved-name collision on "
-                        f"{RESERVED_MANUAL_NAME!r}"
-                    )
             seen[child.name] = child
         self.name = name
         self._children: dict[str, ChildTool] = seen
