@@ -147,16 +147,33 @@ def is_apriori_summary(content: Any) -> bool:
     )
 
 
-def summary_requested(args: dict | None) -> bool:
+# LingTai Tool Protocol v2 families whose root ``summarize`` boolean is the
+# canonical a-priori summary control. Scoped by name so an unrelated,
+# unmigrated tool's own domain field literally named ``summarize`` is never
+# silently reinterpreted as this cross-cutting control (see
+# ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
+_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+
+
+def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     """Return True iff the normalized tool args opt into a-priori summary.
 
-    The flag is the boolean ``summary`` field on the tool call. Anything other
-    than a literal ``True`` (missing, ``False``, ``None``, truthy-but-not-True)
-    preserves current behavior exactly.
+    The legacy flag is the boolean ``summary`` field on the tool call, honored
+    for every caller. A migrated LTP v2 family (currently only ``web``) may
+    instead set the canonical root ``summarize`` boolean; that spelling is
+    recognized only when ``tool_name`` names a migrated family, so an
+    unmigrated tool's own ``summarize``-named domain field is never
+    reinterpreted as this control. Anything other than a literal ``True``
+    (missing, ``False``, ``None``, truthy-but-not-True) preserves current
+    behavior exactly for either spelling.
     """
     if not isinstance(args, dict):
         return False
-    return args.get("summary") is True
+    if args.get("summary") is True:
+        return True
+    if tool_name in _LTP_V2_MIGRATED_FAMILIES:
+        return args.get("summarize") is True
+    return False
 
 
 def _build_summarizer_prompt(reason: str, raw_text: str) -> str:
@@ -404,20 +421,31 @@ def maybe_summarize_result(
       logged before this point, so it remains retrievable by ``tool_call_id``.
     - Already an a-priori summary (defensive) → returned unchanged.
     - Error results (the tool itself failed) are NOT summarized: the agent needs
-      the exact error text to recover. Returned unchanged.
+      the exact error text to recover. Returned unchanged. This covers the
+      kernel-wide ``status == "error"`` convention and, scoped to migrated LTP
+      v2 families only, that family's own canonical error status (``web``'s is
+      exactly ``"failed"``).
     - Visible payload > cap → refusal dict (no LLM call).
     - Otherwise → generated summary dict; on summarizer exception, an error dict.
 
     Only dict/str results are summarizable; other shapes pass through.
     """
-    if not summary_requested(args):
+    if not summary_requested(args, tool_name=tool_name):
         return result
     if is_apriori_summary(result):
         return result
     # Do not summarize tool-level errors — the agent needs the exact error to
     # recover. ``status == "error"`` is the kernel-wide tool-error convention.
-    if isinstance(result, dict) and result.get("status") == "error":
-        return result
+    # A migrated LTP v2 family may instead use its own canonical error status
+    # (``web``'s is exactly ``"failed"``); recognizing it here is scoped to
+    # migrated families only, so an unrelated tool's non-error ``"failed"``-
+    # named domain value is never reinterpreted as an error result.
+    if isinstance(result, dict):
+        status = result.get("status")
+        if status == "error":
+            return result
+        if status == "failed" and tool_name in _LTP_V2_MIGRATED_FAMILIES:
+            return result
     # Only dict/str payloads have a meaningful "visible text" to summarize.
     if not isinstance(result, (dict, str)):
         return result

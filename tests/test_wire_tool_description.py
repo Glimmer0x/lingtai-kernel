@@ -145,6 +145,8 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
         assert wire["type"] == "object"
         assert wire["required"] == ["action", "input"]
         assert wire["additionalProperties"] is False
+        assert set(wire["properties"]) == {"action", "input", "summarize"}
+        assert wire["properties"]["summarize"]["type"] == "boolean"
         branches = wire["properties"]["input"]["anyOf"]
         assert [branch["title"] for branch in branches] == [
             "search input", "browse input", "manual input",
@@ -152,8 +154,46 @@ def test_web_action_input_schema_survives_chat_and_responses_wires():
         for branch in branches:
             assert branch["additionalProperties"] is False
             assert set(branch["required"]) == set(branch["properties"])
+            assert "summarize" not in branch["properties"]
+            assert "reasoning" not in branch["properties"]
+            assert "_reasoning" not in branch["properties"]
         assert branches[1]["properties"]["cursor"]["type"] == ["string", "null"]
         assert branches[2]["properties"] == {}
+
+
+def test_web_final_agent_schema_root_is_exactly_action_input_reasoning_summarize(tmp_path):
+    """A real fresh ``Agent`` startup must prove the exact final closed root:
+    ``action | input | reasoning | summarize``. ``reasoning`` is injected by
+    Agent schema composition (``_build_tool_schemas``); ``summarize`` is owned
+    by web's own schema (LTP v2 is migrated per-family, not by central
+    injection). No public ``summary`` alias and no nested branch admits
+    ``reasoning``, ``_reasoning``, or ``summarize``.
+    """
+    from lingtai.agent import Agent
+    from lingtai.kernel.base_agent.tools import _build_tool_schemas
+    from tests._service_helpers import make_gemini_mock_service as make_mock_service
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="wire-test",
+        working_dir=tmp_path,
+        capabilities={"web": {"provider": "duckduckgo"}},
+    )
+    try:
+        schemas = _build_tool_schemas(agent)
+        web = next(s for s in schemas if s.name == "web")
+        params = web.parameters
+        assert params["required"] == ["action", "input"]
+        assert params["additionalProperties"] is False
+        assert set(params["properties"]) == {"action", "input", "reasoning", "summarize"}
+        assert "summary" not in params["properties"]
+        for branch in params["properties"]["input"]["anyOf"]:
+            assert "reasoning" not in branch["properties"]
+            assert "_reasoning" not in branch["properties"]
+            assert "summarize" not in branch["properties"]
+            assert "summary" not in branch["properties"]
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():

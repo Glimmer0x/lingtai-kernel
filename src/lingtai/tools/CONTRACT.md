@@ -230,14 +230,18 @@ an unrelated domain field that happens to be named `summary` — see
 ### Relationship to current runtime
 
 Nothing here describes shipped behavior beyond what each migrated family already
-documents. In particular, the current a-priori result-summarization flag is read at
-runtime under the literal key `summary`
-(`src/lingtai/kernel/tool_result_summary.py:159`); this contract names the future
-envelope field `summarize`. Reconciling the two is per-family migration work, not
-a claim about today's wire. Unified `web` is the existing conceptual family shape
-— `search | browse | manual` under one name — and is not changed by this file.
-`web` is not yet a migrated family: it exposes no root `summarize`, has no LTP
-settings surface, and has not been aligned to this contract.
+documents. `web` (`search | browse | manual`) is the first family migrated to
+this contract: its final model-facing root is exactly `action`, `input`,
+`reasoning`, and `summarize`; its `search` action reads the action-owned
+`settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+The legacy a-priori result-summarization flag under the literal key `summary`
+(`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
+still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
+the canonical `summarize` spelling only when the calling tool is a migrated LTP
+v2 family (currently only `web`), so an unmigrated tool's own field literally
+named `summarize` is never reinterpreted as this control. Every other
+LingTai-owned family remains unmigrated and keeps its existing schema and
+settings surface unchanged by this file.
 
 Non-normative future illustration: `file` may later become one family with
 actions `read | write | edit | glob | grep | manual`, while all six
@@ -266,10 +270,16 @@ invalid settings file. LTP does not mandate one universal suite covering these,
 and a family choosing a different local evidence set is not thereby
 non-conforming.
 
-Web's existing focused capability and wire tests are starting evidence for the
-family/action shape only: they cover `action` / `input` / `manual`, and `web`
-does not yet expose the root `summarize` field or an LTP settings surface. They
-are not a conformance suite, and no such suite is required to exist.
+Web's focused capability, wire, and executor tests are this contract's first
+migration evidence: they cover the full closed root (`action` / `input` /
+`reasoning` / `summarize`), closed input branches, wrong-branch and non-boolean
+rejection, `summarize` retention and isolation on both the single and a
+controlled-parallel call path, raw output recorded before any visible
+replacement, exact `status: "failed"` results under `summarize=true`, and the
+action-owned `settings/web.search.json` surface (see
+`src/lingtai/tools/web_search/CONTRACT.md` Contract tests). They remain one
+family's local evidence, not a conformance suite, and no such suite is required
+to exist.
 
 ## Maintenance
 

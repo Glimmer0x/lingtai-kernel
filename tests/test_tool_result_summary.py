@@ -35,6 +35,29 @@ def test_summary_requested_only_true():
     assert summary_requested(None) is False
 
 
+# --- summary_requested: canonical root `summarize` is scoped to the LTP v2 ---
+# --- migrated `web` family only, never a generic reinterpretation -----------
+
+def test_summary_requested_recognizes_canonical_summarize_only_for_web():
+    assert summary_requested({"summarize": True}, tool_name="web") is True
+    assert summary_requested({"summarize": False}, tool_name="web") is False
+    assert summary_requested({}, tool_name="web") is False
+    assert summary_requested({"summarize": "yes"}, tool_name="web") is False
+
+
+def test_summary_requested_ignores_summarize_for_unmigrated_tools():
+    # An unmigrated tool that happens to declare its own domain field literally
+    # named `summarize` must NOT be silently reinterpreted as the LTP control.
+    assert summary_requested({"summarize": True}, tool_name="bash") is False
+    assert summary_requested({"summarize": True}) is False
+
+
+def test_summary_requested_legacy_summary_still_works_for_web():
+    # The legacy literal `summary` key remains honored for every caller,
+    # including web, so genuinely unmigrated call sites keep working.
+    assert summary_requested({"summary": True}, tool_name="web") is True
+
+
 # --- cap constant -----------------------------------------------------------
 
 def test_cap_constant_is_500k():
@@ -373,6 +396,37 @@ def test_error_result_not_summarized():
         summarizer_fn=lambda sp, up, tn, cid: "nope",
     )
     assert out is raw  # exact error text preserved for recovery
+
+
+def test_web_canonical_failed_status_not_summarized_with_root_summarize():
+    # web's canonical error envelope uses exact status "failed", not "error".
+    # With root summarize=true it must stay byte/content exact and unsummarized.
+    raw = {"status": "failed", "action": "search", "error_code": "SEARCH_ENGINE_UNAVAILABLE",
+           "message": "the selected search engine is unavailable"}
+    out = maybe_summarize_result(
+        raw,
+        args={"summarize": True, "_reasoning": "r"},
+        tool_name="web",
+        tool_call_id="t_web_err",
+        summarizer_fn=lambda sp, up, tn, cid: "nope",
+    )
+    assert out is raw
+
+
+def test_unmigrated_tool_failed_status_is_not_treated_as_error():
+    # A "failed"-status value on an unmigrated tool is an ordinary domain field,
+    # not the web-specific canonical error convention, so it is still eligible
+    # for a-priori summarization via the legacy `summary` flag.
+    raw = {"status": "failed", "stdout": "not actually an LTP error"}
+    out = maybe_summarize_result(
+        raw,
+        args={"summary": True, "_reasoning": "r"},
+        tool_name="bash",
+        tool_call_id="t_bash",
+        summarizer_fn=lambda sp, up, tn, cid: "SUMMARIZED",
+    )
+    assert out is not raw
+    assert is_apriori_summary(out)
 
 
 # --- lifecycle event: success carries the model-visible summary text ---------

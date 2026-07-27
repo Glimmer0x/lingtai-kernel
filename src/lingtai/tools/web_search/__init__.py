@@ -107,6 +107,13 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
                     },
                 ],
             },
+            "summarize": {
+                "type": "boolean",
+                "description": (
+                    "Root, cross-cutting result post-processing control; absent "
+                    "or false by default. Not action input."
+                ),
+            },
         },
         "required": ["action", "input"],
         "additionalProperties": False,
@@ -189,7 +196,14 @@ class WebManager:
         )
         return snapshot.engine, snapshot, self._diagnostics(snapshot)
 
-    def _failure(self, action: str, snapshot: SettingsSnapshot, diagnostic: dict[str, Any], code: str, message: str, **extra: Any) -> dict[str, Any]:
+    def _no_settings_diagnostic(self) -> dict[str, Any]:
+        # Only ``search`` owns and reads settings/web.search.json. Every other
+        # action (and any pre-dispatch validation failure) reports a truthful
+        # synthetic snapshot without ever touching that file.
+        snapshot = SettingsSnapshot(None, "not_applicable", "not_read", None)
+        return self._diagnostics(snapshot)
+
+    def _failure(self, action: str, snapshot: SettingsSnapshot | None, diagnostic: dict[str, Any], code: str, message: str, **extra: Any) -> dict[str, Any]:
         result = {"status": "failed", "action": action, "error_code": code, "message": message, "current_setting": diagnostic}
         result.update(extra)
         return result
@@ -238,7 +252,7 @@ class WebManager:
             return self._failure("search", snapshot, diagnostic, "INVALID_QUERY", "query must be a non-empty string")
         name = snapshot.engine
         if snapshot.error:
-            return self._failure("search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", "settings/web.json is invalid; no search engine was selected")
+            return self._failure("search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", "settings/web.search.json is invalid; no search engine was selected")
         if not name or name not in self._specs:
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine is unavailable")
         spec = self._specs[name]
@@ -270,9 +284,10 @@ class WebManager:
         except Exception:
             return self._failure("search", snapshot, diagnostic, "SEARCH_FAILED", "the selected search engine failed")
 
-    def manual(self, snapshot: SettingsSnapshot, diagnostic: dict[str, Any]) -> dict[str, Any]:
-        # This path is intentionally before _service_for and performs no provider
-        # construction or search operation, even when settings are malformed.
+    def manual(self, diagnostic: dict[str, Any]) -> dict[str, Any]:
+        # This path never reads settings/web.search.json and performs no
+        # provider construction or search operation, even when settings are
+        # malformed: manual does not own that file.
         loaded = load_installed_manual(self._agent, "web")
         loaded.update({"action": "manual", "current_setting": diagnostic})
         return loaded
@@ -281,30 +296,38 @@ class WebManager:
         raw = dict(args or {})
         action = raw.get("action")
         if action not in _ACTION_INPUT_FIELDS:
-            _, snapshot, diagnostic = self._resolve()
-            return self._failure("unknown", snapshot, diagnostic, "ACTION_REQUIRED", "action must be one of search, browse, or manual")
+            diagnostic = self._no_settings_diagnostic()
+            return self._failure("unknown", None, diagnostic, "ACTION_REQUIRED", "action must be one of search, browse, or manual")
+        # Root ``summarize`` is envelope metadata (LTP v2), not action input.
+        # Validate its type and strip it here so it never reaches an action
+        # implementation or the unknown-argument check below.
+        if "summarize" in raw:
+            summarize = raw.pop("summarize")
+            if not isinstance(summarize, bool):
+                diagnostic = self._no_settings_diagnostic()
+                return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "summarize must be a boolean")
         # Public ``reasoning`` stays top-level in the Agent schema. ToolExecutor
         # strips that public field and preserves it internally as ``_reasoning``
         # before invoking capability handlers.
         unknown = set(raw) - {"action", "input", "reasoning", "_reasoning"}
         if unknown:
-            _, snapshot, diagnostic = self._resolve()
-            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web argument")
+            diagnostic = self._no_settings_diagnostic()
+            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "unsupported web argument")
         action_input = raw.get("input")
         if not isinstance(action_input, Mapping):
-            _, snapshot, diagnostic = self._resolve()
-            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "input must be an object")
+            diagnostic = self._no_settings_diagnostic()
+            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "input must be an object")
         action_args = dict(action_input)
         if set(action_args) - _ACTION_INPUT_FIELDS[action]:
-            _, snapshot, diagnostic = self._resolve()
-            return self._failure(action, snapshot, diagnostic, "INVALID_ARGUMENT", "unsupported web input field")
+            diagnostic = self._no_settings_diagnostic()
+            return self._failure(action, None, diagnostic, "INVALID_ARGUMENT", "unsupported web input field")
         # Strict OpenAI schemas express optional fields as required nullable
         # properties.  Null means absent to the internal action handlers.
         dispatch_args = {"action": action, **{key: value for key, value in action_args.items() if value is not None}}
-        _, snapshot, diagnostic = self._resolve()
         if action == "manual":
-            return self.manual(snapshot, diagnostic)
+            return self.manual(self._no_settings_diagnostic())
         if action == "search":
+            _, snapshot, diagnostic = self._resolve()
             return self._search(dispatch_args, snapshot, diagnostic)
         browse_args = dict(dispatch_args)
         try:
@@ -312,7 +335,7 @@ class WebManager:
         except Exception:
             result = {"status": "failed", "error_code": "BROWSE_FAILED", "message": "browse failed safely"}
         result["action"] = "browse"
-        result["current_setting"] = diagnostic
+        result["current_setting"] = self._no_settings_diagnostic()
         return result
 
 

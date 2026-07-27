@@ -1,6 +1,6 @@
 ---
 name: web
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/browser/port.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/services/websearch/__init__.py
+  - src/lingtai/kernel/tool_result_summary.py
 maintenance: |
   Keep this unified web Contract and its Anatomy reciprocal. Keep the manual
   edge on both owner twins. Update the Port, adapters, tests, and this Contract
@@ -25,19 +26,25 @@ maintenance: |
 `web` is exactly one model-facing capability with explicit `search`, `browse`,
 and metadata-only `manual` actions. It is implemented in the retained
 `tools.web_search` composition owner; browser and SearchService are internal
-subcomponents.
+subcomponents. `web` is the first family migrated to the LingTai Tool Protocol
+v2 shape defined in `src/lingtai/tools/CONTRACT.md`.
 
 ## Behavior
 
-Every call rereads the Agent-owned `settings/web.json` selector. Search returns
-bounded structured results and same-Agent `link_ref` handles. Browse consumes a
-URL or a search/browse reference through the same BrowserEngine state. Manual
-returns the installed web-manual without provider construction or network I/O.
-All success and failure envelopes include `action` and a bounded secret-free
+Search rereads the action-owned `settings/web.search.json` selector on every
+call; browse and manual read no settings file. Search returns bounded
+structured results and same-Agent `link_ref` handles. Browse consumes a URL or
+a search/browse reference through the same BrowserEngine state. Manual returns
+the installed web-manual without provider construction or network I/O. All
+success and failure envelopes include `action` and a bounded secret-free
 `current_setting` block. Explicit `engine` and irrelevant action fields fail
-loudly. In the final Agent schema, public `reasoning` is a top-level block;
-ToolExecutor preserves it only as internal `_reasoning` metadata, which does not
-enter action input or change dispatch.
+loudly. In the final Agent schema, public `reasoning` is a top-level block
+injected by Agent schema composition; ToolExecutor preserves it only as
+internal `_reasoning` metadata, which does not enter action input or change
+dispatch. `web`'s own schema owns the root `summarize` boolean (LTP v2 is
+migrated one family at a time, not by central injection); `handle()` validates
+it is boolean and strips it before action dispatch — no action implementation
+ever receives it.
 
 ## Port
 
@@ -59,45 +66,72 @@ remain in force.
 
 - The public name is `web`; no browser or web_search registry, schema, prompt,
   check-caps, catalog, or installed manual entry exists.
-- `web` is the first wire-tested implementation of the shared future tool
-  contract in `src/lingtai/tools/CONTRACT.md`: the final model-facing root is
-  exactly `action`, `input`, and `reasoning`. There is no public `parameters`,
-  `parameter`, or other compatibility alias; `_reasoning` is internal only.
+- `web` is the first real implementation of the shared LTP v2 contract in
+  `src/lingtai/tools/CONTRACT.md`: the final model-facing root is exactly
+  `action`, `input`, `reasoning`, and `summarize`. There is no public
+  `parameters`, `parameter`, `summary`, or other compatibility alias;
+  `_reasoning` is internal only.
 - `action` and nested `input` are required by the capability schema. `action` is
   one of `search`, `browse`, or `manual`; `input` uses strict action-specific
   object branches. Each branch is closed, every declared branch field is
   required, and browse optionals use JSON null, matching OpenAI strict-object
-  conventions.
-- Settings v1 is exactly `{"schema_version":1,"search":{"engine":"..."}}`.
-  Only an operator-admitted engine name is permitted. Missing files use the
-  operator/built-in default; malformed, unknown, disallowed, unavailable, or
-  credential-missing selections fail search without substitution. Invalid settings
-  use error code `WEB_SETTINGS_INVALID`; a selected or initialization-unavailable
-  engine uses `SEARCH_ENGINE_UNAVAILABLE`. Browse and manual remain usable and
-  report the settings error.
+  conventions. No branch admits `reasoning`, `_reasoning`, or `summarize`.
+- `summarize` is a root-only optional boolean, absent or false by default. It
+  is envelope metadata, not action input: `handle()` validates its type
+  (non-boolean fails loudly with `INVALID_ARGUMENT`) and strips it before
+  dispatching to `search`/`browse`/`manual`. `src/lingtai/kernel/
+  tool_result_summary.py` recognizes canonical root `summarize=true` for
+  `web` specifically (scoped by tool name, alongside the legacy literal
+  `summary` flag it preserves for genuinely unmigrated callers) and treats
+  `web`'s own canonical `status: "failed"` envelope as an unsummarizable error
+  result, exactly like the kernel-wide `status: "error"` convention — scoped
+  to migrated LTP v2 families so an unrelated tool's non-error `"failed"`-named
+  domain value is never reinterpreted.
+- Settings v1 is the direct, action-owned strict schema
+  `{"schema_version":1,"engine":"<admitted-name>"}`, read from
+  `settings/web.search.json` (a direct child of `<agent-dir>/settings/`; no
+  nested `search` object). There is no family-owned `settings/web.json`, no
+  `settings/web.browse.json` or `settings/web.manual.json`, no cross-read of
+  any old or sibling settings path, and no compatibility fallback, overlay, or
+  merge. Only an operator-admitted engine name is permitted. Missing files use
+  the operator/built-in default; malformed, unknown, disallowed, unavailable,
+  or credential-missing selections fail search without substitution. Invalid
+  settings use error code `WEB_SETTINGS_INVALID`; a selected or
+  initialization-unavailable engine uses `SEARCH_ENGINE_UNAVAILABLE`. Browse
+  and manual remain fully usable — including when `settings/web.search.json`
+  is invalid — and never construct a search provider.
 - Settings reads reject symlinks, non-regular files, unstable snapshots,
-  oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong schema.
+  oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong
+  schema. A changed file is observed on the next call (hot-read, no caching).
   Diagnostics contain source, selected engine/null, bounded available statuses,
-  revision/hash, and the exact change hint `Edit settings/web.json; changes apply
-  on the next web call; use web(action='manual', input={}, reasoning='load web guidance') for schema.`;
-  secrets and absolute
-  paths never appear.
+  revision/hash, and the exact change hint `Edit settings/web.search.json;
+  changes apply on the next web call; use web(action='manual', input={},
+  reasoning='load web guidance') for schema.`; secrets and absolute paths never
+  appear.
 - Search results are bounded `{title,url,snippet,link_ref}` objects with count
   and actual engine. References are same-Agent handles accepted by browse.
 - Browse remains static public HTTP(S) only with its existing SSRF/DNS,
-  extraction, provenance, cursor, snapshot, deadline, and typed-failure rules.
+  extraction, provenance, cursor, snapshot, deadline, and typed-failure rules,
+  and stays provider/network independent of the search settings file.
 
 ## Contract tests
 
 Focused direct checks cover canonical and legacy configuration normalization,
 opaque dependency identity, schema/prompt/catalog uniqueness, lazy provider
-construction, settings file states and revision changes, explicit argument
-rejection, environment immutability, search-to-browse continuation, and manual
-operation with invalid settings. Existing browser Core/Port and SearchService
-contract tests remain applicable. A real fresh Agent startup must prove exactly
-`action` / `input` / `reasoning` at the root, no reasoning field in nested input
-branches, internal `_reasoning` dispatch, resident/batched prompts, and both Chat
-and Responses tool wires.
+construction, action-owned settings file states (missing, valid, malformed,
+wrong schema, unknown/duplicate fields, disallowed selector, symlink/non-
+regular file, changed-file-observed-next-call), no old-path cross-read,
+explicit argument rejection, environment immutability, search-to-browse
+continuation, and manual/browse operation with invalid settings and no
+provider construction. Existing browser Core/Port and SearchService contract
+tests remain applicable. A real fresh Agent startup must prove exactly
+`action` / `input` / `reasoning` / `summarize` at the root, no cross-cutting
+field in any nested input branch, internal `_reasoning` dispatch,
+resident/batched prompts, and both Chat and Responses tool wires. Executor-
+level evidence proves the raw result is durably logged before any visible
+`summarize=true` replacement on both the sequential and a controlled-parallel
+path, and that search/browse `status: "failed"` results stay byte/content
+exact and unsummarized under `summarize=true`.
 
 ## Maintenance
 
