@@ -45,7 +45,7 @@ def test_daemon_contract_frontmatter_lists_related_files_and_triggers():
     meta = _frontmatter(DOC)
     assert meta["name"] == "daemon-contract"
     assert meta["status"] == "active"
-    assert meta["contract_version"] == 6
+    assert meta["contract_version"] == 7
     related = set(meta["related_files"])
     triggers = set(meta["review_triggers"])
     for rel in REQUIRED_RELATED:
@@ -99,3 +99,14 @@ def test_daemon_contract_does_not_claim_unwired_native_mcp_support():
     assert "| `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only." in text
     assert "| `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`." in text
     assert "| `cursor` | Yes. | Not verified; prompt catalog only." in text
+
+
+def test_empty_recovery_contract_keeps_the_layer_boundary_explicit():
+    text = " ".join(DOC.read_text(encoding="utf-8").split())
+    anatomy = " ".join((ROOT / "src/lingtai/tools/daemon/ANATOMY.md").read_text(encoding="utf-8").split())
+    base_agent_anatomy = " ".join((ROOT / "src/lingtai/kernel/base_agent/ANATOMY.md").read_text(encoding="utf-8").split())
+    assert "shares only the pure `LLMResponse` all-empty predicate" in text
+    assert "builds both the fixed safe error description and each localized `MSG_REQUEST` locally" in text
+    assert "never provider text, ids, model, or finish reason" in text
+    assert "daemon error descriptions and localized recovery `MSG_REQUEST`s are daemon-local" in base_agent_anatomy
+    assert "provider payloads and BaseAgent private helpers do not cross this boundary" in anatomy
