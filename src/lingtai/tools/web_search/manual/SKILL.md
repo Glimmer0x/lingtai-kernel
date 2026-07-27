@@ -100,28 +100,64 @@ succeeds with `summarize=true` returns a generated-summary replacement instead
 of the raw result; a call that fails (`status: "failed"`) always returns its
 exact, unsummarized error, on every action, regardless of `summarize`.
 
-Search alone reads settings, from the action-owned relative path
-`settings/web.search.json` under the Agent workdir — hot-read on every search
-call, so an edit takes effect on the very next call. The exact v1 file is:
+### Search settings — exact contract
+
+Search alone owns and reads one settings address:
+`<agent-workdir>/settings/web.search.json`. The address is fixed; callers
+cannot choose another file. It is hot-read at the start of every **search**
+action, so a valid edit is observed by the next search call without refresh or
+restart. Browse, manual, unknown actions, and their local validation failures
+do not stat, open, or parse this file.
+
+The complete v1 document is:
 
 ```json
-{"schema_version":1,"engine":"duckduckgo"}
+{
+  "schema_version": 1,
+  "engine": "duckduckgo"
+}
 ```
 
-It may contain only that flat engine selector — no nested object, no other
-key. There is no family-owned `settings/web.json` and no
-`settings/web.browse.json` or `settings/web.manual.json`: browse and manual
-read no settings file at all and stay usable, provider/network independent,
-even when `settings/web.search.json` is missing or invalid. Operators admit
-engines and provide credentials outside this file. Missing settings use the
-operator or built-in default. Malformed, unknown, disallowed, unavailable, or
-credential-missing selection fails search loudly; it never silently
-substitutes another engine. Invalid settings use `WEB_SETTINGS_INVALID`; a
-selected or initialization-unavailable engine uses `SEARCH_ENGINE_UNAVAILABLE`.
-Every result reports source, available engine statuses, a bounded
-revision/hash, and the exact hint: `Edit settings/web.search.json; changes
-apply on the next web call; use web(action='manual', input={},
-reasoning='load web guidance') for schema.`
+| Field | Required value |
+|---|---|
+| `schema_version` | JSON integer `1` exactly. Boolean `true`, floating-point `1.0`, strings, and other versions are rejected. |
+| `engine` | One bounded engine name that the Agent operator already admitted. The file selects an engine; it does not install a provider or carry credentials. |
+
+No other key is allowed. Nested objects, missing/extra fields, duplicate JSON
+keys, malformed or non-UTF-8 JSON, unreadable files, symlinks, non-regular
+files, files larger than 64 KiB, and files that change while being read are all
+invalid. A stable snapshot contributes a bounded revision and SHA-256-derived
+hash to `current_setting`; diagnostics never expose credential values or an
+absolute host path.
+
+The read outcomes are deliberately simple:
+
+| File / engine state | Search behavior |
+|---|---|
+| File absent | Use the operator-selected or built-in composition default. |
+| Valid file, admitted available engine | Use exactly that engine. |
+| File present but invalid, or engine not admitted | Fail with `WEB_SETTINGS_INVALID`. |
+| Selected engine admitted but unavailable, credential-missing, or initialization failed | Fail with `SEARCH_ENGINE_UNAVAILABLE`. |
+
+There is no family-owned `settings/web.json`, no
+`settings/web.browse.json`, and no `settings/web.manual.json`. The old family
+path is not a compatibility source. Lingtai does not cross-read, merge, overlay,
+or apply precedence between settings files, and it never silently substitutes
+another engine when a present selection is invalid or unavailable. Operator
+composition owns admitted engines, provider credentials, models, and provider
+kwargs outside this file.
+
+Browse and manual stay usable and provider/network independent even when the
+search settings file is invalid. Their `current_setting` block is explicitly
+non-search: `engine`, `search_engine`, `selected_engine`, and `settings_hash`
+are `null`; `source` is `not_applicable`; `settings_revision` is `not_read`.
+They may still report the bounded admitted-engine status list and the help hint,
+but those actions never read the action-owned search file.
+
+Every result includes bounded `current_setting`. Search reports the selected
+source, available engine statuses, revision/hash, and the hint: `Edit
+settings/web.search.json; changes apply on the next web call; use
+web(action='manual', input={}, reasoning='load web guidance') for schema.`
 
 ## 4. One explicit legacy fallback
 
