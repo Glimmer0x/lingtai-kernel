@@ -152,20 +152,38 @@ def is_apriori_summary(content: Any) -> bool:
 # unmigrated tool's own domain field literally named ``summarize`` is never
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
-_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+_LTP_V2_MIGRATED_FAMILIES = frozenset(
+    {
+        "web", "mcp", "knowledge", "file", "vision", "avatar", "soul",
+        "shell", "skills", "notification",
+    }
+)
 
 
 def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     """Return True iff the normalized tool args opt into a-priori summary.
 
     The legacy flag is the boolean ``summary`` field on the tool call, honored
-    for every caller. A migrated LTP v2 family (currently only ``web``) may
-    instead set the canonical root ``summarize`` boolean; that spelling is
+    for every caller. ``shell``'s pre-migration ``summary`` boolean is still
+    accepted through that spelling by any historical/pending call that carries
+    it, but the migrated public ``shell`` schema
+    (``tools/bash/_tool_family.py::get_schema``) no longer advertises it — the
+    legacy flat ``tools/bash/__init__.py::get_schema`` that still declares
+    ``summary`` is retained only as the internal ``ShellManager`` shape and is
+    not the registered model-facing schema. A migrated LTP v2 family (see
+    ``_LTP_V2_MIGRATED_FAMILIES``) may instead set the canonical root
+    ``summarize`` boolean; that spelling is
     recognized only when ``tool_name`` names a migrated family, so an
     unmigrated tool's own ``summarize``-named domain field is never
     reinterpreted as this control. Anything other than a literal ``True``
     (missing, ``False``, ``None``, truthy-but-not-True) preserves current
     behavior exactly for either spelling.
+
+    This is only the opt-in control. It says nothing about which results are
+    worth summarizing: ``file``'s own manual carries that per-action guidance
+    (bulky-result for ``read``/``grep``/``glob``, short-result for the
+    ``write``/``edit`` receipts a caller should read exactly), and the
+    summarizer never rewrites a recorded raw result or an error either way.
     """
     if not isinstance(args, dict):
         return False
@@ -423,8 +441,8 @@ def maybe_summarize_result(
     - Error results (the tool itself failed) are NOT summarized: the agent needs
       the exact error text to recover. Returned unchanged. This covers the
       kernel-wide ``status == "error"`` convention and, scoped to migrated LTP
-      v2 families only, that family's own canonical error status (``web``'s is
-      exactly ``"failed"``).
+      v2 families only, that family's own canonical error status (``web``'s and
+      ``knowledge``'s envelope failures are exactly ``"failed"``).
     - Visible payload > cap → refusal dict (no LLM call).
     - Otherwise → generated summary dict; on summarizer exception, an error dict.
 
@@ -437,9 +455,14 @@ def maybe_summarize_result(
     # Do not summarize tool-level errors — the agent needs the exact error to
     # recover. ``status == "error"`` is the kernel-wide tool-error convention.
     # A migrated LTP v2 family may instead use its own canonical error status
-    # (``web``'s is exactly ``"failed"``); recognizing it here is scoped to
-    # migrated families only, so an unrelated tool's non-error ``"failed"``-
-    # named domain value is never reinterpreted as an error result.
+    # (``web``'s, ``mcp``'s, and ``knowledge``'s envelope failures are exactly
+    # ``"failed"``, and every family built on the generic ``ToolFamily``
+    # dispatcher — including ``avatar`` and ``soul`` — likewise returns
+    # ``"failed"`` for its envelope-level errors; ``mcp``'s unknown-action
+    # envelope uses the kernel-wide ``"error"`` above); recognizing it here is
+    # scoped to migrated families only, so an unrelated tool's non-error
+    # ``"failed"``-named domain value is never reinterpreted as an error
+    # result.
     if isinstance(result, dict):
         status = result.get("status")
         if status == "error":

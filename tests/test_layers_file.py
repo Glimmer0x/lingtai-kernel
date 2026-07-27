@@ -1,4 +1,12 @@
-"""Tests for file I/O capabilities (read, write, edit, glob, grep)."""
+"""Tests for the file I/O operations (read, write, edit, glob, grep).
+
+These five are no longer separate model-facing tools: they are the canonical
+actions of the one public ``file`` family, whose single package owns both the
+envelope and the operation bodies (``src/lingtai/tools/file/_read.py`` and
+siblings). These tests exercise the same behavior through the family envelope.
+Family-level schema/envelope evidence lives in
+``tests/test_file_tool_family.py``.
+"""
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
@@ -16,46 +24,108 @@ from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
 
 
+def file_call(agent, action, **input_):
+    """Invoke one ``file`` family action with the LTP v2 envelope.
+
+    Optional per-action fields are omitted rather than passed as ``null``;
+    ``ToolFamily.handle`` accepts any subset of the child's own declared
+    properties, and the operation applies its own historical defaults either
+    way.
+    """
+    return agent._tool_handlers["file"](
+        {"action": action, "input": input_, "reasoning": "file layer test"}
+    )
 
 
-def test_file_sugar_expands_to_five(tmp_path):
-    """capabilities=["file"] should register all 5 file tools."""
+def test_file_capability_registers_one_family_root(tmp_path):
+    """capabilities=["file"] registers the one public ``file`` family tool."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["file"],
     )
-    for name in ("read", "write", "edit", "glob", "grep"):
-        assert name in agent._tool_handlers, f"{name} not registered"
+    assert "file" in agent._tool_handlers, "file not registered"
+    # The five pre-migration model-facing roots are gone; their operations are
+    # now canonical actions of the one family.
+    for retired in ("read", "write", "edit", "glob", "grep"):
+        assert retired not in agent._tool_handlers, f"{retired} must not be a public root"
     agent.stop(timeout=1.0)
 
 
-def test_file_sugar_dict_form(tmp_path):
-    """capabilities={"file": {}} (dict form) should also expand."""
+def test_file_capability_dict_form(tmp_path):
+    """capabilities={"file": {}} (dict form) registers the same one root."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities={"file": {}},
     )
-    for name in ("read", "write", "edit", "glob", "grep"):
-        assert name in agent._tool_handlers, f"{name} not registered (dict form)"
+    assert "file" in agent._tool_handlers, "file not registered (dict form)"
     agent.stop(timeout=1.0)
 
 
-def test_individual_file_capability(tmp_path):
-    """Each file capability can be disabled individually via `disable=[...]`.
+def test_legacy_file_capability_names_fail_loudly(tmp_path):
+    """The five old capability names are gone — not aliased, not silent.
 
-    The always-on file caps are default-on; `disable` is the opt-out
-    channel for hosts that want a narrower surface.
+    Before the migration these were five independent capabilities. The
+    migration was a clean break with no compatibility alias, so each name is
+    now simply unknown: ``setup_capability`` raises with the available set, and
+    the Agent records the skip rather than quietly materializing something the
+    caller did not ask for.
+    """
+    from lingtai.tools.registry import canonical_capability_name, setup_capability
+
+    for legacy in ("read", "write", "edit", "glob", "grep"):
+        # No alias entry: the name canonicalizes to itself.
+        assert canonical_capability_name(legacy) == legacy
+        with pytest.raises(ValueError, match=f"Unknown capability: '{legacy}'"):
+            setup_capability(object(), legacy)
+
+    # ``file`` remains the one canonical name that does resolve.
+    assert canonical_capability_name("file") == "file"
+
+
+def test_legacy_capability_name_does_not_silently_register_file(tmp_path):
+    """An old preset naming ``read`` gets the core-default file tool only.
+
+    ``file`` is in ``CORE_DEFAULTS``, so it boots regardless; what must not
+    happen is the retired name being treated as a request for it. The unknown
+    name is skipped with a recorded reason (Agent's pre-existing tolerance for
+    wizard-written presets), never resolved.
     """
     agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        disable=["edit", "glob", "grep"],
+        service=make_mock_service(), agent_name="test",
+        working_dir=tmp_path / "legacy", capabilities=["read"],
     )
-    assert "read" in agent._tool_handlers
-    assert "write" in agent._tool_handlers
-    assert "edit" not in agent._tool_handlers
-    assert "glob" not in agent._tool_handlers
-    assert "grep" not in agent._tool_handlers
-    agent.stop(timeout=1.0)
+    try:
+        registered = {name for name, _ in agent._capabilities}
+        assert "read" not in registered
+        assert "read" not in agent._tool_handlers
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_disable_is_family_grained_and_legacy_names_do_not_disable(tmp_path):
+    """`disable` is family-grained, and the retired names disable nothing.
+
+    Collapsing the five roots into one family means a single action can no
+    longer be disabled on its own. Because the migration also removed the
+    legacy capability aliases, `disable=["edit"]` no longer silently removes
+    the whole `file` capability either — `edit` is simply not a capability
+    name, so the disable list does not match anything and `file` stays.
+    Disabling the real capability by its canonical name still works.
+    """
+    stale = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "stale",
+        disable=["edit"],
+    )
+    assert "file" in stale._tool_handlers, \
+        "a retired operation name must not disable the file capability"
+    stale.stop(timeout=1.0)
+
+    canonical = Agent(
+        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "canonical",
+        disable=["file"],
+    )
+    assert "file" not in canonical._tool_handlers
+    canonical.stop(timeout=1.0)
 
 
 def test_write_and_read_via_capability(tmp_path):
@@ -65,14 +135,15 @@ def test_write_and_read_via_capability(tmp_path):
         capabilities=["file"],
     )
     # Write
-    write_result = agent._tool_handlers["write"](
-        {"file_path": str(agent.working_dir / "test.txt"), "content": "hello world"}
+    write_result = file_call(
+        agent, "write",
+        file_path=str(agent.working_dir / "test.txt"), content="hello world",
     )
     assert write_result["status"] == "ok"
 
     # Read
-    read_result = agent._tool_handlers["read"](
-        {"file_path": str(agent.working_dir / "test.txt")}
+    read_result = file_call(
+        agent, "read", file_path=str(agent.working_dir / "test.txt"),
     )
     assert "hello world" in read_result["content"]
     agent.stop(timeout=1.0)
@@ -85,8 +156,10 @@ def test_edit_via_capability(tmp_path):
         capabilities=["file"],
     )
     (agent.working_dir / "test.txt").write_text("hello world")
-    result = agent._tool_handlers["edit"](
-        {"file_path": str(agent.working_dir / "test.txt"), "old_string": "hello", "new_string": "goodbye"}
+    result = file_call(
+        agent, "edit",
+        file_path=str(agent.working_dir / "test.txt"),
+        old_string="hello", new_string="goodbye",
     )
     assert result["status"] == "ok"
     assert (agent.working_dir / "test.txt").read_text() == "goodbye world"
@@ -102,9 +175,7 @@ def test_glob_via_capability(tmp_path):
     (agent.working_dir / "a.py").write_text("pass")
     (agent.working_dir / "b.py").write_text("pass")
     (agent.working_dir / "c.txt").write_text("text")
-    result = agent._tool_handlers["glob"](
-        {"pattern": "*.py", "path": str(agent.working_dir)}
-    )
+    result = file_call(agent, "glob", pattern="*.py", path=str(agent.working_dir))
     # Agent init may create library files; assert user files are present.
     matched_names = {Path(p).name for p in result["matches"]}
     assert "a.py" in matched_names
@@ -120,9 +191,7 @@ def test_grep_via_capability(tmp_path):
         capabilities=["file"],
     )
     (agent.working_dir / "test.py").write_text("def hello():\n    pass\n")
-    result = agent._tool_handlers["grep"](
-        {"pattern": "def hello", "path": str(agent.working_dir)}
-    )
+    result = file_call(agent, "grep", pattern="def hello", path=str(agent.working_dir))
     assert result["count"] >= 1
     agent.stop(timeout=1.0)
 
@@ -135,8 +204,8 @@ def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
     )
     target = agent.working_dir / "nested" / "target.py"
     try:
-        write_result = agent._tool_handlers["write"](
-            {"file_path": "nested/target.py", "content": "needle\nold\n"}
+        write_result = file_call(
+            agent, "write", file_path="nested/target.py", content="needle\nold\n",
         )
         assert write_result == {
             "status": "ok",
@@ -145,19 +214,19 @@ def test_file_capability_relative_paths_resolve_under_workdir(tmp_path):
         }
         assert target.read_text() == "needle\nold\n"
 
-        read_result = agent._tool_handlers["read"]({"file_path": "nested/target.py"})
+        read_result = file_call(agent, "read", file_path="nested/target.py")
         assert "needle" in read_result["content"]
 
-        edit_result = agent._tool_handlers["edit"](
-            {"file_path": "nested/target.py", "old_string": "old", "new_string": "new"}
+        edit_result = file_call(
+            agent, "edit", file_path="nested/target.py", old_string="old", new_string="new",
         )
         assert edit_result["status"] == "ok"
         assert target.read_text() == "needle\nnew\n"
 
-        glob_result = agent._tool_handlers["glob"]({"pattern": "*.py", "path": "nested"})
+        glob_result = file_call(agent, "glob", pattern="*.py", path="nested")
         assert str(target) in glob_result["matches"]
 
-        grep_result = agent._tool_handlers["grep"]({"pattern": "needle", "path": "nested"})
+        grep_result = file_call(agent, "grep", pattern="needle", path="nested")
         assert any(match["file"] == str(target) for match in grep_result["matches"])
     finally:
         agent.stop(timeout=1.0)
@@ -189,8 +258,8 @@ def test_file_capability_uses_file_io_service(tmp_path):
         file_io=svc,
         capabilities=["file"],
     )
-    result = agent._tool_handlers["write"](
-        {"file_path": str(tmp_path / "test.txt"), "content": "via service"}
+    result = file_call(
+        agent, "write", file_path=str(tmp_path / "test.txt"), content="via service",
     )
     assert result["status"] == "ok"
     assert (tmp_path / "test.txt").read_text() == "via service"
@@ -228,10 +297,10 @@ def test_read_error_shape(tmp_path):
     """read returns {status: error, message: ...} on failure."""
     agent = _file_agent(tmp_path)
     try:
-        _assert_error_shape(agent._tool_handlers["read"]({}),
+        _assert_error_shape(file_call(agent, "read"),
                             expect_substring="file_path")
         _assert_error_shape(
-            agent._tool_handlers["read"]({"file_path": "/nonexistent/x"}),
+            file_call(agent, "read", file_path="/nonexistent/x"),
             expect_substring="not found",
         )
     finally:
@@ -242,7 +311,7 @@ def test_write_error_shape(tmp_path):
     """write returns {status: error, message: ...} on failure (was {error: ...})."""
     agent = _file_agent(tmp_path)
     try:
-        _assert_error_shape(agent._tool_handlers["write"]({"content": "x"}),
+        _assert_error_shape(file_call(agent, "write", content="x"),
                             expect_substring="file_path")
     finally:
         agent.stop(timeout=1.0)
@@ -252,26 +321,29 @@ def test_edit_error_shape(tmp_path):
     """edit returns {status: error, message: ...} on each of its failure paths."""
     agent = _file_agent(tmp_path)
     try:
-        _assert_error_shape(agent._tool_handlers["edit"]({}),
+        _assert_error_shape(file_call(agent, "edit"),
                             expect_substring="file_path")
         _assert_error_shape(
-            agent._tool_handlers["edit"](
-                {"file_path": "/nonexistent/x", "old_string": "a", "new_string": "b"}
+            file_call(
+                agent, "edit",
+                file_path="/nonexistent/x", old_string="a", new_string="b",
             ),
             expect_substring="not found",
         )
         target = tmp_path / "edit_target.txt"
         target.write_text("hello")
         _assert_error_shape(
-            agent._tool_handlers["edit"](
-                {"file_path": str(target), "old_string": "missing", "new_string": "x"}
+            file_call(
+                agent, "edit",
+                file_path=str(target), old_string="missing", new_string="x",
             ),
             expect_substring="not found",
         )
         target.write_text("aaa")
         _assert_error_shape(
-            agent._tool_handlers["edit"](
-                {"file_path": str(target), "old_string": "a", "new_string": "b"}
+            file_call(
+                agent, "edit",
+                file_path=str(target), old_string="a", new_string="b",
             ),
             expect_substring="replace_all",
         )
@@ -283,7 +355,7 @@ def test_glob_error_shape(tmp_path):
     """glob returns {status: error, message: ...} on missing pattern."""
     agent = _file_agent(tmp_path)
     try:
-        _assert_error_shape(agent._tool_handlers["glob"]({}),
+        _assert_error_shape(file_call(agent, "glob"),
                             expect_substring="pattern")
     finally:
         agent.stop(timeout=1.0)
@@ -293,7 +365,7 @@ def test_grep_error_shape(tmp_path):
     """grep returns {status: error, message: ...} on missing pattern."""
     agent = _file_agent(tmp_path)
     try:
-        _assert_error_shape(agent._tool_handlers["grep"]({}),
+        _assert_error_shape(file_call(agent, "grep"),
                             expect_substring="pattern")
     finally:
         agent.stop(timeout=1.0)
@@ -303,10 +375,10 @@ def test_file_tool_errors_match_executor_predicate(tmp_path):
     """C2 hidden P1: tool_executor predicate (status=='error') now catches them."""
     agent = _file_agent(tmp_path)
     try:
-        for tool in ("write", "edit", "glob", "grep"):
-            args = {"content": "x"} if tool == "write" else {}
-            result = agent._tool_handlers[tool](args)
+        for action in ("write", "edit", "glob", "grep"):
+            args = {"content": "x"} if action == "write" else {}
+            result = file_call(agent, action, **args)
             assert isinstance(result, dict) and result.get("status") == "error", \
-                f"{tool}: tool_executor would silently drop {result!r}"
+                f"{action}: tool_executor would silently drop {result!r}"
     finally:
         agent.stop(timeout=1.0)

@@ -3,10 +3,27 @@ from __future__ import annotations
 
 import codecs
 import re
+import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from . import netpolicy
+
+# A body that failed to decode is only reclassified as unreadable when it is
+# large enough to judge and is dominated by undecodable characters.  Short
+# documents are excluded because a legitimately truncated multibyte tail can
+# reach an arbitrarily high replacement ratio (``b"\x82\xa0\x82"`` in shift_jis
+# is 50% replacement yet perfectly usable), so density alone is not evidence.
+_UNDECODABLE_MIN_CHARS = 512
+_UNDECODABLE_REPLACEMENT_RATIO = 0.30
+_UNDECODABLE_BINARY_RATIO = 0.01
+_REPLACEMENT_CHAR = "�"
+_DECODE_REPLACED_WARNINGS = {
+    "CHARSET_DECODE_ERROR_REPLACED",
+    "UNSUPPORTED_CHARSET_FALLBACK",
+    "INVALID_UTF8_REPLACED",
+}
+UNDECODABLE_CONTENT_WARNING = "UNDECODABLE_CONTENT"
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +204,27 @@ def _number_blocks(raw: list[tuple[str, str]]) -> list[Block]:
     return [Block(id=f"b{i:04d}", kind=kind, text=text) for i, (kind, text) in enumerate(raw, 1)]
 
 
+def _is_undecodable(blocks: list[Block], warnings: list[str]) -> bool:
+    """Report whether extracted text is replacement garbage rather than content.
+
+    Only bodies the decoder already had to repair are considered, so cleanly
+    decoded text — however exotic its script — is never reclassified.  Binary
+    payloads served under a text content type (an unnegotiated ``gzip``
+    response, for example) survive decoding as a dense mix of replacement
+    characters and raw control bytes; real prose carries neither.
+    """
+    if not any(warning in _DECODE_REPLACED_WARNINGS for warning in warnings):
+        return False
+    text = "".join(block.text for block in blocks)
+    if len(text) < _UNDECODABLE_MIN_CHARS:
+        return False
+    replacement = text.count(_REPLACEMENT_CHAR)
+    if replacement / len(text) < _UNDECODABLE_REPLACEMENT_RATIO:
+        return False
+    binary = sum(1 for char in text if unicodedata.category(char) in {"Cc", "Cf", "Co", "Cs", "Cn"} and char not in "\t\n\r")
+    return binary / len(text) >= _UNDECODABLE_BINARY_RATIO
+
+
 def extract_html(body: bytes, *, base_url: str, charset: str | None = None) -> ExtractedDocument:
     text, warnings = _decode(body, charset)
     parser = _Parser(base_url)
@@ -204,6 +242,13 @@ def extract_html(body: bytes, *, base_url: str, charset: str | None = None) -> E
             seen.add(key)
             links.append(link)
     blocks = _number_blocks(parser.blocks)
+    if _is_undecodable(blocks, warnings):
+        # Undecodable bytes are not usable page content; drop them so the
+        # caller raises its existing no-text failure instead of returning
+        # garbage under a success envelope.
+        blocks = []
+        links = []
+        warnings.append(UNDECODABLE_CONTENT_WARNING)
     if not blocks:
         warnings.append("NO_TEXT_BLOCKS")
     return ExtractedDocument(_clean("".join(parser.title_parts)), blocks, links, warnings)
@@ -215,6 +260,9 @@ def extract_plain_text(body: bytes, charset: str | None = None) -> ExtractedDocu
     if len(paragraphs) == 1 and "\n" in paragraphs[0]:
         paragraphs = [line.strip() for line in paragraphs[0].splitlines() if line.strip()]
     blocks = _number_blocks([("paragraph", _clean(part)) for part in paragraphs if _clean(part)])
+    if _is_undecodable(blocks, warnings):
+        blocks = []
+        warnings.append(UNDECODABLE_CONTENT_WARNING)
     if not blocks:
         warnings.append("NO_TEXT_BLOCKS")
     return ExtractedDocument("", blocks, [], warnings)

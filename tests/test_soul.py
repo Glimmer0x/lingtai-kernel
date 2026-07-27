@@ -63,18 +63,18 @@ class TestSoulHandle:
     def test_inquiry_returns_voice(self):
         agent = _make_mock_agent()
         agent._config.retry_timeout = 30.0
-        result = soul.handle(agent, {"action": "inquiry", "inquiry": "What am I missing?"})
+        result = soul.handle(agent, {"action": "inquiry", "input": {"inquiry": "What am I missing?"}})
         assert result["status"] == "ok"
         assert "voice" in result
 
     def test_inquiry_requires_text(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "inquiry"})
+        result = soul.handle(agent, {"action": "inquiry", "input": {}})
         assert "error" in result
 
     def test_inquiry_rejects_empty(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "inquiry", "inquiry": "   "})
+        result = soul.handle(agent, {"action": "inquiry", "input": {"inquiry": "   "}})
         assert "error" in result
 
     def test_flow_action_voluntary_succeeds_when_lock_free(self):
@@ -82,7 +82,7 @@ class TestSoulHandle:
         consultation runs on a daemon thread and lands later via tc_inbox."""
         agent = _make_mock_agent()
         agent._soul_fire_lock = threading.Lock()
-        result = soul.handle(agent, {"action": "flow"})
+        result = soul.handle(agent, {"action": "flow", "input": {}})
         assert result.get("status") == "ok"
         assert "soul flow triggered" in result.get("message", "").lower()
 
@@ -94,7 +94,7 @@ class TestSoulHandle:
         lock.acquire()
         agent._soul_fire_lock = lock
         try:
-            result = soul.handle(agent, {"action": "flow"})
+            result = soul.handle(agent, {"action": "flow", "input": {}})
         finally:
             lock.release()
         assert "error" in result
@@ -122,7 +122,7 @@ class TestSoulHandle:
             tracking_fire,
         )
 
-        result = soul.handle(agent, {"action": "flow"})
+        result = soul.handle(agent, {"action": "flow", "input": {}})
         assert result.get("status") == "ok"
 
         # Fire should NOT have been called yet — still ACTIVE
@@ -151,7 +151,7 @@ class TestSoulHandle:
             tracking_fire,
         )
 
-        result = soul.handle(agent, {"action": "flow"})
+        result = soul.handle(agent, {"action": "flow", "input": {}})
         assert result.get("status") == "ok"
 
         # Wait longer than the timeout — fire should never be called
@@ -160,7 +160,7 @@ class TestSoulHandle:
 
     def test_unknown_action_returns_error(self):
         agent = _make_mock_agent()
-        result = soul.handle(agent, {"action": "on"})
+        result = soul.handle(agent, {"action": "on", "input": {}})
         assert "error" in result
 
     def test_inquiry_works_with_large_delay(self):
@@ -168,7 +168,7 @@ class TestSoulHandle:
         agent = _make_mock_agent()
         agent._soul_delay = 999999.0
         agent._config.retry_timeout = 30.0
-        result = soul.handle(agent, {"action": "inquiry", "inquiry": "Am I stuck?"})
+        result = soul.handle(agent, {"action": "inquiry", "input": {"inquiry": "Am I stuck?"}})
         assert result["status"] == "ok"
         assert "voice" in result
 
@@ -180,34 +180,58 @@ class TestSoulHandle:
 
 class TestSoulSchema:
 
-    def test_schema_exposes_five_actions(self):
+    def _branch(self, schema, action):
+        return next(
+            b for b in schema["properties"]["input"]["oneOf"]
+            if b["title"] == f"{action} input"
+        )
+
+    def test_schema_exposes_six_actions(self):
         schema = soul.get_schema("en")
-        # Five actions are agent-visible: inquiry (manual self-Q&A),
-        # flow (mechanical, fires only on the wall clock / turn counter —
-        # agent cannot invoke), config (agent adjusts cadence + K
-        # at runtime), voice (agent picks/customizes own soul-flow
-        # prompt — read or set), and dismiss (clear soul notification).
+        # Six actions are agent-visible: inquiry (manual self-Q&A),
+        # flow (opt-in; also fires mechanically on the wall clock),
+        # config (agent adjusts cadence + K at runtime), voice (agent
+        # picks/customizes own soul-flow prompt — read or set), dismiss
+        # (clear soul notification), and manual (installed soul-manual).
         assert schema["properties"]["action"]["enum"] == [
             "inquiry", "flow", "config", "voice", "dismiss", "manual",
         ]
 
-    def test_schema_inquiry_property_present(self):
+    def test_schema_inquiry_input_is_action_scoped(self):
+        # Post-migration, ``inquiry`` lives inside the inquiry action's own
+        # strict input object — not at the flat root where every other action
+        # advertised it too.
         schema = soul.get_schema("en")
-        assert "inquiry" in schema["properties"]
+        assert "inquiry" not in schema["properties"]
+        branch = self._branch(schema, "inquiry")
+        assert branch["properties"]["inquiry"]["type"] == "string"
+        assert branch["required"] == ["inquiry"]
+        assert branch["additionalProperties"] is False
 
-    def test_schema_config_properties_present(self):
+    def test_schema_config_input_is_action_scoped(self):
         # config parameters — delay_seconds (number, min 30s),
-        # consultation_past_count (integer, [0, 5]).
+        # consultation_past_count (integer, [0, 5]). Nullable because a
+        # strict provider schema expresses an optional field as a required
+        # nullable property; null means "not set" at dispatch.
         schema = soul.get_schema("en")
-        assert "delay_seconds" in schema["properties"]
-        assert schema["properties"]["delay_seconds"]["type"] == "number"
-        assert schema["properties"]["delay_seconds"]["minimum"] == 30.0
-        assert "consultation_interval" not in schema["properties"]
-        assert "consultation_past_count" in schema["properties"]
-        assert schema["properties"]["consultation_past_count"]["type"] == "integer"
+        assert "delay_seconds" not in schema["properties"]
+        branch = self._branch(schema, "config")
+        props = branch["properties"]
+        assert props["delay_seconds"]["type"] == ["number", "null"]
+        assert props["delay_seconds"]["minimum"] == 30.0
+        assert "consultation_interval" not in props
+        assert props["consultation_past_count"]["type"] == ["integer", "null"]
+        assert props["consultation_past_count"]["minimum"] == 0
+        assert props["consultation_past_count"]["maximum"] == 5
+        assert branch["additionalProperties"] is False
 
-    def test_schema_required_is_action(self):
-        assert soul.get_schema("en")["required"] == ["action"]
+    def test_schema_root_is_the_closed_ltp_v2_envelope(self):
+        schema = soul.get_schema("en")
+        assert set(schema["properties"]) == {
+            "action", "input", "reasoning", "summarize",
+        }
+        assert schema["required"] == ["action", "input", "reasoning"]
+        assert schema["additionalProperties"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +482,7 @@ class TestVoluntaryFlowOptIn:
         agent._soul_fire_lock = _threading.Lock()
 
         before = _threading.active_count()
-        result = soul.handle(agent, {"action": "flow"})
+        result = soul.handle(agent, {"action": "flow", "input": {}})
         # No fire thread spawned.
         assert _threading.active_count() == before
 
@@ -479,7 +503,7 @@ class TestVoluntaryFlowOptIn:
         monkeypatch.setenv("LINGTAI_SOUL_FLOW_ENABLED", "1")
         agent = _make_mock_agent()
         agent._soul_fire_lock = _threading.Lock()
-        result = soul.handle(agent, {"action": "flow"})
+        result = soul.handle(agent, {"action": "flow", "input": {}})
         assert result.get("status") == "ok"
         assert "soul flow triggered" in result.get("message", "").lower()
 
@@ -541,7 +565,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
         monkeypatch.delenv("LINGTAI_SOUL_FLOW_ENABLED", raising=False)
         agent = _make_mock_agent()
         agent._config.retry_timeout = 30.0
-        result = soul.handle(agent, {"action": "inquiry", "inquiry": "Am I ok?"})
+        result = soul.handle(agent, {"action": "inquiry", "input": {"inquiry": "Am I ok?"}})
         assert result["status"] == "ok"
         assert "voice" in result
 
@@ -558,7 +582,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
         snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         try:
-            result = soul.handle(agent, {"action": "config", "delay_seconds": 300})
+            result = soul.handle(agent, {"action": "config", "input": {"delay_seconds": 300}})
             assert result["status"] == "ok"
             assert result["new"]["delay_seconds"] == 300.0
             # Disabled note surfaced; config does not enable flow.
@@ -580,7 +604,7 @@ class TestNonFlowActionsUnaffectedByOptIn:
         snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
         )
         try:
-            result = soul.handle(agent, {"action": "config", "delay_seconds": 300})
+            result = soul.handle(agent, {"action": "config", "input": {"delay_seconds": 300}})
             assert result["status"] == "ok"
             assert "soul_flow_enabled" not in result
             assert "note" not in result

@@ -17,12 +17,31 @@ and actions"): the child's own canonical/raw result stays canonical.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Mapping
 
 from .._manual import load_installed_manual
 from . import ChildTool
 
-__all__ = ["build_manual_child"]
+__all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
+
+#: The one strict-empty ``manual`` input schema every family shares. ``required``
+#: is stated explicitly rather than left implicit: an empty ``properties`` map
+#: with ``additionalProperties: False`` already admits only ``{}``, so the key is
+#: semantically exact, and stating it keeps one canonical spelling for consumers
+#: that compare composed schemas byte-for-byte — whether a family registers
+#: ``build_manual_child`` below or, like ``avatar``, supplies its own ``manual``
+#: handler while still reusing this same literal. Exported so a family that
+#: must also *declare* this schema (e.g. ``soul``'s module-level schema-only
+#: ``ToolFamily`` built before an agent exists) references the one owned
+#: definition instead of copying it — the schema and the child that dispatches
+#: it cannot then drift apart.
+MANUAL_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
 
 
 def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
@@ -68,7 +87,9 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
 
     return ChildTool(
         name="manual",
-        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        # Deep copy: a shallow one would share the nested ``properties`` map,
+        # letting one family's child mutate every other family's schema.
+        input_schema=copy.deepcopy(MANUAL_INPUT_SCHEMA),
         handler=handler,
         title="manual input",
     )

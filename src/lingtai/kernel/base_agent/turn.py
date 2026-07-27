@@ -241,7 +241,8 @@ def _publish_tool_loop_guard_notification(
                 "tool call(s) unchanged. Continue with a different approach, "
                 "summarize the blocked/completed work, or ask the human for "
                 "direction, then dismiss with notification(action='dismiss_channel', "
-                "channel='tool_loop_guard', reason='handled')."
+                "input={'channel': 'tool_loop_guard', 'force': null, "
+                "'reason': 'handled'}, reasoning='...')."
             ),
             data={
                 "reason": reason,

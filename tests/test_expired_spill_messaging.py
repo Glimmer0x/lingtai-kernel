@@ -212,7 +212,9 @@ def test_generic_missing_file_still_generic(tmp_path):
     """A missing file NOT under ``tmp/tool-results/`` must produce the
     standard ``File not found`` message, not the spill-aware one."""
     # We test the read handler indirectly by calling it in isolation
-    from lingtai.tools.read import setup as read_setup
+    # ``read`` is an action of the one public ``file`` family; the operation
+    # lives in that package and is bound via build_operation().
+    from lingtai.tools.file._read import build_operation as build_read
 
     mock_agent = MagicMock()
     mock_agent._working_dir = tmp_path
@@ -224,16 +226,7 @@ def test_generic_missing_file_still_generic(tmp_path):
 
     mock_agent._file_io.read = fake_read
 
-    # Capture the handler registered via add_tool
-    captured_handler = {}
-
-    def fake_add_tool(name, *, schema, handler, description, **kwargs):
-        captured_handler[name] = handler
-
-    mock_agent.add_tool = fake_add_tool
-    read_setup(mock_agent)
-
-    handler = captured_handler["read"]
+    handler = build_read(mock_agent)
 
     # Generic missing file — not under tmp/tool-results/
     result = handler({"file_path": str(tmp_path / "nonexistent.txt")})
@@ -486,7 +479,7 @@ def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
     """A path like ``tmp/tool-results/../not-a-spill.txt`` must NOT be
     classified as a spill artifact — the ``..`` escapes the spill
     directory.  The read handler must return the generic File not found."""
-    from lingtai.tools.read import setup as read_setup
+    from lingtai.tools.file._read import build_operation as build_read
 
     mock_agent = MagicMock()
     mock_agent._working_dir = tmp_path
@@ -497,15 +490,7 @@ def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
 
     mock_agent._file_io.read = fake_read
 
-    captured_handler = {}
-
-    def fake_add_tool(name, *, schema, handler, description, **kwargs):
-        captured_handler[name] = handler
-
-    mock_agent.add_tool = fake_add_tool
-    read_setup(mock_agent)
-
-    handler = captured_handler["read"]
+    handler = build_read(mock_agent)
 
     # Path traverses out of tmp/tool-results/ via ".."
     traversal_path = str(tmp_path / "tmp" / "tool-results" / ".." / "not-a-spill.txt")

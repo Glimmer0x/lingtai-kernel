@@ -6,6 +6,12 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/notification/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -40,7 +46,7 @@ this package too — using it is optional, not mandatory).
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:98-289`). Two enforcement layers correlate `action` with
+  (`__init__.py:98-281`). Two enforcement layers correlate `action` with
   `input`, generated purely from the child registry with no name/schema
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
@@ -52,14 +58,25 @@ this package too — using it is optional, not mandatory).
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
-- `manual.py` — `build_manual_child()` wraps `../_manual.py`'s
+- `manual.py` — owns `MANUAL_INPUT_SCHEMA`, the single strict-empty `manual`
+  input schema every family reuses, and `build_manual_child()`, which wraps
+  `../_manual.py`'s
   `load_installed_manual()` into the ManualTool stable contract: strict empty
   input, and a handler whose actual return value (what `ToolFamily.handle()`
   dispatches back verbatim, once the returned `ChildTool` is registered
   directly and unwrapped in a family's own `ToolFamily`) is the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
-  path) shape, with `status`/`error` loader facts preserved truthfully
-  (`manual.py:1-74`).
+  path) shape, with `status`/`error` loader facts preserved truthfully. The
+  strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
+  so a family composing a schema-only `ToolFamily` alongside its dispatching
+  one reuses the same object instead of hand-copying it and drifting (`mcp`,
+  `knowledge`, `file`, `vision`, and `soul` all do; `manual.py:1-89`) — and a
+  family supplying its own `manual` child entirely, like `avatar`, can
+  reference it the same way instead of restating the literal. `web` predates
+  the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which
+  its own owner may collapse onto this export separately. Each `ChildTool`
+  deep-copies `MANUAL_INPUT_SCHEMA` rather than sharing the literal, so one
+  family's schema can never be mutated through another's.
 
 ## Connections
 
@@ -82,6 +99,86 @@ diagnostic onto any envelope-level failure result, since a generic
 `ToolFamily` has no knowledge of a specific family's settings diagnostics.
 This division follows `../CONTRACT.md` "Implementation independence": using
 `ToolFamily.handle()` is `web`'s choice, not an inherited requirement.
+
+`mcp/__init__.py` ([`../mcp/ANATOMY.md`](../mcp/ANATOMY.md)) is the second
+consumer and the minimal shape of one: a two-child family (`info`, `manual`)
+whose public tool name and action values are unchanged by the migration, where
+both children take the canonical strict-empty `input`. It follows the same
+division — the `manual` child from `build_manual_child(agent, "mcp")` is
+registered directly and unwrapped, and `mcp`'s own flat `mcp_manual` public
+shape is reconstructed post-dispatch by a Host-owned adapter. It also shows
+what a family, not this package, must own when a pre-migration public error
+envelope predates the generic dispatcher: `mcp` renders its exact
+unknown-action envelope in its own `handle_mcp` *before* delegating, including
+the missing-action empty-string default and unhashable `action` values that
+`ToolFamily.handle`'s dict lookup would otherwise raise `TypeError` on. The
+generic dispatcher's canonical error shape is never changed to accommodate a
+consumer.
+
+`knowledge/__init__.py` is the third real consumer
+(`src/lingtai/tools/knowledge/ANATOMY.md`): one `_build_family(agent | None)`
+is the single builder — `_FAMILY = _build_family(None)` backs `get_schema()`
+with non-dispatching handlers, and `_build_family(agent)` binds the
+`info`/`manual` operations named in `_CHILD_SPECS` per agent. Both children declare the canonical strict-empty
+`input_schema`, so every `input` key is a cross-branch/unknown key rejected
+before handler I/O. It registers its own `manual` child rather than
+`build_manual_child`, because knowledge's public manual result is keyed
+`knowledge_manual` — the child's canonical result is returned verbatim, so no
+Host-layer flattening is needed. Its outer `handle()` normalizes only the
+generic `ACTION_REQUIRED` envelope failure back to knowledge's exact
+pre-migration unknown-action result.
+
+`avatar/__init__.py` ([`../avatar/ANATOMY.md`](../avatar/ANATOMY.md)) is the
+sixth real consumer, and shows partial adoption is conforming: it reuses
+`ChildTool`/`ToolFamily` and the exported `MANUAL_INPUT_SCHEMA` for
+`spawn`/`rules`/`manual` schema composition and dispatch — deriving both its
+schema-only and handler-bound child listings from one `_CHILD_SPECS`
+`(action, schema)` source via its own `_build_family`, so they cannot drift
+apart — but supplies its **own** `manual` handler rather than
+`manual.build_manual_child`, because its manual ships inside its own package
+instead of the agent's installed `.library` catalog. `ToolFamily.handle()`
+returns that child's own canonical flat result verbatim — no double wrap, and
+no post-dispatch adaptation of a manual result at all. `AvatarManager.handle()`
+does two things after dispatch returns that this package deliberately cannot:
+it restores avatar's pinned unknown-action error string in place of the generic
+`ACTION_REQUIRED` envelope failure, and it threads root `_reasoning` (the spawn
+mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
+passes no envelope field to any child.
+
+`soul/__init__.py` is the seventh consumer and the first *intrinsic* one. It
+exercises a different composition shape than `web`: soul is a module with a
+`handle(agent, args)` entry point rather than a per-Agent manager object, so it
+composes `get_schema()` from a module-level schema-only `ToolFamily` (which also
+fails loudly at import time on a duplicate/reserved-name collision) and builds
+an agent-bound `ToolFamily` per call in `handle()`, both from the one canonical
+`_CHILD_SPECS` registry of (name, schema, handler-factory).
+Soul goes one step further than `web`'s dual listing: `_build_children(agent)`
+is the single place children are enumerated, called with `None` for the
+schema-only family and with the live agent per dispatch, so the drift class
+where a child is schema-advertised but dispatch-rejected cannot occur. Its
+`manual` child comes from `build_manual_child(agent, "soul-manual")`,
+registered directly and unwrapped, and `handle()` flattens that canonical
+result back to soul's pre-migration flat `status`/`manual`/`manual_path` shape
+after dispatch. Soul additionally drops
+the kernel-injected `_tc_id` before the envelope's closed-root check — that key
+is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
+args (capabilities like `web` never see it), so a family migrating an intrinsic
+must strip it rather than widen `_ROOT_FIELDS`.
+
+`skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
+ninth consumer and uses the same division with no shared code beyond this
+package, and differs from `web` in declaring its child registry exactly once:
+a single `_build_family(agent, paths)` builder registers the `info` child and
+`manual.build_manual_child(agent, "skills")` directly, and both `get_schema()`
+(via an import-time `agent=None` instance whose handlers are unreachable) and
+`setup()` obtain their `ToolFamily` from it — so the advertised input schemas
+are by construction the ones dispatch registers. Both of its children declare
+the canonical strict-empty `input` schema, so `handle()`'s allowed-key check
+rejects every `input` key for either action. Its
+`handle_skills` wrapper adapts only the dispatched `manual` child result to
+the capability's public `skills_manual`/`library_manual`/`manual_path` shape
+and, unlike `web`, keeps this package's canonical envelope-failure result
+verbatim — it has no family-specific diagnostic block to stamp on.
 
 ## Composition
 
@@ -107,6 +204,9 @@ belongs to the consuming family, as `WebManager` demonstrates.
 
 A fake `widget` family in `tests/test_tool_family_generic.py` and
 `tests/test_tool_family_wire_parity.py` proves this package is generic, not
-Web-specific. Building a family on `ToolFamily` is optional: a family may
-hand-write an equivalent `handle()`/schema composition instead, exactly as
-`web` did before adopting this package.
+Web-specific; `soul`'s migration
+(`tests/test_tool_family_soul_migration.py`) proves it a second time against a
+real intrinsic with a different composition shape. Building a family on
+`ToolFamily` is optional: a family may hand-write an equivalent
+`handle()`/schema composition instead, exactly as `web` did before adopting
+this package.

@@ -403,10 +403,10 @@ def _parent_host_tool_floor() -> frozenset[str]:
     the TUI preset wizard only writes overrides/opt-ins into
     ``manifest.capabilities``. So those floor tools must still resolve from the
     parent surface under a preset. But the floor is exactly the host
-    primitives — ``shell`` and the ``file`` group (read/write/edit/glob/grep) —
-    and nothing more: optional/provider parent tools (e.g. ``vision``,
-    ``web_search``) must NOT silently fall back to the parent when a preset
-    omits or fails them.
+    primitives — ``shell`` and ``file`` (the one family whose actions are
+    read/write/edit/glob/grep) — and nothing more: optional/provider parent
+    tools (e.g. ``vision``, ``web_search``) must NOT silently fall back to the
+    parent when a preset omits or fails them.
 
     Derived from ``CORE_DEFAULTS`` so it stays in sync with the floor, minus
     the entries that are not borrowable host *tools*:
@@ -414,7 +414,7 @@ def _parent_host_tool_floor() -> frozenset[str]:
         register no emanation-usable tool surface;
       * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
         tools are inherited only via task ``mcp`` registrations, never the floor.
-    The result is exactly {shell, read, write, edit, glob, grep}.
+    The result is exactly {shell, file}.
     """
     from lingtai.tools.registry import CORE_DEFAULTS  # noqa: PLC0415
     return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp"})
@@ -2301,8 +2301,9 @@ class DaemonManager:
         provider-specific capabilities (``preset_surface =
         (schemas_by_name, handlers_by_name)``), but it does NOT replace the
         parent's always-on host tool floor. Only that narrow floor — ``shell``
-        and the file primitives (read/write/edit/glob/grep) the preset wizard
-        omits from ``manifest.capabilities`` — stays available from the parent,
+        and ``file`` (whose actions are read/write/edit/glob/grep), which the
+        preset wizard omits from ``manifest.capabilities`` — stays available
+        from the parent,
         so requested host tools are not rejected as unknown just because a
         preset was supplied. Optional/provider parent tools (vision,
         web_search, …) are NOT borrowable; they must come from the preset's own
@@ -2342,7 +2343,7 @@ class DaemonManager:
             preset_schemas, preset_handlers = preset_surface
             # A preset selects the child LLM + provider-specific capabilities;
             # it does NOT re-declare the parent's always-on CORE_DEFAULTS host
-            # floor (shell / read / write / edit / glob / grep), because the
+            # floor (shell / file), because the
             # preset wizard only writes overrides/opt-ins into
             # manifest.capabilities. So those floor tools must remain available
             # — they must not become "unknown" just because a preset was
@@ -2437,17 +2438,14 @@ class DaemonManager:
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
-        from lingtai.tools.registry import _GROUPS, canonical_capability_name
+        from lingtai.tools.registry import canonical_capability_name
 
         tool_names: set[str] = set()
         for name in requested:
             name = canonical_capability_name(name)
             if name in EMANATION_BLACKLIST:
                 continue
-            if name in _GROUPS:
-                tool_names.update(_GROUPS[name])
-            else:
-                tool_names.add(name)
+            tool_names.add(name)
         return tool_names
 
     def _instantiate_preset_capabilities(
@@ -2472,7 +2470,6 @@ class DaemonManager:
         """
         from lingtai.tools.registry import (
             BUILTIN_TOOLS,
-            _GROUPS,
             canonical_capability_name,
             setup_capability,
         )
@@ -2485,20 +2482,9 @@ class DaemonManager:
         resolved = copy.deepcopy(preset_caps)
         expand_inherit(resolved, preset_llm)
 
-        # Expand group names (e.g. 'file' → read/write/edit/glob/grep). Groups
-        # inherit the same kwargs as the group entry — same convention as
-        # agent.py:790. Without this, setup_capability would reject 'file'
-        # as an unknown capability.
-        expanded: dict = {}
-        for name, kwargs in resolved.items():
-            if name in _GROUPS:
-                for sub in _GROUPS[name]:
-                    # Each group member gets its own kwargs copy — if a
-                    # capability's setup() ever pops or mutates its kwargs
-                    # in place, sibling members must not be corrupted.
-                    expanded[sub] = dict(kwargs) if isinstance(kwargs, dict) else {}
-            else:
-                expanded[name] = kwargs
+        # Capability groups no longer exist: every name here is either a real
+        # capability or an unknown one that ``setup_capability`` rejects.
+        expanded: dict = dict(resolved)
 
         collector = _ToolCollector(self._agent)
         required = required_tools

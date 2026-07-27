@@ -10,6 +10,15 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/mcp/CONTRACT.md
+  - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/soul/CONTRACT.md
+  - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/skills/__init__.py
+  - src/lingtai/tools/notification/CONTRACT.md
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -82,11 +91,13 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today only `web` is on that allowlist, so
-`summarize` is meaningful for the one family that uses this infrastructure; a
-family adopting `ToolFamily` without also joining the kernel allowlist would
-advertise a model-visible `summarize` control that the kernel silently
-ignores. Calling
+package does not own or enforce. Today `web`, `mcp`, `knowledge`, `file`,
+`vision`, `avatar`, and `soul` are on that allowlist, so `summarize` is
+meaningful for the families that use this infrastructure; a family adopting
+`ToolFamily` without also joining the kernel allowlist would advertise a
+model-visible `summarize` control that the kernel silently ignores —
+joining it is part of a migration, not something this package does on a
+family's behalf. Calling
 `handle()` is optional: it validates the envelope (unknown `action`,
 non-boolean `summarize`, unknown root fields, `input` keys outside the
 selected child's own declared schema) before invoking exactly that child's
@@ -96,7 +107,14 @@ own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
-input; its handler loads the existing `load_installed_manual()` shape
+input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
+that also composes a schema-only `ToolFamily` advertises the identical object
+rather than a hand-copied near-duplicate (`soul` does; `web` predates the
+export and still declares a local copy — collapsing that is `web`'s owner's
+call, not a conformance failure), and so a family supplying its own
+`manual` handler entirely (as `avatar` does) can reference the same literal
+instead of restating it, keeping the two from drifting apart; its handler
+loads the existing `load_installed_manual()` shape
 (`status`, `manual` full body, `manual_path`, optionally `error`) and maps it
 to the canonical, actually-dispatched result: `content=[{"type": "text",
 "text": <full body>}]` and `structuredContent={"manual_path": <path>}`, with
@@ -121,8 +139,8 @@ package, per `../CONTRACT.md` "Implementation independence".
 
 ## Adapters
 
-`web_search/__init__.py` is the one production Adapter/consumer in this
-candidate: `WebManager.__init__` builds a per-instance `ToolFamily` with
+`web_search/__init__.py` is the first production Adapter/consumer:
+`WebManager.__init__` builds a per-instance `ToolFamily` with
 `search`/`browse` handlers bound to that instance, and registers
 `manual.build_manual_child(agent, "web")`'s returned `ChildTool` *directly* —
 unwrapped — as the family's `manual` child. `WebManager.handle()` calls
@@ -137,9 +155,96 @@ flattens the canonical result to Web's pre-migration public shape (`status`,
 `handle()`, not to the generic child or any wrapper registered in place of
 it. `WebManager.handle()` also stamps `current_setting` onto any
 envelope-level failure result (search/browse/unknown-action) before
-returning, unchanged from before. No other built-in family is migrated in
-this candidate; each remains fully independent of this package until its own
-scoped migration.
+returning, unchanged from before.
+
+`mcp/__init__.py` (`../mcp/CONTRACT.md`) is the second production Adapter and
+the minimal shape of one: a two-child family (`info`, `manual`) keeping its
+exact public tool name and action values, where both children declare the
+canonical strict-empty `input`. It registers `build_manual_child(agent,
+"mcp")` directly and unwrapped, and flattens the canonical child result to
+`mcp`'s own `status`/`mcp_manual`/`manual_path` public shape post-dispatch in
+`_flatten_manual_result`. It also establishes how a consumer keeps a
+pre-migration public *error* envelope that this package's dispatcher does not
+reproduce: `handle_mcp` renders `mcp`'s exact unknown-action envelope itself,
+before delegating, covering the missing-action empty-string default and
+unhashable `action` values (`[]`/`{}` from invalid JSON) that
+`ToolFamily.handle`'s `action not in self._children` dict lookup would raise
+`TypeError` on. It routes on `child_names`, the public ordered tuple, whose
+`in` compares by `==` and never hashes — so the unhashable case is handled by
+construction, with no exception handler needed. Per "Implementation
+independence", the fix belongs in the consumer; this package's canonical
+`ACTION_REQUIRED` shape is never widened to accommodate one family's legacy
+envelope.
+
+`knowledge/__init__.py` is the third production Adapter/consumer:
+one `_build_family(agent | None)` registers `info` and `manual` children from a
+single `_CHILD_SPECS` source, both with the canonical strict-empty
+`input_schema`; passing `None` yields the module-level schema-only family
+behind `get_schema()`. It does **not** use
+`manual.build_manual_child`, because knowledge's public manual result has
+always been keyed `knowledge_manual` rather than the generic
+`content`/`structuredContent` shape; registering its own `manual` child means
+`ToolFamily.handle()` returns that family's canonical result verbatim with no
+double wrap and no round-trip through a shape it never exposes — the same
+no-double-wrap rule, satisfied without a Host adapter. Its outer `handle()`
+normalizes only the generic `ACTION_REQUIRED` envelope failure back to
+knowledge's exact pre-migration unknown-action result.
+
+`avatar/__init__.py` is the fourth production Adapter/consumer to touch this
+contract (after `file` and `vision`, which adopt this package per
+`../CONTRACT.md` without a dedicated Adapter paragraph here):
+`AvatarManager.__init__` builds a per-instance `ToolFamily` with
+`spawn`/`rules`/`manual` handlers bound to that instance, and
+`AvatarManager.handle()` calls `self._family.handle(args)`. It is a deliberate
+**partial** adoption, which this package permits: `avatar` reuses `ChildTool`
+and `ToolFamily` but *not* `build_manual_child`, because its manual ships inside
+its own package (`avatar/manual/SKILL.md`) rather than the agent's installed
+`.library` intrinsic catalog — `build_manual_child` would report a `.library`
+`manual_path` that family never reads. Its `manual` child is therefore its own
+`ChildTool` returning `avatar`'s own canonical flat result (`status`, `action`,
+`manual`, `manual_path`), which `ToolFamily.handle()` returns verbatim with no
+double wrap and no post-dispatch adaptation. Strictly *after* dispatch,
+`AvatarManager.handle()` normalizes this package's generic `ACTION_REQUIRED`
+envelope failure back to avatar's own pinned unknown-action error string — the
+same Host/presentation-layer ownership boundary `web` uses for
+`current_setting`, and never a change to this package's canonical error shape.
+`avatar` also threads its root `_reasoning` (the spawn mission brief) to its
+`spawn` handler out-of-band, because this package correctly refuses to pass any
+envelope field to a child.
+
+`soul/__init__.py` is the fifth production Adapter/consumer, and the first
+that is an intrinsic. It demonstrates the module-level composition shape: an
+intrinsic exposes `get_schema()`/`handle(agent, args)` rather than a per-Agent
+manager object, so `get_schema()` composes from a module-level schema-only
+`ToolFamily` (whose construction at import time is also the registry's
+duplicate/reserved-name collision check) and `handle()` builds an agent-bound
+`ToolFamily` per call from the same six child `input_schema` objects. Its
+`manual` child is `build_manual_child(agent, "soul-manual")`, registered
+directly and unwrapped, and `handle()` flattens that canonical result to
+soul's pre-migration flat `status`/`manual`/`manual_path` shape strictly after
+dispatch. `soul` also drops the kernel-injected `_tc_id` before delegating:
+`base_agent._dispatch_tool` adds that transport key to every intrinsic's args
+(a capability like `web` never receives it), so a migrating intrinsic strips it
+at its own Host boundary rather than this package widening `_ROOT_FIELDS` for
+everyone.
+
+`skills/__init__.py` (`../skills/CONTRACT.md`) is the sixth production
+Adapter/consumer. One `_build_family(agent, paths)` builder is its single
+canonical child registry, registering an `info` child and
+`manual.build_manual_child(agent, "skills")` directly — unwrapped; both
+`get_schema()` (through an import-time `agent=None` instance whose handlers are
+unreachable) and `setup()` obtain their `ToolFamily` from that one builder, so
+the composed schema advertises exactly the child `input_schema`s dispatch
+registers. Its `handle_skills` wrapper adapts only a successfully
+dispatched manual result (`"content" in result`) to that capability's public
+`skills_manual`/`library_manual`/`manual_path` shape, post-dispatch. Unlike
+`web`, it returns this package's canonical envelope-failure result verbatim,
+having no family-specific diagnostic block to stamp on; both of its children
+declare the canonical strict-empty `input_schema`, so `handle()`'s
+allowed-key check rejects every `input` key on either action.
+
+Every other built-in family remains fully independent of this package until
+its own scoped migration.
 
 ## Contract rules
 
@@ -168,6 +273,11 @@ scoped migration.
   sole enforcement boundary; dispatch remains always-authoritative and
   fail-closed regardless of whether a given provider validates the root
   `allOf`/`if`/`then` schema-side (`../CONTRACT.md` "Dispatch and actions").
+- `handle()` MUST treat an unhashable `action` (e.g. `[]` or `{}`, reachable
+  when invalid JSON survives to dispatch — the issue #513 blocker class) as
+  simply matching no child, rendering the stable typed `ACTION_REQUIRED`
+  envelope failure exactly as `kernel/tool_dispatch.py` does, rather than
+  raising `TypeError` out of the dispatcher.
 - A child handler MUST receive only its own validated `input` mapping — never
   `action`, `reasoning`, `_reasoning`, or `summarize`.
 - `handle()`'s dispatch result IS the child's own raw/canonical result;
@@ -176,8 +286,12 @@ scoped migration.
   shared handler, common request/result types, or a universal domain result
   shape from any consumer family, matching `../CONTRACT.md` "Implementation
   independence" verbatim.
-- `manual.build_manual_child`'s child MUST use the reserved name `manual`, a
-  strict empty `input_schema`, and its handler's actual return value — what
+- `manual.build_manual_child`'s child MUST use the reserved name `manual`, the
+  exported `manual.MANUAL_INPUT_SCHEMA` strict-empty `input_schema` — the one
+  canonical spelling (`required: []` stated explicitly; families MUST NOT
+  restate it locally), which any family supplying its own `manual` child
+  entirely SHOULD also reference rather than restate — and its handler's
+  actual return value — what
   `ToolFamily.handle()` dispatches back verbatim — MUST be the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
   path) shape, never the pre-mapping flat `load_installed_manual()` dict.
@@ -241,6 +355,12 @@ using the fake `widget` family. `web`'s own existing suite
 — the last of which now also proves root `allOf` correlation survives
 identically on both Chat Completions and Responses wires)
 remains this migration's Web-specific evidence per `../web_search/CONTRACT.md`.
+`tests/test_tool_family_soul_migration.py` is the equivalent family-specific
+evidence for `soul` (`../soul/CONTRACT.md`), and independently exercises this
+package against an intrinsic consumer: all six child schemas and handlers, the
+closed root on both wires, wrong-branch rejection before handler I/O, envelope
+metadata isolation including `_tc_id`, and the reserved `manual` child's
+no-double-wrap result.
 
 ## Maintenance
 

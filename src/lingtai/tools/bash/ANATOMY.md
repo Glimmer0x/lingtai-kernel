@@ -3,6 +3,9 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/bash/_async_supervisor.py
   - src/lingtai/tools/bash/_async_process.py
   - src/lingtai/tools/bash/_state_lock.py
@@ -43,7 +46,8 @@ be explicitly opted into.
 
 ## Components
 
-- `bash/__init__.py` — public schema/setup plus policy, sync execution, and durable async manager orchestration. `get_description` (`__init__.py:195`), `get_schema` (`__init__.py:199`), and `setup` (`__init__.py:1416`) define the public capability surface. `BashManager` owns validation, manager semantics, durable-state rehydration, notification publication, and poll/cancel consumption (`__init__.py:338`). `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:141`).
+- `bash/__init__.py` — the execution engine plus policy, sync execution, and durable async manager orchestration. It declares no schema or description of its own: the package's single public pair is re-exported from `_tool_family.py` at `__init__.py:43` under the canonical `get_schema`/`get_description` names, so there is exactly one model-facing surface and no second flat one to drift against. `setup` (`__init__.py:1470`) registers the public `shell` tool with that schema/description and the family dispatcher. `ShellManager` (`__init__.py:330`, aliased `BashManager` at `__init__.py:1467`) owns validation, manager semantics, durable-state rehydration, notification publication, and poll/cancel consumption; its `handle` dispatches `poll`/`cancel`/`run` only — `manual` is a family child and never reaches it. Its async start receipt and durable reminder body both teach the registered envelope call `shell(action="poll", input={"job_id": ...})`. `_augment_command_result` adds `ok`/`command_status`/`warning` fidelity fields (`__init__.py:191`).
+- `bash/_tool_family.py` — the public/model-facing `shell` tool's LTP v2 envelope. `RUN_INPUT_SCHEMA`/`POLL_INPUT_SCHEMA`/`CANCEL_INPUT_SCHEMA`/`MANUAL_INPUT_SCHEMA` are four strict per-action schemas (run-only fields — `command`, `timeout`, `working_dir`, `async`, `reminder` — live only in `run`'s branch; `job_id` lives only in `poll`/`cancel`'s); `get_schema()` composes them via the generic `tool_family.ToolFamily` (root `allOf` correlation plus `input.oneOf` disclosure, same infra `web` uses), and `get_description()` here is the registered model-facing text documenting that action-separated call shape. Optional run fields are declared required-but-nullable per the strict-schema convention; `_strip_nulls` drops `null` (meaning *absent*) so `ShellManager`'s own runtime defaults apply, while falsy-but-present values (`timeout: 0`, `async: false`) pass through verbatim. `ShellFamilyDispatcher` is the per-agent, per-`ShellManager` handler registered by `setup()`: its `run`/`poll`/`cancel` child handlers flatten their own validated `input` (re-adding the matching `action` key) and delegate to the unchanged `ShellManager.handle` — the async lifecycle, durable state, and every existing `ShellManager` test keep exercising that exact code path. Its thin outer `handle()` adds exactly one Host normalization: narrowing the generic dispatcher's unknown-action message to Shell's own four actions. `manual` is registered directly from `tool_family.manual.build_manual_child`, the shared reserved-name contract, so it returns the canonical `content`/`structuredContent` shape; `MANUAL_INPUT_SCHEMA` is sourced from that same builder rather than re-declared, so the schema the wire advertises and the schema dispatch validates against are one definition. The engine has no manual branch at all — `manual` performs no shell operation and never reaches `ShellManager`.
 - `bash/_shell_dialect.py` — the Bash-local `ShellDialect` port and serializable `ShellInvocation`; the POSIX extraction helper preserves the existing policy grammar.
 - `adapters/posix/bash.py` — `PosixBashDialect`, the first production adapter; it provides POSIX policy extraction and script-form shell invocation.
 - `adapters/shell.py` — `select_shell_dialect`, the outer selector for POSIX and PowerShell dialects; `adapters/bash.py` remains a private compatibility selector.
@@ -56,21 +60,33 @@ be explicitly opted into.
 
 ## Public API
 
-The canonical `shell` tool supports synchronous and asynchronous execution:
+The canonical `shell` tool is a migrated LTP v2 family (`src/lingtai/tools/CONTRACT.md`). Its model-facing root is exactly four fields, and the action's own inputs live under `input`:
 
-| Parameter      | Type     | Description |
-|----------------|----------|-------------|
-| `command`      | string   | Shell command to execute (required for `run`) |
-| `timeout`      | number   | Timeout in seconds (default: 30, sync only) |
-| `working_dir`  | string   | Working directory for execution (default: agent's working dir) |
-| `action`       | string   | `run` (default), `poll`, or `cancel` |
-| `async`        | boolean  | If true, run in background and return job_id immediately (default: false) |
-| `reminder`     | number   | Top-level schema-required field; provider calls carry it for every action, but runtime consumes/validates it only for async `run` (default 1800) |
-| `job_id`       | string   | Job ID for `poll` and `cancel` actions |
+| Root field   | Type    | Description |
+|--------------|---------|-------------|
+| `action`     | string  | Required. One of `run`, `poll`, `cancel`, `manual`. No default. |
+| `input`      | object  | Required. Strict, action-specific input; cross-action keys are rejected at dispatch. |
+| `reasoning`  | string  | Required. Host InvocationContext/audit metadata; never forwarded into `input`. |
+| `summarize`  | boolean | Optional root result post-processing control (default false); never forwarded into `input`. |
 
-**Sync mode** (`async=false`, default): Returns `{status, exit_code, stdout, stderr, ok, command_status[, warning]}` once the command completes, or `{status: "error", message}` only when the shell itself could not run it (empty command, policy denial, timeout, spawn failure).
+Per-action `input` (run-only fields exist only in `run`; `job_id` only in `poll`/`cancel`):
 
-**Async mode** (`async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Initial durable state carries both a tokenized finite supervisor-start lease and a bounded `return_handoff`. The supervisor must claim/recheck the start lease before adapter spawn; the parent then atomically replaces the crash-fallback reminder deadline with `returned_at + reminder` and arms the return handoff before returning. `status: ok` requires winning that valid pending-to-armed transition (or exact completed/failed truth under the still-valid guard); a late owner after expiry returns a pollable error with `job_id`/`pid` instead of false success. Any rehydrated old timer defers while that handoff is pending. The detached supervisor owns durable lease/cancellation/terminal policy and selects the Bash-local process Port; the POSIX adapter owns the command handle, spawn, exact wait, and process-tree cancellation. The supervisor atomically records `{cwd, started_at, finished_at, exit_status_known, exit_code}` from that exact owned wait. A fresh manager never consumes unknown merely because a command process ref vanished: it waits/reloads while the recorded supervisor can still commit, marks unknown only after an expired start lease or a definitively gone supervisor, and otherwise returns recoverable `running`. Terminal poll is a conditional one-shot claim. `cancel` persists a request only after the selected adapter verifies the neutral supervisor ref as the same incarnation; unknown identity is never cancellation authority. The POSIX adapter retains the direct child unreaped through TERM grace, KILLs the original group, proves live-member quiescence, and returns exact terminal truth for the supervisor to commit before cancellation can atomically consume/suppress the job. Async run validates `reminder` as a finite non-negative number bounded by `threading.TIMEOUT_MAX` and defaults omitted direct calls to 1800 seconds.
+| Action   | `input` field  | Type    | Description |
+|----------|----------------|---------|-------------|
+| `run`    | `command`      | string  | Shell command to execute (the one genuinely required, non-nullable field) |
+| `run`    | `timeout`      | number\|null | Timeout in seconds; `null` → default 30, sync only |
+| `run`    | `working_dir`  | string\|null | Working directory; `null`/`""` → the agent working dir, and it must stay inside that sandbox |
+| `run`    | `async`        | boolean\|null | `true` runs in background and returns `job_id` immediately; `null` → false |
+| `run`    | `reminder`     | number\|null | Last-resort async wake delay; `null` → default 1800. Consumed/validated only for async `run` |
+| `poll`   | `job_id`       | string  | Job ID returned by an async run |
+| `cancel` | `job_id`       | string  | Job ID returned by an async run |
+| `manual` | —              | —       | Strict empty `{}`; performs no shell operation |
+
+**Manual** (`action="manual"`): Returns the shared ManualTool contract result — full `shell-manual` body at `content[0].text`, host-local path at `structuredContent.manual_path` — verbatim, with no double wrapping. It reaches no execution engine, spawns no process, and touches no job state, and it serves the installed manual body/path unchanged (`.library/intrinsic/capabilities/shell/SKILL.md`).
+
+**Sync mode** (`input.async=false`, default): Returns `{status, exit_code, stdout, stderr, ok, command_status[, warning]}` once the command completes, or `{status: "error", message}` only when the shell itself could not run it (empty command, policy denial, timeout, spawn failure).
+
+**Async mode** (`input.async=true`): Returns `{status: "ok", job_id, pid, message}` immediately. Initial durable state carries both a tokenized finite supervisor-start lease and a bounded `return_handoff`. The supervisor must claim/recheck the start lease before adapter spawn; the parent then atomically replaces the crash-fallback reminder deadline with `returned_at + reminder` and arms the return handoff before returning. `status: ok` requires winning that valid pending-to-armed transition (or exact completed/failed truth under the still-valid guard); a late owner after expiry returns a pollable error with `job_id`/`pid` instead of false success. Any rehydrated old timer defers while that handoff is pending. The detached supervisor owns durable lease/cancellation/terminal policy and selects the Bash-local process Port; the POSIX adapter owns the command handle, spawn, exact wait, and process-tree cancellation. The supervisor atomically records `{cwd, started_at, finished_at, exit_status_known, exit_code}` from that exact owned wait. A fresh manager never consumes unknown merely because a command process ref vanished: it waits/reloads while the recorded supervisor can still commit, marks unknown only after an expired start lease or a definitively gone supervisor, and otherwise returns recoverable `running`. Terminal poll is a conditional one-shot claim. `cancel` persists a request only after the selected adapter verifies the neutral supervisor ref as the same incarnation; unknown identity is never cancellation authority. The POSIX adapter retains the direct child unreaped through TERM grace, KILLs the original group, proves live-member quiescence, and returns exact terminal truth for the supervisor to commit before cancellation can atomically consume/suppress the job. Async run validates `reminder` as a finite non-negative number bounded by `threading.TIMEOUT_MAX` and defaults omitted direct calls to 1800 seconds.
 
 **Result fidelity — top-level `status` vs. inner command success.** The top-level `status` (`ok`/`done`) reflects only that the shell *spawned* the command; it stays `ok`/`done` even when the inner command exits nonzero. To make inner failures impossible to skim past *without* changing the `status` contract that downstream recovery/telemetry branch on (`tool_executor.py` enriches/logs/collects on `status == "error"`), `_augment_command_result` (`__init__.py`) adds three additive, model-visible fields keyed off `exit_code`:
 

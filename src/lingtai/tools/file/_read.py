@@ -1,6 +1,9 @@
-"""Read capability — read text file contents.
+"""The ``file`` family's ``read`` operation: numbered, capped file windows.
 
-Usage: Agent(capabilities=["read"]) or capabilities=["file"]
+Owns the paging/truncation math (``_apply_cap``), the per-call character cap
+resolution (``_resolve_call_cap``), the continuation contract callers resume
+with, and the spill-aware missing-file hint. Behavior is unchanged from the
+pre-migration ``read`` tool; only its ownership moved here.
 """
 from __future__ import annotations
 
@@ -10,12 +13,15 @@ from typing import TYPE_CHECKING
 from lingtai.kernel.tool_result_artifacts import PREVENTIVE_MAX_CHARS
 
 from .._file_paths import resolve_workdir_path
-from .._manual import load_installed_manual
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
 
-PROVIDERS = {"providers": [], "default": "builtin"}
+__all__ = [
+    "DEFAULT_READ_CAP_CHARS",
+    "READ_HARD_CAP_CHARS",
+    "build_operation",
+]
 
 # Read defaults to a smaller everyday page budget while the runtime tool-result
 # boundary remains a larger non-configurable hard ceiling. Callers may pass
@@ -42,32 +48,13 @@ def _resolve_call_cap(agent: "BaseAgent", requested_max_chars: object) -> int:
     ``max_chars`` lets the caller intentionally ask for smaller or larger chunks
     than the read default while the runtime hard cap remains the ceiling that
     prevents provider-visible tool-result blowups. Invalid per-call values are
-    ignored and use the 50k read default.
+    ignored and use the read default.
     """
     runtime_cap = _runtime_hard_cap(agent)
     requested_cap = _valid_cap(requested_max_chars)
     if requested_cap is None:
         return min(DEFAULT_READ_CAP_CHARS, runtime_cap)
     return min(requested_cap, runtime_cap)
-
-
-def get_description(lang: str = "en") -> str:
-    return "Read the contents of a text file. Normal reads are the primary operation: omit action for the legacy ordinary call or use action='read' explicitly. Returns numbered lines. Text files only — cannot read binary, images, or audio. Use action='manual' once to return the installed read-manual skill; after the manual result, continue the original ordinary read instead of repeating manual, because repeated identical manual calls are an error loop. Before using read for ordinary reads, especially for large files, complete-content workflows, truncation, or line_truncated handling, read that manual. If the file is non-UTF-8 or needs careful search/edit workflow, read file-manual first. Use offset/limit for line windows and optional max_chars to choose the per-call character budget. Default read budget is 100 000 characters; max_chars can raise/lower that per call but is clamped by the non-configurable runtime hard cap of 200 000 characters. A successful read can still be truncated: check truncated=true, cap_chars, returned_chars, next_offset, remaining_lines_estimate, and line_truncated. Continue with next_offset until done. If line_truncated=true, the shown physical line is only a prefix; next_offset skips to the next line and does not recover the hidden tail. Use the read-manual's bash/Python metadata/stats workflow (file size, line count, longest line) and targeted grep/sed/Python processing for such content."
-
-
-def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["read", "manual"], "description": "Omit action for the legacy ordinary read, use action='read' for an explicit ordinary read, or use action='manual' once for the installed read-manual skill."},
-            "file_path": {"type": "string", "description": "Absolute path to the file to read. Required for ordinary reads; omit for action='manual'."},
-            "offset": {"type": "integer", "description": 'Line number to start from (1-based)', "default": 1},
-            "limit": {"type": "integer", "description": 'Max lines to read', "default": 2000},
-            "max_chars": {"type": "integer", "description": 'Optional per-call character budget for read content. Defaults to 100 000; values above the runtime hard cap are clamped to 200 000. Use read-manual before setting this for large files.'},
-            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
-        },
-        "required": [],
-    }
 
 
 def _apply_cap(
@@ -127,15 +114,15 @@ def _apply_cap(
     return numbered, meta
 
 
-def setup(agent: "BaseAgent") -> None:
-    """Set up the read capability on an agent."""
+def build_operation(agent: "BaseAgent"):
+    """Return the bound ``read`` operation for the ``file`` family.
+
+    The returned callable takes only this action's own validated ``input``
+    mapping — never ``action``, ``reasoning``, or ``summarize`` — and returns
+    the canonical raw read result, or a ``{"status": "error", ...}`` dict.
+    """
 
     def handle_read(args: dict) -> dict:
-        action = args.get("action")
-        if action == "manual":
-            return load_installed_manual(agent, "read-manual")
-        if action is not None and action != "read":
-            return {"status": "error", "message": f"Unsupported action for read: {action!r}"}
         path = args.get("file_path", "")
         if not path:
             return {"status": "error", "message": "file_path is required"}
@@ -184,4 +171,4 @@ def setup(agent: "BaseAgent") -> None:
         result.update(extra)
         return result
 
-    agent.add_tool("read", schema=get_schema(), handler=handle_read, description=get_description(), glossary_package=__package__)
+    return handle_read

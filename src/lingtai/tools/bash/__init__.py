@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
-from .._manual import load_installed_manual
 
 from ._async_supervisor import (
     load_state,
@@ -37,6 +36,11 @@ from ._async_process import (
     ProcessRef,
     process_ref_from_state,
 )
+# The package's one and only public schema/description pair is the migrated
+# action-separated family surface, re-exported here under the canonical
+# duck-typed names (the same single-surface shape ``web`` has). There is no
+# second, flat, pre-migration pair to drift against.
+from ._tool_family import ShellFamilyDispatcher, get_description, get_schema
 
 
 if TYPE_CHECKING:
@@ -238,66 +242,6 @@ def _augment_command_result(result: dict) -> dict:
     result["warning"] = "; ".join(parts)
     return result
 
-def get_description(
-    lang: str = "en",
-    dialect: str = "posix",
-    host_os: str | None = None,
-) -> str:
-    host = f" Host OS: {host_os}." if host_os else ""
-    return (f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{host} "
-            "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, data pipelines. "
-            "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
-            "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
-            "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
-            "Supports async mode (async=true → job_id, then poll/cancel). Call shell(action='manual') to return the installed shell-manual skill. Before ordinary shell work, read that manual — it covers async hygiene and advanced usage; no exceptions.")
-
-
-def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["run", "poll", "cancel", "manual"],
-                "description": "Action to perform: 'run' (default) executes a command, 'poll' checks async job status, 'cancel' kills an async job, 'manual' returns the installed shell-manual skill",
-                "default": "run",
-            },
-            "command": {
-                "type": "string",
-                "description": 'The shell command to execute',
-            },
-            "timeout": {
-                "type": "number",
-                "description": 'Timeout in seconds (default: 30, only for sync execution)',
-                "default": 30,
-            },
-            "working_dir": {
-                "type": "string",
-                "description": 'Working directory for the command (optional). Leave it out (or pass an empty string) to use the agent working directory. Must be inside the agent working directory sandbox; paths outside it are rejected. For external repos/paths, keep working_dir at the agent dir and put an explicit cd in command, e.g. cd /absolute/path && ...',
-            },
-            "async": {
-                "type": "boolean",
-                "description": "Run command in background and return immediately with a job_id (default: false, only for action='run')",
-                "default": False,
-            },
-            "reminder": {
-                "type": "number",
-                "description": "Last-resort async wake delay in seconds (default: 1800). For async run only: if the job is still non-terminal when the durable deadline expires, publish a system notification reminding you to poll it; exact completion suppresses this stale watchdog and publishes the shell completion wake instead.",
-                "default": _DEFAULT_ASYNC_REMINDER_SECONDS,
-            },
-            "job_id": {
-                "type": "string",
-                "description": 'Job ID for poll/cancel actions (returned by async run)',
-            },
-            "summary": {
-                "type": "boolean",
-                "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.',
-                "default": False,
-            },
-        },
-        "required": [],  # action-specific inputs are enforced by the handler; manual needs none
-    }
-
 
 
 class ShellPolicy:
@@ -493,9 +437,13 @@ class ShellManager:
         return delay, None
 
     def handle(self, args: dict) -> dict:
+        """Execute one already-validated action in the internal flat shape.
+
+        ``manual`` is not handled here: it is a no-I/O documentation action
+        owned by the family's reserved ``manual`` child
+        (``_tool_family.build_manual_child``), which never reaches this engine.
+        """
         action = args.get("action", "run")
-        if action == "manual":
-            return load_installed_manual(self._agent, "shell")
         if action == "poll":
             return self._handle_poll(args)
         if action == "cancel":
@@ -817,7 +765,13 @@ class ShellManager:
                     }
                 return {
                     "status": "ok", "job_id": job_id, "pid": pid,
-                    "message": f'Job started. Use shell(action="poll", job_id="{job_id}") to check.',
+                    # Teaches the registered public envelope, not the internal
+                    # flat shape: an agent that copies this receipt verbatim
+                    # must land a call the public ``shell`` schema accepts.
+                    "message": (
+                        'Job started. Use shell(action="poll", '
+                        f'input={{"job_id": "{job_id}"}}) to check.'
+                    ),
                     "handoff": "While waiting, go idle or call system(action='sleep'); the terminal result will arrive and wake you as a notification; read shell-manual and notification-manual for details. If Telegram is connected and a Task Card is available for the current turn, use it to report progress; call `telegram(action='manual')` and follow its `Programmable Task Card` section for details.",
                 }
             if state and self._terminal(state.get("status")):
@@ -1009,9 +963,12 @@ class ShellManager:
             cancel_event.set()
 
     def _publish_async_reminder(self, job_id: str) -> bool:
+        # Same envelope-teaching rule as the async start receipt: this durable
+        # watchdog may wake an agent hours later (possibly post-molt), so the
+        # call it hands over must be the one the public schema accepts.
         body = (
             f"Shell async job {job_id} may still be running. "
-            f"Poll it with shell(action=\"poll\", job_id=\"{job_id}\")."
+            f'Poll it with shell(action="poll", input={{"job_id": "{job_id}"}}).'
         )
         agent = self._agent
         if hasattr(agent, "_enqueue_system_notification"):
@@ -1543,11 +1500,19 @@ def setup(
         agent=agent,
         dialect=dialect,
     )
-    # Description is setup-time metadata derived from the injected adapter and host.
+    # Description is setup-time metadata derived from the injected adapter and
+    # host, documenting the registered action-separated call shape.
     desc = get_description(dialect=dialect.state_key(), host_os=_describe_host_os())
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
 
-    agent.add_tool("shell", schema=get_schema(), handler=mgr.handle, description=desc, glossary_package=__package__)
+    # The dispatcher validates the envelope and flattens each action's own
+    # ``input`` into the internal call shape ``ShellManager.handle`` consumes,
+    # so the async lifecycle and durable state stay one untouched code path.
+    dispatcher = ShellFamilyDispatcher(mgr, agent)
+    agent.add_tool(
+        "shell", schema=get_schema(), handler=dispatcher.handle,
+        description=desc, glossary_package=__package__,
+    )
     return mgr

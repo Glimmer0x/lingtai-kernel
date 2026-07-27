@@ -676,12 +676,12 @@ def test_mcp_show_action_returns_health_snapshot(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
     assert handler is not None
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}, "reasoning": "check registry health"})
     assert result["status"] == "ok"
     assert result["registered_count"] == 1
     assert result["registered"][0]["name"] == "imap"
     assert "mcp_manual" not in result
-    manual = handler({"action": "manual"})
+    manual = handler({"action": "manual", "input": {}, "reasoning": "load mcp guidance"})
     assert manual["status"] == "ok"
     assert "mcp_manual" in manual and manual["mcp_manual"]  # umbrella SKILL.md body
 
@@ -723,10 +723,14 @@ def test_mcp_manual_preserves_tui_command_boundary():
 def test_mcp_show_unknown_action_returns_error(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["imap"])
     handler = agent._tool_handlers.get("mcp")
+    # These calls deliberately omit the LTP v2 ``input``/``reasoning`` envelope:
+    # an unknown/malformed ``action`` must be rejected with mcp's exact
+    # unknown-action envelope before any envelope or input validation runs, so
+    # these stay shaped exactly as they were pre-ToolFamily-migration.
     result = handler({"action": "register"})  # not supported in slice
     assert result["status"] == "error"
     # Exact model-visible envelope must survive the dispatch-helper migration
-    # (issue #513).
+    # (issue #513) and the ToolFamily migration.
     assert result == {
         "status": "error",
         "message": "unknown action: 'register', only 'info' or 'manual' is supported",

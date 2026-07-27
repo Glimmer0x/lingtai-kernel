@@ -1,14 +1,22 @@
 ---
 name: soul-contract
 tool: soul
-contract_version: 1
+contract_version: 2
+root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/config.py
   - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_result_summary.py
+  - tests/test_tool_family_soul_migration.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits.
+  same change and bump contract_version on breaking contract edits. soul's
+  schema composition and envelope dispatch build on the generic tool_family
+  package; keep that link current when either side's boundary changes.
 ---
 
 # Soul capability contract
@@ -17,6 +25,14 @@ maintenance: |
 periodic `flow` consultation, cadence/voice `config`, and a `dismiss` for the
 soul-flow notification. The implementation lives in `src/lingtai/tools/soul/`; the code
 is the source of truth.
+
+`soul` is migrated to the LingTai Tool Protocol v2 shape defined in
+`src/lingtai/tools/CONTRACT.md` and builds its schema composition and envelope
+dispatch on the generic `src/lingtai/tools/tool_family/` infrastructure. The
+public tool name, the six action values, every success/error payload, every
+log event, and every persistence path are exactly what they were before that
+migration; only the argument *shape* changed, from a flat root to
+`action` + one strict per-action `input`.
 
 ## Routing Card
 
@@ -41,8 +57,18 @@ claims; log/notification paths -> §State & storage.
 ## Scope
 
 - Canonical tool name: `soul`.
-- Schema requires `action` (enum: `inquiry`, `flow`, `config`, `voice`,
-  `dismiss`).
+- The root property set is exactly `action`, `input`, `reasoning`, and
+  `summarize`, with `additionalProperties: false`. `action`, `input`, and
+  `reasoning` are required; `summarize` is optional Host presentation and is
+  never action input. The action enum is `inquiry`, `flow`, `config`, `voice`,
+  `dismiss`, `manual` — one canonical child each, where the child's name is
+  simultaneously the public action value and the dispatch key.
+- Each action owns one strict, closed `input` object. Declared optional fields
+  use the provider-compatible nullable representation (`["number", "null"]`
+  etc.); null means "absent" at dispatch.
+- `summarize` guidance profile: **short-result** for every action — soul's
+  payloads are small, so leave it false. Call `manual` with `summarize=false`
+  so the exact enable/disable procedure is not summarized away.
 - `flow` is opt-in via an environment variable and disabled by default; the
   agent-invoked call only *triggers* a fire — voices arrive asynchronously.
 - Non-goals: general notification verbs, molt/summarize, mailbox actions.
@@ -52,16 +78,68 @@ claims; log/notification paths -> §State & storage.
 Schema and dispatch both live in `src/lingtai/tools/soul/__init__.py`
 (`get_schema`, `handle`).
 
-| Action | Required inputs | Optional inputs | Success output | Error shapes |
+Inputs below are fields of that action's own `input` object, never of the root.
+
+| Action | Required `input` fields | Optional `input` fields | Success output | Error shapes |
 |---|---|---|---|---|
 | `inquiry` | `inquiry` (non-empty str) | — | `{status: "ok", voice}` (or `voice: "(silence)"`) | `{error: "inquiry is required ..."}` |
-| `flow` | — | — | `{status: "ok", message}` when triggered; `{status: "disabled", enabled: False, env_var, message}` when opt-out | `{error: "soul flow ongoing, request rejected"}` when a fire is already in flight |
-| `config` | at least one of `delay_seconds`, `consultation_past_count` | — | `{status: "ok", old, new}` (+ `soul_flow_enabled`/`note` when flow disabled) | `{error: "config requires at least one of ..."}`; range/type `{error}` for each field |
-| `voice` | — (read) | `set` (`inner`/`observer`/`custom`), `prompt` (required for `custom`) | `{status: "ok", current, available, prompt, ...}` | `{error: "set must be a string ..."}`; `{error: "Unknown voice profile: ..."}`; `{error: "set='custom' requires a non-empty 'prompt' ..."}`; `{error: "prompt is too long ..."}` |
-| `dismiss` | — | — | `{status: "ok", message}` (delegates to `dismiss_channel(soul)`) | dismissal `{status: "error", ...}` from the shared helper |
+| `flow` | — (empty `input`) | — | `{status: "ok", message}` when triggered; `{status: "disabled", enabled: False, env_var, message}` when opt-out | `{error: "soul flow ongoing, request rejected"}` when a fire is already in flight |
+| `config` | at least one non-null of `delay_seconds`, `consultation_past_count` | the other knob (nullable) | `{status: "ok", old, new}` (+ `soul_flow_enabled`/`note` when flow disabled) | `{error: "config requires at least one of ..."}`; range/type `{error}` for each field |
+| `voice` | — (read: both nullable fields null) | `set` (`inner`/`observer`/`custom`), `prompt` (required for `custom`) | `{status: "ok", current, available, prompt, ...}` | `{error: "set must be a string ..."}`; `{error: "Unknown voice profile: ..."}`; `{error: "set='custom' requires a non-empty 'prompt' ..."}`; `{error: "prompt is too long ..."}` |
+| `dismiss` | — (empty `input`) | — | `{status: "ok", message}` (delegates to `dismiss_channel(soul)`) | dismissal `{status: "error", ...}` from the shared helper |
+| `manual` | — (strict empty `input`) | — | flat `{status, manual, manual_path}` (+ `error` when the manual is missing) | `{status: "degraded", ..., error: "soul-manual manual missing ..."}` |
 
 An unknown/absent `action` returns `{error: "Unknown soul action: ..."}`.
 `flow`'s disabled/ongoing paths return **before** spawning any fire thread.
+`manual` performs **no** soul operation: it reads the installed manual and
+touches no timer, lock, consultation, config, voice, or notification state.
+
+### Envelope enforcement
+
+- The root `allOf` correlates each `action` const with that action's exact
+  `input` schema, so a provider that enforces `allOf`/`if`/`then` can reject a
+  mismatched pairing before invocation; `input.oneOf` discloses every action's
+  exact shape in one place.
+- Dispatch remains the always-authoritative, fail-closed boundary. An `input`
+  key belonging to another action's branch (e.g. `action='inquiry'` with
+  `input={'delay_seconds': 60}`) is rejected with
+  `{status: "failed", error_code: "INVALID_ARGUMENT", message: "unsupported soul input field"}`
+  **before** any handler I/O — no LLM call, no config write, no log event.
+- A non-boolean `summarize`, an unknown root field, and a non-object `input`
+  each fail with a stable typed `INVALID_ARGUMENT` envelope error.
+- `reasoning`, `_reasoning`, and `summarize` never reach a child handler.
+  Neither does `_tc_id`, the transport metadata `base_agent._dispatch_tool`
+  injects into every intrinsic's args; soul drops it before the closed-root
+  check and does not consume it.
+- `soul` is listed in `_LTP_V2_MIGRATED_FAMILIES`
+  (`src/lingtai/kernel/tool_result_summary.py`), so the canonical root
+  `summarize` spelling is recognized as the a-priori summary control for this
+  family, and the generic dispatcher's `status: "failed"` envelope errors are
+  never summarized away.
+- No action and no input field anywhere in this family can enable soul flow.
+  The opt-in gate is the operator's `LINGTAI_SOUL_FLOW_ENABLED` env var alone;
+  `config` tunes cadence only and says so in its own result.
+
+### Synthesized involuntary flow pair
+
+The soul-flow fire appends a synthesized `(ToolCallBlock, ToolResultBlock)`
+pair to chat history (`consultation.build_consultation_pair`). That call block
+is replayed to the provider as an assistant `tool_use` block, so it is a
+**model-visible example of how to call `soul`** and MUST carry the same
+envelope the schema advertises: `action: "flow"`, strict empty `input`, and a
+Host-authored `reasoning` (`INVOLUNTARY_FLOW_REASONING`) stating plainly that
+the agent did not initiate the call. An involuntary fire has no agent rationale
+to record, so the constant states that fact rather than inventing one.
+
+This is not cosmetic: a model imitating its own history and sending the
+pre-migration flat `{"action": "flow"}` succeeded before the migration and now
+fails with `INVALID_ARGUMENT`. Any future producer of synthesized `soul` calls
+carries the same obligation.
+
+Appendix-pair detection (`flow._rehydrate_appendix_tracking`) reads only
+`args.get("action")`, so it recognizes both pre- and post-migration history
+without a shape branch. That is a read path over existing history, **not** a
+second accepted call shape: nothing in dispatch admits the flat form.
 
 ## State & storage
 
@@ -102,7 +180,13 @@ init.json                   — manifest.soul persistence for config (delay_seco
 
 | Claim | Source | Test |
 |---|---|---|
-| Schema exposes `inquiry`/`flow`/`config`/`voice`/`dismiss` | `src/lingtai/tools/soul/__init__.py:get_schema` | `tests/test_soul.py` |
+| Schema exposes `inquiry`/`flow`/`config`/`voice`/`dismiss`/`manual` as action-separated children behind one closed LTP v2 root | `src/lingtai/tools/soul/__init__.py:get_schema` | `tests/test_soul.py`, `tests/test_tool_family_soul_migration.py` |
+| Each action's parameters live only in that action's own strict `input` branch | `src/lingtai/tools/soul/__init__.py` (child `input_schema` objects) | `tests/test_tool_family_soul_migration.py::test_action_parameters_are_no_longer_advertised_to_every_action` |
+| Cross-action `input` is rejected before any handler I/O | `src/lingtai/tools/soul/__init__.py:handle` via `tool_family.ToolFamily.handle` | `tests/test_tool_family_soul_migration.py::test_cross_action_input_is_rejected_before_any_handler_io` |
+| `manual` returns the full body plus host-local `manual_path`, no double wrap, and performs no soul operation | `src/lingtai/tools/soul/__init__.py:_adapt_manual_result`, `tool_family/manual.py:build_manual_child` | `tests/test_tool_family_soul_migration.py` (manual section), `tests/test_intrinsic_manual_actions.py` |
+| One public `soul` root on both the Chat and Responses wires, `reasoning` required | `src/lingtai/tools/soul/__init__.py:get_schema`, `kernel/base_agent/tools.py:_build_tool_schemas` | `tests/test_tool_family_soul_migration.py::test_agent_composition_keeps_reasoning_required_on_both_wires` |
+| The synthesized involuntary flow pair carries the current envelope, not the flat pre-migration shape | `src/lingtai/tools/soul/consultation.py:build_consultation_pair` | `tests/test_tool_family_soul_migration.py::test_synthesized_involuntary_flow_pair_uses_the_current_envelope`, `tests/test_soul_consultation.py::TestBuildConsultationPair::test_pair_uses_soul_flow_action` |
+| Schema and dispatch are generated from one child registry and cannot drift | `src/lingtai/tools/soul/__init__.py:_CHILD_SPECS`/`_build_children` | `tests/test_tool_family_soul_migration.py::test_schema_and_dispatch_come_from_one_registry` |
 | `flow` is opt-in and returns a stable `disabled` status when the env var is unset | `src/lingtai/tools/soul/__init__.py:handle` (`_soul_flow_enabled`) | `tests/test_soul.py` |
 | A late consultation result is discarded after a state change | `src/lingtai/tools/soul/flow.py` | `tests/test_soul.py::test_consultation_fire_discards_late_result_after_state_change` |
 | `inquiry` returns a voice (or "(silence)") and persists the entry | `src/lingtai/tools/soul/__init__.py:handle`, `src/lingtai/tools/soul/inquiry.py:soul_inquiry` | `tests/test_soul_consultation.py` |
@@ -120,11 +204,16 @@ init.json                   — manifest.soul persistence for config (delay_seco
 | Config bounds are enforced and persisted | `tests/test_soul.py` (config validation) | Set `delay_seconds` below the min | Runaway cadence / lost settings |
 | `dismiss` only clears the `soul` channel via the shared guard | `tests/test_system_dismiss.py::test_soul_dismiss_alias_uses_shared_helper` | Dismiss soul, inspect other channels | Cross-channel notification wipe |
 | Late/stale consultation results are discarded | `tests/test_soul.py::test_consultation_fire_discards_late_result_after_state_change` | Change state mid-fire | Stale voices injected into a new context |
+| A cross-action `input` never reaches a handler | `tests/test_tool_family_soul_migration.py::test_cross_action_input_is_rejected_before_any_handler_io` | Send `action='inquiry'` with `input={'delay_seconds': 60}` | A mis-paired call silently mutating cadence or burning an LLM call |
+| `manual` performs no soul operation | `tests/test_tool_family_soul_migration.py::test_manual_performs_no_soul_operation` | Call `soul(action='manual', input={})` and inspect init.json + logs | Reading the manual perturbing live soul state |
+| Synthesized flow calls stay envelope-shaped | `tests/test_tool_family_soul_migration.py::test_synthesized_involuntary_flow_pair_uses_the_current_envelope` | Trigger a fire, read the appended pair's args in chat history | History teaching a shape the schema rejects; a model imitating it gets `INVALID_ARGUMENT` |
 
 Run before merging soul changes:
 
 ```bash
-python -m pytest tests/test_soul.py tests/test_soul_consultation.py tests/test_system_dismiss.py -q
+python -m pytest tests/test_soul.py tests/test_soul_consultation.py \
+  tests/test_system_dismiss.py tests/test_tool_family_soul_migration.py \
+  tests/test_intrinsic_manual_actions.py -q
 ```
 
 ## Schema and glossary ownership

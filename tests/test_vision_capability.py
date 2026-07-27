@@ -13,6 +13,23 @@ from lingtai.tools.vision import PROVIDERS, VisionManager, setup
 from lingtai.services.vision import VisionService, create_vision_service
 
 
+def analyze(image_path: str = "", question=None) -> dict:
+    """Build one LTP v2 ``analyze`` envelope for the public ``vision`` family.
+
+    ``vision`` is action-separated (``analyze``/``manual``): the model sends
+    ``action`` + strict per-action ``input`` + required ``reasoning``. Optional
+    ``question`` is a required nullable branch property, so absent is ``None``.
+    """
+    return {
+        "action": "analyze",
+        "input": {"image_path": image_path, "question": question},
+        "reasoning": "analyze the test image",
+    }
+
+
+MANUAL_CALL = {"action": "manual", "input": {}, "reasoning": "load vision guidance"}
+
+
 def make_mock_service():
     svc = MagicMock()
     svc.provider = "gemini"
@@ -69,7 +86,7 @@ def test_vision_with_dedicated_service(tmp_path):
 
     img_path = tmp_path / "test.jpg"
     img_path.write_bytes(b"\xff\xd8\xff fake jpeg")
-    result = mgr.handle({"image_path": str(img_path)})
+    result = mgr.handle(analyze(str(img_path)))
     assert result["status"] == "ok"
     assert "dog" in result["analysis"]
     mock_vision_svc.analyze_image.assert_called_once()
@@ -80,7 +97,7 @@ def test_vision_missing_image(tmp_path):
     mock_vision_svc = MagicMock(spec=VisionService)
     agent = make_mock_agent(tmp_path)
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    result = mgr.handle({"image_path": "/nonexistent/image.png"})
+    result = mgr.handle(analyze("/nonexistent/image.png"))
     assert result.get("status") == "error"
 
 
@@ -93,7 +110,7 @@ def test_vision_relative_path(tmp_path):
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
     img_path = tmp_path / "photo.png"
     img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle({"image_path": "photo.png"})
+    result = mgr.handle(analyze("photo.png"))
     assert result["status"] == "ok"
     mock_vision_svc.analyze_image.assert_called_once_with(str(img_path), prompt="Describe what you see in this image.")
 
@@ -107,7 +124,7 @@ def test_vision_service_error_handled(tmp_path):
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle({"image_path": str(img_path)})
+    result = mgr.handle(analyze(str(img_path)))
     assert result["status"] == "error"
     assert "API down" not in result["message"]
     assert "RuntimeError" in result["message"]
@@ -122,7 +139,7 @@ def test_vision_service_error_does_not_echo_secret_or_url(tmp_path):
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"fake")
-    result = mgr.handle({"image_path": str(img_path)})
+    result = mgr.handle(analyze(str(img_path)))
     assert result["status"] == "error"
     assert "secret" not in result["message"]
     assert "example.test" not in result["message"]
@@ -205,7 +222,7 @@ def test_openai_unknown_wire_remains_manual_without_factory_call(tmp_path):
 
     mock_factory.assert_not_called()
     assert mgr._vision_service is None
-    result = mgr.handle({})
+    result = mgr.handle(analyze())
     assert result["status"] == "error"
     assert "manual" in result["message"]
     assert "unproven_wire" not in result["message"]
@@ -233,7 +250,7 @@ def test_generic_openai_compatible_unknown_wire_remains_manual(tmp_path):
 
     mock_cls.assert_not_called()
     assert mgr._vision_service is None
-    result = mgr.handle({})
+    result = mgr.handle(analyze())
     assert result["status"] == "error"
     assert "manual" in result["message"]
     assert "unproven_wire" not in result["message"]
@@ -257,7 +274,7 @@ def test_vision_empty_response_is_error(tmp_path):
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
     img_path = tmp_path / "test.png"
     img_path.write_bytes(b"\x89PNG fake")
-    result = mgr.handle({"image_path": str(img_path)})
+    result = mgr.handle(analyze(str(img_path)))
     assert result["status"] == "error"
 
 
@@ -355,7 +372,7 @@ def test_mimo_responses_wire_is_manual_only(tmp_path):
     )
     mgr = setup(agent, provider="mimo", api_key="sk-test")
     assert mgr._vision_service is None
-    assert mgr.handle({})["status"] == "error"
+    assert mgr.handle(analyze())["status"] == "error"
 
 
 def test_vision_setup_resolves_api_key_env(tmp_path, monkeypatch):
@@ -1071,7 +1088,7 @@ def test_registered_adapters_remain_callable_with_manual_route(tmp_path, provide
     assert isinstance(result, VisionManager)
     agent.add_tool.assert_called_once()
     handler = agent.add_tool.call_args.kwargs["handler"]
-    assert handler({"action": "manual"})["status"] in {"ok", "degraded"}
+    assert handler(MANUAL_CALL)["status"] in {"ok", "degraded"}
 
 
 def test_vision_setup_unsupported_provider_keeps_manual_route(tmp_path):
@@ -1096,7 +1113,7 @@ def test_setup_failure_retains_safe_manual_reason(tmp_path):
         )
         (tmp_path / "x.png").write_bytes(b"fake")
         mgr = setup(agent, provider="openai", api_key="sk-test")
-    result = mgr.handle({"image_path": "x.png"})
+    result = mgr.handle(analyze("x.png"))
     assert result["status"] == "error"
     assert "RuntimeError" in result["message"]
     assert "secret" not in result["message"]
@@ -1306,7 +1323,7 @@ def test_vision_empty_image_path(tmp_path):
     mock_vision_svc = MagicMock(spec=VisionService)
     agent = make_mock_agent(tmp_path)
     mgr = VisionManager(agent, vision_service=mock_vision_svc)
-    result = mgr.handle({"image_path": ""})
+    result = mgr.handle(analyze(""))
     assert result["status"] == "error"
     assert "image_path" in result["message"].lower() or "provide" in result["message"].lower()
 

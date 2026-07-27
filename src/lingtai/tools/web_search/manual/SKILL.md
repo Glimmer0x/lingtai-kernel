@@ -3,8 +3,8 @@ name: web-manual
 description: >
   One web workflow: search first, browse a known result next, and use one
   explicit legacy fallback only when static browsing cannot serve the need.
-version: 7.0.0
-last_changed_at: "2026-07-26T00:00:00Z"
+version: 7.0.1
+last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
@@ -162,7 +162,9 @@ web(action='manual', input={}, reasoning='load web guidance') for schema.`
 ## 4. One explicit legacy fallback
 
 If browse returns a typed unsupported-content failure (for example PDF or a
-JavaScript-only page), choose exactly one legacy route and name it: use the
+JavaScript-only page), or a `NO_TEXT_BLOCKS` failure reporting that the body was
+not decodable text (an origin that returns compressed or binary bytes under a
+text content type), choose exactly one legacy route and name it: use the
 preserved `scripts/extract_page.py --tier 0` for a PDF, a source-specific API
 for structured data, or the documented Playwright/academic references under
 `reference/`. Do not advertise or invoke a second public tool; do not silently

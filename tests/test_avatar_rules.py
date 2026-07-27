@@ -165,7 +165,7 @@ class TestAvatarRulesAction:
         mgr = agent.get_capability("avatar")
         result = mgr.handle({
             "action": "rules",
-            "rules_content": "No deleting.",
+            "input": {"rules_content": "No deleting."},
         })
         assert "error" in result
 
@@ -189,7 +189,7 @@ class TestAvatarRulesAction:
         mgr = agent.get_capability("avatar")
         result = mgr.handle({
             "action": "rules",
-            "rules_content": "Always log actions.",
+            "input": {"rules_content": "Always log actions."},
         })
         assert result["status"] == "ok"
 
@@ -243,7 +243,7 @@ class TestAvatarRulesAction:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "rules",
-            "rules_content": "No external API calls.",
+            "input": {"rules_content": "No external API calls."},
         })
         assert result["status"] == "ok"
         # Self + descendants uniformly get .rules signal files
@@ -288,7 +288,7 @@ class TestAvatarRulesAction:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "rules",
-            "rules_content": "Be concise.",
+            "input": {"rules_content": "Be concise."},
         })
         assert result["status"] == "ok"
         # All descendants get .rules signal files
@@ -307,7 +307,7 @@ class TestAvatarRulesAction:
             admin={"karma": True},
         )
         mgr = agent.get_capability("avatar")
-        result = mgr.handle({"action": "rules"})
+        result = mgr.handle({"action": "rules", "input": {}})
         assert "error" in result
 
     def test_explicit_spawn_action_required(self, tmp_path):
@@ -322,7 +322,7 @@ class TestAvatarRulesAction:
         so the unified 'avatar' tool matches the schema-and-runtime-required
         'action' contract every other canonical action tool (knowledge, mcp,
         skills, notification, system, soul, daemon) already follows — see
-        avatar CONTRACT.md contract_version 3.
+        avatar CONTRACT.md contract_version 4.
         """
         from lingtai.agent import Agent
 
@@ -349,7 +349,7 @@ class TestAvatarRulesAction:
             assert not (parent_dir.parent / "child").exists()
 
             # Explicit action='spawn' behaves exactly as before.
-            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
+            result = mgr.handle({"action": "spawn", "input": {"name": "child", "confirm": True}})
         assert result["status"] == "ok"
         assert result["agent_name"] == "child"
         assert result["address"] == "child"  # relative name (current convention)
@@ -388,7 +388,7 @@ class TestAvatarRulesAction:
         mgr = parent.get_capability("avatar")
         result = mgr.handle({
             "action": "rules",
-            "rules_content": "Cycle test.",
+            "input": {"rules_content": "Cycle test."},
         })
         assert result["status"] == "ok"
         # Both self and child receive .rules signals
@@ -435,7 +435,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
+            result = mgr.handle({"action": "spawn", "input": {"name": "child", "confirm": True}})
         assert result["status"] == "ok"
 
         # Child dir is a sibling of parent_dir (avatar_working_dir = parent.parent / name)
@@ -449,7 +449,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"action": "spawn", "name": "child", "confirm": True})
+            result = mgr.handle({"action": "spawn", "input": {"name": "child", "confirm": True}})
         assert result["status"] == "ok"
 
         child_dir = parent_dir.parent / "child"
@@ -463,7 +463,7 @@ class TestAutoDistributeAfterSpawn:
 
         mgr = parent.get_capability("avatar")
         with _patch_avatar_launch():
-            result = mgr.handle({"action": "spawn", "name": "clone", "type": "deep", "confirm": True})
+            result = mgr.handle({"action": "spawn", "input": {"name": "clone", "type": "deep", "confirm": True}})
         assert result["status"] == "ok"
 
         clone_dir = parent_dir.parent / "clone"
@@ -515,7 +515,7 @@ class TestSpawnNameValidation:
         mgr = parent.get_capability("avatar")
 
         with _patch_avatar_launch() as launch:
-            result = mgr.handle({"action": "spawn", "name": bad_name})
+            result = mgr.handle({"action": "spawn", "input": {"name": bad_name}})
 
         assert "error" in result, f"name={bad_name!r} should have been rejected but got {result}"
         # No subprocess launched
@@ -540,26 +540,44 @@ class TestSpawnNameValidation:
         mgr = parent.get_capability("avatar")
 
         with _patch_avatar_launch():
-            result = mgr.handle({"action": "spawn", "name": good_name, "confirm": True})
+            result = mgr.handle({"action": "spawn", "input": {"name": good_name, "confirm": True}})
 
         assert result.get("status") == "ok", f"name={good_name!r} should have been accepted but got {result}"
         assert (parent_dir.parent / good_name).is_dir()
 
-    def test_legacy_dir_argument_is_ignored(self, tmp_path):
-        """Pre-fix callers may still pass `dir=...`. It's no longer in the
-        schema, but the handler must not crash on unknown kwargs — it should
-        fall through to `name`-driven placement."""
+    def test_legacy_dir_argument_is_rejected_before_any_io(self, tmp_path):
+        """Pre-fix callers may still pass `dir=...` inside the spawn input.
+
+        Before the LTP v2 migration `dir` was merely absent from the schema and
+        silently ignored, so a call carrying it still spawned at the
+        `name`-driven location. The strict per-action input schema is now the
+        dispatch-time authorization boundary: an unknown input key is rejected
+        outright, before any filesystem mutation or subprocess launch. The
+        malicious `dir` still cannot place anything — and now neither can the
+        otherwise-valid `name`.
+        """
         parent, parent_dir = self._spawnable_parent(tmp_path)
         mgr = parent.get_capability("avatar")
 
-        with _patch_avatar_launch():
-            # Pass both a safe name and a malicious legacy dir; name wins.
-            result = mgr.handle({"action": "spawn", "name": "safe", "dir": "avatars/evil", "confirm": True})
+        with _patch_avatar_launch() as launch:
+            # Pass both a safe name and a malicious legacy dir; the whole call
+            # is refused because `dir` is not a declared spawn input field.
+            result = mgr.handle({
+                "action": "spawn",
+                "input": {"name": "safe", "dir": "avatars/evil", "confirm": True},
+            })
 
-        assert result.get("status") == "ok"
-        assert (parent_dir.parent / "safe").is_dir()
+        assert result == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported avatar input field",
+        }
+        # Rejected before any I/O: no subprocess, no directory, no ledger.
+        launch.assert_not_called()
+        assert not (parent_dir.parent / "safe").exists()
         # The malicious dir was NOT honored
         assert not (parent_dir.parent / "avatars").exists()
+        assert not (parent_dir / "delegates" / "ledger.jsonl").exists()
 
     def test_prepare_deep_refuses_non_sibling_dst(self, tmp_path):
         """Defense-in-depth: even if _prepare_deep is called directly with a

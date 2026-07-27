@@ -259,7 +259,13 @@ class TestBashManager:
         assert str(external.resolve()) in result["message"]
 
     def test_schema_documents_working_dir_sandbox_and_cd_workaround(self):
-        desc = get_schema("en")["properties"]["working_dir"]["description"]
+        # ``working_dir`` is a run-only field, so it lives in the ``run``
+        # child's own input schema on the migrated envelope.
+        run_branch = next(
+            b for b in get_schema("en")["properties"]["input"]["oneOf"]
+            if b["title"] == "run input"
+        )
+        desc = run_branch["properties"]["working_dir"]["description"]
 
         assert "agent working directory sandbox" in desc
         assert "paths outside" in desc

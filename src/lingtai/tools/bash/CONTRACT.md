@@ -1,9 +1,13 @@
 ---
 name: bash-contract
 tool: shell
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/bash/_async_supervisor.py
   - src/lingtai/tools/bash/_async_process.py
   - src/lingtai/tools/bash/_state_lock.py
@@ -71,20 +75,86 @@ does not stream output incrementally (async jobs are polled, not streamed).
 
 ## Tool surface
 
-`get_schema` marks `reminder` required at the top schema level to satisfy the
-provider-facing required-option contract. Provider-validated sync `run`,
-`poll`, and `cancel` calls therefore also carry `reminder` on the wire, but the
-handler consumes and validates it only for async `run`; sync `run`, `poll`, and
-`cancel` ignore it. Direct async runtime calls that omit it still default to
-1800 seconds for compatibility. The handler enforces per-action requirements
-for `command` and `job_id`. `action` defaults to `run`.
+`shell` is a migrated LingTai Tool Protocol v2 family (see
+`src/lingtai/tools/CONTRACT.md`). Its public/model-facing root is exactly
+`action`, `input`, `reasoning`, and `summarize`; `action`, `input`, and
+`reasoning` are required and the root is closed
+(`additionalProperties: false`). The four canonical children are
+`run | poll | cancel | manual`; each child name is simultaneously the public
+`action` value and the dispatch key, with no mapping layer. `action` has no
+default — it must be stated. The composed schema is built by the generic
+`tool_family` infrastructure in `src/lingtai/tools/bash/_tool_family.py`
+(`get_schema`), which correlates each `action` const to that child's own
+`input` schema at the root via `allOf`/`if`/`then` and additionally discloses
+every branch under `input.oneOf`.
 
-| Action | Required inputs | Optional inputs | Success output | Error shapes |
+Run-only fields (`command`, `timeout`, `working_dir`, `async`, `reminder`) exist
+only in `run`'s `input`; `job_id` exists only in `poll`'s and `cancel`'s.
+`manual` takes a strict empty `input`. Every child `input` is closed, and a key
+belonging to another action's branch is rejected at dispatch — before any
+handler I/O — with `{status: "failed", error_code: "INVALID_ARGUMENT",
+message: "unsupported shell input field"}`. An unknown `action` is rejected the
+same way with `error_code: "ACTION_REQUIRED"` and the message
+`action must be one of run, poll, cancel, or manual`.
+
+Following the strict-schema convention, optional run fields are declared
+REQUIRED but nullable: `null` means *absent* and is dropped before delegation,
+so `ShellManager` applies its own unchanged runtime defaults (`timeout` 30,
+`working_dir` = the agent sandbox, `async` false, `reminder` 1800). Only
+`command` is genuinely required and non-nullable. A falsy-but-present value
+(`timeout: 0`, `async: false`, `working_dir: ""`) is passed through verbatim.
+
+`reasoning` is Host InvocationContext/audit metadata and `summarize` is the
+root, cross-cutting result post-processing control; neither is ever forwarded
+into a child's `input`. `summarize` is honored by the single existing central
+summarizer (`src/lingtai/kernel/tool_result_summary.py`), which recognizes the
+canonical spelling only for a migrated family — there is no second summarizer
+and no shell-specific summarization mechanism. The pre-migration flat `summary`
+boolean is no longer advertised on the public schema, though the central
+summarizer still honors that spelling unconditionally for any historical or
+pending call that carries it.
+
+`ShellManager` is the unchanged execution engine. It still accepts the
+historical flat call shape (`{"action": "run", "command": ...}`, `action`
+defaulting to `run`) as its internal interface, and the async lifecycle,
+durable job state, leases, reminders, completion notifications, and
+cancellation semantics below are exactly as before; `_tool_family.py` only
+flattens a validated `input` back into that shape before delegating. That flat
+shape is purely internal and has no schema of its own: the package declares
+exactly one `get_schema`/`get_description` pair — the migrated family surface in
+`_tool_family.py`, re-exported from `__init__.py` under those canonical names —
+so no second, pre-migration public schema exists to drift against.
+
+The engine serves no documentation: `ShellManager.handle` dispatches only
+`poll`, `cancel`, and `run`. `manual` is owned solely by the family's reserved
+child and never reaches the engine.
+
+Each child returns `ShellManager`'s own raw, canonical result verbatim. There
+is no Host envelope wrapped around a child result, and no child result nested
+inside another action's result.
+
+| Action | Required `input` | Nullable-optional `input` | Success output | Error shapes |
 |---|---|---|---|---|
-| `run` (sync) | Provider schema: `command`, `reminder`; runtime consumes `command` only | `working_dir`, `timeout` (default 30), `summary` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
-| `run` (async) | Provider/runtime: `command`, `async: true`, `reminder` | `working_dir`, `summary` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
-| `poll` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
-| `cancel` | Provider schema: `job_id`, `reminder`; runtime consumes `job_id` only | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
+| `run` (sync) | `command` | `working_dir`, `timeout` (default 30), `async`, `reminder` | `{status: "ok", exit_code, stdout, stderr, ok, command_status, warning?}` | `{status: "error", message}` — empty command, policy-denied, cwd outside sandbox, timeout (with broad-scan hint), or spawn failure |
+| `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
+| `poll` | `job_id` | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
+| `cancel` | `job_id` | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
+| `manual` | — (strict empty `{}`) | — | `{status, content: [{type: "text", text: <full shell-manual body>}], structuredContent: {manual_path}}` — the shared ManualTool contract, returned without double wrapping | `status: "degraded"` plus `error` when the installed manual is missing |
+
+`manual` performs no shell operation: it never reaches the execution engine,
+spawns no process, and touches no job state. It serves the installed manual body
+and its host-local `manual_path` unchanged
+(`.library/intrinsic/capabilities/shell/SKILL.md`, the destination
+`Agent._install_intrinsic_manuals` maps the retained `bash/manual/` bundle to).
+Its input schema is sourced from the shared `build_manual_child` builder, not
+re-declared, so the advertised and dispatch-validated shapes are one definition.
+
+The async start receipt (`run` async `message`) and the durable reminder
+notification body both hand the model a literal call, and both MUST teach the
+registered envelope — `shell(action="poll", input={"job_id": "..."})` — never a
+flat root `job_id`, which the public schema rejects before dispatch. A reminder
+may wake an agent hours later, possibly post-molt, so this is the recovery
+guidance for exactly the callers least able to re-derive the shape.
 
 Fidelity fields are additive and keyed off `exit_code`: `ok` is `True` only when
 `exit_code == 0`; `command_status` is `"success"`/`"failed"`; `warning` is
@@ -100,8 +170,9 @@ any filesystem access (path-traversal guard).
 `run`; booleans, non-numeric values, non-finite values (`NaN`, `Infinity`),
 negative values, and values larger than `threading.TIMEOUT_MAX` are rejected
 because the timer backend cannot accept them safely. The schema default is 1800
-seconds. Direct runtime calls that omit it still get 1800 seconds, so older
-callers keep working even though providers see the field as required.
+seconds. It now lives only in `run`'s `input`, so `poll` and `cancel` no longer
+carry it on the wire at all; a `run` call that passes `null` (or a direct
+runtime call that omits it) still gets 1800 seconds.
 
 Agents following an async success `handoff` MUST treat Task Card guidance as
 conditional: use the Task Card only when Telegram is connected and a Task Card

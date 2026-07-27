@@ -5,7 +5,11 @@ related_files:
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/manual/SKILL.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/CONTRACT.md
   - tests/test_knowledge.py
+  - tests/test_tool_family_knowledge_migration_parity.py
   - src/lingtai/tools/knowledge/glossary-en.md
   - src/lingtai/tools/knowledge/glossary-zh.md
   - src/lingtai/tools/knowledge/glossary-wen.md
@@ -28,8 +32,13 @@ the regular `read` tool.
 ## Components
 
 - `knowledge/__init__.py` — the capability implementation. It owns legacy JSON
-  migration, `_reconcile`, `get_description`, `get_schema`, and `setup`, and
-  imports shared Markdown-catalog scanning/rendering from `core/_catalog.py`.
+  migration, `_reconcile`, `_knowledge_manual`, the `ToolFamily` composition
+  (`_EMPTY_INPUT_SCHEMA`, `_CHILD_SPECS`, one `_build_family(agent | None)`),
+  `get_description`, `get_schema`, `handle`, and `setup`, and imports shared
+  Markdown-catalog scanning/rendering from `core/_catalog.py`.
+- `tools/tool_family/` — the generic, optional LTP v2 composition/dispatch
+  infrastructure this capability adopts for its schema and dispatch
+  (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `core/_catalog.py` — shared frontmatter parser, recursive Markdown catalog
   scanner, and YAML catalog renderer used by both `knowledge` and `skills`.
 - `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
@@ -40,9 +49,17 @@ the regular `read` tool.
 
 - `lingtai.tools.registry` maps builtin capability name `knowledge` here. Former
   `library` and `codex` capability names are not registered.
-- `setup()` registers exactly one tool, `knowledge`, with a single `info`
-  action. The historical `knowledge_limit` kwarg is accepted and ignored.
+- `setup()` registers exactly one tool, `knowledge`, as one LTP v2 family with
+  the two public actions `info` and `manual`. The historical `knowledge_limit`
+  kwarg is accepted and ignored.
+- `handle()` is the Host layer: it dispatches through the family and normalizes
+  the generic `ACTION_REQUIRED` envelope failure back to knowledge's exact
+  pre-migration unknown-action result.
 - `_reconcile()` writes protected prompt section `knowledge`.
+- `kernel/tool_result_summary.py` lists `knowledge` in
+  `_LTP_V2_MIGRATED_FAMILIES`, so root `summarize` is the canonical a-priori
+  summary control for this tool and its `status: "failed"` envelope errors are
+  never summarized.
 - `skills/` is the structurally isomorphic, physically separate sibling
   capability — it owns `<agent>/.library/{intrinsic,custom}/<name>/SKILL.md`,
   knowledge owns `<agent>/knowledge/<name>/KNOWLEDGE.md`. Two separate
@@ -63,6 +80,12 @@ the regular `read` tool.
 
 - `knowledge` is private, agent-owned memory. It is not the public skill
   catalog.
+- The tool is a signpost only: no action creates, edits, searches, or loads
+  knowledge entries. Both children declare a strict-empty `input`, so there is
+  no field through which an authoring payload could be smuggled.
+- `info` re-scans/reconciles the catalog and returns health
+  (`knowledge_dir`/`catalog_size`/`problems`) without loading bodies. `manual`
+  returns the current manual body/path and never rescans or mutates.
 - `library` and `codex` are gone as durable-memory aliases. This is a breaking
   rename by design.
 - The catalog injects only `name`/`description`/`path`. Bodies and supporting

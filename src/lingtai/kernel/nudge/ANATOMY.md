@@ -69,7 +69,8 @@ the ordinary Notification Store channel; it does not create a second transport.
 `base_agent/lifecycle.py:_heartbeat_loop` calls `run_checks` once per heartbeat;
 protected goal reminders are dispatched separately by
 `run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
-`NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", channel="nudge")` remains
+`NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", input={"channel": "nudge", ...},
+reasoning=...)` remains
 the only transport-facing dismissal path and calls `record_dismissal` so dismiss
 means mute, not resolved. Effective config is reread on every Nudge operation;
 invalid values fail safe to defaults and are diagnostic-only.

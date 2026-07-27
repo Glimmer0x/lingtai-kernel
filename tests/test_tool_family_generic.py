@@ -59,11 +59,13 @@ def test_registration_is_deterministic_and_ordered():
 
 def test_duplicate_child_name_fails_loudly():
     calls: list[dict] = []
-    with pytest.raises(ToolFamilyError):
+    with pytest.raises(ToolFamilyError, match="duplicate child name 'spin'"):
         ToolFamily("widget", [_spin_child(calls), _spin_child(calls)])
 
 
 def test_manual_reserved_name_collision_fails_loudly():
+    """A repeated reserved ``manual`` child is caught by the duplicate-name check."""
+
     def handler(_input):
         return {"status": "ok"}
 
@@ -72,7 +74,7 @@ def test_manual_reserved_name_collision_fails_loudly():
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=handler,
     )
-    with pytest.raises(ToolFamilyError):
+    with pytest.raises(ToolFamilyError, match=f"duplicate child name '{RESERVED_MANUAL_NAME}'"):
         ToolFamily("widget", [_manual_child(), second_manual])
 
 
@@ -135,6 +137,22 @@ def test_dispatch_missing_action_fails_with_action_required():
     result = fam.handle({"input": {}})
     assert result["status"] == "failed"
     assert result["error_code"] == "ACTION_REQUIRED"
+
+
+def test_dispatch_unhashable_action_fails_without_raising():
+    """Invalid JSON can make ``action`` unhashable (issue #513 blocker class).
+
+    Such an action matches no child and must render the stable typed envelope
+    failure, exactly as ``kernel/tool_dispatch.py`` does — not raise
+    ``TypeError`` out of the dispatcher.
+    """
+    calls: list[dict] = []
+    fam = _widget_family(calls)
+    for unhashable in ([], {}, ["spin"], {"spin": 1}, set()):
+        result = fam.handle({"action": unhashable, "input": {}, "reasoning": "why"})
+        assert result["status"] == "failed", unhashable
+        assert result["error_code"] == "ACTION_REQUIRED", unhashable
+    assert calls == []
 
 
 def test_dispatch_non_object_input_fails_with_invalid_argument():

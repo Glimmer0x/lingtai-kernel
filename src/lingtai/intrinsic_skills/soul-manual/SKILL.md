@@ -1,11 +1,13 @@
 ---
 name: soul-manual
 description: |
-  Operational guide for the `soul` tool — your inner voice. Read this when: you call `soul(action='flow')` and get a `status: disabled` result; you want to understand why soul flow is off by default and how the operator enables it; you are tuning `delay_seconds`/`consultation_past_count` with `config` and want to know whether fires will actually happen; or you need the difference between the always-available actions (inquiry/config/voice/dismiss) and the opt-in `flow`. Covers the `LINGTAI_SOUL_FLOW_ENABLED` env gate, disabled-flow behavior, delay-vs-off-switch semantics, enabling/disabling, troubleshooting, and the privacy/cost rationale.
-version: 1.0.0
-last_changed_at: "2026-07-19T00:00:00Z"
+  Operational guide for the `soul` tool — your inner voice. Read this when: you need the exact call shape (one `soul` tool, six actions, each with its own strict `input` object); you call `soul(action='flow', input={})` and get a `status: disabled` result; you want to understand why soul flow is off by default and how the operator enables it; you are tuning `delay_seconds`/`consultation_past_count` with `config` and want to know whether fires will actually happen; or you need the difference between the always-available actions (inquiry/config/voice/dismiss/manual) and the opt-in `flow`. Covers the call shape and per-action inputs, the `LINGTAI_SOUL_FLOW_ENABLED` env gate, disabled-flow behavior, delay-vs-off-switch semantics, enabling/disabling, troubleshooting, and the privacy/cost rationale.
+version: 1.1.0
+last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
+- src/lingtai/tools/soul/CONTRACT.md
+- src/lingtai/tools/CONTRACT.md
 - src/lingtai/tools/soul/flow.py
 - src/lingtai/tools/soul/config.py
 - src/lingtai/tools/soul/consultation.py
@@ -15,8 +17,39 @@ maintenance: |
 
 # Soul Manual
 
-`soul` is your inner voice. `inquiry`, `config`, `voice`, and `dismiss` are
-**always available**. `flow` is **opt-in and disabled by default**.
+`soul` is your inner voice. `inquiry`, `config`, `voice`, `dismiss`, and
+`manual` are **always available**. `flow` is **opt-in and disabled by default**.
+
+## 0. How to call it
+
+One tool, six actions. Every call is `action` + that action's own `input`
+object + `reasoning`:
+
+```json
+{"action": "inquiry", "input": {"inquiry": "What am I avoiding?"}, "reasoning": "check my own blind spot"}
+```
+
+Each action's `input` is **strict and closed** — it accepts that action's own
+fields and nothing else. Sending another action's field (say `delay_seconds`
+inside an `inquiry` call) is rejected before anything runs:
+
+| Action | `input` |
+|---|---|
+| `inquiry` | `{"inquiry": "<your question>"}` — required, non-empty |
+| `flow` | `{}` |
+| `config` | `{"delay_seconds": <num or null>, "consultation_past_count": <int or null>}` — at least one non-null |
+| `voice` | `{"set": <profile or null>, "prompt": <text or null>}` — both null = read |
+| `dismiss` | `{}` |
+| `manual` | `{}` |
+
+Optional fields are declared nullable rather than omittable, so pass `null` for
+the ones you are not setting.
+
+**`summarize`** is a root-level boolean (never inside `input`), absent or false
+by default. Soul's results are all small — a voice, a couple of knob values, a
+status — so leave it false; there is nothing to compress and summarizing only
+risks losing the exact wording of a voice. When calling `manual`, keep it false
+so the exact enable/disable procedure below is not summarized away.
 
 ## 1. The soul-flow gate
 
@@ -32,7 +65,7 @@ The gate governs **both** firing paths:
 
 1. **The wall-clock timer** — the periodic cadence that would otherwise fire
    every `delay_seconds` while you are IDLE. When disabled, no timer is armed.
-2. **Voluntary `soul(action='flow')`** — a call you make yourself. When
+2. **Voluntary `soul(action='flow', input={})`** — a call you make yourself. When
    disabled, it returns immediately and never spawns a fire.
 
 A defensive last-line check inside the fire itself means even a stray residual
@@ -40,7 +73,7 @@ caller cannot fire while the gate is off.
 
 ## 2. Calling `flow` while disabled
 
-`soul(action='flow')` returns, **before** taking any lock or spawning any
+`soul(action='flow', input={})` returns, **before** taking any lock or spawning any
 thread:
 
 ```json
@@ -60,7 +93,7 @@ on-demand self-reflection.
 ## 3. `delay_seconds` is cadence, not an off switch
 
 After the env opt-in, `delay_seconds` (set via
-`soul(action='config', delay_seconds=...)`) controls **how often** the timer
+`soul(action='config', input={'delay_seconds': ..., 'consultation_past_count': null})`) controls **how often** the timer
 fires — e.g. `300` = every 5 minutes, `7200` = every 2 hours; minimum `30`.
 That is *all* it does:
 
@@ -91,8 +124,8 @@ itself:
 1. Set `LINGTAI_SOUL_FLOW_ENABLED=1` (or `true`/`yes`/`on`) in the agent's
    runtime environment.
 2. Refresh/restart the agent so the new environment is loaded.
-3. (Optional) tune cadence with `soul(action='config', delay_seconds=...)` and
-   voice count with `consultation_past_count`.
+3. (Optional) tune cadence and voice count with
+   `soul(action='config', input={'delay_seconds': 300, 'consultation_past_count': 2})`.
 
 To **disable** again: unset the variable (or set it to `0`/`false`) and
 refresh/restart. No `delay_seconds` sentinel is needed — the gate is the off
@@ -100,9 +133,10 @@ switch.
 
 ## 5. Checking the current state
 
-- **Is flow enabled right now?** Run `soul(action='flow')` — `status: ok`
-  means enabled, `status: disabled` means the env var is not set. You can also
-  run `soul(action='config', ...)` and read `soul_flow_enabled` in the result.
+- **Is flow enabled right now?** Run `soul(action='flow', input={})` —
+  `status: ok` means enabled, `status: disabled` means the env var is not set.
+  You can also run `soul(action='config', input={...})` and read
+  `soul_flow_enabled` in the result.
 - **Check the env from a shell:**
   `shell({"command": "printenv LINGTAI_SOUL_FLOW_ENABLED"})` — empty output
   means unset (disabled).
@@ -122,8 +156,19 @@ None of these depend on the env gate.
 - **`voice`** — read or set how your own soul-flow voice sounds
   (`inner`/`observer`/`custom`). Yours to choose; persists to `init.json`.
 - **`dismiss`** — clear the current soul-flow notification from the panel.
+- **`manual`** — return this manual. Reads one file and performs **no** soul
+  operation: no timer change, no consultation, no config/voice/notification
+  write.
 
-## 7. Privacy and cost rationale
+## 7. Settings files
+
+`soul` has **no** settings file at either LTP level — there is no
+`settings/soul.json` and no `settings/soul.<action>.json`. Cadence and voice
+live in `init.json` under `manifest.soul` (written by `config`/`voice`), and
+the flow gate lives in the process environment. Nothing here reads a
+`settings/` file.
+
+## 8. Privacy and cost rationale
 
 Soul flow is **off by default** deliberately:
 

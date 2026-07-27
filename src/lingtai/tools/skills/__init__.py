@@ -21,6 +21,11 @@ initializer's job.
 
 Tool surface: ``info`` refreshes/reconciles the catalog and returns runtime
 health without manual bodies; ``manual`` returns the skills manual body on demand.
+Both are action children of one LTP v2 ``ToolFamily`` (``src/lingtai/tools/
+CONTRACT.md``): the public tool name stays ``skills`` and the public action
+values stay exactly ``info`` and ``manual``; only the envelope shape around
+them changes to the canonical ``action`` + ``input`` + ``reasoning`` +
+``summarize`` root.
 
 Usage: ``Agent(capabilities={"skills": {"paths": [...]}})`` or via init.json.
 """
@@ -28,11 +33,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-from lingtai.kernel.tool_dispatch import dispatch_action
+from typing import TYPE_CHECKING, Any, Mapping
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
+from ..tool_family import ChildTool, ToolFamily
+from ..tool_family.manual import build_manual_child
 from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
@@ -41,6 +46,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PROVIDERS = {"providers": [], "default": "builtin"}
+
+# Both skills actions are signposts that take no arguments at all, so both
+# child input schemas are the canonical strict-empty object. Built per call so
+# each child owns a distinct schema object: a future per-action field must not
+# silently widen its sibling.
+def _strict_empty_input() -> dict[str, Any]:
+    return {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
 
 
 # ---------------------------------------------------------------------------
@@ -167,24 +179,25 @@ def _skills_info(agent: "BaseAgent", paths: list[str]) -> dict:
     return result
 
 
-def _skills_manual(agent: "BaseAgent") -> dict:
-    """Return the skills manual body without refreshing catalog health."""
-    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
-    if not manual_path.is_file():
-        return {
-            "status": "degraded",
-            "skills_manual": "",
-            "library_manual": "",
-            "manual_path": str(manual_path),
-            "error": "skills manual missing — initializer may have failed or capability not installed correctly",
-        }
-    manual_body = manual_path.read_text(encoding="utf-8")
-    return {
-        "status": "ok",
+def _adapt_manual_result(mcp_result: dict) -> dict:
+    """Flatten the dispatched ``manual`` child's canonical result to skills' shape.
+
+    Skills' public manual shape predates the generic canonical
+    ``content``/``structuredContent`` contract and must stay byte-identical, so
+    this Host-owned adapter runs strictly *after* dispatch — never inside a
+    registered child, and never touching ``info``. ``library_manual`` remains
+    the back-compat mirror of ``skills_manual``.
+    """
+    manual_body = mcp_result["content"][0]["text"]
+    flat: dict = {
+        "status": mcp_result.get("status", "ok"),
         "skills_manual": manual_body,
         "library_manual": manual_body,
-        "manual_path": str(manual_path),
+        "manual_path": mcp_result["structuredContent"]["manual_path"],
     }
+    if "error" in mcp_result:
+        flat["error"] = mcp_result["error"]
+    return flat
 
 
 # ---------------------------------------------------------------------------
@@ -192,21 +205,51 @@ def _skills_manual(agent: "BaseAgent") -> dict:
 # ---------------------------------------------------------------------------
 
 def get_description(lang: str = "en") -> str:
-    return 'SIGNPOST ONLY: this tool does not author, pin, publish, install, or execute skills; `info` only refreshes/reconciles the skills catalog and returns health without the manual body; `manual` returns the skills-manual body. Your per-agent skill catalog. The skills section of your system prompt is a YAML list — one `- name:` block per skill with `location:` and `description:` — covering every skill reachable right now. Before using this tool (authoring, pinning, publishing, or managing skills), read the `skills-manual` skill — call `manual` for its body and `info` for a runtime health snapshot; no exceptions.'
+    return 'SIGNPOST ONLY: this tool does not author, pin, publish, install, or execute skills; `info` only refreshes/reconciles the skills catalog and returns health without the manual body; `manual` returns the skills-manual body. Your per-agent skill catalog. The skills section of your system prompt is a YAML list — one `- name:` block per skill with `location:` and `description:` — covering every skill reachable right now. Both actions take an empty input object: skills(action=\'info\', input={}, reasoning=\'refresh the skill catalogue\') and skills(action=\'manual\', input={}, reasoning=\'load skills guidance\'). Before using this tool (authoring, pinning, publishing, or managing skills), read the `skills-manual` skill — call `manual` for its body and `info` for a runtime health snapshot; no exceptions.'
+
+
+def _build_family(agent: "BaseAgent | None", paths: list[str]) -> ToolFamily:
+    """Build the skills family — the one canonical child registry.
+
+    Both the model-facing schema and runtime dispatch come from this single
+    declaration, so action names, input schemas, titles, and order cannot drift
+    apart. ``agent=None`` yields a schema-only family whose handlers are never
+    reachable: ``get_schema()`` calls only ``build_schema()``, which reads each
+    child's ``input_schema`` and never a handler. Constructing it at import time
+    also proves the registry has no duplicate or reserved-name collision
+    (``ToolFamilyError`` would raise here rather than shipping silently).
+
+    The ``manual`` child is ``build_manual_child``'s, registered directly and
+    unwrapped, so ``ToolFamily.handle()`` returns its canonical result verbatim
+    (no double wrap); the flat public shape is rebuilt strictly after dispatch
+    in ``handle_skills``. It reads the installed manual only — no catalog scan,
+    no prompt injection, no other ``info``-side effect.
+    """
+    if agent is None:
+        def _info(_input: Mapping[str, Any]) -> dict:
+            raise AssertionError("the schema-only skills family never dispatches")
+    else:
+        def _info(_input: Mapping[str, Any]) -> dict:
+            return _skills_info(agent, paths)
+
+    # Always the shared builder's own child, so the advertised ``manual`` input
+    # schema is exactly the one dispatch registers — schema and dispatch cannot
+    # disagree even about a detail like a redundant empty ``required``.
+    manual_child = build_manual_child(agent, "skills")
+
+    return ToolFamily(
+        "skills",
+        [ChildTool("info", _strict_empty_input(), _info, title="info input"), manual_child],
+    )
+
+
+_SCHEMA_FAMILY = _build_family(None, [])
 
 
 def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["info", "manual"],
-                "description": 'info: refresh/reconcile the skills catalog and return runtime health (catalog size, resolved paths, problems) without the manual body. manual: return only the skills-manual skill body.',
-            },
-        },
-        "required": ["action"],
-    }
+    # Composed from the same child registry runtime dispatch uses, so the
+    # public action enum cannot drift from the dispatch keys.
+    return _SCHEMA_FAMILY.build_schema()
 
 
 def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> None:
@@ -227,19 +270,18 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
     # This only READS from .library/ — the initializer has already written it.
     _reconcile(agent, path_list)
 
-    # Register signpost actions. `info` refreshes health; `manual` returns the large manual body.
+    family = _build_family(agent, path_list)
+
     def handle_skills(args: dict) -> dict:
-        return dispatch_action(
-            args,
-            {
-                "info": lambda _args: _skills_info(agent, path_list),
-                "manual": lambda _args: _skills_manual(agent),
-            },
-            unknown=lambda action: {
-                "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
-            },
-        )
+        # ``ToolFamily.handle`` is the fail-closed authorization boundary:
+        # schema conformance alone is not (``tools/CONTRACT.md`` "Dispatch and
+        # actions"). Flattening the dispatched ``manual`` result is this Host
+        # layer's own job, done strictly after dispatch.
+        action = args.get("action") if isinstance(args, Mapping) else None
+        result = family.handle(args)
+        if action == "manual" and "content" in result:
+            return _adapt_manual_result(result)
+        return result
 
     agent.add_tool(
         "skills",

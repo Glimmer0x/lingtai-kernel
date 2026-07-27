@@ -16,9 +16,11 @@ Knowledge is structurally isomorphic to skills but physically separate:
   private, agent-owned, and may reference agent-local paths, mail ids, and
   logs that skills must not depend on.
 
-Tool surface: ``info`` returns a runtime health snapshot (catalog size,
-problems) without the manual body; ``manual`` returns the knowledge-manual body
-on demand. Knowledge entry bodies are read via the ``read`` tool, the same way
+Tool surface (LTP v2 family; see ``src/lingtai/tools/CONTRACT.md``): the public
+tool stays ``knowledge`` with the same two action values. ``info`` returns a
+runtime health snapshot (catalog size, problems) without the manual body;
+``manual`` returns the knowledge-manual body on demand. Both take a strict empty
+``input``. Knowledge entry bodies are read via the ``read`` tool, the same way
 the agent opens a ``SKILL.md``.
 
 Usage: ``Agent(capabilities={"knowledge": {}})`` or via init.json.
@@ -31,11 +33,10 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-from lingtai.kernel.tool_dispatch import dispatch_action
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
+from ..tool_family import ChildTool, ToolFamily
 from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
@@ -281,48 +282,126 @@ def _knowledge_manual(agent: "BaseAgent") -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# LTP v2 family composition
+# ---------------------------------------------------------------------------
+
+# Neither action ever took an argument, so both children share the canonical
+# strict-empty input. That is what mechanically enforces the signpost contract:
+# with no declared property, *every* ``input`` key is an unknown key and is
+# rejected before the handler runs.
+_EMPTY_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+# The one source of truth for knowledge's children: name -> the operation that
+# child performs on a bound agent. Both share ``_EMPTY_INPUT_SCHEMA`` and the
+# ``"<name> input"`` title, so the spec carries only what differs. Each
+# operation is a lambda rather than a direct function reference so the
+# module-level global is resolved when the child runs, not when this tuple is
+# built at import — the no-rescan/pre-I/O tests patch those globals to prove a
+# handler never ran.
+#
+# ``manual`` is this package's own child rather than the generic
+# ``build_manual_child`` because knowledge's public result is keyed
+# ``knowledge_manual``, not the generic ``content``/``structuredContent`` shape.
+# Using the generic builder would mean wrapping into a shape this family never
+# exposes only to flatten it back in a Host adapter; registering our own child
+# satisfies no-double-wrap without that round trip.
+_CHILD_SPECS: tuple[tuple[str, Callable[["BaseAgent"], dict]], ...] = (
+    ("info", lambda agent: _reconcile(agent)),
+    ("manual", lambda agent: _knowledge_manual(agent)),
+)
+
+
+def _build_family(agent: "BaseAgent | None") -> ToolFamily:
+    """Build one ``knowledge`` :class:`ToolFamily` from :data:`_CHILD_SPECS`.
+
+    With an ``agent``, children dispatch that agent's real operations. With
+    ``None`` — the module-level :data:`_FAMILY` backing ``get_schema()`` — they
+    raise if invoked, since a schema-only family never dispatches. Either way
+    construction validates the registry, so a duplicate or reserved-name
+    collision raises :class:`ToolFamilyError` at import time.
+    """
+
+    def bind(operation: "Callable[[BaseAgent], dict]") -> Callable[[Mapping[str, Any]], dict]:
+        if agent is None:
+            def unused(_input: Mapping[str, Any]) -> dict:
+                raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+            return unused
+        return lambda _input: operation(agent)
+
+    return ToolFamily(
+        "knowledge",
+        [
+            ChildTool(name, _EMPTY_INPUT_SCHEMA, bind(operation), title=f"{name} input")
+            for name, operation in _CHILD_SPECS
+        ],
+    )
+
+
+_FAMILY = _build_family(None)
+
+
 def get_description(lang: str = "en") -> str:
-    return "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; `info` only re-scans the knowledge catalog and reports health; `manual` returns the knowledge-manual body. Your private durable knowledge catalog across molts — what you've learned, decided, and discovered. Each entry is a folder at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in your system prompt is a YAML list — each entry is a `- name:` block with `location:` and `description:` — bodies load on demand via the read tool, just like skills. Knowledge is private and agent-owned: entries may reference local paths, mail ids, and logs that skills must not depend on. Author new entries by writing knowledge/<name>/KNOWLEDGE.md with write/edit; revise the same way. Call info to refresh the catalog and inspect health. Before using this tool, read the `knowledge-manual` skill — no exceptions."
+    return "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; `info` only re-scans the knowledge catalog and reports health; `manual` returns the knowledge-manual body. Your private durable knowledge catalog across molts — what you've learned, decided, and discovered. Each entry is a folder at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in your system prompt is a YAML list — each entry is a `- name:` block with `location:` and `description:` — bodies load on demand via the read tool, just like skills. Knowledge is private and agent-owned: entries may reference local paths, mail ids, and logs that skills must not depend on. Author new entries by writing knowledge/<name>/KNOWLEDGE.md with write/edit; revise the same way. Call knowledge(action='info', input={}, reasoning='refresh the knowledge catalog') to refresh the catalog and inspect health, and knowledge(action='manual', input={}, reasoning='load knowledge guidance') for the manual body. Before using this tool, read the `knowledge-manual` skill — no exceptions."
 
 
 def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["info", "manual"],
-                "description": 'info: re-scan knowledge/ and return runtime health (catalog size, resolved root path, malformed entries) without the manual body. manual: return only the knowledge-manual skill body.',
-            },
-        },
-        "required": ["action"],
-    }
+    # Composed by the generic ToolFamily infra from each child's own canonical
+    # ``input_schema`` rather than hand-assembled. The public action values are
+    # unchanged (``info``, ``manual``); what changes is the root envelope, which
+    # is now the closed LTP v2 ``action``/``input``/``reasoning``/``summarize``
+    # shape with per-action ``input`` correlation on both provider wires.
+    return _FAMILY.build_schema()
+
+
+def handle(family: ToolFamily, args: dict | None) -> dict:
+    """Dispatch one ``knowledge`` family call and normalize its envelope error.
+
+    ``family`` is the per-agent :class:`ToolFamily` ``setup()`` builds once at
+    registration. Dispatch itself lives entirely in the generic
+    ``ToolFamily.handle``; the only thing this Host layer adds is the
+    unknown-action normalization below.
+
+    Knowledge's pre-migration public unknown-action result was
+    ``{"status": "error", "message": "unknown action: ..., only 'info' or
+    'manual' is supported"}`` for any bad action value, including an unhashable
+    one such as ``[]`` or ``{}``, and rendering a *missing* ``action`` as the
+    empty-string default (``kernel/tool_dispatch.py``'s ``default=""``). That
+    exact shape — including that default — is preserved here, after dispatch,
+    rather than by changing the generic dispatcher's own canonical
+    ``ACTION_REQUIRED`` envelope error.
+    """
+    action = args.get("action", "") if isinstance(args, Mapping) else ""
+    result = family.handle(args)
+    if result.get("error_code") == "ACTION_REQUIRED":
+        return {
+            "status": "error",
+            "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
+        }
+    return result
 
 
 def setup(agent: "BaseAgent", **_ignored) -> None:
     """Set up the knowledge capability.
 
     Scans ``<agent>/knowledge/`` for ``<name>/KNOWLEDGE.md`` entries and
-    injects the catalog into the system prompt. Registers ``info`` for
-    runtime health and ``manual`` for the progressive-disclosure manual body.
+    injects the catalog into the system prompt. Registers the ``knowledge``
+    family with ``info`` for runtime health and ``manual`` for the
+    progressive-disclosure manual body.
 
     Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
     ignored — the file-backed catalog has no fixed-size limit.
     """
     _reconcile(agent)
+    family = _build_family(agent)
 
     def handle_knowledge(args: dict) -> dict:
-        return dispatch_action(
-            args,
-            {
-                "info": lambda _args: _reconcile(agent),
-                "manual": lambda _args: _knowledge_manual(agent),
-            },
-            unknown=lambda action: {
-                "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
-            },
-        )
+        return handle(family, args)
 
     agent.add_tool(
         "knowledge",

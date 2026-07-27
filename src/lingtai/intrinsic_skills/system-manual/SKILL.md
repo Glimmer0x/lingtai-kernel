@@ -11,9 +11,9 @@ description: >
   notifications, POSIX workdir rename/recovery, molt/memory questions,
   MCP/addon ownership, collaboration topology, and resident prompt design. The
   nested catalog below names each reference and its exact trigger.
-version: 1.9.0
+version: 1.9.1
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
-last_changed_at: 2026-07-20T00:00:00Z
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -121,7 +121,7 @@ selects that topic.
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `reference/summarize-manual/SKILL.md` |
 | SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; trajectory/anomaly mining; improvement digests; cheap-model strategy | `reference/sqlite-log-query/SKILL.md` |
-| Notifications; direct `notification(action='manual')`; check/dismiss_channel/dismiss_event/dismiss_ref/manual; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; legacy `large_tool_result` dismiss | `notification-manual` |
+| Notifications; direct `notification(action='manual', input={})`; check/dismiss_channel/dismiss_event/dismiss_ref/manual; `.notification/<channel>.json`; channel allowlist; top-level `instructions`; protected channels; generic vs producer dismiss; stale-version/force; legacy `large_tool_result` dismiss | `notification-manual` |
 | Kernel update lifecycle; runtime/source discovery; `kernel_version` and `source_drift`; heartbeat nudge dispatch; `.notification/nudge.json`; durable state; sync/wake/dismiss mechanics; packaged vs editable/source installs; refresh vs TUI-managed update; verification/troubleshooting | `reference/runtime-update-checks/SKILL.md` |
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |

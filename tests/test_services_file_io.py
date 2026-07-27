@@ -297,7 +297,9 @@ class TestGrepGlobFilter:
         svc.write("good.py", "needle\n")
         svc.write("noisy.log", "needle\n")
 
-        from lingtai.tools.grep import setup as grep_setup
+        # ``grep`` is an action of the one public ``file`` family; the search
+        # operation lives in that package and is bound via build_operation().
+        from lingtai.tools.file._grep import build_operation as build_grep
 
         class _StubConfig:
             language = "en"
@@ -307,15 +309,8 @@ class TestGrepGlobFilter:
             _working_dir = tmp_path
             _file_io = svc
 
-            def __init__(self):
-                self.handlers = {}
-
-            def add_tool(self, name, *, schema, handler, description, **kwargs):
-                self.handlers[name] = handler
-
-        agent = _StubAgent()
-        grep_setup(agent)
-        result = agent.handlers["grep"]({"pattern": "needle", "glob": "*.py"})
+        handle_grep = build_grep(_StubAgent())
+        result = handle_grep({"pattern": "needle", "glob": "*.py"})
 
         assert captured["glob_filter"] == "*.py"
         files = {m["file"] for m in result["matches"]}

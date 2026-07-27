@@ -14,7 +14,8 @@ description: >
       `whatsapp` / `cloud_mail` addon, or any LingTai email/chat integration.
       **Step 1 is always** `reference/curated-addons.md`; exact config field
       names come from the addon docs — do NOT guess them.
-    - You want to know what MCPs you currently have (`mcp(action="info")`).
+    - You want to know what MCPs you currently have
+      (`mcp(action="info", input={}, reasoning="list registered MCPs")`).
     - An MCP isn't behaving: registry validation, the `problems` list,
       refresh-after-edit verification, common boot errors.
     - You're exploring an unfamiliar third-party MCP and need its docs.
@@ -107,7 +108,17 @@ If neither path yields docs, fall back to the MCP's own runtime self-description
 
 ## Tool surface
 
-Two actions: `mcp(action="info")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body; `mcp(action="manual")` returns this manual body on demand.
+Two actions, called through the standard envelope
+`mcp(action=..., input={}, reasoning="...")`. `action`, `input`, and `reasoning`
+are all required; neither action takes any arguments, so `input` is always the
+empty object `{}` — passing any field inside it is rejected before the tool does
+anything. The optional root `summarize` boolean is presentation only.
+
+- `mcp(action="info", input={}, reasoning="...")` returns current registry contents and a runtime health snapshot (registry path, count, problems) without the manual body.
+- `mcp(action="manual", input={}, reasoning="...")` returns this manual body on demand, without re-reading the registry.
+
+Every worked call in this manual and its `reference/` docs is written in this
+full form; there is no shorthand to expand.
 
 Each `registered` entry may also carry a non-secret **`identity`** block, so you can tell *which* configured account/bot/channel an MCP surface represents without reading private config:
 

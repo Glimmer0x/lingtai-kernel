@@ -1,10 +1,13 @@
 ---
 name: knowledge-contract
 tool: knowledge
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - tests/test_tool_family_knowledge_migration_parity.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -61,7 +64,7 @@ The two capabilities are structurally isomorphic but physically separate:
 | Root directory | `<agent>/.library/{intrinsic,custom}/` | `<agent>/knowledge/` |
 | Manifest file | `SKILL.md` | `KNOWLEDGE.md` |
 | Tool name | `skills` | `knowledge` |
-| Tool surface | `info` | `info` |
+| Tool surface | `info`, `manual` (unmigrated flat schema) | `info`, `manual` (LTP v2 family envelope) |
 | Prompt section | protected `skills` (YAML catalog) | protected `knowledge` (YAML catalog) |
 | Extra path sources | `manifest.capabilities.skills.paths` | none — strictly per-agent |
 | Visibility | portable / shareable | private / agent-owned |
@@ -74,18 +77,64 @@ does not leak into the public skill catalog.
 
 ## Tool surface
 
-The schema requires `action` and accepts exactly one action:
+`knowledge` is a migrated **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`).
+Its public name and its two public action values are unchanged by that
+migration; the root envelope is what changed. The model-facing root is the
+closed object `{action, input, reasoning, summarize}` with
+`additionalProperties: false` and `required: [action, input, reasoning]`.
+`summarize` is the optional root-only Host presentation control and is never
+action input.
 
-| Action | Required fields | Optional fields | Return on success |
-|---|---|---|---|
-| `info` | — | — | `{status: "ok", knowledge_dir, catalog_size, problems}` |
+`action` selects one child; `input` is that child's own strict object. Both
+children take the canonical **strict-empty** input
+(`{"type": "object", "properties": {}, "required": [], "additionalProperties": false}`)
+because neither operation ever took an argument:
 
-Unknown actions return `{status: "error", message: ...}` and do not mutate
-state. The previous JSON-database actions (`submit`, `view`, `consolidate`,
-`delete`) are intentionally removed: knowledge is now authored by writing
-`KNOWLEDGE.md` files with the regular `write`/`edit` tools, just like skills.
-There is no in-tool capacity limit; the historical `knowledge_limit` kwarg is
-accepted but ignored.
+| Action | `input` | Return on success |
+|---|---|---|
+| `info` | `{}` (strict empty) | `{status: "ok", knowledge_dir, catalog_size, problems}` |
+| `manual` | `{}` (strict empty) | `{status: "ok", knowledge_manual, manual_path}` |
+
+The composed schema correlates each action `const` with its exact `input`
+schema at the root (`allOf`/`if`/`then`) and additionally discloses every
+action's shape under `input.oneOf`. Both surfaces reach the Chat Completions
+and Responses wires; the Responses builder rewrites nested `oneOf` to `anyOf`
+but preserves the root correlation.
+
+Behavior is preserved exactly across the migration:
+
+- `info` re-scans and reconciles the private knowledge catalog, rewrites the
+  protected prompt section, and returns health only. It never loads entry
+  bodies into its result and never mutates entries.
+- `manual` returns the current knowledge-manual body at `knowledge_manual` and
+  its host-local path at `manual_path`. It performs no scan, no reconciliation,
+  and no mutation. A missing manual returns `status: "degraded"` with an empty
+  `knowledge_manual`, the resolved `manual_path`, and an `error`. This result
+  is the child's own canonical shape, returned verbatim by the dispatcher with
+  no double wrap.
+
+Neither action creates, edits, searches, or loads knowledge entries; the tool
+remains a signpost. Because both child inputs are strict-empty, *any* `input`
+key — including an authoring or search field — is rejected at dispatch before
+the handler runs, with `{status: "failed", error_code: "INVALID_ARGUMENT"}`.
+Unknown root fields and a non-boolean `summarize` fail the same way.
+
+Unknown actions return knowledge's exact pre-migration envelope,
+`{status: "error", message: "unknown action: <repr>, only 'info' or 'manual' is
+supported"}`, and do not mutate state; a missing `action` renders the
+empty-string default and an unhashable `action` (invalid JSON, issue #513)
+renders its repr rather than raising. That shape is preserved by knowledge's
+own Host layer after dispatch, not by altering the generic dispatcher's
+canonical `ACTION_REQUIRED` failure.
+
+The family supports no settings files at either LTP settings level; there is
+nothing to configure and no file is ever read.
+
+The previous JSON-database actions (`submit`, `view`, `consolidate`, `delete`)
+are intentionally removed: knowledge is now authored by writing `KNOWLEDGE.md`
+files with the regular `write`/`edit` tools, just like skills. There is no
+in-tool capacity limit; the historical `knowledge_limit` kwarg is accepted but
+ignored.
 
 Only `knowledge(...)` is registered. There is no `library(...)` or `codex(...)`
 alias.
@@ -163,7 +212,14 @@ skill -> private knowledge.
 | Claim | Source | Test |
 |---|---|---|
 | `knowledge` is the only private durable memory capability in the builtin registry | `src/lingtai/tools/registry.py` | `tests/test_check_caps.py::test_get_all_providers_includes_expected_capabilities` |
-| `knowledge` setup registers only the `knowledge` tool | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool` |
+| `knowledge` setup registers only the `knowledge` tool | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_setup_registers_only_knowledge_tool`, `tests/test_tool_family_knowledge_migration_parity.py::test_setup_registers_one_knowledge_tool_with_the_family_schema` |
+| The root envelope is the closed `action`/`input`/`reasoning`/`summarize` object with required `reasoning` | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_schema_root_is_closed_action_input_reasoning_summarize` |
+| Public action values are unchanged (`info`, `manual`) and no authoring/search/edit action exists | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_public_action_values_are_unchanged_by_the_migration`, `::test_family_has_no_authoring_search_or_edit_capability` |
+| Both child inputs are canonical strict-empty objects, correlated to their action const on both wires | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_child_inputs_are_canonical_strict_empty_objects`, `::test_root_allof_correlates_each_action_const_with_its_input_schema`, `::test_knowledge_family_schema_survives_chat_and_responses_wires` |
+| Missing or extra `input` fails before any handler I/O | `src/lingtai/tools/tool_family/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_missing_input_is_rejected_before_any_io`, `::test_extra_input_field_is_rejected_before_any_io` |
+| `info` re-scans and returns exact count/problems without loading bodies or mutating entries | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_info_rescans_and_reports_exact_count_and_problems`, `::test_info_does_not_load_bodies_or_mutate_entries` |
+| `manual` returns the current body/path and never rescans or mutates | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning`, `::test_manual_missing_is_degraded_and_still_no_rescan` |
+| The exact pre-migration unknown-action envelope survives the migration | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_unknown_action_returns_error` |
 | Legacy `knowledge/knowledge.json` and `codex/codex.json` entries migrate once into `KNOWLEDGE.md` folders; `supplementary` becomes `references/supplementary.md` | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_legacy_knowledge_json_migrates_to_knowledge_md`, `tests/test_knowledge.py::test_legacy_codex_json_migrates_to_knowledge_md` |
 | Manager-style lookup is exact: `knowledge` resolves and former names do not | `src/lingtai/agent.py` | `tests/test_knowledge.py::test_former_alias_capabilities_do_not_register_knowledge` |
 | Catalog reads `<agent>/knowledge/<name>/KNOWLEDGE.md` and excludes `SKILL.md` entries | `src/lingtai/tools/knowledge/__init__.py` | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` |
@@ -179,11 +235,14 @@ skill -> private knowledge.
 | Skills do not depend on private knowledge | documented invariant; enforce by review | Check shared skill docs for private paths/ids | Shared skills become non-portable |
 | Knowledge and skills use distinct manifest filenames | `tests/test_knowledge.py::test_knowledge_md_convention_distinct_from_skill_md` | Drop a `SKILL.md` into `<agent>/knowledge/foo/` and confirm it is not picked up | Physical separation collapses; private/public boundary blurs |
 | Body content stays out of prompt catalog | `tests/test_knowledge.py::test_prompt_catalog_only_metadata_not_body` | Author an entry with a long body and inspect the prompt section | Prompt bloat / private detail leakage |
+| LTP v2 envelope: closed root, strict-empty child inputs, pre-I/O rejection | `tests/test_tool_family_knowledge_migration_parity.py` | Call with an extra `input` field and confirm no rescan happens | Invalid calls reach handlers; the signpost boundary weakens |
+| `manual` performs no catalog scan or mutation | `tests/test_tool_family_knowledge_migration_parity.py::test_manual_returns_body_and_path_without_rescanning` | Author an entry, call `manual`, confirm the prompt section is unchanged | Reading guidance silently rewrites prompt state |
 
 Run before merging knowledge changes:
 
 ```bash
-python -m pytest tests/test_knowledge.py tests/test_skills.py tests/test_check_caps.py tests/test_daemon_preset_capabilities.py -q
+python -m pytest tests/test_knowledge.py tests/test_tool_family_knowledge_migration_parity.py \
+  tests/test_skills.py tests/test_check_caps.py tests/test_daemon_preset_capabilities.py -q
 ```
 
 ## Schema and glossary ownership

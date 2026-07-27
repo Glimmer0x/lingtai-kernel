@@ -8,7 +8,9 @@ related_files:
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/avatar_launcher.py
   - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
   - tests/test_avatar_rules.py
+  - tests/test_tool_family_avatar_migration.py
   - src/lingtai/tools/avatar/glossary-en.md
   - src/lingtai/tools/avatar/glossary-zh.md
   - src/lingtai/tools/avatar/glossary-wen.md
@@ -42,37 +44,60 @@ independent life — its existence does not depend on yours.
 
 ## Public API
 
-The capability exposes one public tool, `avatar`, dispatched by an `action`
-enum:
+The capability exposes one public tool, `avatar`, an LTP v2 action-separated
+family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 
-| Action | Description |
-|------|-------------|
-| `spawn` | Spawn a new avatar agent (shallow or deep) with a given name, optional type, and optional comment. Accepts `dry_run` (preview-only) and `confirm` (acknowledge mission-quality gate). |
-| `rules` | Set rules content and distribute via `.rules` signal files to self + all descendants. |
-| `manual` | Read-only: returns the exact `manual/SKILL.md` body. No mutation. |
+| Action | Own strict `input` | Description |
+|------|------|-------------|
+| `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
+| `rules` | `rules_content` | Set rules content and distribute via `.rules` signal files to self + all descendants. Karma-gated. |
+| `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn or rules I/O. |
 
-`action` has no default — it is required both by the schema
-(`"required": ["action"]`) and at runtime, matching the established action-tool
-convention already used by `knowledge`, `mcp`, `skills`, `notification`,
-`system`, `soul`, and `daemon`. Omitting `action` fails deterministically via
-the same `dispatch_action` unknown-action envelope as an unrecognized value;
-it never falls through to `spawn`.
+The model-facing root is exactly `action` + `input` + required `reasoning` +
+optional `summarize`, `additionalProperties: false`. Each action owns exactly
+its own fields, so a key from another action's branch is rejected *before* any
+handler I/O. The child canonical name equals the public action value equals the
+dispatch key — there is no mapping layer.
 
-`avatar` uses a single plain top-level `type: object` schema with an explicit
-`action` enum, not a top-level `allOf`/`oneOf` combinator — some
-OpenAI-compatible strict tool validators reject top-level JSON Schema
-combinators. Action-specific required inputs beyond `action` itself (`name`
-for spawn, `rules_content` for rules) are validated in the handler, not the
-schema.
+`action` has no default — it is required both by the schema and at runtime,
+matching the established action-tool convention already used by `knowledge`,
+`mcp`, `skills`, `notification`, `system`, `soul`, and `daemon`. Omitting
+`action` fails deterministically with avatar's own pinned unknown-action
+envelope; it never falls through to `spawn`.
+
+**Mission brief.** The spawn mission is root `reasoning` (normalized to
+`_reasoning` by ToolExecutor), never an `input` property — nested `input` must
+never carry `reasoning`/`_reasoning`/`summarize`. `handle()` captures it from
+the envelope and hands it to `_spawn` out-of-band, clearing it in `finally` so
+no later call can inherit a previous call's mission.
+
+Schema composition and envelope dispatch are delegated to the generic, optional
+`tool_family` infrastructure (`../tool_family/ANATOMY.md`); `handle()` is
+retained as avatar's own outer layer solely to normalize the generic
+`ACTION_REQUIRED` envelope failure back to avatar's exact pinned
+unknown-action error string.
 
 ## Internal Module Layout
 
 ```
 avatar/__init__.py
-  ├── AvatarManager.__init__        — stores parent agent ref
-  ├── handle()                      — public dispatcher for the avatar tool
-  │                                    (action: spawn | rules | manual)
+  ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict per-action inputs
+  │                                    (manual reuses the generic
+  │                                    tool_family.manual.MANUAL_INPUT_SCHEMA)
+  ├── _CHILD_SPECS                  — the one (action, schema) source both
+  │                                    family listings are built from
+  ├── _build_family() / _FAMILY     — import-time registry validation;
+  │                                    get_schema() composes from _FAMILY
+  ├── AvatarManager.__init__        — parent agent ref + per-instance ToolFamily
+  ├── handle()                      — envelope entry: captures root _reasoning,
+  │                                    delegates to ToolFamily.handle(), then
+  │                                    normalizes ACTION_REQUIRED back to
+  │                                    avatar's pinned unknown-action error
+  ├── _dispatch_spawn/_rules/_manual — child handlers; strip nulls, thread
+  │                                    the mission brief to _spawn
+  ├── _strip_nulls()                — nullable-optional → absent
   ├── _manual()                     — reads the packaged manual/SKILL.md body
+  │                                    and reports its host-local path
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -116,7 +141,7 @@ avatar/__init__.py
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` via `lingtai.kernel.tool_dispatch.dispatch_action`. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
+- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` through its own `tool_family.ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean it advertises is actually honored by the single central summarizer. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` and the
 POSIX reference adapter. Unsupported Windows selection fails loudly; a future

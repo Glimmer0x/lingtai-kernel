@@ -1073,20 +1073,93 @@ def test_detached_lingtai_file_surface_executes_against_parent_workdir(tmp_path)
 
     host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
     schemas, dispatch = host._build_lingtai_surface()
-    assert {schema.name for schema in schemas}.issuperset(
-        {"read", "write", "edit", "glob", "grep"}
-    )
+    # One public ``file`` tool whose actions are read/write/edit/glob/grep.
+    assert {schema.name for schema in schemas}.issuperset({"file"})
+    file_schema = next(s for s in schemas if s.name == "file")
+    assert file_schema.parameters["properties"]["action"]["enum"] == [
+        "read", "write", "edit", "glob", "grep", "manual",
+    ]
 
-    write_result = dispatch["write"]({
-        "file_path": "detached-file-probe.txt",
-        "content": "detached file handler works\n",
+    write_result = dispatch["file"]({
+        "action": "write",
+        "input": {
+            "file_path": "detached-file-probe.txt",
+            "content": "detached file handler works\n",
+        },
+        "reasoning": "detached write probe",
     })
-    assert write_result["status"] == "ok"
+    assert write_result["status"] == "ok", write_result
     target = parent_working_dir / "detached-file-probe.txt"
     assert target.read_text(encoding="utf-8") == "detached file handler works\n"
 
-    read_result = dispatch["read"]({"file_path": "detached-file-probe.txt"})
+    read_result = dispatch["file"]({
+        "action": "read",
+        "input": {"file_path": "detached-file-probe.txt"},
+        "reasoning": "detached read probe",
+    })
     assert read_result["content"] == "1\tdetached file handler works\n"
+
+
+def test_detached_file_manifest_injects_file_io(tmp_path):
+    """A manifest requesting ``file`` gets a usable FileIOService.
+
+    The detached host injects its FileIOService only when the requested tool
+    surface needs it. That gate used to key off the ``file`` capability group;
+    when groups were deleted the group lookup silently went empty, so the
+    service was never injected and every detached file write failed at
+    execution time with ``'NoneType' object has no attribute 'write'``. The
+    gate now keys off the canonical ``file`` name directly.
+    """
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="file manifest")
+    parent_working_dir = run_dir.path.parent.parent
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(parent_working_dir), run_dir=str(run_dir.path),
+        task="file manifest", tools=["file"], max_turns=1,
+        timeout_s=30, group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    assert host._agent._file_io is not None, "file manifest must inject file_io"
+
+    _, dispatch = host._build_lingtai_surface()
+    result = dispatch["file"]({
+        "action": "write",
+        "input": {"file_path": "detached-probe.txt", "content": "file works\n"},
+        "reasoning": "detached manifest probe",
+    })
+    assert result["status"] == "ok", result
+    assert (parent_working_dir / "detached-probe.txt").read_text(encoding="utf-8") == "file works\n"
+
+
+def test_detached_retired_file_tool_names_fail_loudly(tmp_path):
+    """A stale manifest naming the retired per-operation tools is rejected.
+
+    The migration removed the capability aliases, so ``read``/``write`` are no
+    longer requestable tool names. They must surface as unknown rather than
+    silently resolving to ``file`` or half-building a surface.
+    """
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="retired names")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="retired names", tools=["read", "write"], max_turns=1,
+        timeout_s=30, group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    with pytest.raises(ValueError, match="Unknown tools for emanation"):
+        host._build_lingtai_surface()
 
 
 def test_detached_port_observation_publishes_identity_before_watchdog_and_cancel_race(tmp_path):

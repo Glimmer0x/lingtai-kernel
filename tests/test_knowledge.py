@@ -87,7 +87,7 @@ def test_legacy_knowledge_limit_kwarg_is_ignored(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"knowledge_limit": 50})
     try:
         assert "knowledge" in agent._tool_handlers
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["status"] == "ok"
     finally:
         agent.stop(timeout=1.0)
@@ -101,7 +101,7 @@ def test_legacy_knowledge_limit_kwarg_is_ignored(tmp_path):
 def test_info_returns_runtime_snapshot(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["status"] == "ok"
         assert result["knowledge_dir"] == str(workdir / "knowledge")
         assert result["catalog_size"] == 0
@@ -124,7 +124,7 @@ def test_info_picks_up_authored_entry(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
     finally:
@@ -132,16 +132,26 @@ def test_info_picks_up_authored_entry(tmp_path):
 
 
 def test_unknown_action_returns_error(tmp_path):
-    """Removed JSON-store actions (submit/view/etc.) must be rejected."""
+    """Removed JSON-store actions (submit/view/etc.) must be rejected.
+
+    The exact pre-ToolFamily model-visible unknown-action envelope is preserved
+    by knowledge's own Host-layer normalization, not by the generic
+    dispatcher's canonical ``ACTION_REQUIRED`` failure.
+    """
     agent, _ = _mk_agent(tmp_path)
     try:
         for action in ("submit", "view", "consolidate", "delete", "filter", "export"):
-            result = agent._tool_handlers["knowledge"]({"action": action})
+            result = agent._tool_handlers["knowledge"](
+                {"action": action, "input": {}, "reasoning": "probe a removed action"}
+            )
             assert result["status"] == "error", f"{action!r} should be rejected"
             assert "unknown action" in result["message"].lower()
         # Exact model-visible envelope must survive the dispatch-helper
-        # migration (issue #513): wording, quoting, and key names verbatim.
-        assert agent._tool_handlers["knowledge"]({"action": "submit"}) == {
+        # migration (issue #513) and the ToolFamily migration: wording,
+        # quoting, and key names verbatim.
+        assert agent._tool_handlers["knowledge"](
+            {"action": "submit", "input": {}, "reasoning": "probe a removed action"}
+        ) == {
             "status": "error",
             "message": "unknown action: 'submit', only 'info' or 'manual' is supported",
         }
@@ -152,11 +162,15 @@ def test_unknown_action_returns_error(tmp_path):
         }
         # Invalid JSON can make `action` unhashable (issue #513 blocker): the
         # router must render the unknown-action envelope, not raise TypeError.
-        assert agent._tool_handlers["knowledge"]({"action": []}) == {
+        assert agent._tool_handlers["knowledge"](
+            {"action": [], "input": {}, "reasoning": "unhashable action"}
+        ) == {
             "status": "error",
             "message": "unknown action: [], only 'info' or 'manual' is supported",
         }
-        assert agent._tool_handlers["knowledge"]({"action": {}}) == {
+        assert agent._tool_handlers["knowledge"](
+            {"action": {}, "input": {}, "reasoning": "unhashable action"}
+        ) == {
             "status": "error",
             "message": "unknown action: {}, only 'info' or 'manual' is supported",
         }
@@ -239,7 +253,7 @@ def test_catalog_refreshes_on_info(tmp_path):
             "late-arrival",
             "Added after agent boot.",
         )
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
 
         prompt = agent._prompt_manager.read_section("knowledge") or ""
@@ -277,7 +291,7 @@ def test_knowledge_md_convention_distinct_from_skill_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
         prompt = agent._prompt_manager.read_section("knowledge") or ""
         assert "real-entry" in prompt
@@ -316,7 +330,7 @@ def test_entries_may_have_scripts_and_assets(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["status"] == "ok"
         assert result["catalog_size"] == 1
         assert result["problems"] == []
@@ -349,7 +363,7 @@ def test_entry_may_reference_local_paths_in_body(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
         prompt = agent._prompt_manager.read_section("knowledge") or ""
         # Body (and its private references) stays out of the prompt catalog.
@@ -377,7 +391,7 @@ def test_info_surfaces_missing_frontmatter(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         problem_folders = [p["folder"] for p in result["problems"]]
         assert any("missing-desc" in f for f in problem_folders)
         assert result["catalog_size"] == 0
@@ -408,7 +422,7 @@ def test_legacy_knowledge_json_migrates_to_knowledge_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
 
@@ -456,7 +470,7 @@ def test_legacy_knowledge_json_migration_uses_unique_slugs(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 2
         assert (legacy_dir / "duplicate" / "KNOWLEDGE.md").is_file()
         assert (legacy_dir / "duplicate-b2" / "KNOWLEDGE.md").is_file()
@@ -487,7 +501,7 @@ def test_legacy_codex_json_migrates_to_knowledge_md(tmp_path):
         capabilities={"knowledge": {}},
     )
     try:
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"]({"action": "info", "input": {}, "reasoning": "check knowledge catalog health"})
         assert result["catalog_size"] == 1
         assert result["problems"] == []
 

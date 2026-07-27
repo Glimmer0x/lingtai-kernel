@@ -797,11 +797,20 @@ class TestBuildConsultationPair:
         assert call.id == result.id
 
     def test_pair_uses_soul_flow_action(self, tmp_path):
+        # The synthesized pair is replayed to the provider as a model-visible
+        # assistant tool_use block, so it must carry the current public soul
+        # envelope — a flat {"action": "flow"} would teach a shape the closed
+        # schema now rejects.
+        from lingtai.tools.soul.consultation import INVOLUNTARY_FLOW_REASONING
         agent = _FakeAgent(tmp_path)
         voices = [{"source": "x", "voice": "y"}]
         call, result = build_consultation_pair(agent, voices)
         assert call.name == "soul"
-        assert call.args == {"action": "flow"}
+        assert call.args == {
+            "action": "flow",
+            "input": {},
+            "reasoning": INVOLUNTARY_FLOW_REASONING,
+        }
         assert result.name == "soul"
 
     def test_voices_array_strips_thinking(self, tmp_path):
@@ -1185,7 +1194,8 @@ class TestRehydrateAppendixTracking:
         iface.add_assistant_message([TextBlock(text="reply")])
         iface.add_assistant_message([
             ToolCallBlock(id="tc_recover_me", name="soul",
-                          args={"action": "flow"}),
+                          args={"action": "flow", "input": {},
+                                "reasoning": "involuntary"}),
         ])
         iface.add_tool_results([
             ToolResultBlock(id="tc_recover_me", name="soul",
@@ -1281,7 +1291,8 @@ class TestRehydrateAppendixTracking:
         for tc_id in ["tc_first", "tc_second"]:
             iface.add_assistant_message([
                 ToolCallBlock(id=tc_id, name="soul",
-                              args={"action": "flow"}),
+                              args={"action": "flow", "input": {},
+                                    "reasoning": "involuntary"}),
             ])
             iface.add_tool_results([
                 ToolResultBlock(id=tc_id, name="soul",
@@ -1798,7 +1809,7 @@ class TestSoulConfig:
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
-        result = handle(agent, {"action": "config", "delay_seconds": 600})
+        result = handle(agent, {"action": "config", "input": {"delay_seconds": 600}})
 
         assert result["status"] == "ok"
         assert result["old"]["delay_seconds"] == 120.0
@@ -1811,7 +1822,7 @@ class TestSoulConfig:
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_past_count=2)
 
-        result = handle(agent, {"action": "config", "consultation_past_count": 4})
+        result = handle(agent, {"action": "config", "input": {"consultation_past_count": 4}})
 
         assert result["status"] == "ok"
         assert result["old"]["consultation_past_count"] == 2
@@ -1825,8 +1836,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "delay_seconds": 300,
-            "consultation_past_count": 1,
+            "input": {"delay_seconds": 300, "consultation_past_count": 1},
         })
 
         assert result["status"] == "ok"
@@ -1847,7 +1857,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "delay_seconds": SOUL_DELAY_MIN_SECONDS - 1,
+            "input": {"delay_seconds": SOUL_DELAY_MIN_SECONDS - 1},
         })
 
         assert "error" in result
@@ -1863,7 +1873,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "delay_seconds": SOUL_DELAY_MIN_SECONDS,
+            "input": {"delay_seconds": SOUL_DELAY_MIN_SECONDS},
         })
 
         assert result["status"] == "ok"
@@ -1873,7 +1883,7 @@ class TestSoulConfig:
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
-        result = handle(agent, {"action": "config"})
+        result = handle(agent, {"action": "config", "input": {}})
 
         assert "error" in result
         assert agent._soul_delay == 120.0
@@ -1885,7 +1895,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "delay_seconds": "fast",
+            "input": {"delay_seconds": "fast"},
         })
 
         assert "error" in result
@@ -1898,7 +1908,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "delay_seconds": float("nan"),
+            "input": {"delay_seconds": float("nan")},
         })
 
         assert "error" in result
@@ -1908,7 +1918,7 @@ class TestSoulConfig:
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0, shutdown=True)
 
-        result = handle(agent, {"action": "config", "delay_seconds": 300})
+        result = handle(agent, {"action": "config", "input": {"delay_seconds": 300}})
 
         assert result["status"] == "ok"
         assert agent._soul_delay == 300.0
@@ -1922,7 +1932,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "consultation_past_count": CONSULTATION_PAST_COUNT_MAX + 1,
+            "input": {"consultation_past_count": CONSULTATION_PAST_COUNT_MAX + 1},
         })
         assert "error" in result
         assert agent._config.consultation_past_count == 2
@@ -1933,7 +1943,7 @@ class TestSoulConfig:
 
         result = handle(agent, {
             "action": "config",
-            "consultation_past_count": -1,
+            "input": {"consultation_past_count": -1},
         })
         assert "error" in result
         assert agent._config.consultation_past_count == 2
@@ -1944,18 +1954,23 @@ class TestSoulConfig:
         assert "config" in schema["properties"]["action"]["enum"]
         # set_delay removed from enum
         assert "set_delay" not in schema["properties"]["action"]["enum"]
-        # Both knobs present in schema
-        assert "delay_seconds" in schema["properties"]
-        assert schema["properties"]["delay_seconds"]["type"] == "number"
-        assert schema["properties"]["delay_seconds"]["minimum"] == 30.0
-        assert "consultation_interval" not in schema["properties"]
-        assert "consultation_past_count" in schema["properties"]
-        assert schema["properties"]["consultation_past_count"]["type"] == "integer"
+        # Both knobs present in the config action's own strict input branch
+        # (post-migration they no longer sit at the flat root, where every
+        # other action advertised them too).
+        branch = next(
+            b for b in schema["properties"]["input"]["oneOf"]
+            if b["title"] == "config input"
+        )
+        props = branch["properties"]
+        assert props["delay_seconds"]["type"] == ["number", "null"]
+        assert props["delay_seconds"]["minimum"] == 30.0
+        assert "consultation_interval" not in props
+        assert props["consultation_past_count"]["type"] == ["integer", "null"]
 
     def test_unknown_action_still_errors(self, tmp_path):
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path)
-        result = handle(agent, {"action": "bogus"})
+        result = handle(agent, {"action": "bogus", "input": {}})
         assert "error" in result
         assert "bogus" in result["error"]
 
@@ -1965,7 +1980,7 @@ class TestSoulConfig:
         from lingtai.tools.soul import handle
         agent = _ConfigFakeAgent(tmp_path, initial_delay=120.0)
 
-        result = handle(agent, {"action": "set_delay", "delay_seconds": 600})
+        result = handle(agent, {"action": "set_delay", "input": {"delay_seconds": 600}})
 
         assert "error" in result
         assert "config" in result["error"]

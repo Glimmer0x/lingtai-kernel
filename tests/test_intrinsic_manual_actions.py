@@ -4,15 +4,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from lingtai.tools import daemon as daemon_tool
-from lingtai.tools import edit as edit_tool
+from lingtai.tools import file as file_tool
 from lingtai.tools import email as email_tool
-from lingtai.tools import glob as glob_tool
-from lingtai.tools import grep as grep_tool
 from lingtai.tools import psyche as psyche_tool
-from lingtai.tools import read as read_tool
 from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
-from lingtai.tools import write as write_tool
+from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 
@@ -54,35 +51,44 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "soul-manual",
             "system-manual",
             "web",
+            "vision",
             "file-manual",
         )
     }
 
-    read_tool.setup(agent)
-    write_tool.setup(agent)
-    edit_tool.setup(agent)
-    glob_tool.setup(agent)
-    grep_tool.setup(agent)
+    # The five old file roots are gone; the one ``file`` family owns a single
+    # ``manual`` action returning ``file-manual``.
+    file_tool.setup(agent)
 
     shell_manager = shell_tool.ShellManager.__new__(shell_tool.ShellManager)
     shell_manager._agent = agent
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
     daemon_manager._agent = agent
     web_manager = web_tool.setup(agent)
+    vision_manager = vision_tool.setup(agent)
+
+    # ``shell`` is a migrated LTP v2 family: its ``manual`` is the reserved
+    # family child dispatched through the registered envelope handler, not an
+    # engine branch. Build the same dispatcher ``setup`` registers.
+    shell_dispatcher = shell_tool.ShellFamilyDispatcher(shell_manager, agent)
 
     calls = {
-        "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
+        "shell": (
+            "shell",
+            lambda: shell_dispatcher.handle(
+                {"action": "manual", "input": {}, "reasoning": "load shell guidance"}
+            ),
+        ),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
-        "read": ("read-manual", lambda: agent.handlers["read"]({"action": "manual"})),
-        "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
+        "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual", "input": {}})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
-        "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),
-        "edit": ("file-manual", lambda: agent.handlers["edit"]({"action": "manual"})),
-        "glob": ("file-manual", lambda: agent.handlers["glob"]({"action": "manual"})),
-        "grep": ("file-manual", lambda: agent.handlers["grep"]({"action": "manual"})),
+        "vision": ("vision", lambda: vision_manager.handle({"action": "manual", "input": {}})),
+        "file": ("file-manual", lambda: agent.handlers["file"](
+            {"action": "manual", "input": {}, "reasoning": "load file guidance"}
+        )),
     }
 
     for tool_name, (skill_name, call) in calls.items():
@@ -94,6 +100,31 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
+        elif tool_name == "file":
+            # ``file`` returns the generic ManualTool canonical child result
+            # verbatim (no double wrap): body at content[0].text, host-local
+            # path at structuredContent.manual_path.
+            assert result == {
+                "status": "ok",
+                "content": [{"type": "text", "text": body}],
+                "structuredContent": {"manual_path": str(path)},
+            }
+        elif tool_name == "vision":
+            # vision's family-owned manual keeps its pre-migration
+            # status/action/manual shape and adds the loader's manual_path.
+            assert result == {
+                "status": "ok",
+                "action": "manual",
+                "manual": body,
+                "manual_path": str(path),
+            }
+        elif tool_name == "shell":
+            # Migrated family: the reserved ``manual`` child's canonical
+            # ManualTool result is returned verbatim (no double wrap) — full
+            # body at content[0].text, host-local path in structuredContent.
+            assert result["status"] == "ok"
+            assert result["content"][0]["text"] == body
+            assert result["structuredContent"]["manual_path"] == str(path)
         else:
             assert result == {
                 "status": "ok",
@@ -110,37 +141,48 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         daemon_tool,
         email_tool,
         psyche_tool,
-        read_tool,
         soul_tool,
         system_tool,
         web_tool,
-        write_tool,
-        edit_tool,
-        glob_tool,
-        grep_tool,
+        file_tool,
+        vision_tool,
     )
     for module in modules:
         schema = module.get_schema()
         action = schema["properties"]["action"]
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
-    assert shell_tool.get_schema()["required"] == []
     assert psyche_tool.get_schema()["required"] == ["action"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3
-    for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
-        assert module.get_schema()["required"] == []
+    file_schema = file_tool.get_schema()
+    assert file_schema["required"] == ["action", "input", "reasoning"]
+    assert len(file_schema["properties"]["input"]["oneOf"]) == 6
+    vision_schema = vision_tool.get_schema()
+    assert vision_schema["required"] == ["action", "input", "reasoning"]
+    assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
+    # ``shell`` is migrated to the same LTP v2 envelope, with four children.
+    shell_schema = shell_tool.get_schema()
+    assert shell_schema["required"] == ["action", "input", "reasoning"]
+    assert len(shell_schema["properties"]["input"]["oneOf"]) == 4
 
     agent = _StubAgent(tmp_path)
-    for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
-        module.setup(agent)
+    agent._file_io = _ActionFileIO(tmp_path)
+    file_tool.setup(agent)
 
-    assert agent.handlers["read"]({})["message"] == "file_path is required"
-    assert agent.handlers["write"]({"file_path": str(tmp_path / "x")})["message"] == "content is required"
-    assert agent.handlers["edit"]({"file_path": str(tmp_path / "x"), "old_string": "a"})["message"] == "new_string is required"
-    assert agent.handlers["glob"]({})["message"] == "pattern is required"
-    assert agent.handlers["grep"]({})["message"] == "pattern is required"
+    def call(action, **input_):
+        return agent.handlers["file"](
+            {"action": action, "input": input_, "reasoning": "runtime check"}
+        )
+
+    # A schema-required field omitted at runtime still fails at the operation
+    # boundary, before any write lands.
+    assert call("read")["message"] == "file_path is required"
+    assert call("write", file_path=str(tmp_path / "x"))["message"] == "content is required"
+    assert call("edit", file_path=str(tmp_path / "x"), old_string="a")["message"] == "new_string is required"
+    assert call("glob")["message"] == "pattern is required"
+    assert call("grep")["message"] == "pattern is required"
     assert not (tmp_path / "x").exists()
 
 
@@ -199,42 +241,70 @@ class _ActionFileIO:
         return result
 
 
-def test_file_action_modes_keep_omission_and_fail_loudly(tmp_path: Path) -> None:
+def test_file_action_modes_require_explicit_action_and_fail_loudly(tmp_path: Path) -> None:
+    """Every operation is now an explicit action of the one ``file`` family.
+
+    The pre-migration "omit action for the legacy ordinary call" dual mode is
+    gone with the five standalone roots: ``action`` is required, each action
+    name is canonical, and an unknown one fails with the family's stable typed
+    envelope error rather than a per-tool string.
+    """
     agent = _StubAgent(tmp_path)
     agent._file_io = _ActionFileIO(tmp_path)
-    modules = (read_tool, write_tool, edit_tool, glob_tool, grep_tool)
-    for module in modules:
-        schema = module.get_schema()
-        tool_name = module.__name__.rsplit(".", 1)[-1]
-        assert schema["properties"]["action"]["enum"] == [tool_name, "manual"]
-        description = module.get_description()
-        assert "omit action" in description
-        assert f"action='{tool_name}'" in description
-        assert "after the manual result" in description
-        assert "error loop" in description
-        module.setup(agent)
+
+    schema = file_tool.get_schema()
+    assert schema["properties"]["action"]["enum"] == [
+        "read", "write", "edit", "glob", "grep", "manual",
+    ]
+    assert schema["required"] == ["action", "input", "reasoning"]
+    description = file_tool.get_description()
+    for action in ("read", "write", "edit", "glob", "grep", "manual"):
+        assert f"action='{action}'" in description
+    assert "after the manual result" in description.lower()
+    assert "error loop" in description
+
+    file_tool.setup(agent)
+
+    def call(action, **input_):
+        return agent.handlers["file"](
+            {"action": action, "input": input_, "reasoning": "action mode test"}
+        )
 
     source = tmp_path / "source.txt"
     source.write_text("alpha\n", encoding="utf-8")
-    assert agent.handlers["read"]({"file_path": str(source)})["total_lines"] == 1
-    assert agent.handlers["read"]({"action": "read", "file_path": str(source)})["total_lines"] == 1
-    assert agent.handlers["write"]({"action": "write", "file_path": str(tmp_path / "written.txt"), "content": "beta"})["status"] == "ok"
-    assert agent.handlers["edit"]({"action": "edit", "file_path": str(source), "old_string": "alpha", "new_string": "gamma"})["status"] == "ok"
-    assert agent.handlers["glob"]({"action": "glob", "pattern": "*.txt", "path": str(tmp_path)})["count"] >= 2
-    assert agent.handlers["grep"]({"action": "grep", "pattern": "gamma", "path": str(source)})["count"] == 1
+    assert call("read", file_path=str(source))["total_lines"] == 1
+    assert call("write", file_path=str(tmp_path / "written.txt"), content="beta")["status"] == "ok"
+    assert call("edit", file_path=str(source), old_string="alpha", new_string="gamma")["status"] == "ok"
+    assert call("glob", pattern="*.txt", path=str(tmp_path))["count"] >= 2
+    assert call("grep", pattern="gamma", path=str(source))["count"] == 1
 
-    for name in ("read", "write", "edit", "glob", "grep"):
-        result = agent.handlers[name]({"action": "unsupported"})
-        assert result["status"] == "error"
-        assert "Unsupported action" in result["message"]
+    unsupported = call("unsupported")
+    assert unsupported["status"] == "failed"
+    assert unsupported["error_code"] == "ACTION_REQUIRED"
+    assert "read, write, edit, glob, grep, manual" in unsupported["message"]
+
+    missing_action = agent.handlers["file"]({"input": {}, "reasoning": "no action"})
+    assert missing_action["error_code"] == "ACTION_REQUIRED"
 
 
-def test_file_manual_bodies_explain_one_time_dual_mode_guidance() -> None:
+def test_file_manual_bodies_explain_one_time_manual_guidance() -> None:
+    """Both bodies keep the one-time manual rule after the family migration.
+
+    The pre-migration "omit action for backward compatibility" dual mode is
+    gone — ``action`` is now always required — so that phrase is no longer
+    asserted. The guidance that still matters is: manual is a one-time lookup,
+    ordinary work resumes after it, and repeating it is an error loop.
+    """
     file_body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
     read_body = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text(encoding="utf-8")
     for body in (file_body, read_body):
-        assert "backward compatibility" in body
         assert "ordinary" in body
         assert "one-time" in body
         assert "After" in body
         assert "error loop" in body
+        # No body may still teach the retired omit-action mode.
+        assert "omit `action`" not in body
+
+    # file-manual is the single family manual; read-manual is nested under it.
+    assert "read-manual" in file_body
+    assert "nested reference" in read_body

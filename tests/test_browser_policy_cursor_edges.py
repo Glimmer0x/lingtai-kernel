@@ -1,6 +1,8 @@
 """Deterministic browser Core policy, redirect, cap and state edge cases."""
 from __future__ import annotations
 
+import gzip
+
 from lingtai.tools.browser.core import BrowserEngine, _content_metadata
 from lingtai.tools.browser.cursor import paginate_blocks
 from lingtai.tools.browser.extractor import Block, extract_html, extract_plain_text
@@ -376,3 +378,91 @@ def test_continuation_refreshes_all_snapshot_link_refs_after_eviction():
         followed = engine.handle({"link_ref": link["ref"]})
         assert followed["status"] == "ok"
         assert followed["requested_url"].endswith(("/one", "/two"))
+
+
+class UndecodableBodyPort:
+    """Serves a text/html 200 whose body is not decodable text.
+
+    Reproduces the real ``python.org/downloads`` case: the origin answers an
+    unnegotiated ``Content-Encoding: gzip`` while still labelling the payload
+    ``text/html; charset=utf-8``, so Core receives compressed bytes.
+    """
+
+    def __init__(self, body: bytes, content_type: str = "text/html; charset=utf-8"):
+        self.body = body
+        self.content_type = content_type
+
+    def resolve(self, hostname: str, *, timeout_s: float):
+        return ("93.184.216.34",)
+
+    def request(self, url: str, *, resolved: ResolvedTarget, max_bytes: int, timeout_s: float):
+        return TransportResponse(200, {"Content-Type": self.content_type}, self.body, False, url)
+
+
+def _gzipped_page() -> bytes:
+    # Paragraphs vary so the compressed payload stays high-entropy and
+    # realistically sized, like the real origin response.
+    paragraphs = "".join(
+        f"<p>Python 3.{n}.{n % 7} was released on day {n}; download artifact {n * 7919}.</p>"
+        for n in range(400)
+    )
+    html = (
+        "<html><head><title>Download Python</title></head><body>"
+        f"<main>{paragraphs}</main></body></html>"
+    ).encode("utf-8")
+    return gzip.compress(html)
+
+
+def test_compressed_binary_body_is_a_typed_extract_failure_not_nominal_success():
+    """HTTP 200 whose extracted body is replacement garbage must not read as usable content."""
+    engine = BrowserEngine(UndecodableBodyPort(_gzipped_page()))
+    result = engine.handle({"url": "https://public.example/downloads/", "max_chars": 12_000})
+
+    assert result["status"] == "failed"
+    assert result["error_code"] == "NO_TEXT_BLOCKS"
+    assert result["stage"] == "extract"
+    # HTTP provenance survives the reclassification.
+    assert result["http_status"] == 200
+    assert result["retryable"] is False
+    # The diagnosis names the real cause instead of blaming the URL, and the
+    # recovery route is actionable.
+    assert "not decodable text" in result["message"]
+    assert "legacy extraction fallback" in result["recommended_action"]
+    # No garbage may reach the model as ordinary page content.
+    assert "blocks" not in result
+    assert result["partial"] is False
+
+
+def test_genuinely_empty_page_keeps_the_generic_no_text_diagnosis():
+    """Only undecodable bodies get the decode-specific message and recovery."""
+    engine = BrowserEngine(UndecodableBodyPort(b"<html><body><nav>menu</nav></body></html>"))
+    result = engine.handle({"url": "https://public.example/empty"})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "NO_TEXT_BLOCKS"
+    assert result["message"] == "The page contained no static text blocks."
+    assert "legacy extraction fallback" not in result["recommended_action"]
+
+
+def test_undecodable_detection_requires_an_actual_decode_failure():
+    """Cleanly decoded text is never reclassified, however unusual its characters."""
+    dense_unicode = ("<main><p>" + "中文内容\U0001f600" * 400 + "</p></main>").encode("utf-8")
+    engine = BrowserEngine(UndecodableBodyPort(dense_unicode))
+    result = engine.handle({"url": "https://public.example/cjk", "max_chars": 12_000})
+    assert result["status"] == "ok"
+    assert result["blocks"]
+
+
+def test_legitimate_partially_replaced_documents_stay_successful():
+    """A mostly-readable document with a few bad bytes keeps its usable content."""
+    body = ("café " * 200).encode("utf-8") + b"\xff\xfe"
+    engine = BrowserEngine(UndecodableBodyPort(body, content_type="text/plain; charset=utf-8"))
+    result = engine.handle({"url": "https://public.example/text", "max_chars": 12_000})
+    assert result["status"] == "ok"
+    assert "CHARSET_DECODE_ERROR_REPLACED" in result["warnings"]
+    assert "café" in result["blocks"][0]["text"]
+
+    # A short legitimately-truncated multibyte document is far too small to judge
+    # by replacement density alone; it must survive.
+    short = extract_plain_text(b"\x82\xa0\x82", charset="shift_jis")
+    assert short.blocks[0].text == "あ�"
+    assert "UNDECODABLE_CONTENT" not in short.warnings
