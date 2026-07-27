@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.tools.tool_family import RESERVED_MANUAL_NAME, ChildTool, ToolFamily, ToolFamilyError
-from lingtai.tools.tool_family.manual import build_manual_child
+from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 
 class _FakeAgent:
@@ -33,10 +33,34 @@ def test_manual_child_reserved_name_is_exactly_manual():
     assert child.name == RESERVED_MANUAL_NAME == "manual"
 
 
-def test_manual_child_input_schema_is_strict_empty():
+def test_manual_child_input_schema_is_the_one_canonical_strict_empty_schema():
+    """Every family's ``manual`` child uses the single exported schema.
+
+    ``required: []`` is stated explicitly and is semantically exact: empty
+    ``properties`` plus ``additionalProperties: False`` already admits only
+    ``{}``. Families must not restate this schema locally.
+    """
     agent = _FakeAgent(Path("/nonexistent"))
     child = build_manual_child(agent, "widget")
-    assert child.input_schema == {"type": "object", "properties": {}, "additionalProperties": False}
+    assert child.input_schema == MANUAL_INPUT_SCHEMA
+    assert MANUAL_INPUT_SCHEMA == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
+
+
+def test_manual_child_schema_is_deep_copied_so_families_cannot_mutate_each_other():
+    """One family's child must not be able to edit the shared canonical schema."""
+    agent = _FakeAgent(Path("/nonexistent"))
+    first = build_manual_child(agent, "widget")
+    second = build_manual_child(agent, "gadget")
+    first.input_schema["properties"]["injected"] = {"type": "string"}
+    first.input_schema["required"].append("injected")
+    assert MANUAL_INPUT_SCHEMA["properties"] == {}
+    assert MANUAL_INPUT_SCHEMA["required"] == []
+    assert second.input_schema == MANUAL_INPUT_SCHEMA
 
 
 def test_manual_child_actual_handler_returns_body_at_content_text_and_path_at_structured_content(tmp_path):

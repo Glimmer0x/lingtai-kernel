@@ -25,13 +25,14 @@ public `web` manager. It is deliberately not registered independently.
 ## Components
 
 - `BrowserEngine` — bounded fetch, extraction, provenance, snapshots, cursors,
-  refs, and typed result envelopes (`src/lingtai/tools/browser/core.py:119-315`).
+  refs, and typed result envelopes (`src/lingtai/tools/browser/core.py:126-327`).
 - `BrowserPort` and transport value types — technology-neutral outbound boundary
   (`src/lingtai/tools/browser/port.py:14-64`).
 - `netpolicy`, `fetcher`, and `extractor` — SSRF, deadline, redirect, decode,
-  and static text policy (`src/lingtai/tools/browser/netpolicy.py:43-224`,
+  undecodable-content, and static text policy
+  (`src/lingtai/tools/browser/netpolicy.py:43-224`,
   `src/lingtai/tools/browser/fetcher.py:56-136`,
-  `src/lingtai/tools/browser/extractor.py:145-220`).
+  `src/lingtai/tools/browser/extractor.py:175-268`).
 - `CursorCodec`, snapshot store, and `RefStore` — bounded same-Agent state
   (`src/lingtai/tools/browser/cursor.py:22-143`,
   `src/lingtai/tools/browser/snapshots.py:33-86`,

@@ -221,8 +221,10 @@ its own scoped migration.
   shared handler, common request/result types, or a universal domain result
   shape from any consumer family, matching `../CONTRACT.md` "Implementation
   independence" verbatim.
-- `manual.build_manual_child`'s child MUST use the reserved name `manual`, a
-  strict empty `input_schema`, and its handler's actual return value — what
+- `manual.build_manual_child`'s child MUST use the reserved name `manual`, the
+  exported `manual.MANUAL_INPUT_SCHEMA` strict-empty `input_schema` — the one
+  canonical spelling (`required: []` stated explicitly; families MUST NOT
+  restate it locally) — and its handler's actual return value — what
   `ToolFamily.handle()` dispatches back verbatim — MUST be the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
   path) shape, never the pre-mapping flat `load_installed_manual()` dict.

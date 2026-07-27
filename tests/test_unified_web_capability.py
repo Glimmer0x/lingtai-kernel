@@ -1,6 +1,7 @@
 """Focused contract regressions for the single public ``web`` capability."""
 from __future__ import annotations
 
+import gzip
 import json
 import os
 from pathlib import Path
@@ -439,3 +440,34 @@ def test_search_caps_an_unbounded_provider_iterable(tmp_path):
     assert result["status"] == "ok"
     assert result["count"] == 20
     assert len(result["results"]) == 20
+
+
+class _CompressedPort:
+    """Origin that answers 200 text/html with an unnegotiated gzip payload."""
+
+    def resolve(self, hostname: str, *, timeout_s: float):
+        return ["93.184.216.34"]
+
+    def request(self, url: str, *, resolved, max_bytes: int, timeout_s: float):
+        paragraphs = "".join(
+            f"<p>Python 3.{n}.{n % 7} was released on day {n}; download artifact {n * 7919}.</p>"
+            for n in range(400)
+        )
+        html = f"<html><body><main>{paragraphs}</main></body></html>".encode("utf-8")
+        return TransportResponse(200, {"content-type": "text/html; charset=utf-8"}, gzip.compress(html), False, url)
+
+
+def test_undecodable_body_surfaces_as_typed_failure_on_the_public_web_result(tmp_path):
+    """Result/wire parity: degraded content is a typed failure, not usable page content."""
+    agent = _Agent(tmp_path)
+    manager = setup(agent, search_service=_Search(), browser_port=_CompressedPort())
+    result = manager.handle(
+        {"action": "browse", "input": {"url": "https://public.example/downloads/", "max_chars": 12_000}}
+    )
+    assert result["status"] == "failed"
+    assert result["error_code"] == "NO_TEXT_BLOCKS"
+    assert result["stage"] == "extract"
+    assert result["http_status"] == 200
+    assert result["action"] == "browse"
+    assert "blocks" not in result
+    assert result["current_setting"]["source"] == "not_applicable"

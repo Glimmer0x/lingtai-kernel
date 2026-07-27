@@ -53,7 +53,13 @@ inject a fake BrowserPort. No adapter registers a model-facing tool.
 
 Only public HTTP(S) destinations are accepted. Existing DNS/SSRF, redirect,
 content, charset, byte, link, snapshot, ref, cursor, timeout, and typed-error
-bounds remain normative. SearchService is not imported or called by this Core.
+bounds remain normative. A transport success whose body does not decode to
+readable text is not usable content: when a decode-replacement warning applies
+and the extracted text is large enough to judge, dominated by replacement
+characters, and carries raw control bytes, extraction yields no blocks and the
+existing `NO_TEXT_BLOCKS` extract failure is raised with HTTP provenance and a
+decode-specific recovery. Cleanly decoded text is never reclassified.
+SearchService is not imported or called by this Core.
 Refresh/reconstruction must use fresh per-Agent state; no filesystem snapshot,
 credential, cookie, or hidden fallback is part of this subcomponent.
 

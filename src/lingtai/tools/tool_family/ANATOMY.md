@@ -42,7 +42,7 @@ this package too — using it is optional, not mandatory).
   and strips root `summarize`, rejects unknown root fields, and rejects
   `input` keys outside the selected child's own declared schema properties
   before calling that child's handler with only its `input`
-  (`__init__.py:98-289`). Two enforcement layers correlate `action` with
+  (`__init__.py:98-281`). Two enforcement layers correlate `action` with
   `input`, generated purely from the child registry with no name/schema
   mapping table: (1) schema-level — a root `allOf` with one `if`/`then`
   condition per child, each `if` testing `action` via `const` against that
@@ -54,7 +54,9 @@ this package too — using it is optional, not mandatory).
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
-- `manual.py` — `build_manual_child()` wraps `../_manual.py`'s
+- `manual.py` — owns `MANUAL_INPUT_SCHEMA`, the single strict-empty `manual`
+  input schema every family reuses, and `build_manual_child()`, which wraps
+  `../_manual.py`'s
   `load_installed_manual()` into the ManualTool stable contract: strict empty
   input, and a handler whose actual return value (what `ToolFamily.handle()`
   dispatches back verbatim, once the returned `ChildTool` is registered
