@@ -77,6 +77,17 @@ class LLMResponse:
     api_call_id: str | None = None
 
 
+def is_all_empty_response(response: LLMResponse) -> bool:
+    """Return whether a response has no text, tool calls, or thoughts.
+
+    This is the deliberately pure semantic-empty contract shared by the main
+    and daemon recovery loops.  It intentionally follows provider-normalized
+    truthiness: whitespace text is a response, and thoughts-only responses are
+    not empty because they still carry model output.
+    """
+    return not response.text and not response.tool_calls and not response.thoughts
+
+
 # The single wire-facing description for registered ``FunctionSchema`` tools.
 # Provider payload builders send this constant as those tools' top-level
 # description; the full ``FunctionSchema.description`` prose renders only into

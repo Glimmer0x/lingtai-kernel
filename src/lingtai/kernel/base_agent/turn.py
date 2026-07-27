@@ -17,6 +17,7 @@ from ..safety_limits import (
 )
 from ..tool_executor import ToolExecutor
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
+from ..llm.base import is_all_empty_response
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
@@ -1670,11 +1671,7 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # plus stuck_revive injection is the right recovery for a degenerate
         # response (often caused by heavy context or mid-loop notification
         # injection confusing the model).
-        if (
-            not response.text
-            and not response.tool_calls
-            and not response.thoughts
-        ):
+        if is_all_empty_response(response):
             # Extract diagnostic metadata from provider response.
             raw = response.raw
             _diag: dict = {}

@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 6
-last_changed_at: "2026-07-24"
+contract_version: 7
+last_changed_at: "2026-07-26"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -16,6 +16,8 @@ related_files:
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/llm/base.py
+  - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
@@ -33,6 +35,7 @@ related_files:
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_daemon_contract_doc.py
   - tests/test_daemon.py
+  - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
@@ -239,6 +242,32 @@ When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`.
+
+The LingTai loop shares only the pure `LLMResponse` all-empty predicate
+(`text`, `tool_calls`, and `thoughts` all empty) with the main agent. An all-empty
+response at any daemon-owned provider-send site (kickoff, post-tool
+continuation, follow-up, or compact-reset continuation) enters one recovery
+state machine: the initial response receives three same-session transient
+retries with 1/2/4 second backoff; each retry closes pending tool calls with
+`tool_completed=True`, applies the bounded AED history-compaction semantics, and
+appends the localized generic `system.stuck_revive` request. The daemon builds
+both the fixed safe error description and each localized `MSG_REQUEST` locally;
+the first failed post-tool send is described as `after tool results`, while each
+later recovery send is a fresh `on initial send` request. Retry/AED events expose
+only that fixed description and bounded attempt/phase data, never provider text,
+ids, model, or finish reason. Only after that budget does counted AED begin,
+using `max_aed_attempts` and preserved-interface session rebuilds; with the
+default three counted attempts, two rebuild sends are allowed and the third
+exhaustion is terminal. Recovery sends respect daemon cancel/timeout and do not
+consume `effective_max_turns`.
+
+Main owns ACTIVE/STUCK/ASLEEP lifecycle states; the daemon owns its cancellation,
+timeout, and max-turn boundaries and maps empty-response AED exhaustion to a
+clear detached-run `FAILED` receipt. Thoughts-only responses, non-empty text,
+other provider exceptions, and partial streams do not enter this path. Canonical
+empty assistant/history entries and real tool results remain intact; prior tool
+calls are never redispatched. A validated `finish(status="done")` remains the
+only completion gate when `daemon_common` is loaded.
 
 ### 4. Artifacts separate review evidence from secret-bearing config
 

@@ -33,13 +33,17 @@ if TYPE_CHECKING:
     from lingtai.agent import Agent
 
 from lingtai.kernel._fsutil import atomic_write_json
-from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.i18n import t as _t
+from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
 from lingtai.kernel.loop_guard import LoopGuard
+from lingtai.kernel.message import MSG_REQUEST, _make_message
 from lingtai.kernel.tool_executor import ToolExecutor
+from lingtai.kernel.tool_result_artifacts import compact_oversized_history
 from lingtai.kernel.meta_block import (
     attach_daemon_agent_meta,
     render_system_prompt_pressure_context,
 )
+from lingtai.kernel.time_veil import now_iso
 from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
@@ -141,6 +145,27 @@ DAEMON_MECHANICAL_COMPACT_RECOVERY = (
     "resume from that verified state. Do not assume erased context or repeat "
     "side effects without verification."
 )
+_DAEMON_MISSING_COMPLETION_ERROR = "missing completion MCP finish signal"
+_DAEMON_EMPTY_RESPONSE_ERROR = "daemon empty-response recovery exhausted"
+_TRANSIENT_EMPTY_RESPONSE_RETRY_LIMIT = 3
+
+
+def _wait_recovery_backoff(
+    cancel_event: threading.Event,
+    timeout_event: threading.Event | None,
+    seconds: float,
+) -> bool:
+    """Wait interruptibly for an empty-response transient retry."""
+    deadline = time.monotonic() + seconds
+    while True:
+        if cancel_event.is_set() or (timeout_event is not None and timeout_event.is_set()):
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        cancel_event.wait(min(remaining, 0.1))
+
+
 _DAEMON_SKILL_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?\n)---\s*\n", re.DOTALL)
 
 
@@ -1954,7 +1979,7 @@ class DaemonManager:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return _DaemonCompletion(None, error="missing completion MCP finish signal")
+            return _DaemonCompletion(None, error=_DAEMON_MISSING_COMPLETION_ERROR)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
             return _DaemonCompletion(None, error=f"invalid completion signal: {e}")
         if not isinstance(data, dict):
@@ -3003,6 +3028,190 @@ class DaemonManager:
             _accum(response)
             return response
 
+        def _record_recovery_response(recovery_response) -> None:
+            # Keep every provider response in the daemon's durable chat history,
+            # but retain the current normal turn number: recovery sends are not
+            # effective-max-turns work.
+            state = run_dir.state_snapshot()
+            current_turn = state.get("turn", turns + 1)
+            if not isinstance(current_turn, int) or isinstance(current_turn, bool):
+                current_turn = turns + 1
+            run_dir.bump_turn(
+                turn=current_turn,
+                response_text=getattr(recovery_response, "text", "") or "",
+            )
+
+        def _compact_before_empty_retry(source: str) -> None:
+            interface = getattr(session, "interface", None)
+            if interface is None:
+                return
+            try:
+                stats = compact_oversized_history(
+                    interface,
+                    working_dir=self._agent._working_dir,
+                    logger_fn=lambda event, **fields: run_dir.append_event(
+                        event, em_id=em_id, run_id=run_dir.run_id, **fields
+                    ),
+                )
+            except Exception:
+                # Recovery must not become a new terminal failure. The main
+                # loop treats this helper as best-effort for the same reason.
+                run_dir.append_event(
+                    "aed_history_compaction_failed",
+                    em_id=em_id,
+                    run_id=run_dir.run_id,
+                    source=source,
+                )
+                return
+            run_dir.append_event(
+                "aed_history_compacted",
+                em_id=em_id,
+                run_id=run_dir.run_id,
+                source=source,
+                scanned_blocks=stats.scanned_blocks,
+                compacted_blocks=stats.compacted_blocks,
+                original_chars_total=stats.original_chars_total,
+                replacement_chars_total=stats.replacement_chars_total,
+                artifact_paths=list(stats.artifact_paths),
+            )
+
+        empty_transient_attempts = 0
+        empty_aed_attempts = 0
+
+        def _daemon_empty_response_error(*, in_tool_loop: bool) -> str:
+            """Describe one daemon provider send without provider-controlled data."""
+            where = "after tool results" if in_tool_loop else "on initial send"
+            return (
+                "LLM returned empty response (no text, no tool_calls, no thoughts) "
+                f"{where}; ledger=daemon"
+            )
+
+        def _daemon_aed_retry_message(err_desc: str) -> str:
+            """Build the daemon-local localized ``MSG_REQUEST`` recovery message."""
+            language = getattr(getattr(self._agent, "_config", None), "language", "en")
+            return _make_message(
+                MSG_REQUEST,
+                "system",
+                _t(
+                    language,
+                    "system.stuck_revive",
+                    ts=now_iso(self._agent),
+                    err_desc=err_desc,
+                ),
+            ).content
+
+        def _recover_empty_response(response, *, in_tool_loop: bool):
+            """Mirror main all-empty transient/AED recovery in this daemon."""
+            nonlocal session, empty_transient_attempts, empty_aed_attempts
+            if not is_all_empty_response(response):
+                return response
+
+            # The location describes this provider send, not the request that
+            # originally entered this helper. Every recovery send is a fresh
+            # initial-send request; a later empty response must not inherit the
+            # location of the post-tool send that triggered recovery.
+            error = _daemon_empty_response_error(in_tool_loop=in_tool_loop)
+            max_aed_attempts = getattr(
+                getattr(self._agent, "_config", None), "max_aed_attempts", 3
+            )
+            if (
+                not isinstance(max_aed_attempts, int)
+                or isinstance(max_aed_attempts, bool)
+                or max_aed_attempts < 1
+            ):
+                max_aed_attempts = 1
+
+            while True:
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return None
+                if empty_transient_attempts < _TRANSIENT_EMPTY_RESPONSE_RETRY_LIMIT:
+                    empty_transient_attempts += 1
+                    backoff_s = 2 ** (empty_transient_attempts - 1)
+                    interface = getattr(session, "interface", None)
+                    if interface is not None:
+                        interface.close_pending_tool_calls(
+                            reason=f"transient_retry: {error[:200]}",
+                            tool_completed=True,
+                        )
+                    _compact_before_empty_retry("aed_transient")
+                    run_dir.append_event(
+                        "daemon_aed_transient_retry",
+                        em_id=em_id,
+                        run_id=run_dir.run_id,
+                        attempt=empty_transient_attempts,
+                        max_attempts=_TRANSIENT_EMPTY_RESPONSE_RETRY_LIMIT,
+                        backoff_s=backoff_s,
+                        error=error,
+                    )
+                    if not _wait_recovery_backoff(
+                        cancel_event, timeout_event, backoff_s
+                    ):
+                        return None
+                    retry_message = _daemon_aed_retry_message(error)
+                    run_dir.record_user_send(retry_message, kind="aed_transient")
+                    response = session.send(retry_message)
+                    daemon_meta_state.note_response(response, session)
+                    _accum(response)
+                    _record_recovery_response(response)
+                    if cancel_event.is_set() or (
+                        timeout_event is not None and timeout_event.is_set()
+                    ):
+                        return None
+                    if not is_all_empty_response(response):
+                        return response
+                    error = _daemon_empty_response_error(in_tool_loop=False)
+                    continue
+
+                empty_aed_attempts += 1
+                interface = getattr(session, "interface", None)
+                if interface is not None:
+                    interface.close_pending_tool_calls(
+                        reason=error,
+                        tool_completed=True,
+                    )
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return None
+                # Record the counted attempt before checking the terminal budget.
+                # A terminal attempt heals the wire but must not compact, rebuild,
+                # or issue another provider call after exhaustion is known.
+                run_dir.append_event(
+                    "daemon_aed_attempt",
+                    em_id=em_id,
+                    run_id=run_dir.run_id,
+                    attempt=empty_aed_attempts,
+                    max_attempts=max_aed_attempts,
+                    error=error,
+                )
+                if empty_aed_attempts >= max_aed_attempts:
+                    raise RuntimeError(_DAEMON_EMPTY_RESPONSE_ERROR)
+                _compact_before_empty_retry("aed_deterministic")
+                preserved_interface = session.interface
+                session = service.create_session(
+                    system_prompt=system_prompt,
+                    tools=schemas or None,
+                    model=effective_model,
+                    thinking="default",
+                    tracked=False,
+                    interface=preserved_interface,
+                )
+                retry_message = _daemon_aed_retry_message(error)
+                run_dir.record_user_send(retry_message, kind="aed")
+                response = session.send(retry_message)
+                daemon_meta_state.note_response(response, session)
+                _accum(response)
+                _record_recovery_response(response)
+                if cancel_event.is_set() or (
+                    timeout_event is not None and timeout_event.is_set()
+                ):
+                    return None
+                if not is_all_empty_response(response):
+                    return response
+                error = _daemon_empty_response_error(in_tool_loop=False)
+
         try:
             kickoff = prompt or "Begin the assigned daemon task."
             run_dir.record_user_send(kickoff, kind="kickoff")
@@ -3017,6 +3226,9 @@ class DaemonManager:
             turns = 0
             recovery_tool_batch_pending = False
             run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+            response = _recover_empty_response(response, in_tool_loop=False)
+            if response is None:
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
             while response.tool_calls and (
                 turns < effective_max_turns or recovery_tool_batch_pending
@@ -3135,6 +3347,15 @@ class DaemonManager:
                 recovery_tool_batch_pending = mechanically_compacted and bool(
                     response.tool_calls
                 )
+                response = _recover_empty_response(
+                    response,
+                    in_tool_loop=not mechanically_compacted,
+                )
+                if response is None:
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                recovery_tool_batch_pending = mechanically_compacted and bool(
+                    response.tool_calls
+                )
 
                 # Inject follow-up as a separate user message — only safe when
                 # the response is text-only. If it carries new tool_calls, the
@@ -3149,6 +3370,9 @@ class DaemonManager:
                         run_dir.bump_turn(
                             turn=turns + 1, response_text=response.text or ""
                         )
+                        response = _recover_empty_response(response, in_tool_loop=False)
+                        if response is None:
+                            return _mark_cancelled_or_timeout(run_dir, timeout_event)
                         recovery_tool_batch_pending = bool(response.tool_calls)
                         if response.tool_calls:
                             # Recovery tool calls must complete before the
@@ -3156,12 +3380,20 @@ class DaemonManager:
                             continue
                     followup = self._drain_followup(em_id)
                     if followup:
+                        # A buffered follow-up is a new daemon request turn;
+                        # reset only the empty-response recovery budget, not
+                        # the normal tool-loop turn counter.
+                        empty_transient_attempts = 0
+                        empty_aed_attempts = 0
                         run_dir.record_user_send(followup, kind="followup")
                         response = session.send(followup)
                         daemon_meta_state.note_response(response, session)
                         _accum(response)
                         turns += 1
                         run_dir.bump_turn(turn=turns + 1, response_text=response.text or "")
+                        response = _recover_empty_response(response, in_tool_loop=False)
+                        if response is None:
+                            return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
             if response.tool_calls and turns >= effective_max_turns:
                 raise RuntimeError(
