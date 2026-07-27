@@ -127,8 +127,8 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert shell_tool.get_schema()["required"] == []
     assert psyche_tool.get_schema()["required"] == ["action"]
     web_schema = web_tool.get_schema()
-    assert web_schema["required"] == ["action", "input"]
-    assert len(web_schema["properties"]["input"]["anyOf"]) == 3
+    assert web_schema["required"] == ["action", "input", "reasoning"]
+    assert len(web_schema["properties"]["input"]["oneOf"]) == 3
     for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
         assert module.get_schema()["required"] == []
 

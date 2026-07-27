@@ -349,13 +349,20 @@ def test_schema_root_is_closed_action_input_reasoning_summarize(tmp_path):
 
     schema = get_schema()
     assert schema["additionalProperties"] is False
-    assert schema["required"] == ["action", "input"]
-    assert set(schema["properties"]) == {"action", "input", "summarize"}
+    # ``reasoning`` is REQUIRED Host InvocationContext/audit metadata; the
+    # family's own get_schema() declares it (and its required-ness) itself —
+    # this is not left to Agent schema composition, which only re-injects the
+    # identical property text into every tool's ``properties`` and never
+    # touches ``required``.
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+    reasoning_prop = schema["properties"]["reasoning"]
+    assert reasoning_prop["type"] == "string"
     summarize_prop = schema["properties"]["summarize"]
     assert summarize_prop["type"] == "boolean"
     # No public `summary` alias, and no branch admits `reasoning`/`_reasoning`/
     # `summarize` inside its own input.
-    for branch in schema["properties"]["input"]["anyOf"]:
+    for branch in schema["properties"]["input"]["oneOf"]:
         assert "summary" not in branch["properties"]
         assert "summarize" not in branch["properties"]
         assert "reasoning" not in branch["properties"]

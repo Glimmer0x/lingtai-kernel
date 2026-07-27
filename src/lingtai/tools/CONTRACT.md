@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/tool_family/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -242,6 +243,16 @@ v2 family (currently only `web`), so an unmigrated tool's own field literally
 named `summarize` is never reinterpreted as this control. Every other
 LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
+
+`src/lingtai/tools/tool_family/` is optional, generic composition
+infrastructure implementing this envelope (schema composition from a
+`ChildTool` registry, dispatch-validation boilerplate, and a reusable
+ManualTool builder) that a family MAY adopt instead of hand-writing the
+equivalent code; `web` is its first consumer, using it for schema composition
+and dispatch while retaining its own outer `handle()` for family-specific
+diagnostics. Using it is never required — see its own
+`src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
+binding on it exactly as it is on every family.
 
 Non-normative future illustration: `file` may later become one family with
 actions `read | write | edit | glob | grep | manual`, while all six

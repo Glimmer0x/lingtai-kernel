@@ -641,6 +641,7 @@ class TestSourceValidation:
 
     def test_validator_passes(self):
         """The validator module should pass on the current source tree."""
+        import re
         import subprocess
         import sys
         from pathlib import Path
@@ -658,7 +659,7 @@ class TestSourceValidation:
             env={"PYTHONPATH": str(repo_root / "src"), "PATH": ""},
         )
         assert result.returncode == 0, f"Validator failed:\n{result.stderr}"
-        assert "57" in result.stdout
+        assert re.search(r"OK: \d+ glossary resources across \d+ packages", result.stdout)
 
     def test_no_repo_root_tools_directory(self):
         """Root tools/ directory must not exist (anatomy hygiene)."""

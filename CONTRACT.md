@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/kernel/migrate/CONTRACT.md

@@ -13,11 +13,14 @@ related_files:
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/services/websearch/__init__.py
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/tools/tool_family/CONTRACT.md
 maintenance: |
   Keep this unified web Contract and its Anatomy reciprocal. Keep the manual
   edge on both owner twins. Update the Port, adapters, tests, and this Contract
   together when behavior or errors change; retain browser as an internal browse
-  subcomponent rather than a second capability.
+  subcomponent rather than a second capability. web's schema composition and
+  envelope dispatch build on the generic tool_family package; keep that link
+  current when either side's boundary changes.
 ---
 # Unified web capability
 
@@ -27,7 +30,10 @@ maintenance: |
 and metadata-only `manual` actions. It is implemented in the retained
 `tools.web_search` composition owner; browser and SearchService are internal
 subcomponents. `web` is the first family migrated to the LingTai Tool Protocol
-v2 shape defined in `src/lingtai/tools/CONTRACT.md`.
+v2 shape defined in `src/lingtai/tools/CONTRACT.md`, and the first family to
+build its schema composition and envelope dispatch on the generic
+`src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool`);
+using it changed no observable promise in this file.
 
 ## Behavior
 
@@ -38,12 +44,17 @@ a search/browse reference through the same BrowserEngine state. Manual returns
 the installed web-manual without provider construction or network I/O. All
 success and failure envelopes include `action` and a bounded secret-free
 `current_setting` block. Explicit `engine` and irrelevant action fields fail
-loudly. In the final Agent schema, public `reasoning` is a top-level block
-injected by Agent schema composition; ToolExecutor preserves it only as
-internal `_reasoning` metadata, which does not enter action input or change
-dispatch. `web`'s own schema owns the root `summarize` boolean (LTP v2 is
-migrated one family at a time, not by central injection); `handle()` validates
-it is boolean and strips it before action dispatch — no action implementation
+loudly. `web`'s own schema (via `ToolFamily.build_schema()`) declares a
+top-level, REQUIRED `reasoning` string property — Host InvocationContext/
+audit metadata — with the same description Agent schema composition also
+re-injects into every tool's `properties` uniformly (that central injection
+never touches `required`, so a family must declare `reasoning` required
+itself). ToolExecutor preserves it only as internal `_reasoning` metadata,
+which does not enter action input or change dispatch. `web`'s own schema owns
+the root `summarize` boolean (LTP v2 is
+migrated one family at a time, not by central injection); `handle()` delegates
+to a per-instance `ToolFamily.handle()` (`tool_family/CONTRACT.md`), which
+validates `summarize` is boolean and strips it before action dispatch — no action implementation
 ever receives it.
 
 ## Port
@@ -71,7 +82,8 @@ remain in force.
   `action`, `input`, `reasoning`, and `summarize`. There is no public
   `parameters`, `parameter`, `summary`, or other compatibility alias;
   `_reasoning` is internal only.
-- `action` and nested `input` are required by the capability schema. `action` is
+- `action`, nested `input`, and top-level `reasoning` are required by the
+  capability schema (`required: [action, input, reasoning]`). `action` is
   one of `search`, `browse`, or `manual`; `input` uses strict action-specific
   object branches. Each branch is closed, every declared branch field is
   required, and browse optionals use JSON null, matching OpenAI strict-object
