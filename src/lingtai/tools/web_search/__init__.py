@@ -367,11 +367,22 @@ class WebManager:
         # the registered child. An envelope-level failure (raised before any
         # action handler runs) has no web-specific ``current_setting``
         # diagnostic yet; this stamps one on, matching every action-level
-        # failure/success result.
+        # failure/success result. The generic dispatcher's own
+        # ``ACTION_REQUIRED`` envelope error is genuinely generic (its
+        # message lists whatever children a given family registered, and it
+        # never had a web-specific ``action`` to echo); Web's pre-migration
+        # public contract instead always reported the fixed values below,
+        # regardless of the arbitrary string a caller sent, so that
+        # normalization happens here — never by changing the generic
+        # dispatcher's own canonical error shape.
         action = args.get("action") if isinstance(args, Mapping) else None
         result = self._family.handle(args)
         if action == "manual" and "content" in result:
             result = self._adapt_manual_result(result)
+        elif result.get("error_code") == "ACTION_REQUIRED":
+            result["action"] = "unknown"
+            result["message"] = "action must be one of search, browse, or manual"
+            result["current_setting"] = self._no_settings_diagnostic()
         elif result.get("status") == "failed" and "current_setting" not in result:
             result["action"] = action if isinstance(action, str) else "unknown"
             result["current_setting"] = self._no_settings_diagnostic()

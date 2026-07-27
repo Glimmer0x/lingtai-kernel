@@ -32,7 +32,19 @@ other web test files already do.
 """
 from __future__ import annotations
 
-from lingtai.tools.web_search import get_schema
+from pathlib import Path
+
+from lingtai.tools.web_search import get_schema, setup
+
+
+class _Agent:
+    def __init__(self, root: Path) -> None:
+        self._working_dir = root
+
+    def add_tool(self, *args, **kwargs) -> None:
+        self.tool_name = args[0]
+        self.schema = kwargs["schema"]
+        self.handler = kwargs["handler"]
 
 
 def _pre_migration_schema() -> dict:
@@ -189,3 +201,25 @@ def test_action_enum_values_and_order_unchanged():
 def test_input_branch_order_and_titles_unchanged():
     branches = get_schema()["properties"]["input"]["oneOf"]
     assert [b["title"] for b in branches] == ["search input", "browse input", "manual input"]
+
+
+def test_unknown_action_matches_pre_migration_public_shape(tmp_path):
+    # At the true pre-migration base (21bf4a3d), an arbitrary invalid
+    # ``action`` string always produced ``action: "unknown"`` and the exact
+    # message ``"action must be one of search, browse, or manual"`` — never
+    # an echo of the caller's own invalid string, and never missing the
+    # "or". The generic ``ToolFamily`` dispatcher's own envelope error is
+    # deliberately generic (a bare comma-joined child list with no "or",
+    # keyed only by ``error_code == "ACTION_REQUIRED"``); ``WebManager``
+    # must restore Web's own pre-migration public values at its
+    # post-dispatch boundary without changing that generic shape.
+    agent = _Agent(tmp_path)
+    manager = setup(agent, search_service=object())
+
+    result = manager.handle({"action": "not-a-real-action", "input": {}})
+
+    assert result["action"] == "unknown"
+    assert result["message"] == "action must be one of search, browse, or manual"
+    assert result["status"] == "failed"
+    assert result["error_code"] == "ACTION_REQUIRED"
+    assert "current_setting" in result
