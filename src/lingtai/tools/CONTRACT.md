@@ -235,12 +235,19 @@ documents. `web` (`search | browse | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action reads the action-owned
 `settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+`shell` (`run | poll | cancel | manual`) is the second: its final model-facing
+root is likewise exactly `action`, `input`, `reasoning`, and `summarize`, its
+run-only fields live only in `run`'s `input` and `job_id` only in
+`poll`/`cancel`'s, and its unchanged `ShellManager` engine — sync execution,
+the working-directory sandbox, the durable async lifecycle, cancellation, and
+terminal receipts — keeps its historical flat shape as a purely internal
+interface (see `src/lingtai/tools/bash/CONTRACT.md`).
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently only `web`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. Every other
+v2 family (currently `web` and `shell`), so an unmigrated tool's own field
+literally named `summarize` is never reinterpreted as this control. Every other
 LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
 
@@ -250,7 +257,9 @@ infrastructure implementing this envelope (schema composition from a
 ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics. Using it is never required — see its own
+diagnostics, and `shell` is its second, using it the same way while retaining a
+thin outer `handle()` that narrows the generic unknown-action message to its own
+four actions. Using it is never required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

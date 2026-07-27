@@ -85,6 +85,15 @@ def _tool_call_context(tool_call: "ToolCallBlock | None") -> str:
     if tool_call.name in {"shell", "bash"}:
         action = args.get("action", "run")
         lines.append(f"shell action: {action}")
+        # ``shell`` is a migrated LTP v2 family: the action's own fields live
+        # under the root ``input`` object, not at the root. A historical/
+        # pending flat call (or the ``bash`` compatibility alias) may still
+        # carry them at the root, so read whichever shape this call actually
+        # has — a recovery notice that silently lost the command preview on
+        # the new envelope would be the failure this helper exists to prevent.
+        action_input = args.get("input")
+        if isinstance(action_input, dict):
+            args = action_input
         if "working_dir" in args:
             lines.append(f"shell working_dir: {args.get('working_dir')}")
         if "timeout" in args:

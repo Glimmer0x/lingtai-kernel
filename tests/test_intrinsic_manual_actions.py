@@ -70,8 +70,18 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     daemon_manager._agent = agent
     web_manager = web_tool.setup(agent)
 
+    # ``shell`` is a migrated LTP v2 family: its ``manual`` is the reserved
+    # family child dispatched through the registered envelope handler, not an
+    # engine branch. Build the same dispatcher ``setup`` registers.
+    shell_dispatcher = shell_tool.ShellFamilyDispatcher(shell_manager, agent)
+
     calls = {
-        "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
+        "shell": (
+            "shell",
+            lambda: shell_dispatcher.handle(
+                {"action": "manual", "input": {}, "reasoning": "load shell guidance"}
+            ),
+        ),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual"})),
         "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
@@ -94,6 +104,13 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
+        elif tool_name == "shell":
+            # Migrated family: the reserved ``manual`` child's canonical
+            # ManualTool result is returned verbatim (no double wrap) — full
+            # body at content[0].text, host-local path in structuredContent.
+            assert result["status"] == "ok"
+            assert result["content"][0]["text"] == body
+            assert result["structuredContent"]["manual_path"] == str(path)
         else:
             assert result == {
                 "status": "ok",
@@ -124,11 +141,14 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         action = schema["properties"]["action"]
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
-    assert shell_tool.get_schema()["required"] == []
     assert psyche_tool.get_schema()["required"] == ["action"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3
+    # ``shell`` is migrated to the same LTP v2 envelope, with four children.
+    shell_schema = shell_tool.get_schema()
+    assert shell_schema["required"] == ["action", "input", "reasoning"]
+    assert len(shell_schema["properties"]["input"]["oneOf"]) == 4
     for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
         assert module.get_schema()["required"] == []
 

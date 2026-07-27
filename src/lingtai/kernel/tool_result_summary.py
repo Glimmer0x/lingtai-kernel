@@ -152,15 +152,22 @@ def is_apriori_summary(content: Any) -> bool:
 # unmigrated tool's own domain field literally named ``summarize`` is never
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
-_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+_LTP_V2_MIGRATED_FAMILIES = frozenset({"web", "shell"})
 
 
 def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     """Return True iff the normalized tool args opt into a-priori summary.
 
     The legacy flag is the boolean ``summary`` field on the tool call, honored
-    for every caller. A migrated LTP v2 family (currently only ``web``) may
-    instead set the canonical root ``summarize`` boolean; that spelling is
+    unconditionally for every caller. ``shell``'s pre-migration ``summary``
+    boolean is still accepted through that spelling by any historical/pending
+    call that carries it, but the migrated public ``shell`` schema
+    (``tools/bash/_tool_family.py::get_schema``) no longer advertises it — the
+    legacy flat ``tools/bash/__init__.py::get_schema`` that still declares
+    ``summary`` is retained only as the internal ``ShellManager`` shape and is
+    not the registered model-facing schema. A migrated LTP v2 family
+    (``web``, ``shell``) sets the canonical root ``summarize`` boolean
+    instead; that spelling is
     recognized only when ``tool_name`` names a migrated family, so an
     unmigrated tool's own ``summarize``-named domain field is never
     reinterpreted as this control. Anything other than a literal ``True``

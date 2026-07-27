@@ -141,7 +141,7 @@ below; the page itself carries only what is specific to that CLI.
 2. **Long-running agent/coding CLI** (`claude -p`, `codex exec`, `opencode run`,
    Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
    Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
-   **Never run it synchronously.** Use `shell(async=true)` and poll — see the
+   **Never run it synchronously.** Use `input.async=true` and poll — see the
    resident rule below.
 3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
 4. **You only need a single future nudge?** Read
@@ -203,26 +203,35 @@ reading the whole file when you only need recent events.
 - **Synchronous `shell` is only for short, deterministic commands.** A long-running
   agent/coding CLI session — `claude -p`, `codex exec`, `opencode run`, the Cursor
   agent CLI, or any sub-agent that may think and run tools for minutes — must
-  **never** be a synchronous `shell` call. Run it with `shell(async=true)` and poll
+  **never** be a synchronous `shell` call. Run it with `input.async=true` and poll
   the returned `job_id`. A synchronous call blocks the whole turn until the child
   exits: you stay `ACTIVE` and stop seeing channel notifications (mail, refresh,
   interrupts) for the entire duration. Async + poll keeps you responsive and
   prevents ACTIVE blockage while the child CLI works.
 
   ```text
-  # Start the child agent in the background — returns immediately with a job_id:
-  shell(async=true, reminder=1800, command="claude -p 'refactor the auth module' --output-format json")
+  # Start the child agent in the background — returns immediately with a job_id.
+  # Run-only fields (command, async, reminder, timeout, working_dir) live in input:
+  shell(action="run",
+        input={"command": "claude -p 'refactor the auth module' --output-format json",
+               "async": true, "reminder": 1800},
+        reasoning="start the refactor sub-agent in the background")
   # → {"status": "ok", "job_id": "job-a1b2c3d4e5f678901234567890abcdef", "pid": 4321}
 
-  # Later turns: poll until done (handle mail/other work between polls):
-  shell(action="poll", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
+  # Later turns: poll until done (handle mail/other work between polls).
+  # poll takes job_id and nothing else — no reminder, no command:
+  shell(action="poll",
+        input={"job_id": "job-a1b2c3d4e5f678901234567890abcdef"},
+        reasoning="check whether the refactor sub-agent finished")
   # → {"status": "running", …}   then eventually
   # → {"status": "done", "exit_code": 0, "ok": true, "command_status": "success", "stdout": "…", "stderr": "…"}
   #   On failure: {"status": "done", "exit_code": 1, "ok": false,
   #                "command_status": "failed", "warning": "command exited with code 1; …"}
 
-  # Abandon it if needed:
-  shell(action="cancel", job_id="job-a1b2c3d4e5f678901234567890abcdef", reminder=1800)
+  # Abandon it if needed — cancel also takes job_id and nothing else:
+  shell(action="cancel",
+        input={"job_id": "job-a1b2c3d4e5f678901234567890abcdef"},
+        reasoning="the refactor is no longer needed")
   ```
 
 - **Use a Task Card for progress when one is available for this turn.**
@@ -242,13 +251,11 @@ reading the whole file when you only need recent events.
   a completion notification arrives, the reminder fires, or you have a concrete
   reason to expect new state.
 
-- **Idle care: set an async `reminder` that matches the expected duration.**
-  Every `shell(async=true)` call has a last-resort `reminder` delay, required in
-  the top-level provider schema and defaulted by the runtime to 1800 seconds
-  when omitted by older direct callers. Provider-facing sync commands, `poll`,
-  and `cancel` also carry `reminder` because of that schema shape, but the field
-  is meaningful and runtime-validated only for async `run`; sync commands,
-  `poll`, and `cancel` ignore it.
+- **Idle care: set an async `input.reminder` that matches the expected duration.**
+  Every async run has a last-resort `reminder` delay. It lives only in `run`'s
+  `input`, alongside the other run-only fields; `poll` and `cancel` take
+  `job_id` and nothing else, so they never carry it. Pass `null` (or omit it) to
+  get the runtime default of 1800 seconds.
   The initial durable deadline is a crash fallback while the supervisor starts.
   A bounded durable return-handoff guard prevents a relaunched/second manager from
   publishing that fallback while the first manager is still before supervisor
@@ -337,7 +344,8 @@ dispatched worker with its own worktree, branch, and context window.
 
 When in doubt for non-trivial work: daemon. A CLI has **no LingTai job protocol
 of its own** — "async" always means a LingTai or OS wrapper around it
-(`shell(async=true)`, a supervised background job, or a daemon backend), and
+(`shell` with `input.async=true`, a supervised background job, or a daemon
+backend), and
 that wrapper owns logs, timeout, cancellation, and recovery notes. Keep
 synchronous inline calls short and explicitly timed (for example a 300 s bash
 timeout); do not solve a long task by raising the synchronous timeout to 15+

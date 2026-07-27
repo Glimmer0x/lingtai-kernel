@@ -263,9 +263,15 @@ class TestBashAsync:
         assert "err" in poll["stderr"]
 
     def test_schema_requires_reminder_with_runtime_default(self, tmp_path):
-        schema = get_schema()
-        assert "reminder" not in schema["required"]  # manual has no action-specific inputs
-        assert schema["properties"]["reminder"]["default"] == 1800.0
+        # ``reminder`` is run-only: it exists solely in the ``run`` child's
+        # input on the migrated envelope, and never on poll/cancel.
+        branches = {
+            b["title"]: b for b in get_schema()["properties"]["input"]["oneOf"]
+        }
+        run_branch = branches["run input"]
+        assert run_branch["properties"]["reminder"]["default"] == 1800.0
+        for action in ("poll input", "cancel input"):
+            assert "reminder" not in branches[action]["properties"]
 
         mgr = self._make_manager(tmp_path)
         result = mgr.handle({"command": "echo compat", "async": True})

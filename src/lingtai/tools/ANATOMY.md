@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
@@ -40,8 +43,13 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer
+  reusable ManualTool builder; `web` and `shell` are its consumers
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `bash/` — public `shell` composition owner for run/poll/cancel/manual
+  (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
+  the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
+  package's only schema/description pair, while `ShellManager` remains the
+  unchanged execution engine behind an internal-only flat call shape.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 
@@ -53,6 +61,13 @@ provider factory only at composition or action boundaries, and imports
 `tool_family` to compose its schema and (optionally) dispatch. The pinned
 browser transport remains an outer adapter. `web_search` is accepted only as a
 one-way configuration input alias and is never emitted as a public name.
+The public `shell` row imports `lingtai.tools.bash` lazily; `bash/__init__.py`
+imports `tool_family` (via `bash/_tool_family.py`) to compose the public
+action-separated schema (re-exported as the package's canonical
+`get_schema`/`get_description`) and to translate `action`/`input` calls into the
+internal flat shape `ShellManager.handle` consumes. `bash` is the
+one-way legacy input alias for `shell` (`registry.py`) and is never emitted
+as a public name or a second schema.
 
 ## Composition
 
