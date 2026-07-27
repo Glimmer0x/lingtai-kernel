@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/soul/CONTRACT.md
+  - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_browser_capability.py
@@ -286,12 +288,12 @@ The legacy a-priori result-summarization flag under the literal key `summary`
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, and `avatar`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. A family adopting
-this envelope MUST join that allowlist in the same change, or the root
-`summarize` it advertises to the model would be silently ignored. Every other
-LingTai-owned family remains unmigrated and keeps its existing schema and
-settings surface unchanged by this file.
+`file`, `vision`, `avatar`, and `soul`), so an unmigrated tool's own field
+literally named `summarize` is never reinterpreted as this control. A family
+adopting this envelope MUST join that allowlist in the same change, or the
+root `summarize` it advertises to the model would be silently ignored. Every
+other LingTai-owned family remains unmigrated and keeps its existing schema
+and settings surface unchanged by this file.
 
 `mcp` is the second migrated family: public tool name `mcp`, actions `info |
 manual`, both taking the canonical strict-empty `input`. The migration changed
@@ -299,6 +301,18 @@ its call envelope only — no action was added, removed, renamed, or given a new
 capability; it remains signpost-only and read-only, and external MCP
 registration (direct insertion into `mcp_registry.jsonl`) is untouched by it.
 See `src/lingtai/tools/mcp/CONTRACT.md`.
+
+`soul` (`inquiry | flow | config | voice | dismiss | manual`) is the seventh
+family migrated to this contract, and the first migrated *intrinsic*. Its final
+model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`;
+each action owns one strict closed `input` object, and its `summarize` guidance
+profile is **short-result** for every action (see
+`src/lingtai/tools/soul/CONTRACT.md`). `soul` supports no settings file at
+either level and its manual says so explicitly. Being an intrinsic, it also
+proves one boundary `web` could not: `base_agent._dispatch_tool` injects the
+transport-only `_tc_id` into every intrinsic's args, so a migrated intrinsic
+drops that key at its own Host boundary before the closed-root check rather
+than widening the shared envelope's admitted root fields.
 
 `src/lingtai/tools/tool_family/` is optional, generic composition
 infrastructure implementing this envelope (schema composition from a
@@ -312,8 +326,11 @@ third, using it the same way with its own outer `handle()` preserving that
 family's exact pre-migration unknown-action result, `file` is its fourth
 (below), `vision` is its fifth, using it the same way while retaining
 its own outer `handle()` for the family's flat manual/error result shapes,
-and `avatar` is its sixth, restoring its own pinned unknown-action error
-envelope the same way. `avatar` reuses `ToolFamily` but not
+`avatar` is its sixth, restoring its own pinned unknown-action error
+envelope the same way, and `soul` is its seventh, composing `get_schema()`
+from a module-level schema-only family and building an agent-bound one per
+`handle(agent, args)` call because an intrinsic module has no per-Agent
+manager instance to hold one. `avatar` reuses `ToolFamily` but not
 `build_manual_child`, because its manual ships inside its own package rather
 than the agent's installed `.library` catalog — adopting part of the
 infrastructure is conforming. Using it is never required — see its own
@@ -386,6 +403,18 @@ and path validation, the karma gate and distribution for `rules`, and `manual`
 performing no spawn or rules I/O. Every test there builds its own isolated
 temporary network and fakes the launcher Port, so it neither creates a live
 avatar nor writes a live `.rules` signal.
+
+`soul`'s migration evidence (`tests/test_tool_family_soul_migration.py`, plus
+the updated `tests/test_soul.py`, `tests/test_soul_consultation.py`,
+`tests/test_system_dismiss.py`, and `tests/test_intrinsic_manual_actions.py`)
+is likewise one family's local evidence: it covers all six child schemas and
+handlers, the closed root on both provider wires, wrong-branch rejection
+before any handler I/O, `reasoning`/`_reasoning`/`summarize`/`_tc_id`
+isolation from child input, the reserved `manual` child's
+full-body/`manual_path` result with no double wrap and no soul operation, and
+— specific to this family — that the opt-in `flow` env gate stays the only
+enable path and that a disabled `flow` is a stable status rather than an
+error.
 
 ## Maintenance
 

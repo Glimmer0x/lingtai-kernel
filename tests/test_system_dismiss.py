@@ -174,7 +174,7 @@ def test_soul_dismiss_alias_uses_shared_helper(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
 
-    res = soul.handle(agent, {"action": "dismiss"})
+    res = soul.handle(agent, {"action": "dismiss", "input": {}})
 
     assert res["status"] == "ok"
     assert res["channel"] == "soul"

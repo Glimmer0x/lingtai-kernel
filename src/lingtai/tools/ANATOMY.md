@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -56,11 +58,15 @@ capability names and lazy adapters.
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
-  second, `knowledge` its third, `file` its fourth, `vision` its fifth, and
-  `avatar` its sixth (`src/lingtai/tools/tool_family/ANATOMY.md`).
+  second, `knowledge` its third, `file` its fourth, `vision` its fifth,
+  `avatar` its sixth, and `soul` its seventh
+  (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
+- `soul/` — the `soul` intrinsic family: six action-separated children
+  (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
+  model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 
@@ -74,7 +80,11 @@ provider factory only at composition or action boundaries, and imports
 same way and reaches `lingtai.services.vision` only on the selected direct
 route. The pinned browser transport remains an outer adapter. `web_search` is
 accepted only as a one-way configuration input alias and is never emitted as a
-public name.
+public name. `soul` is a mandatory intrinsic (`INTRINSICS`, not
+`BUILTIN_TOOLS`) and imports `tool_family` statically; because it is a module
+rather than a per-Agent manager object, it composes its schema from a
+module-level schema-only `ToolFamily` and builds an agent-bound one per
+`handle(agent, args)` call.
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
 five operation modules once per manager and reaches the working tree only

@@ -7,6 +7,16 @@ interception. Bundles voices into a synthetic pair for the main agent.
 """
 from __future__ import annotations
 
+# Host-authored ``reasoning`` for the synthesized involuntary flow pair
+# (``build_consultation_pair``). The envelope requires ``reasoning``, but an
+# involuntary fire has no agent rationale to record — so this states the truth
+# rather than inventing one, and doubles as the in-history explanation of why
+# a call the agent never made is sitting in its own transcript.
+INVOLUNTARY_FLOW_REASONING = (
+    "Involuntary soul flow fire — you did not initiate this call; the soul "
+    "timer did."
+)
+
 
 def _build_consultation_tool_refusal(system_prompt: str) -> str:
     """ToolResultBlock content for intercepted consultation tool calls.
@@ -595,6 +605,16 @@ def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None)
     wants the chat-history call_id to match the soul_flow.jsonl fire_id
     (cross-reference between logs and chat). If omitted, a fresh id is
     generated.
+
+    The synthesized call carries the **current** public ``soul`` family
+    envelope (``action`` + strict empty ``input`` + ``reasoning``), not the
+    pre-migration flat shape. This pair is replayed to the provider as an
+    assistant tool_use block, so it is a model-visible example of how to call
+    ``soul``: leaving it flat would teach a shape the closed schema now
+    rejects, and a model imitating its own history would get
+    ``INVALID_ARGUMENT``. ``reasoning`` is Host-authored here and says plainly
+    that the agent did not initiate this call — the fire is involuntary, so
+    there is no agent rationale to record, and inventing one would be untruthful.
     """
     import secrets
     import time
@@ -603,7 +623,15 @@ def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None)
 
     if not tc_id:
         tc_id = f"tc_{int(time.time())}_{secrets.token_hex(2)}"
-    call = ToolCallBlock(id=tc_id, name="soul", args={"action": "flow"})
+    call = ToolCallBlock(
+        id=tc_id,
+        name="soul",
+        args={
+            "action": "flow",
+            "input": {},
+            "reasoning": INVOLUNTARY_FLOW_REASONING,
+        },
+    )
 
     # Strip the thinking block from the wire payload — it inflates tokens
     # without adding readable signal at the consumption site (the agent

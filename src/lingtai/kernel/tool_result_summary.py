@@ -153,7 +153,7 @@ def is_apriori_summary(content: Any) -> bool:
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
 _LTP_V2_MIGRATED_FAMILIES = frozenset(
-    {"web", "mcp", "knowledge", "file", "vision", "avatar"}
+    {"web", "mcp", "knowledge", "file", "vision", "avatar", "soul"}
 )
 
 
@@ -447,10 +447,13 @@ def maybe_summarize_result(
     # recover. ``status == "error"`` is the kernel-wide tool-error convention.
     # A migrated LTP v2 family may instead use its own canonical error status
     # (``web``'s, ``mcp``'s, and ``knowledge``'s envelope failures are exactly
-    # ``"failed"``; ``mcp``'s unknown-action envelope uses the kernel-wide
-    # ``"error"`` above); recognizing it here is scoped to migrated families
-    # only, so an unrelated tool's non-error ``"failed"``-named domain value
-    # is never reinterpreted as an error result.
+    # ``"failed"``, and every family built on the generic ``ToolFamily``
+    # dispatcher — including ``avatar`` and ``soul`` — likewise returns
+    # ``"failed"`` for its envelope-level errors; ``mcp``'s unknown-action
+    # envelope uses the kernel-wide ``"error"`` above); recognizing it here is
+    # scoped to migrated families only, so an unrelated tool's non-error
+    # ``"failed"``-named domain value is never reinterpreted as an error
+    # result.
     if isinstance(result, dict):
         status = result.get("status")
         if status == "error":

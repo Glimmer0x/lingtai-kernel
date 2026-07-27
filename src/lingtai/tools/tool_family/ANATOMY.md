@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/tools/soul/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -67,11 +68,13 @@ this package too — using it is optional, not mandatory).
   strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
   so a family composing a schema-only `ToolFamily` alongside its dispatching
   one reuses the same object instead of hand-copying it and drifting (`mcp`,
-  `knowledge`, `file`, and `vision` all do; `manual.py:1-89`) — and a family
-  supplying its own `manual` child entirely, like `avatar`, can reference it
-  the same way instead of restating the literal. Each `ChildTool` deep-copies
-  `MANUAL_INPUT_SCHEMA` rather than sharing the literal, so one family's
-  schema can never be mutated through another's.
+  `knowledge`, `file`, `vision`, and `soul` all do; `manual.py:1-89`) — and a
+  family supplying its own `manual` child entirely, like `avatar`, can
+  reference it the same way instead of restating the literal. `web` predates
+  the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which
+  its own owner may collapse onto this export separately. Each `ChildTool`
+  deep-copies `MANUAL_INPUT_SCHEMA` rather than sharing the literal, so one
+  family's schema can never be mutated through another's.
 
 ## Connections
 
@@ -140,6 +143,26 @@ it restores avatar's pinned unknown-action error string in place of the generic
 mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
 passes no envelope field to any child.
 
+`soul/__init__.py` is the seventh consumer and the first *intrinsic* one. It
+exercises a different composition shape than `web`: soul is a module with a
+`handle(agent, args)` entry point rather than a per-Agent manager object, so it
+composes `get_schema()` from a module-level schema-only `ToolFamily` (which also
+fails loudly at import time on a duplicate/reserved-name collision) and builds
+an agent-bound `ToolFamily` per call in `handle()`, both from the one canonical
+`_CHILD_SPECS` registry of (name, schema, handler-factory).
+Soul goes one step further than `web`'s dual listing: `_build_children(agent)`
+is the single place children are enumerated, called with `None` for the
+schema-only family and with the live agent per dispatch, so the drift class
+where a child is schema-advertised but dispatch-rejected cannot occur. Its
+`manual` child comes from `build_manual_child(agent, "soul-manual")`,
+registered directly and unwrapped, and `handle()` flattens that canonical
+result back to soul's pre-migration flat `status`/`manual`/`manual_path` shape
+after dispatch. Soul additionally drops
+the kernel-injected `_tc_id` before the envelope's closed-root check — that key
+is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
+args (capabilities like `web` never see it), so a family migrating an intrinsic
+must strip it rather than widen `_ROOT_FIELDS`.
+
 ## Composition
 
 The parent [`../ANATOMY.md`](../ANATOMY.md) owns capability registry
@@ -164,6 +187,9 @@ belongs to the consuming family, as `WebManager` demonstrates.
 
 A fake `widget` family in `tests/test_tool_family_generic.py` and
 `tests/test_tool_family_wire_parity.py` proves this package is generic, not
-Web-specific. Building a family on `ToolFamily` is optional: a family may
-hand-write an equivalent `handle()`/schema composition instead, exactly as
-`web` did before adopting this package.
+Web-specific; `soul`'s migration
+(`tests/test_tool_family_soul_migration.py`) proves it a second time against a
+real intrinsic with a different composition shape. Building a family on
+`ToolFamily` is optional: a family may hand-write an equivalent
+`handle()`/schema composition instead, exactly as `web` did before adopting
+this package.
