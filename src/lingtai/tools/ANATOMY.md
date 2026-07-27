@@ -19,6 +19,9 @@ related_files:
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
@@ -59,7 +62,7 @@ capability names and lazy adapters.
   and dispatch infrastructure implementing the LTP v2 envelope, and the
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
-  `avatar` its sixth, and `soul` its seventh
+  `avatar` its sixth, `soul` its seventh, and `shell` its eighth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
@@ -67,6 +70,11 @@ capability names and lazy adapters.
 - `soul/` — the `soul` intrinsic family: six action-separated children
   (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
   model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
+- `bash/` — public `shell` composition owner for run/poll/cancel/manual
+  (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
+  the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
+  package's only schema/description pair, while `ShellManager` remains the
+  unchanged execution engine behind an internal-only flat call shape.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 
@@ -84,7 +92,13 @@ public name. `soul` is a mandatory intrinsic (`INTRINSICS`, not
 `BUILTIN_TOOLS`) and imports `tool_family` statically; because it is a module
 rather than a per-Agent manager object, it composes its schema from a
 module-level schema-only `ToolFamily` and builds an agent-bound one per
-`handle(agent, args)` call.
+`handle(agent, args)` call. The public `shell` row imports `lingtai.tools.bash`
+lazily; `bash/__init__.py` imports `tool_family` (via `bash/_tool_family.py`)
+to compose the public action-separated schema (re-exported as the package's
+canonical `get_schema`/`get_description`) and to translate `action`/`input`
+calls into the internal flat shape `ShellManager.handle` consumes. `bash` is
+the one-way legacy input alias for `shell` (`registry.py`) and is never
+emitted as a public name or a second schema.
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
 five operation modules once per manager and reaches the working tree only
