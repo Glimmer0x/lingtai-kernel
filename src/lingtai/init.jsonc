@@ -129,7 +129,8 @@
     // Lifecycle limits
     // -------------------------------------------------------
 
-    // Max context window tokens. null = use generic cap (1M tokens).
+    // Max context window tokens. null/missing/invalid = use the conservative
+    // 272,000-token fallback; valid configured values are preserved exactly.
     // Set this to cap memory usage or force earlier molt.
     "context_limit": null,
 

@@ -476,6 +476,24 @@ def test_daemon_schema_exposes_prompt_and_removes_system_prompt():
     assert "custom_system_prompt" not in task_props
 
 
+def test_daemon_schema_context_token_limit_description_matches_contract():
+    from lingtai.tools.daemon import get_schema
+
+    desc = get_schema("en")["properties"]["tasks"]["items"]["properties"][
+        "context_token_limit"
+    ]["description"].lower()
+
+    assert "does not set daemon context" in desc
+    assert "daemon session's own resolved context window" in desc
+    assert "separate provider-compaction threshold" in desc
+    assert "explicit preset" in desc
+    assert "canonical manifest.llm.context_limit" in desc
+    assert "implicit/no-preset" in desc
+    assert "inherited parent effective window" in desc
+    assert "272,000 fallback" in desc
+    assert "parent service's resolved context window" not in desc
+
+
 def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
     """CLI backends receive serialized MCP registrations instead of rejecting mcp."""
     agent = _make_agent(tmp_path, ["daemon"])
@@ -4102,6 +4120,7 @@ def _capturing_fake_service(captured, text="daemon done"):
             captured["init"] = kwargs
             self.model = kwargs["model"]
             self.provider = kwargs["provider"]
+            self._context_window = kwargs.get("context_window")
 
         def create_session(self, **kwargs):
             mock_session = MagicMock()
@@ -4264,6 +4283,62 @@ def test_implicit_parent_preset_llm_does_not_resolve_primary_key(tmp_path):
     assert preset["context_window"] == 200000
     assert preset["key_resolver"] is exploding_resolver
     assert preset["_provider_defaults"] == {"max_rpm": 5}
+
+
+def test_implicit_parent_preset_uses_conservative_fallback_for_invalid_window(tmp_path):
+    agent = _make_agent(tmp_path, ["daemon"])
+    agent.service._context_window = 0
+    mgr = agent.get_capability("daemon")
+
+    preset = mgr._implicit_parent_preset_llm()
+
+    assert preset["context_window"] == 272_000
+
+
+def test_explicit_manifest_context_limit_reaches_daemon_service_window(tmp_path, monkeypatch):
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    resolved = mgr._resolve_manifest_llm({
+        "provider": "openai",
+        "model": "gpt-test",
+        "context_limit": 123_456,
+        "context_window": 999_999,
+    })
+
+    assert resolved["context_window"] == 123_456
+
+    captured = {}
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", _capturing_fake_service(captured))
+
+    cancel = threading.Event()
+    em_id = "em-explicit-context"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    result = mgr._run_emanation(
+        em_id,
+        run_dir,
+        schemas,
+        dispatch,
+        "x",
+        cancel,
+        preset_llm={
+            "provider": "openai",
+            "model": "gpt-test",
+            "context_limit": 123_456,
+            "context_window": 999_999,
+        },
+    )
+
+    assert result == "daemon done"
+    assert captured["init"]["context_window"] == 123_456
 
 
 class _SummaryRunDir:

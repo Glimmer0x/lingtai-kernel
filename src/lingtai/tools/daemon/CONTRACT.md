@@ -152,6 +152,13 @@ rejects the obsolete field before run-dir creation or scheduling. External CLI
 backend tasks reject `prompt` before run-dir creation; CLI behavior remains
 task-as-CLI-prompt.
 
+LingTai-backend daemon LLM construction uses one effective context window:
+an explicit daemon preset's canonical `manifest.llm.context_limit` wins,
+otherwise an implicit/no-preset daemon inherits the parent service's valid
+resolved `_context_window`, and missing/invalid values fall back to the shared
+`lingtai.llm.service.CONSERVATIVE_CONTEXT_WINDOW` value (272,000). That same
+window is passed into the daemon `LLMService` and its context telemetry.
+
 Per-task `context_token_limit` (positive integer; bool rejected) is a
 context-token compaction threshold — rendered/provider-context tokens, never
 cumulative spend — effective only for `backend="lingtai"` tasks whose resolved
@@ -159,8 +166,12 @@ provider is Codex (`codex`/`codex-pool`) or the native `mimo` LLM provider
 (`manifest.llm.provider="mimo"` — distinct from the `backend` enum's
 `mimo`/`mimocode` alias above, which drives the external `mimo` CLI as a
 subprocess and never consults this field); every other provider and every
-external CLI backend ignores it. Omitted, it inherits the parent service's
-resolved context window as the threshold; an explicit value wins. Native
+external CLI backend ignores it. This threshold does not set the daemon context
+window. Omitted, it uses the daemon session's own resolved context window as the
+threshold: explicit preset canonical `manifest.llm.context_limit` when supplied,
+otherwise the inherited valid parent effective window, otherwise 272,000. An
+explicit `context_token_limit` value wins only for this separate provider
+compaction threshold. Native
 `mimo` defaults to the stateless OpenAI Responses wire (full-history replay;
 never `store`/`previous_response_id`/`conversation`/generic
 `context_management`) — an explicit `wire_api="chat_completions"` on the
@@ -382,8 +393,11 @@ general skills/MCP/completion/backend-support invariants above:
   `_daemon_provider_defaults` as `codex_compact_token_limit` /
   `mimo_compact_token_limit` respectively. Every other provider and every
   external CLI backend never receives it.
-- Omitted, the value inherits the parent service's resolved context window as
-  the threshold; an explicit task value always wins.
+- Omitted, the threshold uses the daemon session's own resolved context window:
+  explicit preset canonical `manifest.llm.context_limit` when supplied,
+  otherwise the inherited valid parent effective window, otherwise 272,000.
+  This value is only the provider-compaction threshold and does not set the
+  daemon context window; an explicit task value always wins for the threshold.
 - When the threshold is reached, the Codex or native-MiMo Responses session
   compacts prior context via that provider's standalone `POST /responses/compact`
   endpoint and continues the same tool loop; neither uses the generic OpenAI

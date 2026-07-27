@@ -232,6 +232,26 @@ def test_cli_build_agent_uses_refresh(tmp_path):
     agent._workdir_lease.release()
 
 
+def test_cli_build_agent_context_window_uses_config_or_conservative_fallback(tmp_path):
+    from lingtai.cli import build_agent, load_init
+    from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
+
+    init = _make_init()
+    init["manifest"]["context_limit"] = None
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    agent = build_agent(load_init(tmp_path), tmp_path)
+    assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
+    agent._workdir_lease.release()
+
+    init["manifest"]["context_limit"] = 123_456
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    agent = build_agent(load_init(tmp_path), tmp_path)
+    assert agent.service._context_window == 123_456
+    agent._workdir_lease.release()
+
+
 def test_deep_refresh_invalid_init_keeps_old_config(tmp_path):
     """If init.json is invalid, refresh logs error and keeps old state."""
     init = _make_init(capabilities={"file": {}})
@@ -327,6 +347,46 @@ def test_deep_refresh_reseals(tmp_path):
     agent._setup_from_init()
 
     assert agent._sealed is True
+
+
+def test_live_refresh_rebuilds_service_for_effective_context_window(tmp_path, monkeypatch):
+    from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
+
+    init = _make_init()
+    init["manifest"]["context_limit"] = 123_456
+    agent = _make_agent(tmp_path, init)
+    agent.service._context_window = 100_000
+
+    mock_interface = MagicMock()
+    mock_session = MagicMock()
+    mock_session.chat = MagicMock()
+    mock_session.chat.interface = mock_interface
+    agent._session = mock_session
+
+    constructed = []
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+            self.provider = kwargs["provider"]
+            self.model = kwargs["model"]
+            self._base_url = kwargs.get("base_url")
+            self._context_window = kwargs["context_window"]
+            self._provider_defaults = kwargs.get("provider_defaults") or {}
+
+    monkeypatch.setattr("lingtai.agent.LLMService", FakeService)
+
+    agent._setup_from_init()
+    assert constructed[-1]["context_window"] == 123_456
+    assert agent.service._context_window == 123_456
+    assert agent._session._llm_service is agent.service
+
+    init["manifest"]["context_limit"] = False
+    (tmp_path / "init.json").write_text(json.dumps(init))
+
+    agent._setup_from_init()
+    assert constructed[-1]["context_window"] == CONSERVATIVE_CONTEXT_WINDOW
+    assert agent.service._context_window == CONSERVATIVE_CONTEXT_WINDOW
 
 
 def test_init_procedures_override_is_migrated_not_prompted(tmp_path):

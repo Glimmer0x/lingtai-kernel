@@ -274,6 +274,11 @@ prompt (counted once via the kernel `count_tokens()` when `_DaemonMetaState` is
 constructed) is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of THIS daemon's own currently-resolved
 context window; it is never derived from or compared against the parent's
 window, and is omitted whenever either metric is unknown/zero.
+For LingTai-backend daemon LLM runs, that resolved window comes from the explicit
+preset's canonical `manifest.llm.context_limit`, else from the parent service's
+valid `_context_window`, else from the shared `CONSERVATIVE_CONTEXT_WINDOW`
+fallback (272,000); it is passed into the daemon `LLMService` before telemetry
+reads it back from the session/service.
 Parent agent/session and notification/communication state is not shared or
 injected. `llm/interface_converters.py` projects the sidecar for both dictionary
 and string results without requiring handler wrappers and preserves the daemon's
