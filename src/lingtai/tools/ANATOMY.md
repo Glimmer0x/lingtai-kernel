@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
@@ -40,8 +42,12 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer and `mcp` its
-  second (`src/lingtai/tools/tool_family/ANATOMY.md`).
+  reusable ManualTool builder; `web` is its first real consumer, `mcp` its
+  second, and `knowledge` its third
+  (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
+  family envelope with the unchanged public actions `info`/`manual`
+  (`src/lingtai/tools/knowledge/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

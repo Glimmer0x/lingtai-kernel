@@ -935,7 +935,9 @@ def test_new_knowledge_and_skills_config_registers_both(tmp_path):
         (entry_dir / "KNOWLEDGE.md").write_text(
             "---\nname: new-entry\ndescription: A freshly authored knowledge entry.\n---\nBody.\n"
         )
-        result = agent._tool_handlers["knowledge"]({"action": "info"})
+        result = agent._tool_handlers["knowledge"](
+            {"action": "info", "input": {}, "reasoning": "refresh after authoring"}
+        )
         assert result["status"] == "ok"
         assert result["catalog_size"] == 1
         assert "new-entry" in (agent._prompt_manager.read_section("knowledge") or "")

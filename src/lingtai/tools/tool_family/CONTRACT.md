@@ -84,8 +84,9 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today `web` and `mcp` are on that allowlist,
-so `summarize` is meaningful for both families that use this infrastructure; a
+package does not own or enforce. Today `web`, `mcp`, and `knowledge` are on
+that allowlist, so `summarize` is meaningful for the families that use this
+infrastructure; a
 family adopting `ToolFamily` without also joining the kernel allowlist would
 advertise a model-visible `summarize` control that the kernel silently
 ignores — so joining it is part of adopting this package, in the same change. Calling
@@ -126,7 +127,7 @@ package, per `../CONTRACT.md` "Implementation independence".
 
 ## Adapters
 
-`web_search/__init__.py` is the reference production Adapter/consumer:
+`web_search/__init__.py` is the first production Adapter/consumer:
 `WebManager.__init__` builds a per-instance `ToolFamily` with
 `search`/`browse` handlers bound to that instance, and registers
 `manual.build_manual_child(agent, "web")`'s returned `ChildTool` *directly* —
@@ -163,6 +164,20 @@ independence", the fix belongs in the consumer; this package's canonical
 `ACTION_REQUIRED` shape is never widened to accommodate one family's legacy
 envelope.
 
+`knowledge/__init__.py` is the third production Adapter/consumer:
+one `_build_family(agent | None)` registers `info` and `manual` children from a
+single `_CHILD_SPECS` source, both with the canonical strict-empty
+`input_schema`; passing `None` yields the module-level schema-only family
+behind `get_schema()`. It does **not** use
+`manual.build_manual_child`, because knowledge's public manual result has
+always been keyed `knowledge_manual` rather than the generic
+`content`/`structuredContent` shape; registering its own `manual` child means
+`ToolFamily.handle()` returns that family's canonical result verbatim with no
+double wrap and no round-trip through a shape it never exposes — the same
+no-double-wrap rule, satisfied without a Host adapter. Its outer `handle()`
+normalizes only the generic `ACTION_REQUIRED` envelope failure back to
+knowledge's exact pre-migration unknown-action result.
+
 Every other built-in family remains fully independent of this package until
 its own scoped migration.
 
@@ -193,6 +208,11 @@ its own scoped migration.
   sole enforcement boundary; dispatch remains always-authoritative and
   fail-closed regardless of whether a given provider validates the root
   `allOf`/`if`/`then` schema-side (`../CONTRACT.md` "Dispatch and actions").
+- `handle()` MUST treat an unhashable `action` (e.g. `[]` or `{}`, reachable
+  when invalid JSON survives to dispatch — the issue #513 blocker class) as
+  simply matching no child, rendering the stable typed `ACTION_REQUIRED`
+  envelope failure exactly as `kernel/tool_dispatch.py` does, rather than
+  raising `TypeError` out of the dispatcher.
 - A child handler MUST receive only its own validated `input` mapping — never
   `action`, `reasoning`, `_reasoning`, or `summarize`.
 - `handle()`'s dispatch result IS the child's own raw/canonical result;

@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/knowledge/CONTRACT.md
+  - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
@@ -235,12 +237,17 @@ documents. `web` (`search | browse | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action reads the action-owned
 `settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+`knowledge` (`info | manual`) is the third: the migration is envelope-only —
+its public tool name and both public action values are unchanged, both children
+take the canonical strict-empty `input`, and it supports no settings file (see
+`src/lingtai/tools/knowledge/CONTRACT.md`). It remains a signpost capability
+with no authoring, search, or edit action.
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently `web` and `mcp`), so an unmigrated tool's own field
-literally named `summarize` is never reinterpreted as this control. That
+v2 family (currently `web`, `mcp`, and `knowledge`), so an unmigrated tool's own
+field literally named `summarize` is never reinterpreted as this control. That
 `_LTP_V2_MIGRATED_FAMILIES` set is the single source of truth for which
 families use the canonical spelling; a migrating family adds its public name
 there in the same change, and never introduces a second summarizer. Every
@@ -260,8 +267,10 @@ infrastructure implementing this envelope (schema composition from a
 ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics, and `mcp` is its second, retaining its own outer `handle_mcp()`
-for its exact pre-migration unknown-action envelope. Using it is never
+diagnostics, `mcp` is its second, retaining its own outer `handle_mcp()`
+for its exact pre-migration unknown-action envelope, and `knowledge` is its
+third, using it the same way with its own outer `handle()` preserving that
+family's exact pre-migration unknown-action result. Using it is never
 required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.

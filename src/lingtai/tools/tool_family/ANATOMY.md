@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/knowledge/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -101,6 +102,19 @@ the missing-action empty-string default and unhashable `action` values that
 `ToolFamily.handle`'s dict lookup would otherwise raise `TypeError` on. The
 generic dispatcher's canonical error shape is never changed to accommodate a
 consumer.
+
+`knowledge/__init__.py` is the third real consumer
+(`src/lingtai/tools/knowledge/ANATOMY.md`): one `_build_family(agent | None)`
+is the single builder — `_FAMILY = _build_family(None)` backs `get_schema()`
+with non-dispatching handlers, and `_build_family(agent)` binds the
+`info`/`manual` operations named in `_CHILD_SPECS` per agent. Both children declare the canonical strict-empty
+`input_schema`, so every `input` key is a cross-branch/unknown key rejected
+before handler I/O. It registers its own `manual` child rather than
+`build_manual_child`, because knowledge's public manual result is keyed
+`knowledge_manual` — the child's canonical result is returned verbatim, so no
+Host-layer flattening is needed. Its outer `handle()` normalizes only the
+generic `ACTION_REQUIRED` envelope failure back to knowledge's exact
+pre-migration unknown-action result.
 
 ## Composition
 

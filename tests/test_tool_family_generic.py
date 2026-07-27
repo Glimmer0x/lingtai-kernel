@@ -137,6 +137,22 @@ def test_dispatch_missing_action_fails_with_action_required():
     assert result["error_code"] == "ACTION_REQUIRED"
 
 
+def test_dispatch_unhashable_action_fails_without_raising():
+    """Invalid JSON can make ``action`` unhashable (issue #513 blocker class).
+
+    Such an action matches no child and must render the stable typed envelope
+    failure, exactly as ``kernel/tool_dispatch.py`` does — not raise
+    ``TypeError`` out of the dispatcher.
+    """
+    calls: list[dict] = []
+    fam = _widget_family(calls)
+    for unhashable in ([], {}, ["spin"], {"spin": 1}, set()):
+        result = fam.handle({"action": unhashable, "input": {}, "reasoning": "why"})
+        assert result["status"] == "failed", unhashable
+        assert result["error_code"] == "ACTION_REQUIRED", unhashable
+    assert calls == []
+
+
 def test_dispatch_non_object_input_fails_with_invalid_argument():
     fam = _widget_family()
     result = fam.handle({"action": "spin", "input": "not-an-object"})

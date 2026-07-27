@@ -259,10 +259,20 @@ class ToolFamily:
         are validated against the selected child's own declared
         ``input_schema`` properties, rejecting any key belonging to another
         action's branch, before the child handler ever runs.
+
+        Invalid JSON can make ``action`` an unhashable value (e.g. ``[]`` or
+        ``{}``) — the issue #513 blocker class. Such an ``action`` simply
+        matches no child and renders the stable typed envelope failure below,
+        exactly as ``kernel/tool_dispatch.py`` does, rather than raising
+        ``TypeError`` out of the dispatcher.
         """
         raw = dict(args or {})
         action = raw.get("action")
-        if action not in self._children:
+        try:
+            known_action = action in self._children
+        except TypeError:
+            known_action = False
+        if not known_action:
             return self._envelope_error(
                 "ACTION_REQUIRED",
                 f"action must be one of {', '.join(self._order)}",
