@@ -152,15 +152,16 @@ def is_apriori_summary(content: Any) -> bool:
 # unmigrated tool's own domain field literally named ``summarize`` is never
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
-_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+_LTP_V2_MIGRATED_FAMILIES = frozenset({"web", "vision"})
 
 
 def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     """Return True iff the normalized tool args opt into a-priori summary.
 
     The legacy flag is the boolean ``summary`` field on the tool call, honored
-    for every caller. A migrated LTP v2 family (currently only ``web``) may
-    instead set the canonical root ``summarize`` boolean; that spelling is
+    for every caller. A migrated LTP v2 family (currently ``web`` and
+    ``vision``) may instead set the canonical root ``summarize`` boolean; that
+    spelling is
     recognized only when ``tool_name`` names a migrated family, so an
     unmigrated tool's own ``summarize``-named domain field is never
     reinterpreted as this control. Anything other than a literal ``True``

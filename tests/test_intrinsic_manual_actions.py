@@ -13,6 +13,7 @@ from lingtai.tools import read as read_tool
 from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
 from lingtai.tools import write as write_tool
+from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 
@@ -54,6 +55,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "soul-manual",
             "system-manual",
             "web",
+            "vision",
             "file-manual",
         )
     }
@@ -69,6 +71,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
     daemon_manager._agent = agent
     web_manager = web_tool.setup(agent)
+    vision_manager = vision_tool.setup(agent)
 
     calls = {
         "shell": ("shell", lambda: shell_manager.handle({"action": "manual"})),
@@ -79,6 +82,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual"})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual"})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
+        "vision": ("vision", lambda: vision_manager.handle({"action": "manual", "input": {}})),
         "write": ("file-manual", lambda: agent.handlers["write"]({"action": "manual"})),
         "edit": ("file-manual", lambda: agent.handlers["edit"]({"action": "manual"})),
         "glob": ("file-manual", lambda: agent.handlers["glob"]({"action": "manual"})),
@@ -94,6 +98,15 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["manual"] == body
             assert result["manual_path"] == str(path)
             assert isinstance(result["current_setting"], dict)
+        elif tool_name == "vision":
+            # vision's family-owned manual keeps its pre-migration
+            # status/action/manual shape and adds the loader's manual_path.
+            assert result == {
+                "status": "ok",
+                "action": "manual",
+                "manual": body,
+                "manual_path": str(path),
+            }
         else:
             assert result == {
                 "status": "ok",
@@ -114,6 +127,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         soul_tool,
         system_tool,
         web_tool,
+        vision_tool,
         write_tool,
         edit_tool,
         glob_tool,
@@ -129,6 +143,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3
+    vision_schema = vision_tool.get_schema()
+    assert vision_schema["required"] == ["action", "input", "reasoning"]
+    assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
     for module in (read_tool, write_tool, edit_tool, glob_tool, grep_tool):
         assert module.get_schema()["required"] == []
 

@@ -52,14 +52,18 @@ this package too — using it is optional, not mandatory).
   correlation was adopted after a live non-strict Codex Responses probe on
   2026-07-27 accepted a raw root `allOf`/`if`/`then` schema without error on
   the current route (see `CONTRACT.md` "Contract rules").
-- `manual.py` — `build_manual_child()` wraps `../_manual.py`'s
-  `load_installed_manual()` into the ManualTool stable contract: strict empty
-  input, and a handler whose actual return value (what `ToolFamily.handle()`
-  dispatches back verbatim, once the returned `ChildTool` is registered
-  directly and unwrapped in a family's own `ToolFamily`) is the canonical
-  `content[0].text` (full body) / `structuredContent.manual_path` (host-local
-  path) shape, with `status`/`error` loader facts preserved truthfully
-  (`manual.py:1-74`).
+- `manual.py` — exports `MANUAL_INPUT_SCHEMA`, the one canonical strict-empty
+  input schema every family's reserved `manual` child registers (so a family
+  composing a schema-only `ToolFamily` uses the same object dispatch validates
+  against instead of restating a drift-prone near-copy), and
+  `build_manual_child()`, which wraps `../_manual.py`'s
+  `load_installed_manual()` into the ManualTool stable contract: that strict
+  empty input, and a handler whose actual return value (what
+  `ToolFamily.handle()` dispatches back verbatim, once the returned `ChildTool`
+  is registered directly and unwrapped in a family's own `ToolFamily`) is the
+  canonical `content[0].text` (full body) / `structuredContent.manual_path`
+  (host-local path) shape, with `status`/`error` loader facts preserved
+  truthfully (`manual.py:1-84`).
 
 ## Connections
 

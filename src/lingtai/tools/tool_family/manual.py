@@ -22,7 +22,17 @@ from typing import Any, Mapping
 from .._manual import load_installed_manual
 from . import ChildTool
 
-__all__ = ["build_manual_child"]
+__all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
+
+# The one canonical strict-empty input schema for every family's reserved
+# ``manual`` child. Exported so a family composing a schema-only ``ToolFamily``
+# registers the *same* object ``build_manual_child`` dispatches against,
+# instead of restating a near-copy that can drift from it.
+MANUAL_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
 
 
 def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
@@ -68,7 +78,7 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
 
     return ChildTool(
         name="manual",
-        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        input_schema=MANUAL_INPUT_SCHEMA,
         handler=handler,
         title="manual input",
     )
