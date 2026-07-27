@@ -19,8 +19,8 @@ Import DAG (enforced by ``tests/test_kernel_isolation.py``):
   ``import lingtai.tools`` must not transitively import ``lingtai.agent``.
 
 The registry surface (``INTRINSICS``, ``BUILTIN_TOOLS``, ``CORE_DEFAULTS``,
-``_GROUPS``, ``setup_capability``, ``apply_core_defaults``,
-``normalize_capabilities``, ``expand_groups``, ``get_all_providers``,
+``setup_capability``, ``apply_core_defaults``,
+``normalize_capabilities``, ``get_all_providers``,
 ``CAPABILITY_UNAVAILABLE``) lives in :mod:`lingtai.tools.registry`. It is intentionally
 not re-exported here so that ``import lingtai.tools`` stays a cheap, dependency-light
 operation; import from :mod:`lingtai.tools.registry` explicitly.

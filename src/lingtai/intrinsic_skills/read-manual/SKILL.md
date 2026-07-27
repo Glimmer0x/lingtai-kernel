@@ -1,11 +1,12 @@
 ---
 name: read-manual
-description: "Complete guide for the read tool: continuation workflow, next_offset pagination, line_truncated handling, runtime tool-result spill vs read-level pagination, 100k read default / 200k runtime hard cap, and when to use bash/grep/sed for truncated lines. Use when implementing complete file-read workflows, handling large files, or understanding cap and truncation semantics."
+description: "Complete guide for the `file` tool's read action: continuation workflow, next_offset pagination, line_truncated handling, runtime tool-result spill vs read-level pagination, 100k read default / 200k runtime hard cap, and when to use bash/grep/sed for truncated lines. Use when implementing complete file-read workflows, handling large files, or understanding cap and truncation semantics."
 version: 0.1.0
 tags: [read, files, continuation, truncation, cap, pagination]
 last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
-- src/lingtai/tools/read/__init__.py
+- src/lingtai/tools/file/_read.py
+- src/lingtai/tools/file/__init__.py
 - src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
@@ -13,14 +14,17 @@ maintenance: |
 
 # Read Manual
 
-Complete workflow for reading files with the `read` tool. Load it for large
-files, complete-content workflows, truncation, or `line_truncated` results.
+Complete workflow for reading files with the `file` tool's `read` action. Load
+it for large files, complete-content workflows, truncation, or `line_truncated`
+results.
 
-For basic tool choice (read vs write vs edit vs grep vs glob), UTF-8 policy, and
-the shared `action="manual"` versus ordinary-call rule, see the `file-manual`
-skill — including that repeating an identical manual call is an error loop, not
-progress. After this manual returns, continue the original task with an ordinary
-read.
+This is a nested reference under `file-manual`, not a separate manual action:
+`file(action="manual")` returns `file-manual`, which points here for read depth.
+For basic action choice (read vs write vs edit vs grep vs glob), UTF-8 policy,
+the `summarize` guidance, and the shared manual-versus-ordinary-call rule, see
+`file-manual` — including that repeating an identical manual call is an error
+loop, not progress. After this manual returns, continue the original task with
+an ordinary read call.
 
 ## Two caps
 
@@ -89,7 +93,8 @@ For any file that may exceed the cap:
 ```python
 offset = 1
 while True:
-    r = read({"file_path": path, "offset": offset, "limit": 200})
+    r = file(action="read", input={"file_path": path, "offset": offset, "limit": 200},
+             reasoning="page through the file")
     process(r["content"])
     if not r.get("truncated"):
         break
@@ -151,7 +156,9 @@ Before calling `read`:
 
 ## Manual versus ordinary reads
 
-For backward compatibility, an ordinary read may omit `action` or set
-`action="read"`. Use `action="manual"` only as a one-time entry to this guide.
-After the manual returns, continue the original task with an ordinary read; do
-not repeat the same manual call. Repeating it is an error loop, not progress.
+An ordinary read is `file(action="read", input={...}, reasoning="...")`;
+`action` is always required. Use `file(action="manual", input={})` only as a
+one-time entry — it returns `file-manual`, which points here for the read depth
+above. After the manual returns, continue the original task with an ordinary
+read; do not repeat the same manual call. Repeating it is an error loop, not
+progress.

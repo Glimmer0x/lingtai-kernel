@@ -254,19 +254,15 @@ class Agent(BaseAgent):
             from .services.file_io_sidecar import default_file_io_service
             self._file_io = default_file_io_service(root=self._working_dir)
 
-        # Expand groups and normalize to dict
+        # Normalize to dict
         if isinstance(capabilities, list):
-            from lingtai.tools.registry import expand_groups, normalize_capabilities
-            expanded = expand_groups(capabilities)
-            capabilities = normalize_capabilities({name: {} for name in expanded})
+            from lingtai.tools.registry import normalize_capabilities
+            capabilities = normalize_capabilities({name: {} for name in capabilities})
         elif isinstance(capabilities, dict):
-            from lingtai.tools.registry import _GROUPS, normalize_capabilities
+            from lingtai.tools.registry import normalize_capabilities
             expanded_dict: dict[str, dict] = {}
             for name, cap_kwargs in capabilities.items():
-                if name in _GROUPS:
-                    for sub in _GROUPS[name]:
-                        expanded_dict[sub] = {}
-                elif cap_kwargs is None:
+                if cap_kwargs is None:
                     expanded_dict[name] = None  # propagate disable-sentinel
                 else:
                     expanded_dict[name] = cap_kwargs
@@ -1594,16 +1590,12 @@ class Agent(BaseAgent):
         null_outs = {n for n, v in raw_caps.items() if v is None}
 
         from lingtai.tools.registry import (
-            _GROUPS,
             apply_core_defaults,
             normalize_capabilities,
         )
         expanded: dict[str, Any] = {}
         for name, cap_kwargs in resolved.items():
-            if name in _GROUPS:
-                for sub in _GROUPS[name]:
-                    expanded[sub] = {}
-            elif name in null_outs:
+            if name in null_outs:
                 expanded[name] = None
             elif cap_kwargs is None:
                 expanded[name] = None

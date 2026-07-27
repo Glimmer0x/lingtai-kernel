@@ -97,26 +97,30 @@ def test_agent_capabilities_list(tmp_path):
     """capabilities= as list of strings is honored alongside the core defaults."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["read", "write"],
+        capabilities=["file"],
     )
     registered = {name for name, _ in agent._capabilities}
-    assert "read" in registered
-    assert "write" in registered
+    assert "file" in registered
+    # The retired per-operation names are not capabilities at all.
+    assert "read" not in registered
+    assert "write" not in registered
     agent.stop(timeout=1.0)
 
 
-def test_read_tool_description_points_to_file_manual(tmp_path):
-    """The read tool should route hard file cases to the intrinsic file manual."""
+def test_file_tool_description_points_to_file_manual(tmp_path):
+    """The file tool should route hard file cases to the intrinsic file manual."""
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
         working_dir=tmp_path / "test",
-        capabilities=["read"],
+        capabilities=["file"],
     )
     try:
-        read_schema = next(schema for schema in agent._tool_schemas if schema.name == "read")
-        assert "file-manual" in read_schema.description
-        assert "non-UTF-8" in read_schema.description
+        file_schema = next(schema for schema in agent._tool_schemas if schema.name == "file")
+        assert "file-manual" in file_schema.description
+        assert "non-UTF-8" in file_schema.description
+        # Read pagination depth stays a nested reference under that one manual.
+        assert "read-manual" in file_schema.description
     finally:
         agent.stop(timeout=1.0)
 

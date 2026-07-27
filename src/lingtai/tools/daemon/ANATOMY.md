@@ -285,7 +285,7 @@ intentional omission of the parent notification axis.
 - `BaseAgent._enqueue_system_notification` — compact daemon completion/failure events
 - `lingtai.kernel.token_ledger` — `append_token_entry` for token accounting
 - `lingtai.i18n` — `t()` for localized strings
-- `lingtai.tools.registry` — `setup_capability`, `_GROUPS` for preset sandbox instantiation
+- `lingtai.tools.registry` — `setup_capability`, `canonical_capability_name` for preset sandbox instantiation
 - `lingtai.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
 - `lingtai.kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
 - `lingtai.kernel.config_resolve` — `resolve_env` for API key resolution

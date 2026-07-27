@@ -30,27 +30,26 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The twenty built-in tools, each owning a top-level CONTRACT.md.
+# Every shipped tool package owning a top-level CONTRACT.md. ``file`` is the
+# sole owner of the file surface: the five pre-migration per-operation packages
+# (read/write/edit/glob/grep), their contracts, and their glossaries were
+# deleted into it.
 _BUILTIN_TOOLS = [
     "avatar",
     "bash",
     "daemon",
-    "edit",
     "email",
-    "glob",
-    "grep",
+    "file",
     "knowledge",
     "mcp",
     "notification",
     "psyche",
-    "read",
     "skills",
     "soul",
     "system",
     "vision",
     "web_search",
     "browser",
-    "write",
     "tool_family",
 ]
 
@@ -246,8 +245,12 @@ def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
 
 
 # ---------------------------------------------------------------------------
-# Glossary resources (60 files: 20 packages × 3 languages)
+# Glossary resources (one per package per language)
 # ---------------------------------------------------------------------------
+
+# Derived from the shipped package list rather than hardcoded, so adding or
+# retiring a tool package updates both halves of this check together.
+_EXPECTED_GLOSSARY_COUNT = len(_BUILTIN_TOOLS) * len(_GLOSSARY_LANGS)
 
 
 def test_wheel_ships_every_glossary_resource(wheel_entries: set[str]):
@@ -260,18 +263,18 @@ def test_wheel_ships_every_glossary_resource(wheel_entries: set[str]):
     assert not missing, "glossary resources missing from wheel: %r" % missing
 
 
-def test_wheel_ships_exactly_60_glossary_resources(wheel_entries: set[str]):
-    # Exactly 20 packages × 3 languages = 60. The narrowed package-data globs
-    # (glossary-en.md, glossary-zh.md, glossary-wen.md — not glossary-*.md)
-    # must include exactly these files and nothing more.
+def test_wheel_ships_exactly_every_glossary_resource(wheel_entries: set[str]):
+    # Exactly one glossary per shipped package per language. The narrowed
+    # package-data globs (glossary-en.md, glossary-zh.md, glossary-wen.md —
+    # not glossary-*.md) must include exactly these files and nothing more.
     glossary_files = {
         e
         for e in wheel_entries
         if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
-    assert len(glossary_files) == 60, (
-        "expected exactly 60 glossary resources, wheel has %d: %r"
-        % (len(glossary_files), sorted(glossary_files))
+    assert len(glossary_files) == _EXPECTED_GLOSSARY_COUNT, (
+        "expected exactly %d glossary resources, wheel has %d: %r"
+        % (_EXPECTED_GLOSSARY_COUNT, len(glossary_files), sorted(glossary_files))
     )
 
 
@@ -310,7 +313,10 @@ def test_installed_wheel_validator_reads_package_resources(
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "60 glossary resources across 20 packages" in result.stdout
+    assert (
+        "%d glossary resources across %d packages"
+        % (_EXPECTED_GLOSSARY_COUNT, len(_BUILTIN_TOOLS))
+    ) in result.stdout
 
 
 @pytest.fixture(scope="module")
@@ -368,12 +374,13 @@ def test_sdist_ships_complete_web_search_manual_bundle(sdist_entries: set[str]):
     assert not missing, "web_search manual files missing from sdist: %r" % missing
 
 
-def test_sdist_ships_exactly_60_glossary_resources(sdist_entries: set[str]):
+def test_sdist_ships_exactly_every_glossary_resource(sdist_entries: set[str]):
     glossary_files = {
         e
         for e in sdist_entries
         if e.startswith("lingtai/tools/") and "/glossary-" in e and e.endswith(".md")
     }
-    assert len(glossary_files) == 60, (
-        "expected exactly 60 glossary resources in sdist, got %d" % len(glossary_files)
+    assert len(glossary_files) == _EXPECTED_GLOSSARY_COUNT, (
+        "expected exactly %d glossary resources in sdist, got %d"
+        % (_EXPECTED_GLOSSARY_COUNT, len(glossary_files))
     )

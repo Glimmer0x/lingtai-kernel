@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/knowledge/__init__.py
+  - src/lingtai/tools/file/CONTRACT.md
+  - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
@@ -218,12 +220,17 @@ envelope. That is a conforming implementation.
 
 ### Non-goals
 
-This contract does not introduce, and this PR does not implement: a central LTP
-validator, registry, schema compiler, or universal conformance harness; the old
-result-summarization control nested as `input.summary`; a shared settings or
-`_settings` foundation; runtime schema injection; ToolExecutor changes; test or
-manual rewrites; a provider adapter envelope; MCP migration; or the `file`
-family.
+This contract does not introduce, and the PR that adopted it did not implement:
+a central LTP validator, registry, schema compiler, or universal conformance
+harness; the old result-summarization control nested as `input.summary`; a
+shared settings or `_settings` foundation; runtime schema injection;
+ToolExecutor changes; a provider adapter envelope; or MCP migration.
+
+The `file` family was also a non-goal of that adopting PR. It has since been
+migrated on its own, vertically and with its own evidence, exactly as the
+"one family at a time" rule requires — see `### Relationship to current
+runtime` below and `src/lingtai/tools/file/CONTRACT.md`. Migrating it did not
+relax any rule in this file.
 
 The `input.summary` non-goal bans one thing: carrying the result-summarization
 *control* below root. It does not reserve the word `summary`, and it does not ban
@@ -242,15 +249,27 @@ its public tool name and both public action values are unchanged, both children
 take the canonical strict-empty `input`, and it supports no settings file (see
 `src/lingtai/tools/knowledge/CONTRACT.md`). It remains a signpost capability
 with no authoring, search, or edit action.
+
+`file` (`read | write | edit | glob | grep | manual`) is the fourth family
+migrated to this contract, and the first aggregation of several former public
+roots into one: its final model-facing root is exactly `action`, `input`,
+`reasoning`, and `summarize`. The migration was a clean break rather than an
+adapter layer — the five old model-facing roots, their implementation packages,
+their per-operation contracts and glossaries, and their capability names were
+all deleted, with the behavior folded into the single `lingtai.tools.file`
+owner. Those five capability names are now unknown and fail loudly; `file`
+surfaces no settings file at either level and says so in its manual (see
+`src/lingtai/tools/file/CONTRACT.md`).
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently `web`, `mcp`, and `knowledge`), so an unmigrated tool's own
-field literally named `summarize` is never reinterpreted as this control. That
-`_LTP_V2_MIGRATED_FAMILIES` set is the single source of truth for which
-families use the canonical spelling; a migrating family adds its public name
-there in the same change, and never introduces a second summarizer. Every
+v2 family (currently `web`, `mcp`, `knowledge`, and `file`), so an unmigrated
+tool's own field literally named `summarize` is never reinterpreted as this
+control. That `_LTP_V2_MIGRATED_FAMILIES` set is the single source of truth for
+which families use the canonical spelling; a migrating family adds its public
+name there in the same change, and never introduces a second summarizer. Every
 other LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
 
@@ -275,10 +294,16 @@ required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 
-Non-normative future illustration: `file` may later become one family with
-actions `read | write | edit | glob | grep | manual`, while all six
-implementations remain fully independent. That migration is not implemented, not
-scheduled here, and not claimed.
+`file` is that illustration realized: one family with actions
+`read | write | edit | glob | grep | manual` whose six implementations remain
+fully independent, sharing nothing but the family name and the wire envelope —
+co-located in one package as `_read.py`, `_write.py`, `_edit.py`, `_glob.py`,
+and `_grep.py`, where none imports another. Single ownership is not shared
+implementation.
+It is also the worked example of the family-boundary rule above — the five
+operations are one family because they act on one working tree through one
+authority (the injected `FileIOService`) under one sandbox, not because their
+code looks alike.
 
 ## Contract tests
 
@@ -312,6 +337,18 @@ action-owned `settings/web.search.json` surface (see
 `src/lingtai/tools/web_search/CONTRACT.md` Contract tests). They remain one
 family's local evidence, not a conformance suite, and no such suite is required
 to exist.
+
+`file`'s focused suite (`tests/test_file_tool_family.py`) is the second
+migration's evidence, chosen for its own risks: exactly one public root with no
+surviving old roots, the closed envelope, action/input correlation on both
+wires, every child's schema/dispatch/result/error, cross-action rejection
+before handler I/O, the no-I/O family manual with read pagination as a nested
+reference, read continuation and line truncation, verbatim write/edit receipts,
+and the `summarize` control and truthful mixed read/write risk posture. The
+retained operations' own suites (`tests/test_layers_file.py`,
+`tests/test_read_continuation.py`) continue to cover per-operation depth. This
+is a different evidence set from web's, which is exactly what the paragraph
+above permits.
 
 ## Maintenance
 

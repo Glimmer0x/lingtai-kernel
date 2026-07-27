@@ -5,7 +5,7 @@ Verifies:
 - The single shared strict grammar (``parse_glossary``) truly rejects
   duplicate keys, malformed frontmatter, wrong types, and wrong identity.
 - Runtime fail-open/warning/cache/concurrency behavior.
-- All-18 canonical invariance (identical schema for every language).
+- All-glossary-owner canonical invariance (identical schema for every language).
 - Normal + daemon rendering/collector propagation.
 - Provider non-leakage (glossary never appears in wire payloads).
 """
@@ -35,6 +35,7 @@ from lingtai.kernel.tool_glossary import (
     parse_glossary,
 )
 from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.tools.glossary_validator import discover_packages
 from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
 
 
@@ -214,27 +215,27 @@ class TestStrictGrammar:
 
 class TestLoadToolGlossary:
     def test_english_body_is_empty(self):
-        body = load_tool_glossary("lingtai.tools.read", "en")
+        body = load_tool_glossary("lingtai.tools.file", "en")
         assert body == ""
 
     def test_chinese_body_is_non_empty(self):
-        body = load_tool_glossary("lingtai.tools.read", "zh")
+        body = load_tool_glossary("lingtai.tools.file", "zh")
         assert body.strip()
         assert "read" in body
 
     def test_wen_body_is_non_empty(self):
-        body = load_tool_glossary("lingtai.tools.read", "wen")
+        body = load_tool_glossary("lingtai.tools.file", "wen")
         assert body.strip()
 
     def test_wen_uses_classical_chinese_not_zh(self):
         """wen must use classical Chinese vocabulary, not be identical to zh."""
-        zh = load_tool_glossary("lingtai.tools.read", "zh")
-        wen = load_tool_glossary("lingtai.tools.read", "wen")
+        zh = load_tool_glossary("lingtai.tools.file", "zh")
+        wen = load_tool_glossary("lingtai.tools.file", "wen")
         assert zh != wen, "wen body must not be identical to zh body"
 
     def test_frontmatter_never_in_body(self):
         for lang in ("zh", "wen"):
-            body = load_tool_glossary("lingtai.tools.read", lang)
+            body = load_tool_glossary("lingtai.tools.file", lang)
             assert "---" not in body
             assert "kind:" not in body
             assert "tool_package:" not in body
@@ -256,7 +257,7 @@ class TestLoadToolGlossary:
 
     def test_missing_file_falls_back_to_english(self):
         """A language with no resource falls back to English (empty)."""
-        body = load_tool_glossary("lingtai.tools.read", "fr")
+        body = load_tool_glossary("lingtai.tools.file", "fr")
         assert body == ""  # fr normalizes to en -> empty English body
 
     def test_unimportable_package_warns_exactly_once_per_language(self):
@@ -320,8 +321,8 @@ class TestLoadToolGlossary:
 
 class TestCaching:
     def test_results_are_cached(self):
-        b1 = load_tool_glossary("lingtai.tools.read", "zh")
-        b2 = load_tool_glossary("lingtai.tools.read", "zh")
+        b1 = load_tool_glossary("lingtai.tools.file", "zh")
+        b2 = load_tool_glossary("lingtai.tools.file", "zh")
         assert b1 == b2
         assert b1  # non-empty
 
@@ -350,7 +351,7 @@ class TestCaching:
         def worker():
             try:
                 start.wait()
-                results.append(load_tool_glossary("lingtai.tools.read", "zh"))
+                results.append(load_tool_glossary("lingtai.tools.file", "zh"))
             except BaseException as exc:  # surface thread assertion/barrier failures
                 errors.append(exc)
 
@@ -406,13 +407,13 @@ class TestCaching:
 class TestAppendToolGlossary:
     def test_english_no_append(self):
         result = append_tool_glossary(
-            "Base description.", tool_package="lingtai.tools.read", language="en"
+            "Base description.", tool_package="lingtai.tools.file", language="en"
         )
         assert result == "Base description."
 
     def test_chinese_appends_body(self):
         result = append_tool_glossary(
-            "Base description.", tool_package="lingtai.tools.read", language="zh"
+            "Base description.", tool_package="lingtai.tools.file", language="zh"
         )
         assert "Base description." in result
         assert result.startswith("Base description.\n\n")
@@ -439,17 +440,27 @@ class TestAppendToolGlossary:
 
 
 # ---------------------------------------------------------------------------
-# All-18 canonical invariance
+# All-glossary-owner canonical invariance
 # ---------------------------------------------------------------------------
 
 
+# Every glossary owner, taken from the validator's own discovery rule (registry
+# packages plus every installed ``tools.<pkg>`` owning a CONTRACT.md) rather
+# than from ``BUILTIN_TOOLS`` alone, so internal packages that ship a glossary
+# without a registry row (``browser``, ``tool_family``) stay covered too.
 _ALL_PACKAGES = sorted(
-    {path.rsplit(".", 1)[-1] for path in BUILTIN_TOOLS.values()} | set(INTRINSICS)
+    set(discover_packages())
+    | {path.rsplit(".", 1)[-1] for path in BUILTIN_TOOLS.values()}
+    | set(INTRINSICS)
 )
-assert len(_ALL_PACKAGES) == 18
+assert len(_ALL_PACKAGES) == 16, _ALL_PACKAGES
+# The five pre-migration file packages were deleted into ``file``; their
+# glossaries must not come back.
+assert "file" in _ALL_PACKAGES
+assert not ({"read", "write", "edit", "glob", "grep"} & set(_ALL_PACKAGES))
 
 
-class TestAllEighteenInvariance:
+class TestAllGlossaryOwnerInvariance:
     @pytest.mark.parametrize("pkg", _ALL_PACKAGES)
     def test_english_body_empty(self, pkg):
         assert load_tool_glossary(f"lingtai.tools.{pkg}", "en") == ""
@@ -502,17 +513,23 @@ class TestSchemaInvariance:
 
     def test_glossary_does_not_affect_identifiers(self):
         """Glossary lookup cannot change names, properties, enums, required."""
-        from lingtai.tools.read import get_schema
+        from lingtai.tools.file import get_schema
 
         base = get_schema()
-        props = base["properties"]
-        assert "file_path" in props
-        assert "offset" in props
-        assert "limit" in props
-        assert base["required"] == []
+        assert base["properties"]["action"]["enum"] == [
+            "read", "write", "edit", "glob", "grep", "manual",
+        ]
+        assert base["required"] == ["action", "input", "reasoning"]
+        read_props = next(
+            branch for branch in base["properties"]["input"]["oneOf"]
+            if branch["title"] == "read input"
+        )["properties"]
+        assert "file_path" in read_props
+        assert "offset" in read_props
+        assert "limit" in read_props
 
     def test_normal_and_daemon_resident_tools_render_selected_glossary(self):
-        zh_body = load_tool_glossary("lingtai.tools.read", "zh")
+        zh_body = load_tool_glossary("lingtai.tools.file", "zh")
         schema = FunctionSchema(
             name="read",
             description="Read text files.",
@@ -526,7 +543,7 @@ class TestSchemaInvariance:
                 },
                 "required": ["file_path"],
             },
-            glossary_package="lingtai.tools.read",
+            glossary_package="lingtai.tools.file",
         )
         sections: dict[str, str] = {}
         agent = SimpleNamespace(
@@ -574,7 +591,7 @@ class TestSchemaInvariance:
             _build_tools as build_openai_tools,
         )
 
-        body = load_tool_glossary("lingtai.tools.read", "zh")
+        body = load_tool_glossary("lingtai.tools.file", "zh")
         parameters = {
             "type": "object",
             "properties": {
@@ -589,7 +606,7 @@ class TestSchemaInvariance:
             name="read",
             description="Read text files.",
             parameters=copy.deepcopy(parameters),
-            glossary_package="lingtai.tools.read",
+            glossary_package="lingtai.tools.file",
         )
 
         openai_chat = build_openai_tools([schema])[0]["function"]
@@ -603,7 +620,7 @@ class TestSchemaInvariance:
         assert openai_responses["parameters"] == parameters
         assert anthropic["input_schema"] == parameters
         assert schema.parameters == parameters
-        assert schema.glossary_package == "lingtai.tools.read"
+        assert schema.glossary_package == "lingtai.tools.file"
 
 
 # ---------------------------------------------------------------------------
