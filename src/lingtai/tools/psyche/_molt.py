@@ -20,6 +20,16 @@ from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 # legacy ``molt`` notification, so it cannot sweep this reminder.
 _POST_MOLT_CHANNEL = "post-molt"
 
+# Host-authored ``reasoning`` for the synthesized system-forced molt pair. A
+# forced molt has no agent rationale to record, so this states that fact
+# plainly rather than inventing one — and it keeps the model-visible
+# synthesized call envelope-shaped (root ``reasoning`` is REQUIRED by the
+# composed psyche schema).
+SYSTEM_FORCED_MOLT_REASONING = (
+    "System-forced molt. You did not initiate this call — the kernel "
+    "synthesized it and authored the summary."
+)
+
 
 def _first_nonempty_line(text: str | None) -> str:
     if not text:
@@ -573,13 +583,37 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
 
     synth_id = f"toolu_synth_{uuid.uuid4().hex[:16]}"
     tool_name = "psyche"
+    # This call block is replayed to the provider as an assistant ``tool_use``
+    # block, so it is a model-visible example of how to call ``psyche`` and
+    # MUST carry the LTP v2 envelope the schema advertises: ``action`` +
+    # strict per-action ``input`` + a Host-authored ``reasoning``. A model
+    # imitating its own history and sending the pre-migration flat
+    # ``{"object": "context", "action": "molt"}`` would now be rejected.
+    #
+    # ``input`` carries EVERY key ``_CONTEXT_MOLT_INPUT_SCHEMA`` marks required,
+    # with the three the forced path does not use spelled as explicit ``null``.
+    # A strict provider schema expresses an optional field as a
+    # required-nullable property, so a partial ``{"summary": ...}`` object would
+    # not satisfy the schema this same family advertises — teaching an invalid
+    # call to any model that imitates its own history. ``_strip_nulls`` turns
+    # these nulls back into "absent" at dispatch, so the forced path's behavior
+    # is unchanged.
+    #
+    # ``_initiator``/``_source`` stay OUTSIDE ``input`` — they are Host
+    # provenance metadata, not action input, and psyche's ``context_molt``
+    # ``input`` schema does not declare them.
     synth_call = ToolCallBlock(
         id=synth_id,
         name=tool_name,
         args={
-            "object": "context",
-            "action": "molt",
-            "summary": summary,
+            "action": "context_molt",
+            "input": {
+                "summary": summary,
+                "session_journal_path": None,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
+            "reasoning": SYSTEM_FORCED_MOLT_REASONING,
             "_initiator": "system",
             "_source": source,
         },

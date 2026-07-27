@@ -32,7 +32,8 @@ maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
   Browser is an internal browse child, not a second public capability. The
   generic tool_family package is optional composition infrastructure any
-  future family migration may adopt, not a second registry. Update
+  future family migration may adopt, not a second registry. psyche is its
+  eleventh consumer and the third migrated intrinsic. Update
   structural claims with code and keep reciprocal graph edges valid.
 ---
 # src/lingtai/tools/
@@ -65,7 +66,8 @@ capability names and lazy adapters.
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
   `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
-  ninth, `notification` its tenth, and `system` its eleventh
+  ninth, `notification` its tenth, `system` its eleventh, and `psyche` its
+  twelfth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
   lifecycle, and context-hygiene actions behind one model-facing root
@@ -90,6 +92,14 @@ capability names and lazy adapters.
   is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
   builds its dispatching family per call, because an intrinsic receives `agent`
   per call rather than owning a manager.
+- `psyche/` — mandatory intrinsic owning the public `psyche` family: the agent's
+  identity, pad, name, and context molt behind one root
+  (`src/lingtai/tools/psyche/ANATOMY.md`). Its public model-facing schema is the
+  ToolFamily-composed LTP v2 envelope; the former two-key `(object, action)`
+  matrix is now one flat action enum, one action per pre-migration pair. Like
+  `soul`/`notification` it builds its dispatching family per call, and it is
+  the one family that *consumes* the kernel-injected `_tc_id` rather than
+  merely dropping it.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

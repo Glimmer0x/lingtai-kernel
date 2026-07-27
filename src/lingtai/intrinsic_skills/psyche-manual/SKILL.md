@@ -46,14 +46,14 @@ post-molt reconstruction leave `system/lingtai.md` untouched and psyche-authored
 identity changes persist. Forced identity mode uses a nonempty resolved
 `lingtai` value, either inline or from `lingtai_file`; that value is authoritative
 and is materialized into `system/lingtai.md` on each reconstruction. A
-`psyche(lingtai, update)` still writes and auto-loads immediately, but a forced
+`psyche(action='lingtai_update')` still writes and auto-loads immediately, but a forced
 configured value replaces it at the next reconstruction. Keep `lingtai` distinct
 from the operator `covenant`, the third-party `base_prompt`, and the mechanical
 `identity` section.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — `psyche(lingtai, update, content=<full identity>)`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
+- **lingtai** — `psyche(action='lingtai_update', input={'content': <full identity>}, reasoning='...')`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
 - **pad** — your living index of what you're working on. Edit it to reflect your current goal and the references that point at where the substance lives. See §5 for the full practice.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for any long-term private context worth keeping. The filesystem is the API — use `write`/`edit` directly.
 - **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
@@ -96,7 +96,7 @@ detail belongs in the child.
 
 **The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt, via `write`/`edit` directly. Read `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including `molt_count`, the required `type: session-journal` marker, and the YAML block-scalar `description` that keeps a `: ` in the text from breaking the gate) and the section layout. It is a journal, not a transcript. Several thousand tokens is fine when the segment was rich; keep it concise when it was small.
 
-This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates it before letting the molt proceed (see §6).
+This sub-entry's path is what you pass as `psyche(action='context_molt', input={'session_journal_path': ...})`, and the kernel validates it before letting the molt proceed (see §6).
 
 Updating the parent index at each session is part of the practice — append one line referencing the new sub-entry. Then write the successor summary (§6), which points back at this entry's path.
 
@@ -123,21 +123,31 @@ Pad is your **living index** of what you're working on right now. It is not a sk
 
 **When to update pad:** whenever the index meaningfully changes — a new reference, a goal shift, a step change. Don't churn on every step, but don't hoard updates for the end either. A stale pad is worse than a noisy pad.
 
-**`pad.append` for file pinning:** `psyche(pad, append, files=[...])` pins file contents as read-only reference in your system prompt — they are re-read and appended on every load (including after molt). Pin anything you want persistent visibility on: source files, skill docs, configs. Pass `files=[]` to clear. Total appended content must not exceed 100k tokens. Paths relative to working directory.
+**`pad_append` for file pinning:** `psyche(action='pad_append', input={'files': [...]}, reasoning='...')` pins file contents as read-only reference in your system prompt — they are re-read and appended on every load (including after molt). Pin anything you want persistent visibility on: source files, skill docs, configs. Pass `files=[]` to clear. Total appended content must not exceed 100k tokens. Paths relative to working directory.
 
-**Archiving completed pads:** When a goal completes, archive to `archive/pad-<goal-slug>-<YYYY-MM-DD>.md`. Then `psyche(pad, edit, content=<next goal>)`.
+**Archiving completed pads:** When a goal completes, archive to `archive/pad-<goal-slug>-<YYYY-MM-DD>.md`. Then `psyche(action='pad_edit', input={'content': <next goal>, 'files': null}, reasoning='...')`. Note `pad_edit` is a FULL REWRITE of the pad, not an append.
 
 ## 6. Step 2 — Write the Summary and Molt
 
 ```
 psyche(
-    object="context",
-    action="molt",
-    summary=<your charge to the next you>,
-    session_journal_path="knowledge/session-journal/<entry>/KNOWLEDGE.md",
-    ...
+    action="context_molt",
+    input={
+        "summary": <your charge to the next you>,
+        "session_journal_path": "knowledge/session-journal/<entry>/KNOWLEDGE.md",
+        "keep_tool_calls": null,
+        "keep_last": null,
+    },
+    reasoning="why you are molting now",
 )
 ```
+
+Every psyche call uses this one envelope: a single `action`, that action's own
+strict `input` object, and a root `reasoning`. There is no `object` argument
+any more — the former `(object, action)` pair is one flat action name
+(`pad_edit`, `context_molt`, `name_set`, ...). Leave the root `summarize`
+false: psyche results are small (short-result profile), and summarizing a
+`manual` call would drop the exact procedure you called it for.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
@@ -182,7 +192,7 @@ Quick routing:
 | Consequential molt / successor handoff — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. Fill every section; write `None` rather than omitting one. |
 | Unsure whether the handoff is complex | Use the asset; extra structure is cheaper than a bad handoff. |
 
-Before you call `psyche(object="context", action="molt", ...)`, always verify at minimum:
+Before you call `psyche(action="context_molt", ...)`, always verify at minimum:
 
 - The session-journal sub-entry for the just-finished segment exists and is
   written *before* the summary (§4) — it is the narrative the summary points

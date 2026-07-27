@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/psyche/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -213,6 +214,21 @@ assertions in `daemon/__init__.py`. It registers
 `build_manual_child(agent, "daemon")` directly and returns its canonical result
 verbatim; its only Host normalization is narrowing this package's generic
 `ACTION_REQUIRED` message to daemon's exact six actions.
+
+`psyche/__init__.py` ([`../psyche/ANATOMY.md`](../psyche/ANATOMY.md)) is the
+thirteenth consumer and the fifth *intrinsic* one. It uses the same module-level
+schema-only / per-call agent-bound composition shape `soul` established, from a
+single `_CHILD_SPECS` registry. Two things distinguish it. First, it is the
+only consumer so far to collapse a *two-key* public surface into this
+envelope: the pre-migration `(object, action)` matrix became one flat action
+per pair (`pad`→`edit` is `pad_edit`), the same shape `notification` used for
+its atomic dismiss verbs. Second, it is the first family that genuinely
+**consumes** the kernel-injected `_tc_id` rather than dropping it —
+`context_molt` needs that wire id to locate and replay its own ToolCallBlock —
+so `handle()` strips it from the closed root and threads it to that one child
+out-of-band, via the same Host-owned seam `avatar` uses for its spawn mission
+brief. This package is not widened for either need: `_ROOT_FIELDS` is
+unchanged, and no envelope field is passed to any child.
 
 ## Composition
 

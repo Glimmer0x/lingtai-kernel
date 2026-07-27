@@ -1083,7 +1083,7 @@ def _turn_boundary_housekeeping(agent) -> None:
 
 
 def _is_context_molt_call(tc) -> bool:
-    """Return True when ``tc`` is ``psyche(context, molt, ...)``.
+    """Return True when ``tc`` is ``psyche(action="context_molt", ...)``.
 
     A post-molt notification is published before the ``psyche.molt`` tool
     result returns.  If that same result batch were active-stamped with the
@@ -1092,13 +1092,18 @@ def _is_context_molt_call(tc) -> bool:
     ``MSG_TC_WAKE`` continuation.  Only the molt batch needs this deferral:
     later ACTIVE batches may consume the post-molt notification normally, while
     an immediate IDLE boundary will wake from the still-uncommitted file state.
+
+    Reads only ``args["action"]``, the post-migration LTP v2 spelling of the
+    former ``(object="context", action="molt")`` pair.  This is a read path
+    over the live batch, not a second accepted call shape: nothing in psyche
+    dispatch admits the pre-migration flat form.
     """
     if getattr(tc, "name", None) != "psyche":
         return False
     args = getattr(tc, "args", None)
     if not isinstance(args, dict):
         return False
-    return args.get("object") == "context" and args.get("action") == "molt"
+    return args.get("action") == "context_molt"
 
 
 def _batch_includes_context_molt(tool_calls) -> bool:

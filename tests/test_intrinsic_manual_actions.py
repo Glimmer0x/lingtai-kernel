@@ -80,10 +80,11 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             ),
         ),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
-        # ``email`` is a migrated LTP v2 family: ``manual`` is the reserved
-        # family child, called through the closed action/input envelope.
+        # ``email`` and ``psyche`` are migrated LTP v2 families: ``manual`` is
+        # the reserved family child, called through the closed action/input
+        # envelope.
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual", "input": {}})),
-        "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual"})),
+        "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual", "input": {}})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual", "input": {}})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual", "input": {}})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
@@ -154,7 +155,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         action = schema["properties"]["action"]
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
-    assert psyche_tool.get_schema()["required"] == ["action"]
+    # psyche is migrated to the LTP v2 envelope, so it now requires the full
+    # closed root exactly as web does — not the pre-migration action-only root.
+    assert psyche_tool.get_schema()["required"] == ["action", "input", "reasoning"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3

@@ -156,6 +156,7 @@ _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
         "web", "mcp", "knowledge", "file", "vision", "avatar", "soul",
         "shell", "skills", "notification", "system", "daemon", "email",
+        "psyche",
     }
 )
 

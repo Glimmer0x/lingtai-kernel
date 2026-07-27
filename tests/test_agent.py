@@ -535,7 +535,7 @@ def test_agent_pad_persists_via_edit(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    agent._intrinsics["psyche"]({"object": "pad", "action": "edit", "content": "updated knowledge"})
+    agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "updated knowledge", "files": None}})
     pad_file = agent.working_dir / "system" / "pad.md"
     assert pad_file.is_file()
     assert pad_file.read_text() == "updated knowledge"

@@ -43,7 +43,7 @@ is canonical.
 |---|---|---|---|
 | **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep`/`daemon`/`glob` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
 | **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
-| **Molt** — context-pressure-triggered | `psyche(context, molt, ...)` | the whole conversation is continued/reset | you (briefing) |
+| **Molt** — context-pressure-triggered | `psyche(action='context_molt', ...)` | the whole conversation is continued/reset | you (briefing) |
 
 Sections 1–6 below are mostly about the a-posteriori `summarize` action; §1a
 covers the a-priori `summary=true` option and when to prefer it; §6 contrasts

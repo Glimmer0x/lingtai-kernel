@@ -90,7 +90,7 @@ def test_lingtai_update_writes_lingtai_md(tmp_path):
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="You are helpful",
     )
-    result = _call(agent, {"object": "lingtai", "action": "update", "content": "I am a PDF specialist"})
+    result = _call(agent, {"action": "lingtai_update", "input": {"content": "I am a PDF specialist"}})
     assert result["status"] == "ok"
     character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == "I am a PDF specialist"
@@ -101,8 +101,8 @@ def test_lingtai_update_empty_clears(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    _call(agent, {"object": "lingtai", "action": "update", "content": "something"})
-    _call(agent, {"object": "lingtai", "action": "update", "content": ""})
+    _call(agent, {"action": "lingtai_update", "input": {"content": "something"}})
+    _call(agent, {"action": "lingtai_update", "input": {"content": ""}})
     character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == ""
     agent.stop(timeout=1.0)
@@ -122,8 +122,8 @@ def test_lingtai_load_writes_character_section(tmp_path):
     )
     agent.start()
     try:
-        _call(agent, {"object": "lingtai", "action": "update", "content": "I specialize in PDFs"})
-        _call(agent, {"object": "lingtai", "action": "load"})
+        _call(agent, {"action": "lingtai_update", "input": {"content": "I specialize in PDFs"}})
+        _call(agent, {"action": "lingtai_load", "input": {}})
 
         # character section carries lingtai.md alone
         character = agent._prompt_manager.read_section("character")
@@ -147,7 +147,7 @@ def test_pad_edit_content_only(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {"object": "pad", "action": "edit", "content": "my notes"})
+    result = _call(agent, {"action": "pad_edit", "input": {"content": "my notes", "files": None}})
     assert result["status"] == "ok"
     md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "my notes" in md
@@ -162,9 +162,11 @@ def test_pad_edit_with_files(tmp_path):
     (agent.working_dir / "export2.txt").write_text("knowledge from export 2")
 
     result = _call(agent, {
-        "object": "pad", "action": "edit",
-        "content": "My working notes.",
-        "files": ["export1.txt", "export2.txt"],
+        "action": "pad_edit",
+        "input": {
+            "content": "My working notes.",
+            "files": ["export1.txt", "export2.txt"],
+        },
     })
     assert result["status"] == "ok"
     md = (agent.working_dir / "system" / "pad.md").read_text()
@@ -183,8 +185,8 @@ def test_pad_edit_files_only(tmp_path):
     (agent.working_dir / "data.txt").write_text("file data")
 
     result = _call(agent, {
-        "object": "pad", "action": "edit",
-        "files": ["data.txt"],
+        "action": "pad_edit",
+        "input": {"content": None, "files": ["data.txt"]},
     })
     assert result["status"] == "ok"
     md = (agent.working_dir / "system" / "pad.md").read_text()
@@ -198,9 +200,8 @@ def test_pad_edit_missing_file_errors(tmp_path):
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
     result = _call(agent, {
-        "object": "pad", "action": "edit",
-        "content": "notes",
-        "files": ["nonexistent.txt"],
+        "action": "pad_edit",
+        "input": {"content": "notes", "files": ["nonexistent.txt"]},
     })
     assert "error" in result
     assert "nonexistent.txt" in result["error"]
@@ -211,7 +212,7 @@ def test_pad_edit_empty_errors(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {"object": "pad", "action": "edit"})
+    result = _call(agent, {"action": "pad_edit", "input": {"content": None, "files": None}})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -231,7 +232,7 @@ def test_pad_load(tmp_path):
         system_dir.mkdir(exist_ok=True)
         (system_dir / "pad.md").write_text("loaded from disk")
 
-        result = _call(agent, {"object": "pad", "action": "load"})
+        result = _call(agent, {"action": "pad_load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "loaded from disk" in section
@@ -277,18 +278,26 @@ def test_molt_returns_faint_memory(tmp_path):
                 id=molt_wire_id,
                 name="psyche",
                 args={
-                    "object": "context", "action": "molt", "summary": molt_summary,
-                    "session_journal_path": journal_path,
+                    "action": "context_molt",
+                    "input": {
+                        "summary": molt_summary,
+                        "session_journal_path": journal_path,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                 },
             ),
         ])
 
         result = _call(agent, {
-            "object": "context",
-            "action": "molt",
-            "summary": molt_summary,
+            "action": "context_molt",
+            "input": {
+                "summary": molt_summary,
+                "session_journal_path": journal_path,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
             "_tc_id": molt_wire_id,
-            "session_journal_path": journal_path,
         })
 
         assert result["status"] == "ok"
@@ -299,7 +308,9 @@ def test_molt_returns_faint_memory(tmp_path):
         molt_calls = [b for b in last.content if isinstance(b, ToolCallBlock)]
         assert molt_calls, "last assistant entry should carry the molt ToolCallBlock"
         assert molt_calls[0].id == molt_wire_id
-        assert molt_calls[0].args.get("summary") == molt_summary
+        # The agent's briefing is replayed verbatim from its own envelope —
+        # under `input`, where the migrated schema puts it.
+        assert molt_calls[0].args["input"]["summary"] == molt_summary
     finally:
         agent.stop()
 
@@ -341,43 +352,69 @@ def test_context_forget_still_works(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_schema_has_correct_objects():
+def test_psyche_schema_preserves_the_object_sub_action_surface():
+    """Every pre-migration (object, action) pair survives as one flat action.
+
+    The migration collapsed the two-key matrix into the LTP v2 single-`action`
+    envelope; it did not add, drop, rename, or merge an operation.
+    """
     from lingtai.tools.psyche import get_schema
     SCHEMA = get_schema("en")
-    objects = SCHEMA["properties"]["object"]["enum"]
-    assert set(objects) == {"lingtai", "pad", "context", "name"}
+    assert SCHEMA["properties"]["action"]["enum"] == [
+        "lingtai_update", "lingtai_load",
+        "pad_edit", "pad_load", "pad_append",
+        "context_molt",
+        "name_set", "name_nickname",
+        "manual",
+    ]
 
 
-def test_psyche_schema_has_correct_actions():
-    # Schema is intentionally flat (no allOf) for strict-mode provider
-    # compatibility — see #114. Per-(object, action) constraints live in
-    # the runtime _VALID_ACTIONS table.
-    from lingtai.tools.psyche import _VALID_ACTIONS, get_schema
+def test_psyche_schema_is_the_closed_ltp_v2_envelope():
+    # The pre-migration schema was deliberately flat with no combinators
+    # (#114). The generic ToolFamily composer now supplies the closed root
+    # plus the `allOf` action/input correlation adopted after the 2026-07-27
+    # Responses probe, so both of those old assertions are inverted here.
+    from lingtai.tools.psyche import get_schema
     SCHEMA = get_schema("en")
-    assert "enum" not in SCHEMA["properties"]["action"]
-    assert "allOf" not in SCHEMA
-    assert _VALID_ACTIONS == {
-        "lingtai": {"update", "load"},
-        "pad": {"edit", "load", "append"},
-        "context": {"molt"},
-        "name": {"set", "nickname"},
+    assert set(SCHEMA["properties"]) == {"action", "input", "reasoning", "summarize"}
+    assert SCHEMA["required"] == ["action", "input", "reasoning"]
+    assert SCHEMA["additionalProperties"] is False
+    assert len(SCHEMA["allOf"]) == len(SCHEMA["properties"]["action"]["enum"])
+    # `object` is gone as a public root field — no compatibility alias.
+    assert "object" not in SCHEMA["properties"]
+
+
+def test_psyche_schema_has_files_field_only_on_the_pad_actions():
+    """`files` belongs to pad_edit/pad_append, not to every action."""
+    from lingtai.tools.psyche import get_schema
+    SCHEMA = get_schema("en")
+    with_files = {
+        cond["if"]["properties"]["action"]["const"]
+        for cond in SCHEMA["allOf"]
+        if "files" in cond["then"]["properties"]["input"]["properties"]
     }
+    assert with_files == {"pad_edit", "pad_append"}
 
 
-def test_psyche_schema_has_files_field():
+def test_psyche_schema_has_session_journal_path_only_on_context_molt():
+    """Issue #350: molt requires a structured session_journal_path arg.
+
+    After the migration it lives in `context_molt`'s own strict input, so no
+    other action advertises it.
+    """
     from lingtai.tools.psyche import get_schema
     SCHEMA = get_schema("en")
-    assert "files" in SCHEMA["properties"]
-
-
-def test_psyche_schema_has_session_journal_path_field():
-    """Issue #350: molt requires a structured session_journal_path arg."""
-    from lingtai.tools.psyche import get_schema
-    SCHEMA = get_schema("en")
-    prop = SCHEMA["properties"].get("session_journal_path")
-    assert prop is not None
+    owners = {}
+    for cond in SCHEMA["allOf"]:
+        action = cond["if"]["properties"]["action"]["const"]
+        owners[action] = cond["then"]["properties"]["input"]["properties"]
+    assert "session_journal_path" not in owners["pad_edit"]
+    prop = owners["context_molt"]["session_journal_path"]
     assert prop["type"] == "string"
     assert prop["description"]
+    assert "session_journal_path" in owners["context_molt"]
+    molt_required = SCHEMA["allOf"][5]["then"]["properties"]["input"]["required"]
+    assert "summary" in molt_required and "session_journal_path" in molt_required
 
 
 # ---------------------------------------------------------------------------
@@ -385,22 +422,31 @@ def test_psyche_schema_has_session_journal_path_field():
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_object(tmp_path):
+def test_unknown_action_is_rejected(tmp_path):
+    """The former `Unknown object:` guard is now one unknown-action guard."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {"object": "bogus", "action": "diff"})
+    result = _call(agent, {"action": "bogus", "input": {}})
     assert "error" in result
+    assert "Unknown psyche action" in result["error"]
     agent.stop(timeout=1.0)
 
 
-def test_invalid_action_for_object(tmp_path):
+def test_pre_migration_object_action_shape_is_rejected(tmp_path):
+    """The flat (object, action) call shape is gone — no compatibility alias.
+
+    A model imitating pre-migration history fails loudly rather than silently
+    dispatching or no-op'ing.
+    """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
     result = _call(agent, {"object": "lingtai", "action": "submit"})
     assert "error" in result
-    assert "update" in result["error"]
+    assert "Unknown psyche action" in result["error"]
+    # And the pad on disk was never touched by the refused call.
+    assert not (agent.working_dir / "system" / "lingtai.md").exists()
     agent.stop(timeout=1.0)
 
 
@@ -452,18 +498,26 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
                 id=molt_id,
                 name="psyche",
                 args={
-                    "object": "context", "action": "molt", "summary": molt_summary,
-                    "session_journal_path": journal_path,
+                    "action": "context_molt",
+                    "input": {
+                        "summary": molt_summary,
+                        "session_journal_path": journal_path,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                 },
             ),
         ])
 
         result = _call(agent, {
-            "object": "context",
-            "action": "molt",
-            "summary": molt_summary,
+            "action": "context_molt",
+            "input": {
+                "summary": molt_summary,
+                "session_journal_path": journal_path,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
             "_tc_id": molt_id,
-            "session_journal_path": journal_path,
         })
 
         assert result["status"] == "ok"
@@ -552,18 +606,26 @@ def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
             ToolCallBlock(
                 id=molt_id, name="psyche",
                 args={
-                    "object": "context", "action": "molt", "summary": "test",
-                    "session_journal_path": journal_path,
+                    "action": "context_molt",
+                    "input": {
+                        "summary": "test",
+                        "session_journal_path": journal_path,
+                        "keep_tool_calls": None,
+                        "keep_last": None,
+                    },
                 },
             ),
         ])
 
         result = _call(agent, {
-            "object": "context",
-            "action": "molt",
-            "summary": "test",
+            "action": "context_molt",
+            "input": {
+                "summary": "test",
+                "session_journal_path": journal_path,
+                "keep_tool_calls": None,
+                "keep_last": None,
+            },
             "_tc_id": molt_id,
-            "session_journal_path": journal_path,
         })
 
         # Molt succeeded

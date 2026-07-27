@@ -1933,7 +1933,7 @@ def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
     )
     molt_call = ToolCall(
         name="psyche",
-        args={"object": "context", "action": "molt", "summary": "continue"},
+        args={"action": "context_molt", "input": {"summary": "continue"}},
         id="call_molt",
     )
     assert _batch_includes_context_molt([molt_call]) is True
