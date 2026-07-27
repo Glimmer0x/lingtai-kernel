@@ -239,10 +239,20 @@ The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently only `web`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. Every other
-LingTai-owned family remains unmigrated and keeps its existing schema and
+v2 family (currently `web` and `mcp`), so an unmigrated tool's own field
+literally named `summarize` is never reinterpreted as this control. That
+`_LTP_V2_MIGRATED_FAMILIES` set is the single source of truth for which
+families use the canonical spelling; a migrating family adds its public name
+there in the same change, and never introduces a second summarizer. Every
+other LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
+
+`mcp` is the second migrated family: public tool name `mcp`, actions `info |
+manual`, both taking the canonical strict-empty `input`. The migration changed
+its call envelope only — no action was added, removed, renamed, or given a new
+capability; it remains signpost-only and read-only, and external MCP
+registration (direct insertion into `mcp_registry.jsonl`) is untouched by it.
+See `src/lingtai/tools/mcp/CONTRACT.md`.
 
 `src/lingtai/tools/tool_family/` is optional, generic composition
 infrastructure implementing this envelope (schema composition from a
@@ -250,7 +260,9 @@ infrastructure implementing this envelope (schema composition from a
 ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics. Using it is never required — see its own
+diagnostics, and `mcp` is its second, retaining its own outer `handle_mcp()`
+for its exact pre-migration unknown-action envelope. Using it is never
+required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

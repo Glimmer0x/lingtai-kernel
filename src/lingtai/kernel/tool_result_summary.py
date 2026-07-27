@@ -152,15 +152,15 @@ def is_apriori_summary(content: Any) -> bool:
 # unmigrated tool's own domain field literally named ``summarize`` is never
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
-_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+_LTP_V2_MIGRATED_FAMILIES = frozenset({"web", "mcp"})
 
 
 def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:
     """Return True iff the normalized tool args opt into a-priori summary.
 
     The legacy flag is the boolean ``summary`` field on the tool call, honored
-    for every caller. A migrated LTP v2 family (currently only ``web``) may
-    instead set the canonical root ``summarize`` boolean; that spelling is
+    for every caller. A migrated LTP v2 family (currently ``web`` and ``mcp``)
+    may instead set the canonical root ``summarize`` boolean; that spelling is
     recognized only when ``tool_name`` names a migrated family, so an
     unmigrated tool's own ``summarize``-named domain field is never
     reinterpreted as this control. Anything other than a literal ``True``
@@ -437,9 +437,11 @@ def maybe_summarize_result(
     # Do not summarize tool-level errors — the agent needs the exact error to
     # recover. ``status == "error"`` is the kernel-wide tool-error convention.
     # A migrated LTP v2 family may instead use its own canonical error status
-    # (``web``'s is exactly ``"failed"``); recognizing it here is scoped to
-    # migrated families only, so an unrelated tool's non-error ``"failed"``-
-    # named domain value is never reinterpreted as an error result.
+    # (both ``web`` and ``mcp`` envelope failures are exactly ``"failed"``;
+    # ``mcp``'s unknown-action envelope uses the kernel-wide ``"error"`` above);
+    # recognizing it here is scoped to migrated families only, so an unrelated
+    # tool's non-error ``"failed"``-named domain value is never reinterpreted
+    # as an error result.
     if isinstance(result, dict):
         status = result.get("status")
         if status == "error":

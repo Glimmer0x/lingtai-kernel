@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/mcp/CONTRACT.md
+  - src/lingtai/tools/mcp/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -82,11 +84,11 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today only `web` is on that allowlist, so
-`summarize` is meaningful for the one family that uses this infrastructure; a
+package does not own or enforce. Today `web` and `mcp` are on that allowlist,
+so `summarize` is meaningful for both families that use this infrastructure; a
 family adopting `ToolFamily` without also joining the kernel allowlist would
 advertise a model-visible `summarize` control that the kernel silently
-ignores. Calling
+ignores — so joining it is part of adopting this package, in the same change. Calling
 `handle()` is optional: it validates the envelope (unknown `action`,
 non-boolean `summarize`, unknown root fields, `input` keys outside the
 selected child's own declared schema) before invoking exactly that child's
@@ -96,7 +98,10 @@ own outer `handle()` to stamp family-specific diagnostics onto envelope
 failures, which this package has no knowledge of.
 
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
-input; its handler loads the existing `load_installed_manual()` shape
+input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
+that also composes a schema-only `ToolFamily` advertises the identical object
+rather than a hand-copied near-duplicate; its handler loads the existing
+`load_installed_manual()` shape
 (`status`, `manual` full body, `manual_path`, optionally `error`) and maps it
 to the canonical, actually-dispatched result: `content=[{"type": "text",
 "text": <full body>}]` and `structuredContent={"manual_path": <path>}`, with
@@ -121,8 +126,8 @@ package, per `../CONTRACT.md` "Implementation independence".
 
 ## Adapters
 
-`web_search/__init__.py` is the one production Adapter/consumer in this
-candidate: `WebManager.__init__` builds a per-instance `ToolFamily` with
+`web_search/__init__.py` is the reference production Adapter/consumer:
+`WebManager.__init__` builds a per-instance `ToolFamily` with
 `search`/`browse` handlers bound to that instance, and registers
 `manual.build_manual_child(agent, "web")`'s returned `ChildTool` *directly* —
 unwrapped — as the family's `manual` child. `WebManager.handle()` calls
@@ -137,9 +142,29 @@ flattens the canonical result to Web's pre-migration public shape (`status`,
 `handle()`, not to the generic child or any wrapper registered in place of
 it. `WebManager.handle()` also stamps `current_setting` onto any
 envelope-level failure result (search/browse/unknown-action) before
-returning, unchanged from before. No other built-in family is migrated in
-this candidate; each remains fully independent of this package until its own
-scoped migration.
+returning, unchanged from before.
+
+`mcp/__init__.py` (`../mcp/CONTRACT.md`) is the second production Adapter and
+the minimal shape of one: a two-child family (`info`, `manual`) keeping its
+exact public tool name and action values, where both children declare the
+canonical strict-empty `input`. It registers `build_manual_child(agent,
+"mcp")` directly and unwrapped, and flattens the canonical child result to
+`mcp`'s own `status`/`mcp_manual`/`manual_path` public shape post-dispatch in
+`_flatten_manual_result`. It also establishes how a consumer keeps a
+pre-migration public *error* envelope that this package's dispatcher does not
+reproduce: `handle_mcp` renders `mcp`'s exact unknown-action envelope itself,
+before delegating, covering the missing-action empty-string default and
+unhashable `action` values (`[]`/`{}` from invalid JSON) that
+`ToolFamily.handle`'s `action not in self._children` dict lookup would raise
+`TypeError` on. It routes on `child_names`, the public ordered tuple, whose
+`in` compares by `==` and never hashes — so the unhashable case is handled by
+construction, with no exception handler needed. Per "Implementation
+independence", the fix belongs in the consumer; this package's canonical
+`ACTION_REQUIRED` shape is never widened to accommodate one family's legacy
+envelope.
+
+Every other built-in family remains fully independent of this package until
+its own scoped migration.
 
 ## Contract rules
 
