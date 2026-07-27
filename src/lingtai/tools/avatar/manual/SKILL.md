@@ -2,17 +2,47 @@
 name: avatar-manual
 description: |
   Complete operational guide for the avatar tool — spawning, managing, and communicating with 他我 (alter-ego agents). Read this when: you are about to spawn an avatar; an avatar you spawned goes quiet; you need to decide between avatar, daemon, or bash; or you are an avatar and need to know how to escalate to your parent. Covers spawn types, naming rules, discipline, escalation protocol, and the parent_prompt contract.
-version: 1.0.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 1.1.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/avatar/__init__.py
 - src/lingtai/tools/avatar/ANATOMY.md
 - src/lingtai/tools/avatar/CONTRACT.md
+- src/lingtai/tools/CONTRACT.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
 
 # Avatar Manual
+
+## 0. How to Call `avatar`
+
+One tool, three actions, each with its own strict `input` object:
+
+```
+avatar(action="spawn",  input={"name": "researcher"},        reasoning="<mission briefing>")
+avatar(action="spawn",  input={"name": "clone", "type": "deep"}, reasoning="<mission briefing>")
+avatar(action="rules",  input={"rules_content": "..."},      reasoning="why these rules")
+avatar(action="manual", input={},                            reasoning="load avatar guidance")
+```
+
+- `action` is **required** — there is no default. Omitting it never spawns.
+- `input` is **required** and closed. `spawn` owns `name`, `type`, `comment`,
+  `dry_run`, `confirm`; `rules` owns `rules_content`; `manual` takes `{}`.
+  Putting one action's field in another's `input` is rejected before anything
+  happens — no process, no ledger entry, no `.rules` write.
+- `reasoning` is **required** and lives at the root, never inside `input`. For
+  `spawn` it *is* the mission briefing (see §4).
+
+**Settings:** `avatar` has no settings file at either the family or action
+level. There is nothing to configure on disk.
+
+**`summarize` (short-result profile).** Every action here returns a small
+result — a spawn receipt, a distribution list, or a manual body you asked for
+verbatim. `summarize` is available but normally unnecessary: leave it false.
+Keep it false for `manual` in particular, so exact procedure and constraints
+are not summarized away, and for `spawn`, whose receipt carries the address,
+`agent_name`, and `pid` you need exactly.
 
 ## 1. What Is an Avatar
 
@@ -42,7 +72,7 @@ and `bash` for one-off commands. The full body-selection model lives in
 
 ## 3. Naming Rules
 
-The `name` field (required) doubles as the avatar's working-directory basename under `.lingtai/`. Constraints:
+The `input.name` field (required for `spawn`) doubles as the avatar's working-directory basename under `.lingtai/`. Constraints:
 
 - Single bare segment: letters (any script), digits, underscore, hyphen only
 - No slashes, no dots, no spaces, no leading `.`
@@ -52,7 +82,7 @@ The avatar's display name (nickname) can be set separately via `psyche(name, nic
 
 ## 4. The `reasoning` Field — Mission Briefing
 
-The `reasoning` parameter you write on the `avatar(action="spawn")` call **automatically becomes the avatar's first prompt**. Write it as a thorough mission briefing, not just a one-liner rationale. Include:
+The root `reasoning` parameter you write on the `avatar(action="spawn", input={...})` call **automatically becomes the avatar's first prompt**. It is a root envelope field, never part of `input`. Write it as a thorough mission briefing, not just a one-liner rationale. Include:
 
 - What the task is
 - Why it matters
@@ -65,13 +95,13 @@ This is the most important part of the spawn. A vague briefing produces a confus
 
 ## 5. Spawn Discipline
 
-Every `avatar(action="spawn")` call creates an independent process that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
+Every `avatar(action="spawn", ...)` call creates an independent process that consumes resources until `system(sleep)` or `system(suspend)`. Treat spawns as expensive:
 
-1. **Never include `avatar(action="spawn")` in a parallel batch** with unrelated tool calls.
+1. **Never include `avatar(action="spawn", ...)` in a parallel batch** with unrelated tool calls.
 2. **Re-read your `reasoning` field before invoking** (§4).
 3. **For inspection or one-off commands, use `bash` or `system`** — not `avatar`.
-4. **Use `dry_run=true` to preview** a spawn without creating a process. Sanity-check the name, type, working directory, and mission before committing.
-5. **Use `confirm=true`** to acknowledge you have double-checked the mission and intend to spawn. Required when the mission looks empty/very short/test-like.
+4. **Use `input={"name": ..., "dry_run": true}` to preview** a spawn without creating a process. Sanity-check the name, type, working directory, and mission before committing.
+5. **Use `input={"name": ..., "confirm": true}`** to acknowledge you have double-checked the mission and intend to spawn. Required when the mission looks empty/very short/test-like.
 
 ## 6. Caring for Avatars After Spawn
 
@@ -111,7 +141,7 @@ If you are an avatar (your `admin` block is empty or all admin privileges are fa
 
 ## 8. The `comment` Field — Persistent System Note
 
-The `comment` parameter is a persistent system-level note injected into the avatar's system prompt (rendered last, after memory). Key properties:
+The `input.comment` field (spawn only) is a persistent system-level note injected into the avatar's system prompt (rendered last, after memory). Key properties:
 
 - **Not inherited from parent** — defaults to empty
 - **Survives everything**: molt, refresh, sleep/wake
@@ -119,7 +149,7 @@ The `comment` parameter is a persistent system-level note injected into the avat
 
 Leave empty unless you have something the avatar should never forget.
 
-## 9. Network Rules (`avatar(action="rules")`)
+## 9. Network Rules (`avatar(action="rules", input={"rules_content": ...})`)
 
 The `rules` action writes a `.rules` file to your directory and distributes it to **all descendants** in the avatar tree. Properties:
 

@@ -15,11 +15,14 @@ maintenance: |
 ---
 **名相对照**
 
-- `avatar`：唯一公开之器，以 `action` 分遣。详见 avatar-manual 技。
-- `action`：必填，无默认。`spawn`（化出独立他我，承 init.json，以默认预设启）｜`rules`（设网法以布一切后嗣，需 karma）｜`manual`（只读，还 avatar 手册全文）。
-- `name`：他我真名（action=spawn 时必填）。亦为 .lingtai/ 下目录之名。单段：字母/数/下划线/连字，至长六十四。
-- `type`：'shallow'（默认，初生）：白纸，仅 init.json。'deep'（二重身）：全拷灵台、简、典。
-- `comment`：他我提示之恒注（跨蜕/刷/眠不去）。不承自父。无事勿填。
-- `dry_run`：预览而不化。用于提交前省察。
-- `confirm`：确认已审任务且决意化。任务空/短/似试时必填。
-- `rules_content`：action=rules 所需法则之文。纯文每行一则。不可议之约束，布一切后嗣。
+- `avatar`：唯一公开之器，以 `action` 分遣，每遣各有严整自专之 `input`。详见 avatar-manual 技。
+- `action`：必填，无默认。`spawn`（化出独立他我，承 init.json，以默认预设启）｜`rules`（设网法以布一切后嗣，需 karma）｜`manual`（只读，还 avatar 手册全文及其 `manual_path`）。
+- `input`：必填，乃所遣一动作自专之严封之器。他遣分支之名，未及动手之先即斥。
+- `reasoning`：必填，居根，非动作之入。`action=spawn` 时即任务之书，为他我第一言。
+- `summarize`：可选，居根之布尔，默然为否。惟司果之后治，终不入动作之实。
+- `input.name`：他我真名（action=spawn 必填）。亦为 .lingtai/ 下目录之名。单段：字母/数/下划线/连字，至长六十四。
+- `input.type`：'shallow'（默认，初生）：白纸，仅 init.json。'deep'（二重身）：全拷灵台、简、典。
+- `input.comment`：他我提示之恒注（跨蜕/刷/眠不去）。不承自父。无事勿填。
+- `input.dry_run`：预览而不化。用于提交前省察。
+- `input.confirm`：确认已审任务且决意化。任务空/短/似试时必填。
+- `input.rules_content`：action=rules 所需法则之文。纯文每行一则。不可议之约束，布一切后嗣。

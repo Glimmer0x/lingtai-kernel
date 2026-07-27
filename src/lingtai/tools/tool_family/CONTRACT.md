@@ -12,6 +12,8 @@ related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -84,9 +86,9 @@ correct even before Agent composition runs). `build_schema()` always
 advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
-package does not own or enforce. Today `web`, `mcp`, and `knowledge` are on
-that allowlist, so `summarize` is meaningful for the families that use this
-infrastructure; a
+package does not own or enforce. Today `web`, `mcp`, `knowledge`, `file`,
+`vision`, and `avatar` are on that allowlist, so `summarize` is meaningful
+for the families that use this infrastructure; a
 family adopting `ToolFamily` without also joining the kernel allowlist would
 advertise a model-visible `summarize` control that the kernel silently
 ignores — so joining it is part of adopting this package, in the same change. Calling
@@ -101,8 +103,10 @@ failures, which this package has no knowledge of.
 `build_manual_child` builds the reserved `manual` `ChildTool`: strict empty
 input — the module-level `MANUAL_INPUT_SCHEMA` literal, exported so a family
 that also composes a schema-only `ToolFamily` advertises the identical object
-rather than a hand-copied near-duplicate; its handler loads the existing
-`load_installed_manual()` shape
+rather than a hand-copied near-duplicate, and so a family supplying its own
+`manual` handler entirely (as `avatar` does) can reference the same literal
+instead of restating it, keeping the two from drifting apart; its handler
+loads the existing `load_installed_manual()` shape
 (`status`, `manual` full body, `manual_path`, optionally `error`) and maps it
 to the canonical, actually-dispatched result: `content=[{"type": "text",
 "text": <full body>}]` and `structuredContent={"manual_path": <path>}`, with
@@ -178,6 +182,28 @@ no-double-wrap rule, satisfied without a Host adapter. Its outer `handle()`
 normalizes only the generic `ACTION_REQUIRED` envelope failure back to
 knowledge's exact pre-migration unknown-action result.
 
+`avatar/__init__.py` is the fourth production Adapter/consumer to touch this
+contract (after `file` and `vision`, which adopt this package per
+`../CONTRACT.md` without a dedicated Adapter paragraph here):
+`AvatarManager.__init__` builds a per-instance `ToolFamily` with
+`spawn`/`rules`/`manual` handlers bound to that instance, and
+`AvatarManager.handle()` calls `self._family.handle(args)`. It is a deliberate
+**partial** adoption, which this package permits: `avatar` reuses `ChildTool`
+and `ToolFamily` but *not* `build_manual_child`, because its manual ships inside
+its own package (`avatar/manual/SKILL.md`) rather than the agent's installed
+`.library` intrinsic catalog — `build_manual_child` would report a `.library`
+`manual_path` that family never reads. Its `manual` child is therefore its own
+`ChildTool` returning `avatar`'s own canonical flat result (`status`, `action`,
+`manual`, `manual_path`), which `ToolFamily.handle()` returns verbatim with no
+double wrap and no post-dispatch adaptation. Strictly *after* dispatch,
+`AvatarManager.handle()` normalizes this package's generic `ACTION_REQUIRED`
+envelope failure back to avatar's own pinned unknown-action error string — the
+same Host/presentation-layer ownership boundary `web` uses for
+`current_setting`, and never a change to this package's canonical error shape.
+`avatar` also threads its root `_reasoning` (the spawn mission brief) to its
+`spawn` handler out-of-band, because this package correctly refuses to pass any
+envelope field to a child.
+
 Every other built-in family remains fully independent of this package until
 its own scoped migration.
 
@@ -224,7 +250,9 @@ its own scoped migration.
 - `manual.build_manual_child`'s child MUST use the reserved name `manual`, the
   exported `manual.MANUAL_INPUT_SCHEMA` strict-empty `input_schema` — the one
   canonical spelling (`required: []` stated explicitly; families MUST NOT
-  restate it locally) — and its handler's actual return value — what
+  restate it locally), which any family supplying its own `manual` child
+  entirely SHOULD also reference rather than restate — and its handler's
+  actual return value — what
   `ToolFamily.handle()` dispatches back verbatim — MUST be the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
   path) shape, never the pre-mapping flat `load_installed_manual()` dict.

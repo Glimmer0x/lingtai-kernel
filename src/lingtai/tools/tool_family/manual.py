@@ -29,7 +29,9 @@ __all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
 #: is stated explicitly rather than left implicit: an empty ``properties`` map
 #: with ``additionalProperties: False`` already admits only ``{}``, so the key is
 #: semantically exact, and stating it keeps one canonical spelling for consumers
-#: that compare composed schemas byte-for-byte.
+#: that compare composed schemas byte-for-byte — whether a family registers
+#: ``build_manual_child`` below or, like ``avatar``, supplies its own ``manual``
+#: handler while still reusing this same literal.
 MANUAL_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},

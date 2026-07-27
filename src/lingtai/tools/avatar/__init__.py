@@ -15,12 +15,15 @@ The avatar is an independent life — its existence does not depend on yours.
 Maintains an append-only ledger (delegates/ledger.jsonl) that records
 every spawn event.
 
-Usage:
+Usage (LTP v2 envelope — one action, one strict child input):
     Agent(capabilities=["avatar"])
-    # avatar(action="spawn", name="researcher")              — shallow (初生)
-    # avatar(action="spawn", name="clone", type="deep")      — deep (二重身)
-    # avatar(action="rules", rules_content="...")            — distribute rules
-    # avatar(action="manual")                                — read the avatar manual
+    # avatar(action="spawn", input={"name": "researcher"}, reasoning="...")
+    # avatar(action="spawn", input={"name": "clone", "type": "deep"}, reasoning="...")
+    # avatar(action="rules", input={"rules_content": "..."}, reasoning="...")
+    # avatar(action="manual", input={}, reasoning="...")
+
+The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
+ToolExecutor), never an ``input`` property — see ``handle()``.
 """
 from __future__ import annotations
 
@@ -32,11 +35,12 @@ import sys
 import time
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
-from lingtai.kernel.tool_dispatch import dispatch_action
+from ..tool_family import ChildTool, ToolFamily
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
 
@@ -95,69 +99,129 @@ if TYPE_CHECKING:
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
+# Canonical, strict per-action input schemas. Optionals are expressed as
+# nullable required properties because that is what strict OpenAI-style
+# validators demand of a closed object; null means "absent" to the action
+# implementations (see ``_strip_nulls``).
+#
+# The spawn mission brief is deliberately NOT a property here: it is root
+# ``reasoning``, and nested ``input`` must never carry
+# ``reasoning``/``_reasoning``/``summarize``.
+_SPAWN_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": (
+                "True name for the avatar. Also the working-directory basename "
+                "under .lingtai/. Single segment: letters/digits/underscore/"
+                "hyphen, max 64 chars."
+            ),
+        },
+        "type": {
+            "type": ["string", "null"],
+            "enum": ["shallow", "deep", None],
+            "description": (
+                "'shallow' (default): blank slate — init.json only. 'deep': "
+                "full copy of character, pad, and codex. Null for the default."
+            ),
+        },
+        "comment": {
+            "type": ["string", "null"],
+            "description": (
+                "Persistent system note in the avatar's prompt (survives molt/"
+                "refresh/wake). Not inherited. Null or empty unless you have "
+                "something the avatar must never forget."
+            ),
+        },
+        "dry_run": {
+            "type": ["boolean", "null"],
+            "description": (
+                "Preview the spawn without creating a process. Use to "
+                "sanity-check before committing. Null for the default false."
+            ),
+        },
+        "confirm": {
+            "type": ["boolean", "null"],
+            "description": (
+                "Confirm you have reviewed the mission and intend to spawn. "
+                "Required when the mission looks empty/short/test-like. Null "
+                "for the default false."
+            ),
+        },
+    },
+    "required": ["name", "type", "comment", "dry_run", "confirm"],
+    "additionalProperties": False,
+}
+
+_RULES_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "rules_content": {
+            "type": "string",
+            "description": (
+                "Plain text, one rule per line. Non-negotiable constraints "
+                "distributed to self and all descendants. Requires karma."
+            ),
+        },
+    },
+    "required": ["rules_content"],
+    "additionalProperties": False,
+}
+
+# The one child spec: canonical action name → its own strict input schema, in
+# model-facing enum order. Both the module-level schema-only family and each
+# manager's handler-bound family are built from this single source by
+# ``_build_family`` below, so the two listings cannot drift apart.
+_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("spawn", _SPAWN_INPUT_SCHEMA),
+    ("rules", _RULES_INPUT_SCHEMA),
+    ("manual", MANUAL_INPUT_SCHEMA),
+)
+
+
+def _build_family(handlers: Mapping[str, Any]) -> ToolFamily:
+    """Build avatar's family, binding each spec'd action to *handlers[name]*.
+
+    Construction validates the registry, so a duplicate or reserved-name
+    collision raises ``ToolFamilyError`` here — at import time for ``_FAMILY``
+    — rather than shipping silently.
+    """
+    return ToolFamily(
+        "avatar",
+        [
+            ChildTool(name, schema, handlers[name], title=f"{name} input")
+            for name, schema in _CHILD_SPECS
+        ],
+    )
+
+
+def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+    raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+
+# Composes the model-facing schema only; ``AvatarManager`` builds its own
+# per-instance family with real handlers bound to that instance.
+_FAMILY = _build_family({name: _unused for name, _ in _CHILD_SPECS})
+
+
 def get_description(lang: str = "en") -> str:
     return (
         "Spawn an independent agent (他我), set network rules for descendants, "
         "or read the avatar manual. Requires an explicit action — no default. "
-        "action='spawn': inherits init.json, boots on default preset — requires "
-        "'name'. action='rules': distribute rules_content to self + all "
-        "descendants (requires karma). action='manual': return the "
+        "avatar(action='spawn', input={'name': 'researcher', ...}, "
+        "reasoning='<the avatar's mission>'): inherits init.json, boots on "
+        "default preset; your reasoning becomes the avatar's first prompt. "
+        "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
+        "distribute rules to self + all descendants (requires karma). "
+        "avatar(action='manual', input={}, reasoning='...'): return the "
         "avatar-manual skill body. See avatar-manual skill for full guidance."
     )
 
 
-def get_schema(lang: str = "en") -> dict:
-    """Schema for the single public ``avatar`` tool.
-
-    A plain top-level ``type: object`` with an explicit ``action`` enum —
-    deliberately no top-level ``allOf``/``oneOf`` combinator, which some
-    OpenAI-compatible strict tool validators reject. Action-specific required
-    inputs (``name`` for spawn, ``rules_content`` for rules) are validated in
-    the handler, not the schema, so all three actions share one flat property
-    bag.
-    """
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["spawn", "rules", "manual"],
-                "description": (
-                    "spawn: create a new avatar — requires 'name'. "
-                    "rules: distribute network rules to self + descendants — "
-                    "requires 'rules_content'. manual: return the avatar-manual "
-                    "skill body; no other inputs used. Required — no default."
-                ),
-            },
-            "name": {
-                "type": "string",
-                "description": 'True name for the avatar (required for action=spawn). Also the working-directory basename under .lingtai/. Single segment: letters/digits/underscore/hyphen, max 64 chars.',
-            },
-            "type": {
-                "type": "string",
-                "enum": ["shallow", "deep"],
-                "description": "'shallow' (default): blank slate — init.json only. 'deep': full copy of character, pad, and codex.",
-            },
-            "comment": {
-                "type": "string",
-                "description": "Persistent system note in the avatar's prompt (survives molt/refresh/wake). Not inherited. Leave empty unless you have something the avatar must never forget.",
-            },
-            "dry_run": {
-                "type": "boolean",
-                "description": 'Preview the spawn without creating a process. Use to sanity-check before committing.',
-            },
-            "confirm": {
-                "type": "boolean",
-                "description": 'Confirm you have reviewed the mission and intend to spawn. Required when the mission looks empty/short/test-like.',
-            },
-            "rules_content": {
-                "type": "string",
-                "description": 'Rules content for action=rules. Plain text, one rule per line. Non-negotiable constraints distributed to all descendants.',
-            },
-        },
-        "required": ["action"],
-    }
-
+def get_schema(lang: str = "en") -> dict[str, Any]:
+    """Compose the LTP v2 model-facing schema for the single public ``avatar`` tool."""
+    return _FAMILY.build_schema()
 
 
 class AvatarManager:
@@ -174,31 +238,93 @@ class AvatarManager:
             from lingtai.adapters.avatar_launcher import select_avatar_launcher
             launcher = select_avatar_launcher()
         self._launcher = launcher
+        # The spawn mission brief reaches ``_spawn`` out-of-band via
+        # ``self._pending_reasoning``, set by ``handle()`` (see ``handle``).
+        self._family = _build_family({
+            "spawn": self._dispatch_spawn,
+            "rules": self._dispatch_rules,
+            "manual": self._dispatch_manual,
+        })
+        self._pending_reasoning: str | None = None
 
     # ------------------------------------------------------------------
     # Handler
     # ------------------------------------------------------------------
 
-    def handle(self, args: dict) -> dict:
-        return dispatch_action(
-            args,
-            {
-                "spawn": self._spawn,
-                "rules": self._rules,
-                "manual": lambda _args: self._manual(),
-            },
-            unknown=lambda action: {
-                "error": f"unknown action: {action!r}, only 'spawn', 'rules', or 'manual' is supported",
-            },
-        )
+    def handle(self, args: dict | None) -> dict:
+        """Dispatch one action through the family, normalizing avatar's errors.
+
+        Root ``reasoning`` (normalized to ``_reasoning`` by ToolExecutor) is the
+        avatar's mission brief and becomes the newborn's first prompt. It is
+        envelope metadata, never action input, so it is captured here and handed
+        to ``_spawn`` out-of-band rather than smuggled into ``input``, and
+        cleared in ``finally`` so a later call cannot inherit a previous call's
+        mission.
+
+        Avatar's pre-migration unknown-action envelope is a pinned public
+        promise; the generic dispatcher's ``ACTION_REQUIRED`` shape is
+        deliberately generic, so it is normalized back here, after dispatch —
+        never by changing that dispatcher's own canonical error shape.
+        """
+        raw = args if isinstance(args, Mapping) else {}
+        reasoning = raw.get("_reasoning")
+        self._pending_reasoning = reasoning if isinstance(reasoning, str) else None
+        try:
+            result = self._family.handle(args)
+        finally:
+            self._pending_reasoning = None
+        if result.get("error_code") == "ACTION_REQUIRED":
+            action = raw.get("action", "")
+            return {
+                "error": (
+                    f"unknown action: {action!r}, only 'spawn', 'rules', or "
+                    f"'manual' is supported"
+                ),
+            }
+        return result
+
+    @staticmethod
+    def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
+        # Strict OpenAI schemas express optional fields as required nullable
+        # properties. Null means absent to the internal action handlers, so
+        # every default below stays exactly the pre-migration default.
+        return {key: value for key, value in action_input.items() if value is not None}
+
+    def _dispatch_spawn(self, action_input: Mapping[str, Any]) -> dict:
+        return self._spawn(self._strip_nulls(action_input), self._pending_reasoning)
+
+    def _dispatch_rules(self, action_input: Mapping[str, Any]) -> dict:
+        return self._rules(self._strip_nulls(action_input))
+
+    def _dispatch_manual(self, _action_input: Mapping[str, Any]) -> dict:
+        return self._manual()
 
     def _manual(self) -> dict:
-        """Return the exact packaged avatar-manual body; performs no mutation."""
+        """Return the exact packaged avatar-manual body; performs no mutation.
+
+        Avatar's manual ships inside this package (``manual/SKILL.md``) rather
+        than in the agent's installed ``.library`` catalog, so this action owns
+        its own loader instead of the shared
+        ``load_installed_manual``/``build_manual_child`` pair — reusing that
+        builder here would report a ``.library`` path this family never reads.
+        """
+        resource = resources.files(__package__).joinpath("manual/SKILL.md")
         try:
-            body = resources.files(__package__).joinpath("manual/SKILL.md").read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError):
-            return {"status": "degraded", "action": "manual", "manual": "", "error": "avatar manual missing"}
-        return {"status": "ok", "action": "manual", "manual": body}
+            body = resource.read_text(encoding="utf-8")
+        except (FileNotFoundError, ModuleNotFoundError, AttributeError, OSError):
+            return {
+                "status": "degraded",
+                "action": "manual",
+                "manual": "",
+                "manual_path": str(resource),
+                "error": "avatar manual missing",
+            }
+        return {
+            "status": "ok",
+            "action": "manual",
+            "manual": body,
+            "manual_path": str(resource),
+        }
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -219,9 +345,11 @@ class AvatarManager:
     # Core spawn
     # ------------------------------------------------------------------
 
-    def _spawn(self, args: dict) -> dict:
+    def _spawn(self, args: dict, reasoning: str | None = None) -> dict:
+        """Create one avatar. ``reasoning`` is the mission brief from the root
+        envelope (``handle()``), not an ``input`` property — it becomes the
+        newborn's first prompt and gates the mission-quality check."""
         parent = self._agent
-        reasoning = args.get("_reasoning")
         peer_name = args.get("name")
         avatar_type = args.get("type", "shallow")
         dry_run = bool(args.get("dry_run", False))

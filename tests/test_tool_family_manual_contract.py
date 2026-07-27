@@ -42,6 +42,12 @@ def test_manual_child_input_schema_is_the_one_canonical_strict_empty_schema():
     """
     agent = _FakeAgent(Path("/nonexistent"))
     child = build_manual_child(agent, "widget")
+    # Strict empty: no properties admitted, and closed. Equal (not identical)
+    # to the exported canonical constant: ``build_manual_child`` deep-copies
+    # ``MANUAL_INPUT_SCHEMA`` per child so families cannot mutate each other's
+    # schema through a shared nested ``properties`` map (see the isolation
+    # test below), but every copy stays pinned to the same canonical shape a
+    # consumer that references it (this builder; ``avatar``) cannot drift from.
     assert child.input_schema == MANUAL_INPUT_SCHEMA
     assert MANUAL_INPUT_SCHEMA == {
         "type": "object",
