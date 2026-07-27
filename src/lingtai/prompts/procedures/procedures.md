@@ -217,7 +217,7 @@ discipline keeps multiple same-day molts chronologically stable.
 | SQLite / log.sqlite / LingTai runtime logs / `lingtai-agent log doctor|query|rebuild` / trace inspection | `system-manual` → `reference/sqlite-log-query/SKILL.md` |
 | Kernel architecture / breaking changes | `lingtai-kernel-anatomy` |
 | TUI / portal code navigation | `lingtai-tui-anatomy` |
-| Web fetching/search/scraping | `web-browsing` |
+| Web fetching/search/scraping | `web-manual` |
 | Image understanding | `vision` |
 | Bug/stale-doc/missing-capability reports | `lingtai-issue-report` |
 

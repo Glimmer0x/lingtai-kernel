@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 1 — API Metadata Queries
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 **When it applies:** Known academic IDs (DOI, arXiv, PMID, PMC), or sites with free APIs.
 **Tools:** `requests` (HTTP) — call APIs directly from Python.

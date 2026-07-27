@@ -6,13 +6,13 @@ maintenance: |
 ---
 # Migration from v2 to v3
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 In **v2**, web browsing was spread across separate sub-skills
 (`web-content-extractor`, `academic-search-pipeline`, `search-strategies`,
 `news-and-rss`, `social-media-extraction`, `realtime-data`, `stealth-browsing`)
 under `~/.lingtai-tui/utilities/`. **v3** merged all of these into this single
-`web-browsing-manual` skill and expanded the tier system from 4 tiers (0–3) to 7
+`web-manual` skill and expanded the tier system from 4 tiers (0–3) to 7
 (0–5, with 1.5); the old sub-skill names now map onto this manual's reference
 files (`academic-pipeline.md`, `search-strategies.md`, etc.) rather than
 standalone directories.

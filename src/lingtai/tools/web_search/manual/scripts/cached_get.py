@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-cached_get.py — Shared caching utility for web-browsing skill.
+cached_get.py — Shared caching utility for web-manual skill.
 
 Provides a simple file-based HTTP cache with TTL support.
 Use this to avoid hammering APIs and to speed up repeated requests.

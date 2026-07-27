@@ -1,8 +1,10 @@
-"""Strict per-Agent settings for the unified ``web`` capability.
+"""Strict per-Agent settings for the ``web`` capability's ``search`` action.
 
 The settings file is intentionally a tiny selector, not a provider
 configuration file.  Operators configure engines and credentials at setup;
-an Agent-owned ``settings/web.json`` may select only one admitted engine.
+an Agent-owned, action-owned ``settings/web.search.json`` may select only one
+admitted engine.  There is no family-owned ``settings/web.json``; browse and
+manual read no settings file at all.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ MAX_SETTINGS_BYTES = 64 * 1024
 _ENGINE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 CHANGE_HINT = (
-    "Edit settings/web.json; changes apply on the next web call; use "
+    "Edit settings/web.search.json; changes apply on the next web call; use "
     "web(action='manual', input={}, reasoning='load web guidance') for schema."
 )
 
@@ -50,8 +52,8 @@ class SettingsSnapshot:
 
 
 def settings_path(agent: Any) -> Path:
-    """Return the one fixed, agent-owned settings path."""
-    return Path(agent._working_dir) / "settings" / "web.json"
+    """Return the one fixed, action-owned settings path for ``search``."""
+    return Path(agent._working_dir) / "settings" / "web.search.json"
 
 
 def _bounded_error(exc: Exception) -> str:
@@ -59,7 +61,7 @@ def _bounded_error(exc: Exception) -> str:
     # result contract exposes only the agent-relative settings path, never the
     # host filesystem location.
     if isinstance(exc, OSError):
-        return f"settings/web.json could not be read ({type(exc).__name__})"
+        return f"settings/web.search.json could not be read ({type(exc).__name__})"
     text = str(exc).replace("\n", " ").strip()
     return (text or "invalid settings")[:240]
 
@@ -79,9 +81,9 @@ def _read_stable(path: Path) -> tuple[bytes, str]:
     except FileNotFoundError:
         return b"", "missing"
     if stat.S_ISLNK(first.st_mode) or not stat.S_ISREG(first.st_mode):
-        raise SettingsError("settings/web.json must be a regular file")
+        raise SettingsError("settings/web.search.json must be a regular file")
     if first.st_size > MAX_SETTINGS_BYTES:
-        raise SettingsError("settings/web.json exceeds the bounded size")
+        raise SettingsError("settings/web.search.json exceeds the bounded size")
     # Open by path only after lstat: a changed link/non-regular file is rejected
     # rather than followed.  A second stat closes ordinary replacement races.
     with path.open("rb") as handle:
@@ -121,19 +123,16 @@ def read_settings(
             return SettingsSnapshot(default_engine, default_source, "missing", None)
         text = raw.decode("utf-8")
         value = json.loads(text, object_pairs_hook=_pairs)
-        if not isinstance(value, dict) or set(value) != {"schema_version", "search"}:
-            raise SettingsError("settings schema must contain only schema_version and search")
+        if not isinstance(value, dict) or set(value) != {"schema_version", "engine"}:
+            raise SettingsError("settings schema must contain only schema_version and engine")
         if type(value["schema_version"]) is not int or value["schema_version"] != 1:
             raise SettingsError("settings schema_version must be integer 1")
-        search = value["search"]
-        if not isinstance(search, dict) or set(search) != {"engine"}:
-            raise SettingsError("settings search must contain only engine")
-        engine = search["engine"]
+        engine = value["engine"]
         if not isinstance(engine, str) or not _ENGINE_NAME.fullmatch(engine):
-            raise SettingsError("settings search.engine must be a bounded engine name")
+            raise SettingsError("settings engine must be a bounded engine name")
         if engine not in admitted:
             raise SettingsError("settings selected engine is not operator-admitted")
-        return SettingsSnapshot(engine, "settings/web.json", revision, revision)
+        return SettingsSnapshot(engine, "settings/web.search.json", revision, revision)
     except (OSError, UnicodeError, json.JSONDecodeError, SettingsError) as exc:
         # A malformed/changed file is never silently treated as missing.
         digest: str | None = None

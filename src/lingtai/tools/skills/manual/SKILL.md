@@ -9,7 +9,7 @@ description: >
   progressive-disclosure router. Does NOT document the bundled skills themselves
   — their own SKILL.md files do.
 version: 1.1.0
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-07-26T20:55:00-07:00"
 related_files:
 - src/lingtai/tools/skills/__init__.py
 - src/lingtai/tools/skills/ANATOMY.md
@@ -327,7 +327,7 @@ Nested child conventions:
 Reference implementations: `system-manual` is a top-level router with nested
 `reference/substrate-manual/SKILL.md`, `reference/procedures-manual/SKILL.md`,
 and `reference/sqlite-log-query/SKILL.md`. Utility routers such as
-`swiss-knife`, `web-browsing`, and `daily-reflection` use the same two-part
+`swiss-knife`, `web-manual`, and `daily-reflection` use the same two-part
 shape: YAML child metadata first, human routing table second.
 
 ### Cleanup / Footprint contract for tool manuals

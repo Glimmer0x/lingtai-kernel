@@ -73,11 +73,13 @@ def test_web_browse_vertical_slice(tmp_path):
         assert "web" in agent._tool_handlers
         schemas = agent._build_tool_schemas()
         web_schema = next(schema for schema in schemas if schema.name == "web")
-        assert set(web_schema.parameters["properties"]) == {"action", "input", "reasoning"}
+        assert set(web_schema.parameters["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert web_schema.parameters["required"] == ["action", "input"]
         assert web_schema.parameters["additionalProperties"] is False
         assert all(
-            "reasoning" not in branch["properties"] and "_reasoning" not in branch["properties"]
+            "reasoning" not in branch["properties"]
+            and "_reasoning" not in branch["properties"]
+            and "summarize" not in branch["properties"]
             for branch in web_schema.parameters["properties"]["input"]["anyOf"]
         )
         first = agent._tool_handlers["web"]({

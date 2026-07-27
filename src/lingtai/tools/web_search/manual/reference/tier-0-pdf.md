@@ -6,7 +6,7 @@ maintenance: |
 ---
 # Tier 0 — PDF Direct Download
 
-> Part of the [web-browsing](../SKILL.md) skill.
+> Part of the [web-manual](../SKILL.md) skill.
 
 **When it applies:** PDF direct links, DOI strings, arXiv IDs.
 **Tools:** `curl` + `fitz` (no script needed).

@@ -1,11 +1,11 @@
 ---
-name: web-browsing-tier-quick-refs
+name: web-manual-tier-quick-refs
 description: >
-  Nested web-browsing reference for tier quick-reference commands: Tier 0 PDF,
+  Nested web-manual reference for tier quick-reference commands: Tier 0 PDF,
   Tier 1 APIs, Tier 1.5 Trafilatura, Tier 2 BeautifulSoup, Tier 3 Playwright
   stealth, Tier 4 Jina/Firecrawl, and Tier 5 AI-native search.
 version: 1.0.0
-last_changed_at: "2026-06-01T01:47:09-07:00"
+last_changed_at: "2026-07-26T20:55:00-07:00"
 related_files:
   - src/lingtai/tools/web_search/manual/SKILL.md
 maintenance: "If you find stale or incorrect information here, use the lingtai-issue-report skill to assemble evidence and obtain per-issue human consent before filing an issue. Never include secrets, credentials, tokens, or private paths."
@@ -13,7 +13,7 @@ maintenance: "If you find stale or incorrect information here, use the lingtai-i
 
 # Web Browsing Tier Quick References
 
-Nested web-browsing reference. Open this after the top-level router when you need
+Nested web-manual reference. Open this after the top-level router when you need
 manual commands for a specific extraction tier instead of the auto-tier script.
 
 ## Tier 0 — PDF Direct Download (Quick Reference)

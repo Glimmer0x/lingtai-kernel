@@ -25,13 +25,15 @@ exposing one model-facing handler and one per-Agent state boundary.
 
 ## Components
 
-- `WebManager`, `setup()`, and the single `web` schema — dispatch, lazy engine
-  composition, settings diagnostics, and registration
-  (`src/lingtai/tools/web_search/__init__.py:1-334`).
+- `WebManager`, `setup()`, and the single `web` schema — dispatch (including
+  root `summarize` validation/stripping and the action-scoped settings read
+  that only `search` performs), lazy engine composition, settings
+  diagnostics, and registration (`src/lingtai/tools/web_search/__init__.py:1-422`).
 - `_EngineSpec` and `_specs_from_kwargs` — immutable operator engine wiring and
-  legacy flat-config migration (`src/lingtai/tools/web_search/__init__.py:66-334`).
+  legacy flat-config migration (`src/lingtai/tools/web_search/__init__.py:124-422`).
 - `read_settings()` — bounded regular-file snapshot and strict v1 selector
-  validation (`src/lingtai/tools/web_search/settings.py:49-180`).
+  validation over the action-owned `settings/web.search.json`
+  (`src/lingtai/tools/web_search/settings.py:49-182`).
 - `BrowserEngine` — internal static browse use case, provenance, refs, cursors,
   SSRF policy, and typed failures (`src/lingtai/tools/browser/core.py:119-315`).
 - `SearchService` adapters — provider implementations behind the internal

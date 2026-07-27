@@ -115,7 +115,7 @@
       }
 
       // --- Removed capabilities (for reference) ---
-      // "web_read"        — folded into the `web-browsing` skill.
+      // "web_read"        — folded into the `web-manual` skill.
       // "compose"/"video"/"draw"/"talk" — use the `media-creation` skill + an MCP server.
       // "listen"          — use the `listen` skill (faster-whisper + librosa).
     },
