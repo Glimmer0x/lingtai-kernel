@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/skills/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -137,9 +139,26 @@ flattens the canonical result to Web's pre-migration public shape (`status`,
 `handle()`, not to the generic child or any wrapper registered in place of
 it. `WebManager.handle()` also stamps `current_setting` onto any
 envelope-level failure result (search/browse/unknown-action) before
-returning, unchanged from before. No other built-in family is migrated in
-this candidate; each remains fully independent of this package until its own
-scoped migration.
+returning, unchanged from before.
+
+`skills/__init__.py` (`../skills/CONTRACT.md`) is the second production
+Adapter/consumer. One `_build_family(agent, paths)` builder is its single
+canonical child registry, registering an `info` child and
+`manual.build_manual_child(agent, "skills")` directly — unwrapped; both
+`get_schema()` (through an import-time `agent=None` instance whose handlers are
+unreachable) and `setup()` obtain their `ToolFamily` from that one builder, so
+the composed schema advertises exactly the child `input_schema`s dispatch
+registers. Its `handle_skills` wrapper adapts only a successfully
+dispatched manual result (`"content" in result`) to that capability's public
+`skills_manual`/`library_manual`/`manual_path` shape, post-dispatch. Unlike
+`web`, it returns this package's canonical envelope-failure result verbatim,
+having no family-specific diagnostic block to stamp on; both of its children
+declare the canonical strict-empty `input_schema`, so `handle()`'s
+allowed-key check rejects every `input` key on either action. The two
+consumers share nothing but this package, as
+`../CONTRACT.md` "Implementation independence" requires. No other built-in
+family is migrated in this candidate; each remains fully independent of this
+package until its own scoped migration.
 
 ## Contract rules
 
@@ -168,6 +187,12 @@ scoped migration.
   sole enforcement boundary; dispatch remains always-authoritative and
   fail-closed regardless of whether a given provider validates the root
   `allOf`/`if`/`then` schema-side (`../CONTRACT.md` "Dispatch and actions").
+- An `action` value that is unhashable (invalid JSON can make it `[]` or
+  `{}`) MUST return the same typed `ACTION_REQUIRED` envelope failure as any
+  other unknown action, never raise. Membership-testing an unhashable key
+  against the child registry raises `TypeError`; `handle()` MUST treat that
+  as matching no child, mirroring the hand-written routers this dispatcher
+  replaces (`kernel/tool_dispatch.py`, issue #513).
 - A child handler MUST receive only its own validated `input` mapping — never
   `action`, `reasoning`, `_reasoning`, or `summarize`.
 - `handle()`'s dispatch result IS the child's own raw/canonical result;

@@ -262,7 +262,18 @@ class ToolFamily:
         """
         raw = dict(args or {})
         action = raw.get("action")
-        if action not in self._children:
+        # Invalid JSON can make ``action`` an unhashable value (e.g. ``[]`` or
+        # ``{}``) — the issue #513 class of blocker the hand-written routers
+        # this dispatcher replaces guarded against explicitly
+        # (``kernel/tool_dispatch.py``). Membership testing an unhashable key
+        # against a dict raises ``TypeError``; treat it as simply matching no
+        # child so an unknown action always fails with the stable typed
+        # envelope failure rather than crashing out of dispatch.
+        try:
+            known_action = action in self._children
+        except TypeError:
+            known_action = False
+        if not known_action:
             return self._envelope_error(
                 "ACTION_REQUIRED",
                 f"action must be one of {', '.join(self._order)}",

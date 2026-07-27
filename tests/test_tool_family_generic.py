@@ -137,6 +137,28 @@ def test_dispatch_missing_action_fails_with_action_required():
     assert result["error_code"] == "ACTION_REQUIRED"
 
 
+def test_dispatch_unhashable_action_fails_without_raising():
+    """Invalid JSON can make ``action`` unhashable (issue #513).
+
+    Membership-testing an unhashable key against the child registry raises
+    ``TypeError``; dispatch must render the stable typed failure instead, the
+    way the hand-written routers this dispatcher replaces did.
+    """
+    fam = _widget_family()
+    for bad_action in ([], {}, [1, 2], {"a": 1}):
+        result = fam.handle({"action": bad_action, "input": {}})
+        assert result["status"] == "failed"
+        assert result["error_code"] == "ACTION_REQUIRED"
+
+
+def test_dispatch_unhashable_action_runs_no_handler():
+    """The unhashable-action guard must fail before any child handler I/O."""
+    calls = []
+    fam = _widget_family(calls)
+    assert fam.handle({"action": [], "input": {"speed": 1}})["error_code"] == "ACTION_REQUIRED"
+    assert calls == []
+
+
 def test_dispatch_non_object_input_fails_with_invalid_argument():
     fam = _widget_family()
     result = fam.handle({"action": "spin", "input": "not-an-object"})

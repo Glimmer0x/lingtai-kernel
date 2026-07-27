@@ -152,7 +152,7 @@ def is_apriori_summary(content: Any) -> bool:
 # unmigrated tool's own domain field literally named ``summarize`` is never
 # silently reinterpreted as this cross-cutting control (see
 # ``src/lingtai/tools/CONTRACT.md`` Contract rules > Envelope).
-_LTP_V2_MIGRATED_FAMILIES = frozenset({"web"})
+_LTP_V2_MIGRATED_FAMILIES = frozenset({"web", "skills"})
 
 
 def summary_requested(args: dict | None, tool_name: str | None = None) -> bool:

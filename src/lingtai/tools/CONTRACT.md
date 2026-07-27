@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
@@ -235,12 +237,19 @@ documents. `web` (`search | browse | manual`) is the first family migrated to
 this contract: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`; its `search` action reads the action-owned
 `settings/web.search.json` (see `src/lingtai/tools/web_search/CONTRACT.md`).
+`skills` (`info | manual`) is the second: it keeps its public tool name and both
+public action values, adopts the same closed root, declares the canonical
+strict-empty `input` object for both actions, and supports no settings file at
+all — its manual says so explicitly (see
+`src/lingtai/tools/skills/CONTRACT.md`). Family boundaries here follow the
+shared-domain rule above: `info` and `manual` are two actions of one skill-
+catalogue authority, not two related tools grouped for convenience.
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
-v2 family (currently only `web`), so an unmigrated tool's own field literally
-named `summarize` is never reinterpreted as this control. Every other
+v2 family (`web` and `skills` as of this migration), so an unmigrated tool's own field
+literally named `summarize` is never reinterpreted as this control. Every other
 LingTai-owned family remains unmigrated and keeps its existing schema and
 settings surface unchanged by this file.
 
@@ -250,7 +259,9 @@ infrastructure implementing this envelope (schema composition from a
 ManualTool builder) that a family MAY adopt instead of hand-writing the
 equivalent code; `web` is its first consumer, using it for schema composition
 and dispatch while retaining its own outer `handle()` for family-specific
-diagnostics. Using it is never required — see its own
+diagnostics, and `skills` is its second, using it the same way but returning
+its canonical envelope failures verbatim, having no such diagnostics. The two
+consumers share nothing but that package. Using it is never required — see its own
 `src/lingtai/tools/tool_family/CONTRACT.md` "Implementation independence" is
 binding on it exactly as it is on every family.
 

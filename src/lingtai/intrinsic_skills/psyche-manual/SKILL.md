@@ -3,7 +3,7 @@ name: psyche-manual
 description: |
   Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
 version: 1.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: 2026-07-27T04:30:00-07:00
 related_files:
 - src/lingtai/tools/psyche/__init__.py
 - src/lingtai/tools/psyche/_molt.py
@@ -216,7 +216,7 @@ If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or
 1. Read the `summary_path` from the post-molt notification
 2. `email(check)` — see what arrived while you were down
 3. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index
-4. `skills(action="info")` — confirm which skills you have
+4. `skills(action="info", input={}, reasoning="confirm my skills")` — confirm which skills you have
 5. `shell({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
 
 Reconstruct your situation from these sources.
