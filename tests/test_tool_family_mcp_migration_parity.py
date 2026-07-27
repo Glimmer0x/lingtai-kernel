@@ -371,8 +371,10 @@ def test_canonical_summarize_spelling_is_registered_once_centrally():
     assert summary_requested({"summarize": True}, tool_name="mcp") is True
     # The legacy flag keeps working, and an unmigrated tool's own
     # `summarize`-named field is still never reinterpreted as this control.
+    # ``bash`` is the legacy input alias for the migrated ``shell`` family and
+    # is never itself on the allowlist, so it stands in for "unmigrated" here.
     assert summary_requested({"summary": True}, tool_name="mcp") is True
-    assert summary_requested({"summarize": True}, tool_name="knowledge") is False
+    assert summary_requested({"summarize": True}, tool_name="bash") is False
 
 
 def test_mcp_error_results_are_never_summarized():

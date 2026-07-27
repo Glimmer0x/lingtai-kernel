@@ -474,14 +474,16 @@ def test_manual_child_input_schema_is_the_generic_owners_object(tmp_path):
 
     A restated copy previously carried `"required": []` while the generic
     owner's omitted the key, so the wire schema and the dispatch-side schema
-    for the same child were two different objects.
+    for the same child were two different objects. The generic owner now
+    states `"required": []` explicitly too (byte-for-byte comparability
+    across every consumer), so the wire branch is checked against it.
     """
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
     manual_branch = get_schema()["properties"]["input"]["oneOf"][1]
     assert manual_branch["properties"] == MANUAL_INPUT_SCHEMA["properties"]
     assert manual_branch["additionalProperties"] is False
-    assert "required" not in MANUAL_INPUT_SCHEMA
+    assert manual_branch.get("required") == MANUAL_INPUT_SCHEMA["required"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -1040,7 +1040,9 @@ def test_skills_is_a_migrated_ltp_v2_family_for_summarize(tmp_path):
     assert summary_requested({"summarize": True}, tool_name="skills") is True
     assert summary_requested({"summarize": False}, tool_name="skills") is False
     # Still scoped by name: an unmigrated tool's own field is not this control.
-    assert summary_requested({"summarize": True}, tool_name="knowledge") is False
+    # ``bash`` is the legacy input alias for the migrated ``shell`` family and
+    # is never itself on the allowlist, so it stands in for "unmigrated" here.
+    assert summary_requested({"summarize": True}, tool_name="bash") is False
 
 
 # ---------------------------------------------------------------------------

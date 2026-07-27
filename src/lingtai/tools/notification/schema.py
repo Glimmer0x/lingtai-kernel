@@ -130,6 +130,7 @@ _DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
 _MANUAL_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},
+    "required": [],
     "additionalProperties": False,
 }
 

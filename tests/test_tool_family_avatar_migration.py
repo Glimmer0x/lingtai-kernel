@@ -301,11 +301,13 @@ class TestAvatarDispatch:
 
     def test_avatar_is_on_the_kernel_summarize_allowlist(self):
         # A family advertising root ``summarize`` must actually be honored by
-        # the single central summarizer, or the control is a lie.
+        # the single central summarizer, or the control is a lie. ``bash`` is
+        # the legacy input alias for the migrated ``shell`` family and is
+        # never itself on the allowlist, so it stands in for "unmigrated".
         from lingtai.kernel.tool_result_summary import summary_requested
 
         assert summary_requested({"summarize": True}, tool_name="avatar") is True
-        assert summary_requested({"summarize": True}, tool_name="knowledge") is False
+        assert summary_requested({"summarize": True}, tool_name="bash") is False
 
 
 class TestCrossActionInputRejectedBeforeIO:
