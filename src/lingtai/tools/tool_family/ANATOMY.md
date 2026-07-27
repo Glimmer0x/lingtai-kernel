@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/mcp/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -58,8 +59,11 @@ this package too — using it is optional, not mandatory).
   dispatches back verbatim, once the returned `ChildTool` is registered
   directly and unwrapped in a family's own `ToolFamily`) is the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
-  path) shape, with `status`/`error` loader facts preserved truthfully
-  (`manual.py:1-74`).
+  path) shape, with `status`/`error` loader facts preserved truthfully. The
+  strict-empty input literal it registers is exported as `MANUAL_INPUT_SCHEMA`
+  so a family composing a schema-only `ToolFamily` alongside its dispatching
+  one reuses the same object instead of hand-copying it and drifting (`mcp`
+  does; `manual.py:1-85`).
 
 ## Connections
 
@@ -82,6 +86,21 @@ diagnostic onto any envelope-level failure result, since a generic
 `ToolFamily` has no knowledge of a specific family's settings diagnostics.
 This division follows `../CONTRACT.md` "Implementation independence": using
 `ToolFamily.handle()` is `web`'s choice, not an inherited requirement.
+
+`mcp/__init__.py` ([`../mcp/ANATOMY.md`](../mcp/ANATOMY.md)) is the second
+consumer and the minimal shape of one: a two-child family (`info`, `manual`)
+whose public tool name and action values are unchanged by the migration, where
+both children take the canonical strict-empty `input`. It follows the same
+division — the `manual` child from `build_manual_child(agent, "mcp")` is
+registered directly and unwrapped, and `mcp`'s own flat `mcp_manual` public
+shape is reconstructed post-dispatch by a Host-owned adapter. It also shows
+what a family, not this package, must own when a pre-migration public error
+envelope predates the generic dispatcher: `mcp` renders its exact
+unknown-action envelope in its own `handle_mcp` *before* delegating, including
+the missing-action empty-string default and unhashable `action` values that
+`ToolFamily.handle`'s dict lookup would otherwise raise `TypeError` on. The
+generic dispatcher's canonical error shape is never changed to accommodate a
+consumer.
 
 ## Composition
 

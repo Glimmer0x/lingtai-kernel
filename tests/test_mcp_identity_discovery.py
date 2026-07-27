@@ -311,7 +311,7 @@ def test_show_action_includes_identity_when_present(tmp_path):
     _write_identity(workdir, "telegram", _telegram_identity())
 
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}, "reasoning": "check registry health"})
 
     registered = {r["name"]: r for r in result["registered"]}
     assert "telegram" in registered
@@ -328,7 +328,7 @@ def test_show_action_omits_identity_when_absent(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
     # No identity file written.
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}, "reasoning": "check registry health"})
     registered = {r["name"]: r for r in result["registered"]}
     assert "identity" not in registered["telegram"]
 
@@ -339,7 +339,7 @@ def test_show_action_ignores_identity_without_registry_match(tmp_path):
     agent, workdir = _mk_agent(tmp_path, addons=["telegram"])
     _write_identity(workdir, "ghost", _telegram_identity())
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}, "reasoning": "check registry health"})
     names = {r["name"] for r in result["registered"]}
     assert "ghost" not in names
 
@@ -354,7 +354,7 @@ def test_identity_rendered_into_prompt_xml(tmp_path):
 
     # Re-render the registry now that the identity file exists.
     handler = agent._tool_handlers.get("mcp")
-    handler({"action": "info"})
+    handler({"action": "info", "input": {}, "reasoning": "check registry health"})
 
     section = agent._prompt_manager._sections.get("mcp")
     body = section.body if hasattr(section, "body") else str(section)
@@ -384,7 +384,7 @@ def test_last_verified_at_absent_from_prompt_xml_but_present_in_read_identities(
 
     # Diagnostic payload (mcp(action="info")) still carries it too.
     handler = agent._tool_handlers.get("mcp")
-    result = handler({"action": "info"})
+    result = handler({"action": "info", "input": {}, "reasoning": "check registry health"})
     registered = {r["name"]: r for r in result["registered"]}
     ident = registered["telegram"]["identity"]
     assert ident["last_verified_at"] == "2026-06-24T09:59:00+00:00"
@@ -414,7 +414,7 @@ def test_prompt_xml_has_no_secret_even_with_poisoned_file(tmp_path):
         },
     )
     handler = agent._tool_handlers.get("mcp")
-    handler({"action": "info"})
+    handler({"action": "info", "input": {}, "reasoning": "check registry health"})
     section = agent._prompt_manager._sections.get("mcp")
     body = section.body if hasattr(section, "body") else str(section)
     assert "SECRET" not in body

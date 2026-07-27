@@ -40,8 +40,8 @@ capability names and lazy adapters.
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
   and dispatch infrastructure implementing the LTP v2 envelope, and the
-  reusable ManualTool builder; `web` is its first real consumer
-  (`src/lingtai/tools/tool_family/ANATOMY.md`).
+  reusable ManualTool builder; `web` is its first real consumer and `mcp` its
+  second (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

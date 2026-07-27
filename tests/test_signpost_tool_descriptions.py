@@ -20,8 +20,16 @@ def test_mcp_description_and_actions_are_explicit_signposts() -> None:
     assert "does not register, activate, configure, or troubleshoot MCP servers" in mcp_description()
     assert "`info` only re-reads the registry" in mcp_description()
     assert "`manual` returns the mcp-manual body" in mcp_description()
-    prop = mcp_schema()["properties"]["action"]
+    schema = mcp_schema()
+    prop = schema["properties"]["action"]
+    # The ToolFamily migration keeps the public action values byte-identical
+    # and preserves the hand-written signpost action description verbatim.
     assert prop["enum"] == ["info", "manual"]
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert [b["title"] for b in schema["properties"]["input"]["oneOf"]] == [
+        "info input",
+        "manual input",
+    ]
     action = prop["description"]
     assert "info: signpost-only action" in action
     assert "without the manual body" in action
