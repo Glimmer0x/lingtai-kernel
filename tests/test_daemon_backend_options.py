@@ -441,9 +441,8 @@ def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
 
 
 def test_schema_includes_backend_options():
-    from lingtai.tools.daemon import get_schema
-    schema = get_schema("en")
-    task_props = schema["properties"]["tasks"]["items"]["properties"]
+    from tests._daemon_helpers import daemon_emanate_task_schema
+    task_props = daemon_emanate_task_schema("en")["properties"]
     assert "backend_options" in task_props
     backend_options = task_props["backend_options"]
     assert backend_options["type"] == "object"
@@ -492,7 +491,13 @@ def test_backend_schema_enum_matches_ordered_contract():
         "cursor",
     ]
     assert list(_BACKEND_SCHEMA_ENUM) == expected
-    assert get_schema("en")["properties"]["backend"]["enum"] == expected
+    from tests._daemon_helpers import daemon_action_input_schema
+    assert (
+        daemon_action_input_schema("emanate", "en")["properties"]["backend"]["enum"]
+        # ``backend`` is required-nullable in the strict child schema; ``None``
+        # means "absent" and the engine then applies its own ``lingtai`` default.
+        == [*expected, None]
+    )
 
 
 def test_backend_metadata_consistency_keeps_hidden_legacy_claude():
@@ -524,9 +529,9 @@ def test_normalize_backend_aliases_only_true_aliases():
 
 
 def test_schema_includes_mimocode_and_qwen_code_backends():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_action_input_schema
 
-    backend = get_schema("en")["properties"]["backend"]
+    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
     for name in ("mimocode", "mimo", "qwen-code", "qwen"):
         assert name in backend["enum"]
     assert "MiMo Code" in backend["description"]
@@ -820,9 +825,9 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 
 
 def test_schema_includes_kimicode_backend():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_action_input_schema
 
-    backend = get_schema("en")["properties"]["backend"]
+    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
     for name in ("kimicode", "kimi"):
         assert name in backend["enum"]
     assert "Kimi Code" in backend["description"]
@@ -1214,9 +1219,9 @@ def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 
 
 def test_schema_includes_oh_my_pi_backend():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_action_input_schema
 
-    backend = get_schema("en")["properties"]["backend"]
+    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
     for name in ("oh-my-pi", "omp"):
         assert name in backend["enum"]
     assert "Oh-My-Pi" in backend["description"]

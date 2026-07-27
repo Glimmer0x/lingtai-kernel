@@ -6,8 +6,8 @@ description: >
   MiMo-specific CLI flags (model selection, provider switches): it routes you
   to the installed CLI's live help via shell and shows how to translate that
   help into the generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.2.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.3.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-mimocode/SKILL.md
@@ -64,7 +64,7 @@ validate, enumerate, or simulate it.
 `--format json` JSONL events) plus its own session selectors — `--session`
 (`-s`), `--continue` (`-c`), and `--fork` — MiMo-specifically. Passing any of
 them in `backend_options` refuses the whole batch before any process is
-spawned, because session/resume is harness-owned: `daemon(action="ask")`
+spawned, because session/resume is harness-owned: `daemon(action="ask", input={"id": ..., "message": ...})`
 asynchronously runs
 `mimo run --session <mimocode_session_id> --format json <message>`, with the
 session id captured from the first session-shaped JSON event into

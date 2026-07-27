@@ -3,11 +3,11 @@ name: daemon-manual
 description: >
   Operational router for the `daemon` tool: inspect slow/stuck/failed emanations,
   read daemon artifact folders, choose polling cadence, avoid reclaiming on a
-  hunch, understand `daemon(action="list")`, use CLI backends and `backend_options`,
+  hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.9.0
-last_changed_at: 2026-07-21T00:00:00Z
+version: 0.10.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -57,7 +57,7 @@ files, not standalone top-level skills.
 - name: daemon-cli-backends
   location: reference/cli-backends/SKILL.md
   description: |
-    Daemon API details and CLI backends: daemon(action=list), claude-p/codex/opencode behavior,
+    Daemon API details and CLI backends: daemon(action=list, input={}), claude-p/codex/opencode behavior,
     backend_options flag passing, preset/capability inheritance, and Codex
     modal capabilities.
 - name: daemon-cleanup
@@ -67,6 +67,26 @@ files, not standalone top-level skills.
     cover, reclaim persistence, and safe cleanup of old daemon artifacts.
 ```
 
+## Call shape
+
+Every `daemon` call is the same four-field envelope: a required `action`, a
+required `input` object holding **only** that action's own fields, and a
+required `reasoning` string. The optional root `summarize` boolean replaces the
+former flat `summary` field. Passing another action's field — or any field at
+the call root — is refused before the daemon engine runs.
+
+| Action | Call |
+|---|---|
+| `emanate` | `daemon(action="emanate", input={"tasks": [{"task": "...", "tools": ["file"]}], "backend": "codex"}, reasoning="...")` |
+| `list` | `daemon(action="list", input={"status": "running", "last": 20}, reasoning="...")` |
+| `ask` | `daemon(action="ask", input={"id": "em-1", "message": "..."}, reasoning="...")` |
+| `check` | `daemon(action="check", input={"id": "em-1", "last": 20, "truncate": 500}, reasoning="...")` |
+| `reclaim` | `daemon(action="reclaim", input={}, reasoning="...")` |
+| `manual` | `daemon(action="manual", input={}, reasoning="...")` |
+
+`list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
+are the three that change state.
+
 ## Router table
 
 | Need / keywords | Read |
@@ -74,7 +94,7 @@ files, not standalone top-level skills.
 | Find an emanation's folder; inspect `daemon.json`, transcript, token ledger, event log; understand result paths or token attribution | `reference/forensics/SKILL.md` |
 | Interpret a CLI-backend **exit code 143 / SIGTERM** (terminated from outside — watchdog/timeout/reclaim — not a test or code failure); decide rerun vs hand-off; report it to a human | `reference/forensics/SKILL.md` |
 | Decide whether a daemon is stuck; choose when to list/check/tail; avoid polling too often; set a reminder before resting | `reference/inspection/SKILL.md` |
-| Use `daemon(action="list")`; choose `lingtai` vs `claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
+| Use `daemon(action="list", input={})`; choose `lingtai` vs `claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
 | Retire or audit old daemon artifacts; understand what `reclaim` does and does not delete; scope boundaries | `reference/cleanup/SKILL.md` |
 
 ## Quick decision tree
@@ -224,8 +244,8 @@ files, not standalone top-level skills.
 - Track daemon work in the parent agent's pad, not in daemon itself. When you
   fan out multiple tasks, immediately write a small pad table after `emanate`:
   label/purpose, returned `id`, `group_id`, brief/context file path, expected
-  artifact, and current status. Use `daemon(action="list")` and
-  `daemon(action="check", id=...)` as the mechanical truth, then update the pad
+  artifact, and current status. Use `daemon(action="list", input={})` and
+  `daemon(action="check", input={"id": ...})` as the mechanical truth, then update the pad
   as the parent-facing map. Daemon should stay thin; if you need durable memory
   or identity, use an avatar instead.
 - Do not copy large background into every task. Put reusable context in a
@@ -237,7 +257,7 @@ files, not standalone top-level skills.
   easy to point at over copying or reviving a daemon session.
 - Each emanation is disposable memory but durable evidence: its folder persists
   after completion or reclaim until cleanup.
-- `daemon(action="list")` is the first layer of progressive disclosure over
+- `daemon(action="list", input={})` is the first layer of progressive disclosure over
   active and historical runs — compact metadata, previews, and paths, not a full
   transcript. Use the returned paths for detail; see
   `reference/cli-backends/SKILL.md` for its filters and lazy-rebuild behavior.
@@ -246,7 +266,7 @@ files, not standalone top-level skills.
   for the notification; do not poll only to ask "is it done yet". The
   notification arrives on the system channel carrying the daemon id, terminal
   status, task summary, and the result/error path. React to it with
-  `daemon(action="check", id=...)` (and read `result.txt` for the full output).
+  `daemon(action="check", input={"id": ...})` (and read `result.txt` for the full output).
 - **Use a Task Card for progress when one is available for this turn.**
   The dispatch success `handoff` is conditional: if Telegram is connected and a
   Task Card is available for the current turn, use it to report progress — call
@@ -257,12 +277,12 @@ files, not standalone top-level skills.
   you a fresh daemon registry with no in-memory entries, but the run folders
   and their notifications survive on disk. New daemon ids are compact run ids
   such as `em-a1b2` (or `em-a1b2-1` after a collision), and
-  `daemon(action="check", id=...)` exact-matches that `daemons/<run_id>/` folder
+  `daemon(action="check", input={"id": ...})` exact-matches that `daemons/<run_id>/` folder
   on a registry miss. Legacy short handles such as `em-5` are accepted only when
   they resolve to one historical run; if several old runs share the handle,
   `check` returns an ambiguity error with `match_count`/`latest_run_id` instead
   of an unbounded path list. Use the exact `run_id` from the notification or
-  `daemon(action="list")` when a legacy handle is ambiguous.
+  `daemon(action="list", input={})` when a legacy handle is ambiguous.
 - **Defense-in-depth, not primary signal: a self-wake guards against a daemon
   that never reaches a terminal state at all.** The terminal notification covers
   every state a run can *finish* in, but a run that hangs without the watchdog

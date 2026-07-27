@@ -25,7 +25,9 @@ def test_emanate_default_uses_ceiling(tmp_path, monkeypatch):
 def test_daemon_schema_advertises_1000_turn_ceiling():
     from lingtai.tools.daemon import get_schema
 
-    max_turns_schema = get_schema("en")["properties"]["max_turns"]
+    from tests._daemon_helpers import daemon_action_input_schema
+
+    max_turns_schema = daemon_action_input_schema("emanate", "en")["properties"]["max_turns"]
     assert max_turns_schema["minimum"] == 1
     assert max_turns_schema["maximum"] == 1000
     assert "1000" in max_turns_schema["description"]

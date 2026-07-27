@@ -7,12 +7,16 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 7
-last_changed_at: "2026-07-26"
+contract_version: 8
+last_changed_at: "2026-07-27"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/system_prompt.py
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/kernel/tool_result_summary.py
@@ -34,6 +38,7 @@ related_files:
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_daemon_contract_doc.py
+  - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon.py
   - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py
@@ -50,6 +55,7 @@ related_files:
   - tests/test_daemon_windows_supervisor.py
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/llm/interface_converters.py
@@ -111,8 +117,9 @@ ownership -> §Process and Terminal Boundaries.
 ## Scope
 
 - Canonical tool name: `daemon`.
-- The parent `daemon` tool exposes five actions: `emanate`, `list`, `ask`, `check`,
-  `reclaim`; `action` is required. Every LingTai emanation additionally receives
+- The parent `daemon` tool exposes six actions: `emanate`, `list`, `ask`, `check`,
+  `reclaim`, `manual`; `action` is required, and so are `input` and `reasoning`
+  (see §Tool Surface). Every LingTai emanation additionally receives
   the intrinsic `compact` tool, whose required `action` is explicit `run`
   (non-terminal reset) or `manual` (read-only procedures); omission is refused.
 - Backends (`backend`, default `lingtai`): schema enum is `lingtai`, `claude-p`,
@@ -136,11 +143,66 @@ where those changes affect the invariants here.
 
 ## Tool Surface
 
-Schema `required: ["action"]`. Relevant properties: `tasks[]` (each requires
-`task` + `tools`; optional `skills`, `mcp`, `preset`, `backend_options`,
-`prompt`, `context_token_limit`), `id`, `message`, `last`, `truncate`,
-`contains`, `status`, `include_done`, `max_turns`, `timeout`, `backend`,
-`summary`.
+`daemon` is migrated to the LingTai Tool Protocol v2 action-separated envelope
+(`../CONTRACT.md`, `../tool_family/CONTRACT.md`) using the generic
+`tool_family` infrastructure. The public root is exactly `action`, `input`,
+required `reasoning`, and optional `summarize`, with
+`required: ["action", "input", "reasoning"]` and
+`additionalProperties: false`. Exactly one model-facing tool named `daemon`
+remains registered: the six actions are internal `ChildTool`s and MUST NOT
+consume additional model tool slots, and no compatibility alias or second
+public root exists.
+
+The six canonical children are `emanate | list | ask | check | reclaim |
+manual`, each owning one strict, closed `input` schema. Every field the
+pre-migration flat root advertised to all six actions at once now lives in
+exactly the branch that consumes it:
+
+| Action | `input` fields |
+|---|---|
+| `emanate` | `tasks[]` (each requires `task` + `tools`; optional per-task fields are unchanged and specified below), `backend`, `max_turns`, `timeout` |
+| `list` | `contains`, `status`, `include_done`, `last` |
+| `ask` | `id`, `message` |
+| `check` | `id`, `last`, `truncate` |
+| `reclaim` | — (canonical strict-empty `input`) |
+| `manual` | — (canonical strict-empty `input`) |
+
+Optional fields are spelled as required-nullable properties, as strict
+validators demand of a closed object; `null` means *absent* and the engine
+applies its own unchanged default, so a falsy-but-present value (`truncate: 0`,
+`include_done: false`, `contains: ""`) is preserved verbatim. The nested
+per-task object inside `emanate.tasks` is deliberately left open
+(`additionalProperties` unset), because `_handle_emanate`'s own strict per-task
+validation owns that boundary and returns domain-specific errors (notably the
+obsolete `system_prompt` migration message) a schema rejection would replace
+with a generic one.
+
+Dispatch is the second, always-authoritative enforcement layer: an unknown or
+unhashable `action`, an unknown root field, a non-object `input`, a non-boolean
+`summarize`, and any `input` key belonging to another action's branch are all
+refused before the daemon engine runs, fail-closed. The unknown-action envelope
+failure carries daemon's own six-action message.
+
+The former flat root `summary` boolean is replaced by the canonical root
+`summarize`; `daemon` is on `kernel/tool_result_summary.py`'s
+`_LTP_V2_MIGRATED_FAMILIES` allowlist so that spelling is actually honored
+rather than silently ignored, and the legacy `summary` spelling remains
+accepted there for historical/pending calls.
+
+`_tool_family.py` owns the child registry, the composed schema, and the
+`DaemonFamilyDispatcher` that translates one envelope call into
+`DaemonManager.handle`'s unchanged legacy flat shape. `DaemonManager` remains
+the untouched engine: batch emanation, backend routing, run directories, the
+detached supervisor, `daemon_common` completion signaling, cancellation,
+timeouts, terminal notifications, and result/error persistence are unchanged by
+the migration. `DaemonManager.handle`'s own `action="manual"` branch is retained
+as that internal flat shape only; the registered model-facing `manual` is the
+shared reserved `build_manual_child(agent, "daemon")` child, returning the
+canonical `content[0].text` / `structuredContent.manual_path` result verbatim
+with no double wrap, and reaching no engine method.
+
+`list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
+are the three side-effectful actions.
 
 `tasks[].task` is required and is the complete parent-controlled daemon system
 instruction for `backend="lingtai"`: objective, role, constraints, tool policy,
@@ -449,7 +511,10 @@ kernel `ToolExecutor`. The closure:
 - accounts usage through `DaemonRunDir.append_tokens`, keeping daemon and parent
   ledgers consistent.
 
-`ToolExecutor` remains responsible for the `summary=true` gate, raw logging,
+`ToolExecutor` remains responsible for the summary gate (the parent-facing
+`daemon` tool now opts in via the canonical root `summarize`; the daemon
+worker's own visible result tools keep their unmigrated `summary=true`
+spelling), raw logging,
 fail-closed replacement, and the 500,000-character cap. Daemons expose the
 run-local `logs/events.jsonl` / `daemon_tool_result` recovery locator. The closure
 is inert unless a tool explicitly requests `summary=true`.

@@ -186,3 +186,29 @@ def register_daemon_entry(
         entry["ask_future"] = ask_future
     mgr._emanations[em_id] = entry
     return entry
+
+
+def daemon_action_input_schema(action: str, lang: str = "en") -> dict[str, Any]:
+    """Return one action's own strict ``input`` schema from the public daemon schema.
+
+    Post-ToolFamily-migration the public ``daemon`` schema is the LTP v2
+    envelope (``action``/``input``/``reasoning``/``summarize``), so a field
+    that used to sit on the flat root now lives in exactly one action's
+    branch. This resolves the ``input.oneOf`` branch by its ``title``, which
+    ``ToolFamily.build_schema`` derives from the child's own registry name —
+    so a test navigating here is asserting against the same canonical child
+    schema dispatch validates.
+    """
+    from lingtai.tools.daemon import get_schema
+
+    schema = get_schema(lang)
+    return next(
+        branch
+        for branch in schema["properties"]["input"]["oneOf"]
+        if branch["title"] == f"{action} input"
+    )
+
+
+def daemon_emanate_task_schema(lang: str = "en") -> dict[str, Any]:
+    """Return the nested per-task object schema inside ``emanate``'s input."""
+    return daemon_action_input_schema("emanate", lang)["properties"]["tasks"]["items"]

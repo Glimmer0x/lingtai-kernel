@@ -257,7 +257,14 @@ def test_openai_responses_preserves_daemon_backend_options_passthrough_schema():
     tools = _build_responses_tools([
         FunctionSchema(name="daemon", description="daemon", parameters=get_schema())
     ])
-    backend_options = tools[0]["parameters"]["properties"]["tasks"]["items"][
+    # Post-ToolFamily migration ``tasks`` lives inside ``emanate``'s own
+    # ``input`` branch; the nested passthrough schema below is unchanged.
+    emanate_branch = next(
+        branch
+        for branch in tools[0]["parameters"]["properties"]["input"]["anyOf"]
+        if branch["title"] == "emanate input"
+    )
+    backend_options = emanate_branch["properties"]["tasks"]["items"][
         "properties"
     ]["backend_options"]
 

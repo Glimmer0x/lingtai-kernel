@@ -47,6 +47,12 @@ from lingtai.kernel.time_veil import now_iso
 from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
+from ._tool_family import (
+    CHECK_LAST_MAX as _FAMILY_CHECK_LAST_MAX,
+    DEFAULT_MAX_TURNS as _FAMILY_DEFAULT_MAX_TURNS,
+    DaemonFamilyDispatcher,
+    build_schema as _family_build_schema,
+)
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
@@ -1064,6 +1070,13 @@ assert set(_BACKEND_SCHEMA_ENUM) == (
     (set(_BACKEND_SPECS) - _HIDDEN_SCHEMA_BACKENDS)
     | set(_BACKEND_ALIASES)
 )
+# ``_tool_family`` restates ``DEFAULT_MAX_TURNS`` as its own literal because
+# importing it from this module would be circular (this module imports
+# ``_tool_family``). Prove at import time that ``emanate``'s child schema still
+# advertises exactly the ceiling the engine enforces. The matching
+# ``CHECK_LAST_MAX`` assertion lives just after ``DaemonManager``, which owns
+# ``_CHECK_LAST_MAX`` and is not defined yet here.
+assert _FAMILY_DEFAULT_MAX_TURNS == DEFAULT_MAX_TURNS
 
 
 def _normalize_backend(backend: str | None) -> str:
@@ -1140,159 +1153,18 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Actions: emanate (dispatch), list (status), ask (follow-up), check (inspect recent events), reclaim (kill all), manual (return the installed daemon-manual skill). Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", id=...). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
-
-
-def _backend_option_value_schema() -> dict:
-    """Return a fresh JSON schema for one generic CLI option value.
-
-    ``backend_options`` remains an open-ended argv passthrough.  A factory keeps
-    its explicit provider-visible properties and ``additionalProperties`` on
-    the same validation contract without sharing mutable schema nodes.
-    """
-    return {
-        "anyOf": [
-            {"type": "boolean"},
-            {"type": "string"},
-            {"type": "integer"},
-            {"type": "number"},
-            {"type": "null"},
-            {
-                "type": "array",
-                "items": {
-                    "anyOf": [
-                        {"type": "string"},
-                        {"type": "integer"},
-                        {"type": "number"},
-                    ],
-                },
-            },
-        ],
-    }
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions.'
 
 
 def get_schema(lang: str = "en") -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["emanate", "list", "ask", "check", "reclaim", "manual"],
-                "description": "Action to perform: 'emanate' (dispatch subagents), 'list' (show status), 'ask' (follow-up message), 'check' (read recent events of one emanation), 'reclaim' (kill all), 'manual' (return the installed daemon-manual skill). LingTai emanations additionally receive compact(action='manual') for read-only compaction procedures or explicit compact(action='run', _reason='...') for the non-terminal sole-call reset; action is required.",
-            },
-            "tasks": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "task": {"type": "string"},
-                        "tools": {"type": "array", "items": {"type": "string"}},
-                        "skills": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Optional skill context for this daemon task. Array of paths; each item may be a skill directory (containing SKILL.md) or a direct SKILL.md file path. Relative paths resolve against the parent agent working directory. The daemon runtime parses each skill frontmatter and injects a compact YAML skill list into this run's system prompt.",
-                        },
-                        "mcp": {
-                            "type": "array",
-                            "items": {"type": "object"},
-                            "description": 'Optional one-run MCP registrations for this daemon task. Array of full MCP registration objects: {name, transport/type: stdio|http, command+args+env for stdio or url+headers for http}. The registrations are serialized into the daemon prompt as YAML; LingTai backend also starts them as task-scoped MCP clients and exposes their tools for this run. CLI backends receive the same serialized registrations as context and may load them if their runtime supports MCP. Secret env/header values are redacted in prompts.',
-                        },
-                        "preset": {
-                            "type": "string",
-                            "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets'). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",
-                        },
-                        "backend_options": {
-                            "type": "object",
-                            "properties": {
-                                "config": {
-                                    **_backend_option_value_schema(),
-                                    "description": (
-                                        "Explicitly declared so constrained tool-schema "
-                                        "providers can generate repeated --config overrides; "
-                                        "uses the same scalar/list contract as generic "
-                                        "backend_options."
-                                    ),
-                                },
-                            },
-                            "additionalProperties": _backend_option_value_schema(),
-                            "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
-                        },
-                        "prompt": {
-                            "type": "string",
-                            "description": 'Optional first ordinary user message for a LingTai daemon. Blank or omitted uses exactly "Begin the assigned daemon task.". Unsupported by external CLI backends.',
-                        },
-                        "context_token_limit": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "Optional context-token compaction threshold for this daemon task (rendered/provider-context tokens, not cumulative spend). Currently effective only for backend='lingtai' tasks whose resolved provider is Codex ('codex'/'codex-pool') or the native 'mimo' provider; every other provider and every external CLI backend ignores this field. This threshold does not set daemon context. When the provider-visible input-token count for this session reaches the limit, the runtime compacts provider context via the provider's standalone compaction and continues the same tool loop. For Codex a standalone-compaction failure is non-fatal (that turn's compaction is skipped and the loop continues on full history); for 'mimo' it is a HARD failure that propagates to the caller instead of silently continuing on full history or falling back to a different wire. Omit to use the daemon session's own resolved context window as the separate provider-compaction threshold: for an explicit preset, valid canonical manifest.llm.context_limit or 272,000 fallback; for implicit/no-preset, a valid inherited parent effective window or 272,000 fallback. Must be a positive integer.",
-                        },
-                    },
-                    "required": ["task", "tools"],
-                },
-                "description": "List of task objects for 'emanate'. Each: {task: str (required — instructions including where to save work), tools: list[str] (required — capability names, e.g. ['file', 'shell']), skills: list[str] (optional — skill directory or SKILL.md paths to render into the daemon prompt), mcp: list[object] (optional — full one-run MCP registrations to serialize into daemon context; LingTai backend also loads them as task-scoped MCP tools), preset: str (optional — preset file path, use name from system(action='presets') output). Omit preset to inherit the parent's regular tool surface. Parent MCP tools are not auto-inherited; provide complete task mcp registrations when needed. See daemon-manual for preset inheritance and capability resolution details.",
-            },
-            "id": {
-                "type": "string",
-                "description": "Subagent ID for 'ask' action (e.g. 'em-1')",
-            },
-            "message": {
-                "type": "string",
-                "description": "Follow-up message for 'ask' action",
-            },
-            "last": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 1000,
-                "description": "For 'check': how many most-recent events to return from events.jsonl. For 'list': positive maximum number of list entries to show after filtering. Default 20 for check; no list limit unless provided.",
-            },
-            "truncate": {
-                "type": "integer",
-                "minimum": 0,
-                "description": "For 'check': maximum length of any string field in returned events; longer fields get an ellipsis suffix. Default 500. Set to 0 to disable.",
-            },
-            "contains": {
-                "type": "string",
-                "description": "For 'list': case-insensitive substring search across daemon task, prompt preview, result preview, backend, status, group_id, run_id, and visible call parameters.",
-            },
-            "status": {
-                "type": "string",
-                "description": "For 'list': optional status filter such as running, done, failed, cancelled, timeout, or all.",
-            },
-            "include_done": {
-                "type": "boolean",
-                "description": "For 'list': include completed historical daemon run directories as well as currently tracked runs. Defaults to true.",
-            },
-            "summary": {"type": "boolean", "description": 'Optional. Default false. When true, this tool runs normally and the raw result is preserved in the durable log (retrievable by tool_call_id), but before the result enters your context it is replaced by an LLM-generated summary driven by your `reasoning` field — so make `reasoning` specific about what to retain. Set true only when the output is expected to be large (>10k chars) and you do NOT need the exact raw text. Leave false when you need exact line/file/diff/stderr text. The summary is non-canonical; if the raw exceeds 500,000 chars no summary is generated and you get a refusal pointing at the preserved raw.', "default": False},
-            "max_turns": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": DEFAULT_MAX_TURNS,
-                "description": "For 'emanate': max LLM tool-loop turns per emanation. Default: parent ceiling (1000). Use a smaller value to keep simple emanations bounded.",
-            },
-            "timeout": {
-                "type": "number",
-                "minimum": 5,
-                "description": "For 'emanate': max wall-clock seconds for the whole batch. Default: parent max (3600s). Watchdog kills any emanation still running when the timer fires.",
-            },
-            "backend": {
-                "type": "string",
-                "enum": list(_BACKEND_SCHEMA_ENUM),
-                "description": (
-                    "Execution backend: 'lingtai' (default — parallel LLM reasoning, uses your current model), "
-                    "'claude-p' (Claude Code print-mode backend; 'claude-code' is a compatibility alias), "
-                    "'codex' (coding tasks via OpenAI Codex CLI), "
-                    "'opencode' (multi-provider open-source agent via the opencode-ai CLI), "
-                    "'mimocode' / 'mimo' (MiMo Code CLI), "
-                    "'qwen-code' / 'qwen' (Qwen Code CLI), "
-                    "'oh-my-pi' / 'omp' (Oh-My-Pi pi-coding-agent CLI), "
-                    "'kimicode' / 'kimi' (MoonshotAI Kimi Code CLI; ask/resume not supported yet), "
-                    "'cursor' (coding tasks via Cursor Agent CLI). "
-                    "CLI backends use external tools with no LLM overhead from the parent."
-                ),
-            },
-        },
-        "required": ["action"],
-    }
+    """Compose the LTP v2 model-facing schema for the single public ``daemon`` tool.
+
+    The composition itself lives in ``_tool_family.py`` (the package's one
+    canonical child registry); this stays the package's public entry point.
+    ``_BACKEND_SCHEMA_ENUM`` is passed in rather than imported there so the
+    child schema and the engine's own backend routing cannot drift apart.
+    """
+    return _family_build_schema(list(_BACKEND_SCHEMA_ENUM), lang)
 
 
 # Sentinel strings a cooperatively-exited run returns through the future.
@@ -8242,6 +8114,12 @@ class DaemonManager:
             self._agent._log(event_type, **fields)
 
 
+# Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
+# ``check``/``list`` child schemas advertise the same ``last`` ceiling the
+# engine enforces. Stated here because ``DaemonManager`` owns ``_CHECK_LAST_MAX``.
+assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
+
+
 def setup(agent: "Agent", max_emanations: int = 100,
           max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
           notify_threshold: int = 20,
@@ -8272,6 +8150,10 @@ def setup(agent: "Agent", max_emanations: int = 100,
                         process_port=process_port,
                         interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()
-    agent.add_tool("daemon", schema=schema, handler=mgr.handle,
+    # The model-facing handler is the LTP v2 envelope dispatcher, not the
+    # engine's legacy flat ``handle``. Still exactly one registered public
+    # tool named ``daemon`` — the six children consume no extra tool slot.
+    dispatcher = DaemonFamilyDispatcher(mgr, agent, list(_BACKEND_SCHEMA_ENUM))
+    agent.add_tool("daemon", schema=schema, handler=dispatcher.handle,
                    description=get_description(), glossary_package=__package__)
     return mgr

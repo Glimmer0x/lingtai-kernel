@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/_tool_family.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -193,6 +195,24 @@ package's largest consumer, and the one where the allowed-key rejection does
 the most safety work — `system`'s privilege classes are per action, so an
 `input` key outside the selected child's schema is refused before any
 lifecycle handler runs.
+
+`daemon/_tool_family.py` ([`../daemon/ANATOMY.md`](../daemon/ANATOMY.md)) is the
+twelfth consumer and repeats `shell`'s structural division rather than `web`'s:
+the family module is a separate file from the engine, owning the package's one
+public `get_schema`/`get_description` pair and a `DaemonFamilyDispatcher` whose
+six child handlers each flatten their own validated `input` (injecting the
+matching `action` key) and call the unchanged `DaemonManager.handle`. A single
+`_child_specs(backend_enum)` builder is the one registry source for both the
+schema-only family behind `get_schema()` and the dispatcher's handler-bound
+family, so composition and dispatch cannot drift; the engine's
+`_BACKEND_SCHEMA_ENUM` is passed *into* that builder rather than imported,
+because `daemon/__init__.py` imports this module and the reverse import would
+be circular. Two engine ceilings (`DEFAULT_MAX_TURNS`, `_CHECK_LAST_MAX`) are
+restated as module literals for the same reason and pinned by import-time
+assertions in `daemon/__init__.py`. It registers
+`build_manual_child(agent, "daemon")` directly and returns its canonical result
+verbatim; its only Host normalization is narrowing this package's generic
+`ACTION_REQUIRED` message to daemon's exact six actions.
 
 ## Composition
 

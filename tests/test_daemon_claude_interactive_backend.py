@@ -187,7 +187,9 @@ def test_schema_hides_interactive_claude_backends_keeps_print_mode():
     # The legacy interactive Claude Code backend (claude / claude-interactive)
     # is no longer a user-selectable daemon backend: hidden from the enum and
     # the human-facing description. Print mode (claude-p / claude-code) stays.
-    backend = get_schema()["properties"]["backend"]
+    from tests._daemon_helpers import daemon_action_input_schema
+
+    backend = daemon_action_input_schema("emanate")["properties"]["backend"]
     assert "claude" not in backend["enum"]
     assert "claude-interactive" not in backend["enum"]
     assert "claude-p" in backend["enum"]

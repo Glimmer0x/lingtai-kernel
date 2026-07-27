@@ -7,8 +7,8 @@ description: >
   routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is not
   a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-opencode/SKILL.md
@@ -63,7 +63,7 @@ OpenCode reserves `--format` at the validation layer: the daemon owns
 `opencode run --format json` so its per-line JSON event parsing keeps working,
 and passing `--format` in `backend_options` refuses the whole batch before
 spawn. Beyond that, do not re-set harness-owned surfaces: session flags
-(`--session` / `--continue`) belong to `daemon(action="ask")` resume
+(`--session` / `--continue`) belong to `daemon(action="ask", input={"id": ..., "message": ...})` resume
 (`opencode run --session <opencode_session_id> --format json ...`), and the
 completion MCP is injected through the `OPENCODE_CONFIG_CONTENT` environment
 variable — not argv — so breaking either silently breaks progress/result

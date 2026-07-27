@@ -20,10 +20,13 @@ related_files:
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/daemon/CONTRACT.md
+  - src/lingtai/tools/daemon/_tool_family.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_family_system_migration.py
+  - tests/test_tool_family_daemon_migration.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep
   related_files complete and repo-relative, including the paired ANATOMY.md,
@@ -94,7 +97,8 @@ advertises `summarize` to the model regardless of family; whether the kernel
 actually honors it is a separate, per-family allowlist decision
 (`kernel/tool_result_summary.py` `_LTP_V2_MIGRATED_FAMILIES`) that this
 package does not own or enforce. Today `web`, `mcp`, `knowledge`, `file`,
-`vision`, `avatar`, and `soul` are on that allowlist, so `summarize` is
+`vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`, and
+`daemon` are on that allowlist, so `summarize` is
 meaningful for the families that use this infrastructure; a family adopting
 `ToolFamily` without also joining the kernel allowlist would advertise a
 model-visible `summarize` control that the kernel silently ignores —
@@ -261,6 +265,33 @@ per action, so rejecting an `input` key outside the selected child's own schema
 is what stops a smuggled `address` on a non-karma action from reaching a
 lifecycle handler at all.
 
+`daemon/_tool_family.py` (`../daemon/CONTRACT.md`) is the eighth production
+Adapter/consumer named here, and the largest-engine one: it repeats the
+`shell` division — a dedicated `_tool_family.py` module owning the package's
+single public `get_schema`/`get_description` pair and a
+`DaemonFamilyDispatcher` that translates one envelope call into
+`DaemonManager.handle()`'s unchanged legacy flat shape — so the ~13k-line
+engine (batch emanation, backend routing, run directories, the detached
+supervisor, completion signaling, cancellation, timeouts, terminal
+notifications) and every pre-migration suite exercising it stay untouched. It
+is the first consumer whose child `input_schema` carries a deep nested
+structure: `emanate`'s `tasks[]` items keep their full eight-property task
+object (including the open-ended `backend_options` argv passthrough)
+byte-for-byte, and that object is deliberately left *open* — the engine's own
+strict per-task validation owns that boundary and returns domain-specific
+errors a schema rejection would replace with a generic one, which this package
+neither requires nor prevents. It registers `build_manual_child(agent,
+"daemon")` directly and unwrapped and returns that canonical result verbatim,
+with no post-dispatch adaptation; the engine's own retained flat
+`action="manual"` branch is internal-only and never the model-facing path. Its
+one Host normalization is narrowing the generic `ACTION_REQUIRED` message to
+daemon's exact six actions, the same boundary `shell` uses. Because it also
+replaces a pre-migration flat `summary` boolean with the canonical root
+`summarize`, its migration joins `kernel/tool_result_summary.py`'s
+`_LTP_V2_MIGRATED_FAMILIES` in the same change — the allowlist step this
+contract notes is part of a migration, not something this package does on a
+family's behalf.
+
 Every other built-in family remains fully independent of this package until
 its own scoped migration.
 
@@ -373,6 +404,14 @@ using the fake `widget` family. `web`'s own existing suite
 — the last of which now also proves root `allOf` correlation survives
 identically on both Chat Completions and Responses wires)
 remains this migration's Web-specific evidence per `../web_search/CONTRACT.md`.
+`tests/test_tool_family_daemon_migration.py` is the family-specific evidence
+for `daemon` (`../daemon/CONTRACT.md`): one model tool slot proven against a
+real Agent's composed tool list, all six child schemas and their exact field
+ownership, the complete nested `emanate` task schema, cross-action and
+unknown-root rejection before any engine I/O, read-only vs side-effectful
+receipt truth, the reserved `manual` child's no-double-wrap result and its
+separation from the engine's retained internal flat branch, and the composed
+schema (including the nested task object) surviving both wires.
 `tests/test_tool_family_soul_migration.py` is the equivalent family-specific
 evidence for `soul` (`../soul/CONTRACT.md`), and independently exercises this
 package against an intrinsic consumer: all six child schemas and handlers, the

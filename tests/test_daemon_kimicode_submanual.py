@@ -104,7 +104,7 @@ def test_kimicode_child_names_canonical_alias_and_limitations():
     for flag in _KIMICODE_RESERVED_BACKEND_FLAGS:
         assert f"`{flag}`" in body, flag
     # Current limitations and MCP wiring stated as they are implemented.
-    assert 'daemon(action="ask")' in body
+    assert 'daemon(action="ask", input={"id": ..., "message": ...})' in body
     assert "unsupported" in body
     assert "kimi-code-home/mcp.json" in body
     assert "backend_harness_files.kimicode_mcp_config" in body

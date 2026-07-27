@@ -4,8 +4,8 @@ description: >
   Nested daemon-manual reference for polling cadence, stall heuristics, anti-
   patterns, backend-specific polling notes, and setting reminders before resting
   while daemon work remains pending.
-version: 1.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 1.2.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
@@ -20,7 +20,7 @@ before reclaiming it, or before going to rest with daemon work pending.
 
 ## Polling cadence — when, how often, and which call
 
-**First principle: completion is push-notified, not polled.** When an emanation reaches a terminal state (`done`, `failed`, `cancelled`, `timeout`), the kernel publishes a compact entry to `.notification/system.json` naming the em-id and pointing at `daemon(action="check", id="em-N")`. You do **not** need to poll to discover completion. If you find yourself running `check` repeatedly waiting for a `state` transition, stop — you're duplicating work the kernel is already doing.
+**First principle: completion is push-notified, not polled.** When an emanation reaches a terminal state (`done`, `failed`, `cancelled`, `timeout`), the kernel publishes a compact entry to `.notification/system.json` naming the em-id and pointing at `daemon(action="check", input={"id": "em-N"})`. You do **not** need to poll to discover completion. If you find yourself running `check` repeatedly waiting for a `state` transition, stop — you're duplicating work the kernel is already doing.
 
 You *do* need to poll when:
 
@@ -43,8 +43,8 @@ Use `elapsed_s` (from `daemon.json` or `list`) to pick an interval. These are st
 
 ### Which call to use, in order
 
-1. **`daemon(action="list")` first** when multiple emanations are in flight and you want a status sweep. Cheap; one line per emanation with `elapsed_s` and `state`. Use it to decide *which* (if any) to investigate.
-2. **`daemon(action="check", id="em-N", last=20, truncate=500)`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. Read the response's `artifacts` block to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand (see `../forensics/SKILL.md`).
+1. **`daemon(action="list", input={})` first** when multiple emanations are in flight and you want a status sweep. Cheap; one line per emanation with `elapsed_s` and `state`. Use it to decide *which* (if any) to investigate.
+2. **`daemon(action="check", input={"id": "em-N", "last": 20, "truncate": 500})`** when one emanation looks suspicious. `last=20` covers ~10 tool dispatches; bump to `last=50` for wider history. Keep `truncate=500` unless you specifically need full tool I/O. Read the response's `artifacts` block to learn which files exist and how big they are before opening any of them, instead of `ls`-ing the run folder by hand (see `../forensics/SKILL.md`).
 3. **Direct `Read` of `daemon.json`** — only when you need a field `check` doesn't surface (rare). Prefer `check`.
 4. **`tail` of `history/chat_history.jsonl`** — when `check` events don't tell you what the LLM is *thinking*. The last assistant text shows the current line of reasoning. (lingtai backend only — CLI backends don't write the LLM transcript here.)
 
@@ -102,7 +102,7 @@ This complements the polling rule above: completion is push-notified, stalls are
 
 ## Worked example: a daemon that's been running 5 minutes
 
-You called `daemon(action="emanate", ...)` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
+You called `daemon(action="emanate", input={"tasks": [...]})` for `em-3`, asked it to "scan src/ for security issues", and it's been running 5 minutes. You're nervous.
 
 ```bash
 # What's the live state?
