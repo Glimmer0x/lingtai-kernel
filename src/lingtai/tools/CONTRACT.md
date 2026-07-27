@@ -81,9 +81,18 @@ model-facing schema or nested `input`.
 - Nested `input` MUST NOT contain `reasoning`, `_reasoning`, or `summarize`.
 - `reasoning` is root-only cross-cutting metadata and is never part of an
   action's independent implementation input.
-- `summarize` is a root-only boolean, absent or false by default. It denotes
-  result post-processing, not an action implementation argument. A family MUST
-  NOT read `summarize` as action input.
+- `summarize` is a root-only boolean, absent or false by default. It is universal
+  cross-cutting result post-processing for every migrated family, not an action
+  implementation argument. A family MUST NOT read `summarize` as action input.
+- The envelope MUST retain the root boolean through result post-processing, on
+  both the single and the parallel call path, and MUST strip it before action
+  implementation dispatch. No action handler or use case receives `summarize` as
+  implementation input. This is interface semantics: it constrains what crosses
+  the boundary, and requires no compiler, dispatcher, base class, or shared
+  implementation to satisfy.
+- Raw output MUST be durably recorded before any visible summary replacement, and
+  tool errors MUST remain exact and unmodified. Summarization replaces what the
+  model sees; it never replaces what was recorded and never rewrites an error.
 - The prohibition above is on the result-summarization **control**, identified by
   role and not by spelling. This contract reserves no name inside `input`: an
   action MAY declare a domain field named `summary` when that field is genuine
@@ -108,6 +117,20 @@ model-facing schema or nested `input`.
   guidance for that family. Agents SHOULD call it before complex or unfamiliar
   use. Manual content stays progressive-disclosure material; schemas MUST NOT be
   bloated to carry it.
+- A migrated family's `manual` MUST explain root `summarize` honestly for that
+  family, selecting one shared guidance profile rather than restating the whole
+  rule. The profiles are:
+  - **bulky-result** — the family or action has predictably large output. Its
+    manual says when `summarize=true` helps, and when exact raw text, IDs, or
+    paths mean it should stay false.
+  - **short-result** — output is normally small. Its manual says `summarize` is
+    available but normally unnecessary, and to leave it false.
+  A family whose actions differ MAY assign profiles per action. Calls to `manual`
+  itself normally use `summarize=false`, so exact procedure and critical
+  constraints are not summarized away; each manual SHOULD say so.
+- The profiles exist so this guidance is maintained once and referenced, not
+  copied verbatim into every manual. This PR defines the obligation only; it
+  writes no manual and implements no manual machinery.
 - Family boundaries follow shared domain, authority, state, and cohesion — not
   superficial implementation similarity. A family exists because its actions
   belong to one thing, not because their code looks alike.
@@ -165,8 +188,11 @@ successful internal `_reasoning` dispatch; unchanged provider envelope semantics
 Chat and Responses serialization; a hermetic fresh Agent startup and complete
 prompt build; and a real model-facing call after refresh when runtime wiring
 changes. Because root `summarize` is required of every migrated family, every
-migrated family must also prove that a `summarize` call preserves and logs the
-raw output before summarization and leaves error results exact.
+migrated family must also prove, for both the single and the parallel call path:
+that the root boolean is retained through post-processing and isolated to the
+call it belongs to; that raw output is durably recorded before any visible
+summary replacement; that error results stay exact and unmodified; and that
+`summarize` never reaches the action implementation.
 
 Web's existing focused capability and wire tests are starting evidence for the
 family/action shape only: they cover `action` / `input` / `manual`, and `web`
