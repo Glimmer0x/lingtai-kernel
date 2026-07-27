@@ -16,6 +16,8 @@ related_files:
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/skills/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -224,6 +226,21 @@ dispatch. `soul` also drops the kernel-injected `_tc_id` before delegating:
 (a capability like `web` never receives it), so a migrating intrinsic strips it
 at its own Host boundary rather than this package widening `_ROOT_FIELDS` for
 everyone.
+
+`skills/__init__.py` (`../skills/CONTRACT.md`) is the sixth production
+Adapter/consumer. One `_build_family(agent, paths)` builder is its single
+canonical child registry, registering an `info` child and
+`manual.build_manual_child(agent, "skills")` directly — unwrapped; both
+`get_schema()` (through an import-time `agent=None` instance whose handlers are
+unreachable) and `setup()` obtain their `ToolFamily` from that one builder, so
+the composed schema advertises exactly the child `input_schema`s dispatch
+registers. Its `handle_skills` wrapper adapts only a successfully
+dispatched manual result (`"content" in result`) to that capability's public
+`skills_manual`/`library_manual`/`manual_path` shape, post-dispatch. Unlike
+`web`, it returns this package's canonical envelope-failure result verbatim,
+having no family-specific diagnostic block to stamp on; both of its children
+declare the canonical strict-empty `input_schema`, so `handle()`'s
+allowed-key check rejects every `input` key on either action.
 
 Every other built-in family remains fully independent of this package until
 its own scoped migration.

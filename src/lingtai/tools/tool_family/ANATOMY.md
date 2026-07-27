@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/skills/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -162,6 +163,21 @@ the kernel-injected `_tc_id` before the envelope's closed-root check — that ke
 is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
 args (capabilities like `web` never see it), so a family migrating an intrinsic
 must strip it rather than widen `_ROOT_FIELDS`.
+
+`skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
+ninth consumer and uses the same division with no shared code beyond this
+package, and differs from `web` in declaring its child registry exactly once:
+a single `_build_family(agent, paths)` builder registers the `info` child and
+`manual.build_manual_child(agent, "skills")` directly, and both `get_schema()`
+(via an import-time `agent=None` instance whose handlers are unreachable) and
+`setup()` obtain their `ToolFamily` from it — so the advertised input schemas
+are by construction the ones dispatch registers. Both of its children declare
+the canonical strict-empty `input` schema, so `handle()`'s allowed-key check
+rejects every `input` key for either action. Its
+`handle_skills` wrapper adapts only the dispatched `manual` child result to
+the capability's public `skills_manual`/`library_manual`/`manual_path` shape
+and, unlike `web`, keeps this package's canonical envelope-failure result
+verbatim — it has no family-specific diagnostic block to stamp on.
 
 ## Composition
 

@@ -17,6 +17,8 @@ related_files:
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_browser_capability.py
@@ -290,17 +292,25 @@ run-only fields live only in `run`'s `input` and `job_id` only in
 the working-directory sandbox, the durable async lifecycle, cancellation, and
 terminal receipts — keeps its historical flat shape as a purely internal
 interface (see `src/lingtai/tools/bash/CONTRACT.md`).
+
+`skills` (`info | manual`) is the ninth: it keeps its public tool name and both
+public action values, adopts the same closed root, declares the canonical
+strict-empty `input` object for both actions, and supports no settings file at
+all — its manual says so explicitly (see
+`src/lingtai/tools/skills/CONTRACT.md`). Family boundaries here follow the
+shared-domain rule above: `info` and `manual` are two actions of one skill-
+catalogue authority, not two related tools grouped for convenience.
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, `avatar`, `soul`, and `shell`), so an unmigrated tool's own
-field literally named `summarize` is never reinterpreted as this control. A
-family adopting this envelope MUST join that allowlist in the same change, or
-the root `summarize` it advertises to the model would be silently ignored.
-Every other LingTai-owned family remains unmigrated and keeps its existing
-schema and settings surface unchanged by this file.
+`file`, `vision`, `avatar`, `soul`, `shell`, and `skills`), so an unmigrated
+tool's own field literally named `summarize` is never reinterpreted as this
+control. A family adopting this envelope MUST join that allowlist in the same
+change, or the root `summarize` it advertises to the model would be silently
+ignored. Every other LingTai-owned family remains unmigrated and keeps its
+existing schema and settings surface unchanged by this file.
 
 `mcp` is the second migrated family: public tool name `mcp`, actions `info |
 manual`, both taking the canonical strict-empty `input`. The migration changed
@@ -337,9 +347,11 @@ its own outer `handle()` for the family's flat manual/error result shapes,
 envelope the same way, `soul` is its seventh, composing `get_schema()`
 from a module-level schema-only family and building an agent-bound one per
 `handle(agent, args)` call because an intrinsic module has no per-Agent
-manager instance to hold one, and `shell` is its eighth, using it the same
+manager instance to hold one, `shell` is its eighth, using it the same
 way while retaining a thin outer `handle()` that narrows the generic
-unknown-action message to its own four actions. `avatar` reuses `ToolFamily`
+unknown-action message to its own four actions, and `skills` is its ninth,
+using it the same way but returning its canonical envelope failures
+verbatim, having no such diagnostics. `avatar` reuses `ToolFamily`
 but not `build_manual_child`, because its manual ships inside its own package
 rather than the agent's installed `.library` catalog — adopting part of the
 infrastructure is conforming. Using it is never required — see its own

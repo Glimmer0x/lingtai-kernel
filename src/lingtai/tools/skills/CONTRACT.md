@@ -1,11 +1,16 @@
 ---
 name: skills-contract
 tool: skills
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/_catalog.py
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/tool_family/__init__.py
+  - src/lingtai/kernel/tool_result_summary.py
+  - tests/test_skills.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -33,6 +38,9 @@ in `src/lingtai/tools/skills/__init__.py`; the code is the source of truth.
   structurally isomorphic, physically separate sibling).
 - Code navigation only: read `src/lingtai/tools/skills/ANATOMY.md`.
 - Shared Markdown catalog mechanics: read `src/lingtai/tools/_catalog.py`.
+- The generic envelope/dispatch/manual-child infrastructure itself: read
+  `src/lingtai/tools/tool_family/CONTRACT.md`; the protocol it implements is
+  `src/lingtai/tools/CONTRACT.md`.
 
 **Fast paths:** tool schema -> §Tool surface; on-disk layout & path sources ->
 §State & storage; skills vs knowledge -> §Scope.
@@ -54,13 +62,38 @@ in `src/lingtai/tools/skills/__init__.py`; the code is the source of truth.
 
 ## Tool surface
 
-Schema requires `action`; the handler is `handle_skills` (dispatched via
-`dispatch_action`). Exactly two actions.
+`skills` is a family migrated to the LingTai Tool Protocol v2 shape defined in
+`src/lingtai/tools/CONTRACT.md`, built on the generic
+`src/lingtai/tools/tool_family/` infrastructure. The public tool name and both
+public action values are unchanged by that migration; only the envelope around
+them is canonical now.
+
+The final model-facing root is a closed object whose properties are exactly
+`action`, `input`, `reasoning`, and `summarize`, with
+`required: ["action", "input", "reasoning"]` and
+`additionalProperties: false`. `action` is one of `info` or `manual`; each
+action value equals its child name and its dispatch key, with no mapping layer.
+Both actions declare the canonical **strict-empty** `input` object
+(`{"type": "object", "properties": {}, "required": [], "additionalProperties":
+false}`) — there is no field to pass on either action. Root `summarize` is an
+optional boolean (absent or false by default) and `reasoning` is required Host
+InvocationContext/audit metadata; neither is ever action input, and no `input`
+branch admits `reasoning`, `_reasoning`, or `summarize`. The root also carries
+one `allOf` `if`/`then` condition per action correlating the `action` const
+with that exact action's `input` schema, on both the Chat Completions and
+Responses wires.
+
+The child registry is declared exactly once, in `_build_family`: both the
+advertised schema and runtime dispatch are built from it, so action names,
+input schemas, titles, and order cannot drift apart. The handler is
+`handle_skills`, which delegates envelope validation and dispatch to an
+agent-bound `ToolFamily` and owns only the post-dispatch presentation
+adaptation of the reserved `manual` child. Exactly two actions.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `info` | `action="info"` | — | reconciles catalog, re-injects prompt, returns `{status, skills_dir, library_dir, catalog_size, paths, problems}` (manual body omitted) | see below |
-| `manual` | `action="manual"` | — | `{status: "ok", skills_manual, library_manual, manual_path}` — manual body without refreshing catalog | degraded shape below |
+| `info` | `action="info"`, `input={}`, `reasoning` | root `summarize` | reconciles catalog, re-injects prompt, returns `{status, skills_dir, library_dir, catalog_size, paths, problems}` (manual body omitted) | see below |
+| `manual` | `action="manual"`, `input={}`, `reasoning` | root `summarize` | `{status: "ok", skills_manual, library_manual, manual_path}` — manual body without refreshing catalog | degraded shape below |
 
 Status is `"ok"` normally; `info` and `manual` return `status: "degraded"` (with
 an `error` string and empty manual body) when the skills manual
@@ -68,8 +101,49 @@ an `error` string and empty manual body) when the skills manual
 and `library_dir` are back-compat keys mirroring the `skills_*` keys; the on-disk
 directory remains `.library`.
 
-**Error shapes** (plain dicts):
-- Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported"}`.
+Each action's own success/degraded result stays canonical and is returned
+verbatim — there is no child-result envelope nested inside another action
+result. `manual`'s reserved child (`tool_family.manual.build_manual_child`)
+returns the canonical `content`/`structuredContent` MCP-compatible shape;
+`handle_skills` flattens exactly that, strictly after dispatch, to the public
+`skills_manual`/`library_manual`/`manual_path` keys above (no double wrap).
+
+**Action separation.** `info` only refreshes/reconciles the catalogue and
+reports health: it never authors, pins, publishes, installs, or executes a
+skill. `manual` only reads the installed manual: it performs no catalogue
+scan, no prompt injection, and no other `info`-side effect.
+
+**Error shapes** (plain dicts). Envelope failures are raised by the generic
+dispatcher before any handler I/O and are returned verbatim — `skills` has no
+family-specific diagnostic block to stamp onto them:
+- Unknown action (including a missing action key, and an unhashable `action`
+  from invalid JSON): `{"status": "failed", "error_code": "ACTION_REQUIRED", "message": "action must be one of info, manual"}`.
+- Any key inside `input` on either action:
+  `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "unsupported skills input field"}`.
+- Missing or non-object `input`:
+  `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "input must be an object"}`.
+- Unknown root field:
+  `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "unsupported skills argument"}`.
+- Non-boolean root `summarize`:
+  `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "summarize must be a boolean"}`.
+
+This replaces the pre-migration router envelope
+(`{"status": "error", "message": "unknown action: ..."}`), which no longer
+exists on this tool.
+
+## Summarize profile
+
+Per `src/lingtai/tools/CONTRACT.md` "Dispatch and actions", this family
+assigns profiles per action: `info` is **short-result** (its health snapshot is
+normally small — `summarize` is available but normally unnecessary, leave it
+false), and `manual` is **bulky-result** (`summarize=true` is reasonable for a
+gist, but calls meant to follow the exact procedure should keep the default
+`false`). `skills` is listed in
+`src/lingtai/kernel/tool_result_summary.py`'s `_LTP_V2_MIGRATED_FAMILIES`, so
+its root `summarize` spelling is recognized as the canonical a-priori summary
+control and its canonical `status: "failed"` envelope errors are never
+summarized. The existing raw-first cap and centralized summarizer remain the
+single source; this family adds no second summarizer.
 
 ## State & storage
 
@@ -106,9 +180,20 @@ Do not change any of the following; documented for reviewers only.
 
 | Claim | Source `src/lingtai/tools/skills/...` | Test |
 |---|---|---|
-| Unknown actions return a `{status: error}` dict | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_unknown_action_returns_error` |
+| Unknown actions return the typed `ACTION_REQUIRED` failure | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_unknown_action_returns_error` |
+| Unknown actions do no handler I/O | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_unknown_action_fails_before_any_handler_io` |
+| Root is the closed LTP v2 envelope with strict-empty inputs | `__init__.py` (`get_schema`) | `tests/test_skills.py::test_family_schema_is_the_canonical_ltp_v2_root` |
+| Schema and dispatch come from one child registry | `__init__.py` (`_build_family`) | `tests/test_skills.py::test_schema_children_are_the_same_registry_dispatch_uses` |
+| Both actions reject any `input` key / bad envelope fields | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_both_actions_reject_extra_input_before_dispatch` |
+| `reasoning`/`_reasoning`/`summarize` never reach a handler | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_envelope_metadata_never_reaches_either_handler` |
+| The composed schema survives both provider wires | `__init__.py` (`get_schema`) | `tests/test_skills.py::test_skills_family_reaches_both_provider_wires` |
+| Root `summarize` is this family's canonical control | `src/lingtai/kernel/tool_result_summary.py` | `tests/test_skills.py::test_skills_is_a_migrated_ltp_v2_family_for_summarize` |
 | `info` omits the manual body | `__init__.py` (`_skills_info`) | `tests/test_skills.py::test_info_omits_skills_manual_body` |
-| `manual` returns the skills manual body | `__init__.py` (`_skills_manual`) | `tests/test_skills.py::test_manual_returns_skills_manual_body` |
+| `info` returns the exact health/problem report | `__init__.py` (`_reconcile`) | `tests/test_skills.py::test_info_result_keys_and_health_are_exactly_preserved` |
+| `manual` returns the skills manual body | `__init__.py` (`_adapt_manual_result`) | `tests/test_skills.py::test_manual_returns_skills_manual_body` |
+| `manual` returns exact body/path with no double wrap | `__init__.py` (`_adapt_manual_result`) | `tests/test_skills.py::test_manual_result_is_exact_body_and_path_without_double_wrap` |
+| `manual` performs no `info`-side catalogue mutation | `__init__.py` (`handle_skills`) | `tests/test_skills.py::test_manual_has_no_info_side_effect` |
+| `manual` degrades with the exact loader message | `__init__.py` (`_adapt_manual_result`) | `tests/test_skills.py::test_manual_degrades_with_exact_loader_message` |
 | Missing intrinsic manual reports `degraded` | `__init__.py` (`_reconcile`) | `tests/test_skills.py::test_info_reports_degraded_when_intrinsic_missing` |
 | Declared paths resolve (absolute / relative / `~`) | `__init__.py` (`_resolve_path`) | `tests/test_skills.py::test_skills_scans_absolute_path`, `::test_skills_resolves_relative_path_from_working_dir`, `::test_skills_expands_tilde` |
 | Catalog is injected into the `skills` prompt section | `__init__.py` (`_reconcile`) | `tests/test_skills.py::test_catalog_injected_into_skills_section` |
@@ -120,7 +205,9 @@ Do not change any of the following; documented for reviewers only.
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
-| Only `info` / `manual` are accepted | `tests/test_skills.py::test_unknown_action_returns_error` | Call `skills(action="foo")` | Silent mis-dispatch |
+| Only `info` / `manual` are accepted | `tests/test_skills.py::test_unknown_action_returns_error` | Call `skills(action="foo", input={}, reasoning="x")` | Silent mis-dispatch |
+| Both actions take strict-empty `input` | `tests/test_skills.py::test_both_actions_reject_extra_input_before_dispatch` | Call `skills(action="info", input={"paths": []}, reasoning="x")` | Smuggled/ignored arguments |
+| `manual` never mutates the catalogue | `tests/test_skills.py::test_manual_has_no_info_side_effect` | Add a skill on disk, call `manual`, inspect the `skills` prompt section | Signpost silently reconciles; hidden side effect |
 | Catalog reaches the prompt | `tests/test_skills.py::test_catalog_injected_into_skills_section` | Boot with a custom skill, inspect `skills` prompt section | Skills invisible to the model |
 | Body stays out of prompt | `tests/test_catalog_helpers.py::test_build_catalog_yaml_golden` | Author a long-body skill, inspect prompt | Prompt bloat |
 | Missing manual is degraded not fatal | `tests/test_skills.py::test_info_reports_degraded_when_intrinsic_missing` | Remove the intrinsic manual, call `info` | Boot failure vs. graceful degrade |

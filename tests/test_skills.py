@@ -64,34 +64,175 @@ def _write_skill(folder: Path, name: str, desc: str = "test skill"):
     )
 
 
-def test_unknown_action_returns_error(tmp_path):
-    """Only `info` is supported; the exact error envelope is model-visible.
+_UNKNOWN_ACTION = {
+    "status": "failed",
+    "error_code": "ACTION_REQUIRED",
+    "message": "action must be one of info, manual",
+}
 
-    Locks the unknown-action envelope through the issue #513 dispatch-helper
-    migration: wording, quoting, and key names must stay verbatim.
+
+def test_unknown_action_returns_error(tmp_path):
+    """Only `info` and `manual` are supported; the failure is model-visible.
+
+    After the LTP v2 ToolFamily migration the unknown-action envelope is the
+    generic family failure (`status: "failed"` + typed `error_code`), not the
+    pre-migration `{status: "error", message: "unknown action: ..."}` router
+    envelope. Skills has no per-result diagnostic block of its own to preserve
+    (unlike `web`'s `action`/`current_setting`), so it keeps the canonical
+    family shape verbatim rather than renormalizing it.
     """
     agent, _ = _mk_agent(tmp_path)
     try:
         handler = agent._tool_handlers["skills"]
-        assert handler({"action": "list"}) == {
-            "status": "error",
-            "message": "unknown action: 'list', only 'info' or 'manual' is supported",
-        }
-        # Missing action key renders the empty-string default, not None.
-        assert handler({}) == {
-            "status": "error",
-            "message": "unknown action: '', only 'info' or 'manual' is supported",
-        }
+        assert handler({"action": "list", "input": {}, "reasoning": "r"}) == _UNKNOWN_ACTION
+        # Missing action key fails the same way, before any handler I/O.
+        assert handler({}) == _UNKNOWN_ACTION
         # Invalid JSON can make `action` unhashable (issue #513 blocker): the
-        # router must render the unknown-action envelope, not raise TypeError.
-        assert handler({"action": []}) == {
-            "status": "error",
-            "message": "unknown action: [], only 'info' or 'manual' is supported",
+        # dispatcher must render the typed failure, not raise TypeError.
+        assert handler({"action": []}) == _UNKNOWN_ACTION
+        assert handler({"action": {}}) == _UNKNOWN_ACTION
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_unknown_action_fails_before_any_handler_io(tmp_path, monkeypatch):
+    """An unknown action must not scan the catalogue or read the manual."""
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        from lingtai.tools import skills as skills_tool
+
+        def _boom(*_args, **_kwargs):
+            raise AssertionError("handler I/O ran for an unknown action")
+
+        monkeypatch.setattr(skills_tool, "_reconcile", _boom)
+        monkeypatch.setattr(skills_tool, "_skills_info", _boom)
+        before = agent._prompt_manager.read_section("skills")
+        assert agent._tool_handlers["skills"](
+            {"action": "publish", "input": {}, "reasoning": "r"}
+        ) == _UNKNOWN_ACTION
+        assert agent._prompt_manager.read_section("skills") == before
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_family_schema_is_the_canonical_ltp_v2_root(tmp_path):
+    """Public name/actions are unchanged; only the envelope is canonical now."""
+    from lingtai.tools import skills as skills_tool
+
+    schema = skills_tool.get_schema()
+    assert schema["type"] == "object"
+    assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert schema["additionalProperties"] is False
+    # Public action values are unchanged and equal the dispatch keys.
+    assert schema["properties"]["action"]["enum"] == ["info", "manual"]
+    assert schema["properties"]["reasoning"]["type"] == "string"
+    assert schema["properties"]["summarize"]["type"] == "boolean"
+
+    branches = schema["properties"]["input"]["oneOf"]
+    assert [b["title"] for b in branches] == ["info input", "manual input"]
+    for branch in branches:
+        # Canonical strict-empty input for both actions.
+        assert branch["type"] == "object"
+        assert branch["properties"] == {}
+        assert branch["additionalProperties"] is False
+        assert "reasoning" not in branch["properties"]
+        assert "_reasoning" not in branch["properties"]
+        assert "summarize" not in branch["properties"]
+
+    # Root correlates each action const with that exact child's input schema.
+    conditions = schema["allOf"]
+    assert len(conditions) == 2
+    for condition, name, branch in zip(conditions, ["info", "manual"], branches):
+        assert condition["if"]["properties"]["action"]["const"] == name
+        assert condition["if"]["required"] == ["action"]
+        assert condition["then"]["properties"]["input"]["additionalProperties"] is False
+        # Both surfaces derive from the one child registry, so the correlated
+        # schema is exactly the disclosed branch (minus its display title).
+        assert condition["then"]["properties"]["input"] == {
+            k: v for k, v in branch.items() if k != "title"
         }
-        assert handler({"action": {}}) == {
-            "status": "error",
-            "message": "unknown action: {}, only 'info' or 'manual' is supported",
+
+
+def test_schema_children_are_the_same_registry_dispatch_uses():
+    """One canonical child-spec source backs both schema and dispatch.
+
+    The advertised input schema for each action must be the exact object the
+    dispatched child declares — not a parallel literal that can drift from it.
+    """
+    from lingtai.tools import skills as skills_tool
+
+    schema_family = skills_tool._build_family(None, [])
+    runtime_family = skills_tool._build_family(object(), ["/some/path"])
+    assert schema_family.child_names == runtime_family.child_names == ("info", "manual")
+    for name in ("info", "manual"):
+        assert (
+            schema_family._children[name].input_schema
+            == runtime_family._children[name].input_schema
+        )
+        assert schema_family._children[name].title == runtime_family._children[name].title
+    # And the composed schema is identical regardless of which one built it.
+    assert schema_family.build_schema() == runtime_family.build_schema()
+
+
+def test_both_actions_reject_extra_input_before_dispatch(tmp_path):
+    """Strict-empty means any input key fails, on either action."""
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["skills"]
+        for action in ("info", "manual"):
+            assert handler(
+                {"action": action, "input": {"paths": ["/tmp"]}, "reasoning": "r"}
+            ) == {
+                "status": "failed",
+                "error_code": "INVALID_ARGUMENT",
+                "message": "unsupported skills input field",
+            }
+        # A missing/non-object input is rejected too.
+        assert handler({"action": "info", "reasoning": "r"}) == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "input must be an object",
         }
+        # Unknown root fields and non-boolean summarize fail at the envelope.
+        assert handler(
+            {"action": "info", "input": {}, "reasoning": "r", "engine": "x"}
+        ) == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "unsupported skills argument",
+        }
+        assert handler(
+            {"action": "info", "input": {}, "reasoning": "r", "summarize": "yes"}
+        ) == {
+            "status": "failed",
+            "error_code": "INVALID_ARGUMENT",
+            "message": "summarize must be a boolean",
+        }
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_envelope_metadata_never_reaches_either_handler(tmp_path):
+    """`reasoning`/`_reasoning`/`summarize` are root-only, never action input."""
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        handler = agent._tool_handlers["skills"]
+        for action in ("info", "manual"):
+            result = handler(
+                {
+                    "action": action,
+                    "input": {},
+                    "reasoning": "why",
+                    "_reasoning": "internal",
+                    "summarize": True,
+                }
+            )
+            # Dispatch succeeded (the envelope fields were stripped, not
+            # forwarded into the strict-empty child input).
+            assert result["status"] == "ok"
+            for leaked in ("reasoning", "_reasoning", "summarize"):
+                assert leaked not in result
     finally:
         agent.stop(timeout=1.0)
 
@@ -594,7 +735,7 @@ def test_skills_scans_absolute_path(tmp_path):
 
     agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["status"] == "ok"
         assert result["paths"][str(extra)]["skills"] == 1
         assert result["catalog_size"] >= 2  # skills-manual + shared-skill
@@ -610,7 +751,7 @@ def test_skills_resolves_relative_path_from_working_dir(tmp_path):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["../.library_shared"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["status"] == "ok"
         assert result["paths"]["../.library_shared"]["exists"] is True
         assert result["paths"]["../.library_shared"]["skills"] == 1
@@ -627,7 +768,7 @@ def test_skills_expands_tilde(tmp_path, monkeypatch):
 
     agent, _ = _mk_agent(tmp_path, {"paths": ["~/my-utils"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["paths"]["~/my-utils"]["exists"] is True
     finally:
         agent.stop(timeout=1.0)
@@ -636,7 +777,7 @@ def test_skills_expands_tilde(tmp_path, monkeypatch):
 def test_skills_reports_missing_path_as_not_existing(tmp_path):
     agent, _ = _mk_agent(tmp_path, {"paths": ["/does/not/exist"]})
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["paths"]["/does/not/exist"]["exists"] is False
         assert result["paths"]["/does/not/exist"]["skills"] == 0
     finally:
@@ -651,7 +792,7 @@ def test_skills_reports_missing_path_as_not_existing(tmp_path):
 def test_info_omits_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert "skills_manual" not in result
         assert "library_manual" not in result
     finally:
@@ -661,7 +802,7 @@ def test_info_omits_skills_manual_body(tmp_path):
 def test_manual_returns_skills_manual_body(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "manual"})
+        result = agent._tool_handlers["skills"]({"action": "manual", "input": {}, "reasoning": "test"})
         assert "skills_manual" in result
         assert "library_manual" in result
         assert "name: skills-manual" in result["skills_manual"]
@@ -672,7 +813,7 @@ def test_manual_returns_skills_manual_body(tmp_path):
 def test_info_reports_ok_when_healthy(tmp_path):
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["status"] == "ok"
         assert "error" not in result
     finally:
@@ -691,7 +832,7 @@ def test_info_reports_degraded_when_intrinsic_missing(tmp_path):
         assert manual_path.is_file(), "precondition: initializer installed manual"
         manual_path.unlink()
 
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         assert result["status"] == "degraded"
         assert "error" in result
     finally:
@@ -712,11 +853,194 @@ def test_info_surfaces_problems(tmp_path):
         capabilities={"skills": {}},
     )
     try:
-        result = agent._tool_handlers["skills"]({"action": "info"})
+        result = agent._tool_handlers["skills"]({"action": "info", "input": {}, "reasoning": "test"})
         problem_folders = [p["folder"] for p in result["problems"]]
         assert any("broken" in f for f in problem_folders)
     finally:
         agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# LTP v2 migration: exact semantic preservation of both children
+# ---------------------------------------------------------------------------
+
+
+def test_info_result_keys_and_health_are_exactly_preserved(tmp_path):
+    """`info` still returns the exact pre-migration health/problem report.
+
+    The envelope changed; the child's own canonical result did not. Keys, the
+    resolved-path report, the problem list entries, and `catalog_size` are
+    returned verbatim, with the manual body still omitted and no wrapper
+    around the child result.
+    """
+    extra = tmp_path / "extra"
+    _write_skill(extra / "good-skill", "good-skill")
+    workdir = tmp_path / "agent"
+    bad = workdir / ".library" / "custom" / "broken" / "SKILL.md"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("---\nname: broken\n---\nno description!\n")
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"skills": {"paths": [str(extra)]}},
+    )
+    try:
+        result = agent._tool_handlers["skills"](
+            {"action": "info", "input": {}, "reasoning": "health check"}
+        )
+        assert set(result) == {
+            "status",
+            "skills_dir",
+            "library_dir",
+            "catalog_size",
+            "paths",
+            "problems",
+        }
+        assert result["status"] == "ok"
+        assert result["skills_dir"] == str(workdir / ".library")
+        assert result["library_dir"] == result["skills_dir"]
+        assert result["paths"] == {
+            str(extra): {"resolved": str(extra), "exists": True, "skills": 1}
+        }
+        assert result["problems"] == [
+            {
+                "folder": "broken",
+                "reason": "SKILL.md missing required frontmatter field: description",
+            }
+        ]
+        assert result["catalog_size"] >= 2
+        # No child-result envelope nested inside the action result.
+        assert "content" not in result
+        assert "structuredContent" not in result
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_manual_result_is_exact_body_and_path_without_double_wrap(tmp_path):
+    """`manual` returns the exact installed bytes and host-local path."""
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        manual_path = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
+        )
+        expected = manual_path.read_text(encoding="utf-8")
+        result = agent._tool_handlers["skills"](
+            {"action": "manual", "input": {}, "reasoning": "load guidance"}
+        )
+        assert result == {
+            "status": "ok",
+            "skills_manual": expected,
+            "library_manual": expected,
+            "manual_path": str(manual_path),
+        }
+        # The canonical child result is adapted by the Host, never nested.
+        assert "content" not in result
+        assert "structuredContent" not in result
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_manual_has_no_info_side_effect(tmp_path):
+    """`manual` must not scan, reconcile, or re-inject the catalogue.
+
+    A skill added on disk after setup stays invisible until `info` runs: this
+    proves `manual` performed no catalogue mutation, only a manual read.
+    """
+    extra = tmp_path / "extra"
+    _write_skill(extra / "before-skill", "before-skill")
+    agent, _ = _mk_agent(tmp_path, {"paths": [str(extra)]})
+    try:
+        handler = agent._tool_handlers["skills"]
+        before = agent._prompt_manager.read_section("skills") or ""
+        assert "- name: before-skill" in before
+
+        # Add a new skill on disk, then call `manual` only.
+        _write_skill(extra / "after-skill", "after-skill")
+        manual_result = handler(
+            {"action": "manual", "input": {}, "reasoning": "read manual"}
+        )
+        assert manual_result["status"] == "ok"
+        unchanged = agent._prompt_manager.read_section("skills") or ""
+        assert unchanged == before
+        assert "- name: after-skill" not in unchanged
+        # `manual` reports no health fields at all.
+        for info_only in ("catalog_size", "paths", "problems", "skills_dir"):
+            assert info_only not in manual_result
+
+        # `info` is what reconciles — the new skill appears only now.
+        info_result = handler({"action": "info", "input": {}, "reasoning": "refresh"})
+        refreshed = agent._prompt_manager.read_section("skills") or ""
+        assert "- name: after-skill" in refreshed
+        assert info_result["paths"][str(extra)]["skills"] == 2
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_manual_degrades_with_exact_loader_message(tmp_path):
+    """A missing manual degrades on `manual` exactly as before the migration."""
+    agent, workdir = _mk_agent(tmp_path)
+    try:
+        manual_path = (
+            workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
+        )
+        assert manual_path.is_file(), "precondition: initializer installed manual"
+        manual_path.unlink()
+
+        assert agent._tool_handlers["skills"](
+            {"action": "manual", "input": {}, "reasoning": "read manual"}
+        ) == {
+            "status": "degraded",
+            "skills_manual": "",
+            "library_manual": "",
+            "manual_path": str(manual_path),
+            "error": (
+                "skills manual missing — initializer may have failed or "
+                "capability not installed correctly"
+            ),
+        }
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_skills_family_reaches_both_provider_wires(tmp_path):
+    """The composed schema survives Chat Completions and Responses unchanged."""
+    from lingtai.kernel.base_agent.tools import _build_tool_schemas
+    from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+
+    agent, _ = _mk_agent(tmp_path)
+    try:
+        schemas = _build_tool_schemas(agent)
+        # Exactly one public model root for the family; no duplicate old roots.
+        assert [s.name for s in schemas].count("skills") == 1
+        skills_schema = next(s for s in schemas if s.name == "skills")
+        chat = _build_tools([skills_schema])[0]["function"]["parameters"]
+        responses = _build_responses_tools([skills_schema])[0]["parameters"]
+        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+            assert set(wire["properties"]) == {
+                "action",
+                "input",
+                "reasoning",
+                "summarize",
+            }
+            assert wire["required"] == ["action", "input", "reasoning"]
+            assert wire["additionalProperties"] is False
+            assert wire["properties"]["action"]["enum"] == ["info", "manual"]
+            branches = wire["properties"]["input"][combinator]
+            assert [b["title"] for b in branches] == ["info input", "manual input"]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_skills_is_a_migrated_ltp_v2_family_for_summarize(tmp_path):
+    """Root `summarize` is the canonical control for this migrated family."""
+    from lingtai.kernel.tool_result_summary import summary_requested
+
+    assert summary_requested({"summarize": True}, tool_name="skills") is True
+    assert summary_requested({"summarize": False}, tool_name="skills") is False
+    # Still scoped by name: an unmigrated tool's own field is not this control.
+    assert summary_requested({"summarize": True}, tool_name="knowledge") is False
 
 
 # ---------------------------------------------------------------------------
