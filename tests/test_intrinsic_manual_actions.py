@@ -6,7 +6,7 @@ from pathlib import Path
 from lingtai.tools import daemon as daemon_tool
 from lingtai.tools import file as file_tool
 from lingtai.tools import email as email_tool
-from lingtai.tools import psyche as psyche_tool
+from lingtai.tools import context as context_tool
 from lingtai.tools import soul as soul_tool
 from lingtai.tools import system as system_tool
 from lingtai.tools import vision as vision_tool
@@ -46,7 +46,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "shell",
             "daemon",
             "email",
-            "psyche-manual",
+            "context-manual",
             "read-manual",
             "soul-manual",
             "system-manual",
@@ -80,11 +80,11 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             ),
         ),
         "daemon": ("daemon", lambda: daemon_manager.handle({"action": "manual"})),
-        # ``email`` and ``psyche`` are migrated LTP v2 families: ``manual`` is
+        # ``email`` and ``context`` are migrated LTP v2 families: ``manual`` is
         # the reserved family child, called through the closed action/input
         # envelope.
         "email": ("email", lambda: email_tool.handle(agent, {"action": "manual", "input": {}})),
-        "psyche": ("psyche-manual", lambda: psyche_tool.handle(agent, {"action": "manual", "input": {}})),
+        "context": ("context-manual", lambda: context_tool.handle(agent, {"action": "manual", "input": {}})),
         "soul": ("soul-manual", lambda: soul_tool.handle(agent, {"action": "manual", "input": {}})),
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual", "input": {}})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
@@ -143,7 +143,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         shell_tool,
         daemon_tool,
         email_tool,
-        psyche_tool,
+        context_tool,
         soul_tool,
         system_tool,
         web_tool,
@@ -155,9 +155,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         action = schema["properties"]["action"]
         assert "manual" in action.get("enum", ()) or "manual" in action["description"]
 
-    # psyche is migrated to the LTP v2 envelope, so it now requires the full
-    # closed root exactly as web does — not the pre-migration action-only root.
-    assert psyche_tool.get_schema()["required"] == ["action", "input", "reasoning"]
+    # context is an LTP v2 family, so it requires the full closed root exactly
+    # as web does — not a pre-migration action-only root.
+    assert context_tool.get_schema()["required"] == ["action", "input", "reasoning"]
     web_schema = web_tool.get_schema()
     assert web_schema["required"] == ["action", "input", "reasoning"]
     assert len(web_schema["properties"]["input"]["oneOf"]) == 3

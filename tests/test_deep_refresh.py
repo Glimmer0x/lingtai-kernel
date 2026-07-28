@@ -637,7 +637,7 @@ def test_reload_keeps_covenant_and_character_separate(tmp_path):
     """Boot/refresh-style reload: covenant.md → `covenant`, lingtai.md →
     `character`. The character text must never be folded into covenant."""
     agent = _make_agent(tmp_path, _make_init(covenant="The operator contract."))
-    # Author a character file as the agent would via psyche(lingtai, update).
+    # Author a character file as the agent would via lingtai(action='update').
     system_dir = agent._working_dir / "system"
     system_dir.mkdir(exist_ok=True)
     (system_dir / "lingtai.md").write_text("I am a meticulous archivist.")
@@ -667,7 +667,7 @@ def test_post_molt_preserves_character_section(tmp_path):
     system_dir.mkdir(exist_ok=True)
     (system_dir / "lingtai.md").write_text("I am a meticulous archivist.")
 
-    # Boot/refresh registers both post-molt hooks (psyche lambda + _reload).
+    # Boot/refresh registers both post-molt hooks (context lambda + _reload).
     agent._setup_from_init()
 
     # Mirror _molt.py:351 — fire every registered post-molt hook in order.
@@ -690,7 +690,7 @@ def test_post_molt_preserves_pad_append_pinned_reference(tmp_path):
     system_dir.mkdir(exist_ok=True)
     (system_dir / "pad.md").write_text("Working notes line.")
 
-    # Pin a reference file via pad_append.json (what psyche(pad, append) writes).
+    # Pin a reference file via pad_append.json (what pad(action='append') writes).
     ref = agent._working_dir / "reference.md"
     ref.write_text("PINNED-REFERENCE-MARKER")
     (system_dir / "pad_append.json").write_text(json.dumps(["reference.md"]))

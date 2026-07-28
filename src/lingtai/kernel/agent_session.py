@@ -43,7 +43,18 @@ __all__ = [
 ]
 
 # The event type both molt paths emit at a molt boundary, carrying ``molt_count``
-# (post-increment). See src/lingtai/tools/psyche/_molt.py:434,702.
+# (post-increment). See src/lingtai/tools/context/_molt.py.
+#
+# LEGACY PERSISTENCE KEY. The public tool that performs a molt is now
+# ``context(action='molt')`` — the ``psyche`` family it came from no longer
+# exists at any model-visible or registry level. This durable *event* name is
+# deliberately NOT renamed with it: it is the boundary marker every historical
+# ``logs/events.jsonl`` row and every ledger row already on disk carries, and
+# it is queried by literal string in the SQL below. Renaming it would make
+# every pre-existing molt boundary invisible to session reconstruction —
+# ``molt_count``, the since-last-molt token aggregate, and the rebuilt agent
+# session would all silently regress on real agents. The spelling is therefore
+# a storage-format constant, not a statement about current tool ownership.
 MOLT_BOUNDARY_EVENT = "psyche_molt"
 
 # The event type carrying per-provider-round token usage. See

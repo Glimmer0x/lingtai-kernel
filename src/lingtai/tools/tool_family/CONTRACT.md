@@ -24,7 +24,7 @@ related_files:
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
-  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_tool_family_generic.py
@@ -324,7 +324,7 @@ Adapter/consumer and the fifth intrinsic. It follows `soul`'s module-level
 composition shape — a schema-only `ToolFamily` at import time (which is also
 the registry's collision check) and an agent-bound one per `handle(agent,
 args)` call, both from one `_CHILD_SPECS` source — and registers
-`build_manual_child(agent, "psyche-manual")` directly and unwrapped, flattening
+`build_manual_child(agent, "context-manual")` directly and unwrapped, flattening
 that canonical result to psyche's own pinned flat `status`/`manual`/
 `manual_path` shape strictly after dispatch. It is the first consumer to fold a
 *two-key* public surface into this envelope: the pre-migration

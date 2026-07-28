@@ -383,7 +383,7 @@ def render_current_molt_context(
         "call instead. "
         f"The recovery target is {recovery_text}, but if a batched summarize/"
         "reconstruction pass still leaves context above 85%, stop repeating summarize, "
-        "tend durable stores, and molt deliberately. See psyche-manual."
+        "tend durable stores, and molt deliberately. See context-manual."
     )
 
 
@@ -417,7 +417,7 @@ def render_reconstruction_molt(
             "summarize calls while context stays above 85% substantially hurt "
             "token efficiency; use at most one rebuild-only summarize call, then "
             "stop repeating summarize, tend durable stores, and molt "
-            "deliberately. See psyche-manual."
+            "deliberately. See context-manual."
         )
     return (
         "The runtime already rebuilt the provider context after summarization, "
@@ -425,7 +425,7 @@ def render_reconstruction_molt(
         f"window, at or above the {recovery_text} recovery target. "
         "If more digested tool results can be summarized, do that as one "
         "batch; otherwise tend durable stores and molt deliberately. See "
-        "psyche-manual."
+        "context-manual."
     )
 
 
@@ -471,7 +471,7 @@ def render_forced_rebuild_warning(
         f"boundary. Context changed from {before_str} before to {after_str} after. "
         f"Reaching the full-context boundary means waiting until context was full was "
         f"not ideal — when context is high, prefer a proactive "
-        f"system(action='summarize', rebuild=true) at the {high_text} rebuild hint "
+        f"context(action='rebuild') at the {high_text} rebuild hint "
         f"instead of letting the emergency boundary force it. If the rebuilt context "
         f"is still above the {recovery_text} recovery target, tend durable stores and "
         f"molt. See meta_guidance, substrate, and procedures."

@@ -68,7 +68,7 @@ _GENERIC_DISMISS_GUARDED: dict[str, str] = {}
 # Agent-facing note included in the dismiss result to explain preferred path.
 _LARGE_RESULT_DISMISS_NOTE = (
     "large_tool_result reminder acknowledged and removed. "
-    "Summarization via system(action='summarize') remains the preferred way to "
+    "Summarization via context(action='summarize') remains the preferred way to "
     "discharge a large result — it records an agent-authored compact replacement "
     "in runtime history and auto-clears the reminder. Dismissal only clears the "
     "reminder surface; the original large result remains in chat history and "

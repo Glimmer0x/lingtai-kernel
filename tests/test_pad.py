@@ -31,14 +31,16 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_intrinsics_include_psyche_pad_and_lingtai():
+def test_intrinsics_include_context_pad_and_lingtai():
     """``pad`` is its own intrinsic root since the pad/lingtai split.
 
     Before the split ``pad`` was deliberately absent — the three pad
-    operations were ``psyche`` leaves. Now it is a model-visible root parallel
-    to ``knowledge`` and ``skills``, and ``psyche`` no longer advertises them.
+    operations were leaves of the former ``psyche``. Now it is a model-visible
+    root parallel to ``knowledge`` and ``skills``, and no other family
+    advertises them.
     """
-    assert "psyche" in ALL_INTRINSICS
+    assert "context" in ALL_INTRINSICS
+    assert "psyche" not in ALL_INTRINSICS
     assert "pad" in ALL_INTRINSICS
     assert "lingtai" in ALL_INTRINSICS
 
@@ -53,13 +55,13 @@ def test_intrinsics_include_psyche_pad_and_lingtai():
     assert actions == ["edit", "load", "append", "manual"]
     assert mod.ACTION_ORDER == tuple(actions)
 
-    psyche_actions = ALL_INTRINSICS["psyche"]["module"].get_schema()["properties"]["action"]["enum"]
-    assert not any(action.startswith("pad_") for action in psyche_actions)
+    context_actions = ALL_INTRINSICS["context"]["module"].get_schema()["properties"]["action"]["enum"]
+    assert not any(action.startswith("pad_") for action in context_actions)
 
 
-def test_psyche_and_pad_wired_in_agent(tmp_path):
+def test_context_and_pad_wired_in_agent(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert "psyche" in agent._intrinsics
+    assert "context" in agent._intrinsics
     assert "pad" in agent._intrinsics
     assert "lingtai" in agent._intrinsics
     agent.stop(timeout=1.0)
@@ -223,7 +225,7 @@ def test_pad_load_no_change_no_commit(tmp_path):
 
 def test_pad_unknown_action(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["psyche"]({"object": "pad", "action": "diff"})
+    result = agent._intrinsics["context"]({"object": "pad", "action": "diff"})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -241,3 +243,94 @@ def test_pad_creates_files_if_missing(tmp_path):
         assert (agent.working_dir / "system" / "pad.md").is_file()
     finally:
         agent.stop()
+
+
+# ---------------------------------------------------------------------------
+# `pad(action='edit')` file embedding
+#
+# Moved here from the former psyche/context suite when `pad` became its own
+# root: these are pad-owned invariants and had no owner-suite coverage. The
+# `[file-N]` embedding contract (and its missing-file refusal) is asserted
+# nowhere else.
+# ---------------------------------------------------------------------------
+
+
+def _pad_agent(tmp_path):
+    return BaseAgent(
+        intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
+        working_dir=tmp_path / "test", workdir_lease=make_test_lease(),
+        snapshot_port=make_test_snapshot_port(),
+        agent_presence=make_test_presence_store(),
+        lifecycle_clock=make_test_lifecycle_clock(),
+        source_revision_port=make_test_source_revision_port(),
+        notification_store=notification_store_for(tmp_path / "test"),
+    )
+
+
+def test_pad_edit_embeds_named_files_alongside_content(tmp_path):
+    agent = _pad_agent(tmp_path)
+    try:
+        (agent.working_dir / "export1.txt").write_text("knowledge from export 1")
+        (agent.working_dir / "export2.txt").write_text("knowledge from export 2")
+
+        result = agent._intrinsics["pad"]({
+            "action": "edit",
+            "input": {
+                "content": "My working notes.",
+                "files": ["export1.txt", "export2.txt"],
+            },
+        })
+        assert result["status"] == "ok"
+        md = (agent.working_dir / "system" / "pad.md").read_text()
+        assert "My working notes." in md
+        # Each file is embedded under its own ordinal marker, in argument order.
+        assert "[file-1]" in md
+        assert "knowledge from export 1" in md
+        assert "[file-2]" in md
+        assert "knowledge from export 2" in md
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_pad_edit_accepts_files_with_no_content(tmp_path):
+    """`content: null` + files is a real call, not the refused bare call."""
+    agent = _pad_agent(tmp_path)
+    try:
+        (agent.working_dir / "data.txt").write_text("file data")
+        result = agent._intrinsics["pad"]({
+            "action": "edit",
+            "input": {"content": None, "files": ["data.txt"]},
+        })
+        assert result["status"] == "ok"
+        md = (agent.working_dir / "system" / "pad.md").read_text()
+        assert "[file-1]" in md
+        assert "file data" in md
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_pad_edit_missing_file_errors_and_names_the_path(tmp_path):
+    agent = _pad_agent(tmp_path)
+    try:
+        result = agent._intrinsics["pad"]({
+            "action": "edit",
+            "input": {"content": "notes", "files": ["nonexistent.txt"]},
+        })
+        assert "error" in result
+        assert "nonexistent.txt" in result["error"]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_stop_does_not_overwrite_pad_md(tmp_path):
+    """Pad is disk-authoritative — stop() must not clobber existing pad.md.
+
+    Moved here from the former psyche/context suite: this is a pad-file
+    invariant, and the `pad` family owns it now.
+    """
+    agent = _pad_agent(tmp_path)
+    pad_file = agent.working_dir / "system" / "pad.md"
+    pad_file.parent.mkdir(exist_ok=True)
+    pad_file.write_text("previous session pad")
+    agent.stop()
+    assert pad_file.read_text() == "previous session pad"

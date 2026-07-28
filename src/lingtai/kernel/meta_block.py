@@ -582,7 +582,7 @@ def current_tool_result_chars(agent, extra_results=()) -> dict:
     in-context formal results exceed it).  Together with ``top_results`` these
     let the agent see what counts as "large" and how many candidates exist —
     the context the removed ``large_tool_result`` notification used to carry —
-    so it can decide what to ``system(action="summarize")``.
+    so it can decide what to ``context(action="summarize")``.
     """
     threshold = getattr(
         agent, "_summarize_notification_threshold", DEFAULT_LARGE_RESULT_THRESHOLD
@@ -965,14 +965,14 @@ def build_molt_context(agent, usage: float) -> str | None:
     about why it appeared and what to do, not a tag soup of ``stage`` /
     ``threshold`` / ``action`` fields.
     """
-    if "psyche" not in getattr(agent, "_intrinsics", set()):
+    if "context" not in getattr(agent, "_intrinsics", set()):
         return None
 
     session = getattr(agent, "_session", None)
     if session is None:
         return None
     # The warning decision + prose live in ``ContextPressureReminder``; the
-    # psyche-intrinsic gate and session lookup stay here (they are agent/session
+    # context-intrinsic gate and session lookup stay here (they are agent/session
     # concerns, not reminder concerns). Prefer the real reminder object; fall
     # back to the session's compat streak/active surface so lightweight test
     # stand-ins (a SimpleNamespace with only context_pressure_* attributes) still
@@ -994,7 +994,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
     stamped under ``_meta.agent_meta.agent_state.context.rebuild`` whenever context is at/above
     ``CONTEXT_PRESSURE_HIGH_RATIO`` and the system intrinsic is available, so the
     agent may explicitly request a rebuild via
-    ``system(action='summarize', rebuild=true)`` instead of letting the
+    ``context(action='rebuild')`` instead of letting the
     1.0 hard boundary force one.
     """
     if "system" not in getattr(agent, "_intrinsics", set()):
@@ -1009,7 +1009,7 @@ def build_context_rebuild_hint(agent, usage: float) -> str | None:
         "context now above 85%: recording summaries does NOT itself rebuild the "
         "active provider context. If recorded summaries are worth making active "
         "sooner, you MAY pay for a provider-context rebuild via "
-        "system(action='summarize', rebuild=true) (with or without new items). This "
+        "context(action='rebuild') (with or without new items). This "
         "is a permitted option, not a requirement; if you do nothing, the runtime "
         "forces a rebuild at the 1.0 hard boundary (full context) regardless. "
         "Preferring a proactive rebuild here avoids the emergency forced path. Keep "
@@ -1193,13 +1193,13 @@ def build_cache_miss_budget_context(agent) -> dict | None:
     available on the newest final carrier and the budget value is surfaced at
     ``agent_meta.agent_state.context.cache_miss_budget`` while the guard is tripped.
 
-    Returns ``None`` (no guard) when: the ``psyche`` intrinsic is absent (matching
+    Returns ``None`` (no guard) when: the ``context`` intrinsic is absent (matching
     :func:`build_molt_context`, since ``molt`` presupposes the molt action), the
     budget is not a positive int, the cumulative-usage getter is missing/raising,
     or the cache-miss total is below the budget.  It is a soft signal only —
     nothing is blocked — and NOT a new event route (no emission-event payload).
     """
-    if "psyche" not in getattr(agent, "_intrinsics", set()):
+    if "context" not in getattr(agent, "_intrinsics", set()):
         return None
 
     # Defensive: only a positive int arms the guard (shared with the always-on
@@ -3044,7 +3044,7 @@ def attach_active_notifications(
           ``lingtai.llm.interface_converters``).
 
     ``post-molt`` is intentionally not special-cased here.  The dangerous race
-    is narrower: the ``psyche.molt`` tool call writes ``post-molt.json`` before
+    is narrower: the ``context.molt`` tool call writes ``post-molt.json`` before
     returning, so only that same molt-result batch must skip active stamping.
     Later ACTIVE batches may consume the post-molt notification normally; if no
     later ACTIVE batch happens, the IDLE/ASLEEP sync path wakes the agent.

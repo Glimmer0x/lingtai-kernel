@@ -150,7 +150,7 @@ three deliberate ways to keep it lean, ordered from local to whole-conversation:
    outputs, reviews, long reports, or any result whose important facts you cannot
    name in advance. For those, leave `summary=false`, consume the result, then
    summarize a posteriori — or molt for whole-conversation pressure.
-2. **A posteriori — agent-guided.** Use `system(action="summarize")` after you
+2. **A posteriori — agent-guided.** Use `context(action="summarize")` after you
    have consumed a result and no longer need its raw text. Keep a useful
    agent-authored summary; the original remains recoverable from durable logs by
    `tool_call_id`.
@@ -170,8 +170,8 @@ session keeps appending; from the agent's perspective, the old raw block may
 still be in the current continuation. Do not call `refresh` just to apply
 summarize. Once context is at/above `0.85`, the runtime stamps
 `_meta.agent_meta.agent_state.context.rebuild`, which permits a proactive manual rebuild with
-`system(action="summarize", rebuild=true)` — either with new items (record then
-apply) or with no items (apply already-pending summaries) — when the fresh
+`context(action="rebuild")` — either with new items (record then apply) or with
+no items (apply already-pending summaries) — when the fresh
 context is worth the cost; applied summaries flip to `status: done`. The manual
 rebuild action's own tool result, including its `context` snapshot plus
 `token_usage.session.context_tokens` and `token_usage.session.context_usage`,
@@ -203,7 +203,7 @@ summaries to apply, so summarize more or molt rather than relying on it for
 compaction. Do not loop rebuild/summarize. Reference manuals explain why this
 boundary exists; this resident section states what to do.
 
-Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
+Both a-priori (`summary=true`) and a-posteriori (`context(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger
 whole-conversation boundary: if you have already decided to molt, do not pay a
 separate summarize call merely to prepare, and if summarize/reconstruction

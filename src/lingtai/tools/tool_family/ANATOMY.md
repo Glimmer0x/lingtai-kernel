@@ -15,7 +15,7 @@ related_files:
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/_tool_family.py
-  - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/tools/pad/ANATOMY.md
   - src/lingtai/tools/lingtai/ANATOMY.md
 maintenance: |

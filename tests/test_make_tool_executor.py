@@ -30,7 +30,7 @@ class _FakeAgent:
     def __init__(self, tmp_path):
         self.service = _FakeService()
         self._config = _FakeConfig()
-        self._intrinsics = {"system": object(), "psyche": object()}
+        self._intrinsics = {"system": object(), "context": object()}
         self._tool_handlers = {"custom_tool": object()}
         self._PARALLEL_SAFE_TOOLS = {"read"}
         self._working_dir = tmp_path
@@ -52,7 +52,7 @@ def test_make_tool_executor_wires_shared_fields(tmp_path):
     assert ex._guard is guard
     # Bound methods are re-created per attribute access, so compare by equality.
     assert ex._dispatch_fn == agent._dispatch_tool
-    assert ex._known_tools == {"system", "psyche", "custom_tool"}
+    assert ex._known_tools == {"system", "context", "custom_tool"}
     assert ex._parallel_safe_tools == {"read"}
     assert ex._logger_fn == agent._log
     assert ex._working_dir == Path(tmp_path)

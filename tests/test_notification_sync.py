@@ -798,7 +798,7 @@ def test_sync_idle_injects_post_molt_after_molt_batch_deferred_stamp(tmp_path: P
     """Regression for the post-molt continuation bug.
 
     A ``post-molt`` continuation is written while the agent is still ACTIVE
-    inside the ``psyche.molt`` tool call.  That same molt-result batch must skip
+    inside the ``context.molt`` tool call.  That same molt-result batch must skip
     active notification stamping and leave ``_notification_fp`` uncommitted; if
     it stamped post-molt and committed the full fingerprint, the IDLE
     ``_sync_notifications`` pass would see no change and never inject the
@@ -1911,7 +1911,7 @@ def test_responses_convert_input_none_yields_empty_list() -> None:
 
 
 def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
-    """The psyche.molt result batch must not consume its own post-molt wake."""
+    """The context.molt result batch must not consume its own post-molt wake."""
     from types import SimpleNamespace
 
     from lingtai.kernel.base_agent.turn import _batch_includes_context_molt
@@ -1932,13 +1932,13 @@ def test_context_molt_batch_skips_active_notification_stamp(tmp_path):
         _notification_live_holder=None,
     )
     molt_call = ToolCall(
-        name="psyche",
-        args={"action": "context_molt", "input": {"summary": "continue"}},
+        name="context",
+        args={"action": "molt", "input": {"summary": "continue"}},
         id="call_molt",
     )
     assert _batch_includes_context_molt([molt_call]) is True
 
-    molt_result = ToolResultBlock(id="call_molt", name="psyche", content={"status": "ok"})
+    molt_result = ToolResultBlock(id="call_molt", name="context", content={"status": "ok"})
     if not _batch_includes_context_molt([molt_call]):
         agent._notification_live_holder = attach_active_notifications(
             agent, [molt_result], prior_holder=agent._notification_live_holder

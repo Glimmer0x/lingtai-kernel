@@ -69,7 +69,7 @@ selects that topic.
   description: |
     Nested system-manual reference and canonical owner of tool-result
     summarization: the three compression modes (a-priori `summary=true`,
-    a-posteriori `system(action="summarize")`, molt), summarize cadences,
+    a-posteriori `context(action="summarize")`, molt), summarize cadences,
     delayed provider reconstruction and the 0.85/1.0 rebuild boundaries,
     original-result recovery by `tool_call_id`, and summarize versus molt.
 - name: sqlite-log-query
@@ -126,7 +126,7 @@ selects that topic.
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
-| Molt mechanics, pad tending, session journals, post-wipe recovery | `psyche-manual` |
+| Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
 | Knowledge-entry layout and private durable memory | `knowledge-manual` |

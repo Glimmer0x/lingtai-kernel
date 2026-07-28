@@ -72,11 +72,11 @@ def test_former_alias_capabilities_are_not_tools(tmp_path):
             agent.stop(timeout=1.0)
 
 
-def test_knowledge_independent_of_psyche(tmp_path):
-    """Knowledge is a separate capability; psyche is always-on as intrinsic."""
+def test_knowledge_independent_of_context(tmp_path):
+    """Knowledge is a separate capability; context is always-on as intrinsic."""
     agent, _ = _mk_agent(tmp_path)
     try:
-        assert "psyche" in agent._intrinsics
+        assert "context" in agent._intrinsics
         assert "knowledge" in agent._tool_handlers
     finally:
         agent.stop(timeout=1.0)

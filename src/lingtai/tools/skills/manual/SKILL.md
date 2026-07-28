@@ -126,12 +126,12 @@ To pin a skill's body into your pad so it survives a molt and rides in the cache
 system-prompt prefix:
 
 ```
-psyche({"action": "pad_append", "input": {"files": ["<location>"]}, "reasoning": "pin reference"})
+pad({"action": "append", "input": {"files": ["<location>"]}, "reasoning": "pin reference"})
 ```
 
 Pinning is cheap per-token over a session; repeated `read`s of the same file are
 not. Pad semantics (read-only reference section, clearing with `files: []`, the
-token ceiling) belong to `psyche-manual` §5 — read it there.
+token ceiling) belong to `context-manual` §5 — read it there.
 
 ## External skill intake (default flow)
 

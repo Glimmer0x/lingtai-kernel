@@ -1,19 +1,19 @@
-"""Evidence for splitting `pad` and `lingtai` out of `psyche` into their own roots.
+"""Evidence for splitting `pad` and `lingtai` out of the former `psyche` into their own roots.
 
 One change's local evidence, in the sense `src/lingtai/tools/CONTRACT.md`
 "Contract tests" permits — not a universal conformance suite. Chosen for this
 split's own risks:
 
 1. **Three roots, not one plus aliases.** The split must produce exactly one
-   model-facing `pad`, one `lingtai`, and one reduced `psyche`, with the five
-   old psyche leaves genuinely gone rather than shimmed.
+   model-facing `pad`, one `lingtai`, and one `context`, with the five
+   old leaves genuinely gone rather than shimmed.
 2. **Two destructive full rewrites changed owner.** `pad(action='edit')` and
    `lingtai(action='update')` must keep their intended/non-empty safety across
    the move, and cross-branch input must still be refused *before* any write.
 3. **Boot and post-molt reload moved.** Each family now owns its own boot hook;
    the prompt sections must survive a molt exactly as before.
 4. **Ownership claims must be truthful.** Each family's reserved `manual` must
-   return that family's own manual, never a psyche-owned one.
+   return that family's own manual, never a context-owned one.
 
 Every stateful test runs against a pytest `tmp_path`, never the live workdir.
 """
@@ -24,7 +24,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.tools import lingtai as lingtai_tool
 from lingtai.tools import pad as pad_tool
-from lingtai.tools import psyche as psyche_tool
+from lingtai.tools import context as context_tool
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -43,8 +43,8 @@ def _lingtai(agent, args: dict) -> dict:
     return agent._intrinsics["lingtai"](args)
 
 
-def _psyche(agent, args: dict) -> dict:
-    return agent._intrinsics["psyche"](args)
+def _context(agent, args: dict) -> dict:
+    return agent._intrinsics["context"](args)
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +66,16 @@ def test_pad_and_lingtai_are_independent_roots_with_exact_action_order():
     assert lingtai_tool.ACTION_ORDER == ("update", "load", "manual")
 
 
-def test_psyche_no_longer_exposes_pad_or_lingtai_leaves():
+def test_context_no_longer_exposes_pad_or_lingtai_leaves():
     """The five old leaves are gone with no compatibility alias."""
-    actions = set(psyche_tool.get_schema("en")["properties"]["action"]["enum"])
+    actions = set(context_tool.get_schema("en")["properties"]["action"]["enum"])
     for gone in (
         "pad_edit", "pad_load", "pad_append", "lingtai_update", "lingtai_load",
     ):
         assert gone not in actions
-    # And the retained inventory is untouched by the split.
-    assert psyche_tool.ACTION_ORDER == (
-        "context_molt", "name_set", "name_nickname", "manual",
+    # And the current inventory carries no leaf spelling from either split.
+    assert context_tool.ACTION_ORDER == (
+        "molt", "summarize", "rebuild", "manual",
     )
 
 
@@ -83,13 +83,13 @@ def test_psyche_no_longer_exposes_pad_or_lingtai_leaves():
     "gone",
     ["pad_edit", "pad_load", "pad_append", "lingtai_update", "lingtai_load"],
 )
-def test_old_psyche_leaves_are_rejected_at_dispatch(tmp_path, gone):
-    """Not an alias: each old leaf is an unknown psyche action and fails loudly."""
+def test_old_split_leaves_are_rejected_at_dispatch(tmp_path, gone):
+    """Not an alias: each old leaf is an unknown context action and fails loudly."""
     agent = _agent(tmp_path)
     try:
-        result = _psyche(agent, {"action": gone, "input": {}})
+        result = _context(agent, {"action": gone, "input": {}})
         assert "error" in result
-        assert "Unknown psyche action" in result["error"]
+        assert "Unknown context action" in result["error"]
         # Nothing written by the refused call.
         assert (agent._working_dir / "system" / "pad.md").read_text() == ""
     finally:
@@ -101,21 +101,21 @@ def test_each_root_is_registered_exactly_once_as_an_intrinsic():
 
     assert INTRINSICS["pad"]["module"] is pad_tool
     assert INTRINSICS["lingtai"]["module"] is lingtai_tool
-    assert INTRINSICS["psyche"]["module"] is psyche_tool
+    assert INTRINSICS["context"]["module"] is context_tool
     # Three distinct modules — no root is an alias of another.
-    assert len({id(pad_tool), id(lingtai_tool), id(psyche_tool)}) == 3
+    assert len({id(pad_tool), id(lingtai_tool), id(context_tool)}) == 3
     # Intrinsics only: never also dynamic capabilities.
-    for name in ("pad", "lingtai", "psyche"):
+    for name in ("pad", "lingtai", "context"):
         assert name not in BUILTIN_TOOLS
 
 
 def test_intrinsic_roots_are_wired_exactly_once_on_a_real_agent(tmp_path):
     agent = _agent(tmp_path)
     try:
-        for name in ("pad", "lingtai", "psyche"):
+        for name in ("pad", "lingtai", "context"):
             assert name in agent._intrinsics
         schema_names = [s.name for s in agent._build_tool_schemas()]
-        for name in ("pad", "lingtai", "psyche"):
+        for name in ("pad", "lingtai", "context"):
             assert schema_names.count(name) == 1
     finally:
         agent.stop(timeout=1.0)
@@ -135,7 +135,7 @@ def test_the_root_is_the_closed_ltp_v2_envelope(module):
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["summarize"]["type"] == "boolean"
-    # The pre-migration psyche `object` key never existed on these roots.
+    # The pre-migration `object` key never existed on these roots.
     assert "object" not in schema["properties"]
     # Schema-level action/input correlation, one condition per child.
     assert len(schema["allOf"]) == len(schema["properties"]["action"]["enum"])
@@ -306,7 +306,7 @@ def test_non_object_input_is_rejected(tmp_path):
 def test_envelope_controls_and_tc_id_never_reach_a_handler(tmp_path):
     """`reasoning`/`summarize`/`_tc_id` are envelope, not action input.
 
-    Neither family consumes `_tc_id` (only psyche's molt does), so both drop it
+    Neither family consumes `_tc_id` (only context’s molt does), so both drop it
     at their own Host boundary without widening the shared root field set.
     """
     for module in (pad_tool, lingtai_tool):
@@ -470,12 +470,12 @@ def _install_manual(workdir, skill_name: str) -> tuple[str, object]:
 
 @pytest.mark.parametrize(
     "module_name,skill_name",
-    [("pad", "pad-manual"), ("lingtai", "lingtai-manual"), ("psyche", "psyche-manual")],
+    [("pad", "pad-manual"), ("lingtai", "lingtai-manual"), ("context", "context-manual")],
 )
 def test_reserved_manual_is_family_correct_and_not_double_wrapped(
     tmp_path, module_name, skill_name
 ):
-    """Each family returns *its own* manual, flattened once — never psyche's."""
+    """Each family returns *its own* manual, flattened once — never another family's."""
     agent = _agent(tmp_path)
     try:
         body, path = _install_manual(agent._working_dir, skill_name)
@@ -491,13 +491,13 @@ def test_reserved_manual_is_family_correct_and_not_double_wrapped(
         agent.stop(timeout=1.0)
 
 
-def test_pad_and_lingtai_manuals_are_installed_and_distinct_from_psyche(tmp_path):
+def test_pad_and_lingtai_manuals_are_installed_and_distinct_from_context(tmp_path):
     """The kernel actually ships and installs the two new manual bundles."""
     agent = _agent(tmp_path)
     try:
         capabilities = agent._working_dir / ".library" / "intrinsic" / "capabilities"
         bodies = {}
-        for skill in ("pad-manual", "lingtai-manual", "psyche-manual"):
+        for skill in ("pad-manual", "lingtai-manual", "context-manual"):
             skill_md = capabilities / skill / "SKILL.md"
             assert skill_md.is_file(), skill
             bodies[skill] = skill_md.read_text(encoding="utf-8")
@@ -536,18 +536,18 @@ def test_both_roots_are_on_the_ltp_v2_summarize_allowlist():
         _LTP_V2_MIGRATED_FAMILIES, summary_requested,
     )
 
-    for name in ("pad", "lingtai", "psyche"):
+    for name in ("pad", "lingtai", "context"):
         assert name in _LTP_V2_MIGRATED_FAMILIES
         assert summary_requested({"summarize": True}, name) is True
         assert summary_requested({"summarize": False}, name) is False
 
 
-def test_both_roots_inherit_psyches_emanation_blacklist_boundary():
+def test_both_roots_inherit_the_emanation_blacklist_boundary():
     """Prompt/identity-mutation authority follows the split rather than being
     lost in it."""
     from lingtai.tools.daemon import EMANATION_BLACKLIST
 
-    for name in ("psyche", "pad", "lingtai"):
+    for name in ("context", "pad", "lingtai"):
         assert name in EMANATION_BLACKLIST
 
 
@@ -563,14 +563,14 @@ def test_glossary_resources_exist_for_both_new_packages():
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_no_longer_owns_the_prompt_section_boot_hooks():
-    """Boot moved; psyche defines no `boot` at all now."""
-    assert not hasattr(psyche_tool, "boot")
+def test_context_no_longer_owns_the_prompt_section_boot_hooks():
+    """Boot moved; context defines no `boot` at all now."""
+    assert not hasattr(context_tool, "boot")
     assert callable(pad_tool.boot)
     assert callable(lingtai_tool.boot)
-    # The handlers live in their own packages — no stale psyche re-export.
-    assert not hasattr(psyche_tool, "_pad_load")
-    assert not hasattr(psyche_tool, "_lingtai_load")
+    # The handlers live in their own packages — no stale re-export.
+    assert not hasattr(context_tool, "_pad_load")
+    assert not hasattr(context_tool, "_lingtai_load")
 
 
 def test_boot_loads_both_sections_and_registers_post_molt_reload(tmp_path):

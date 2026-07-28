@@ -1,10 +1,10 @@
 ---
 related_files:
-- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
-- src/lingtai/tools/psyche/_session_journal.py
-- src/lingtai/tools/psyche/ANATOMY.md
+- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/_session_journal.py
+- src/lingtai/tools/context/ANATOMY.md
 maintenance: |
-  Session-journal / molt-history entry scaffold whose required frontmatter marker (`type: session-journal`) and path convention are enforced by the molt gate in src/lingtai/tools/psyche/_session_journal.py; update it in lockstep whenever that validator's required fields or path rule change.
+  Session-journal / molt-history entry scaffold whose required frontmatter marker (`type: session-journal`) and path convention are enforced by the molt gate in src/lingtai/tools/context/_session_journal.py; update it in lockstep whenever that validator's required fields or path rule change.
 ---
 
 # Session-Journal / Molt-History Entry Template
@@ -16,7 +16,7 @@ via `write`/`edit` (the kernel `knowledge` mechanic auto-discovers subdirectorie
 containing `KNOWLEDGE.md`). Read `<molt-count>` from your resident system
 prompt's identity section — "You have undergone N molts since birth" — and use
 that N: this entry records the pre-molt segment, written *before* you call
-`psyche(action='context_molt')`. (The tool result afterward reports the next count,
+`context(action='molt')`. (The tool result afterward reports the next count,
 N+1, which belongs to the next segment.) Including it keeps chronology stable
 when you molt more than once on the same date: the date alone cannot order two
 same-day entries, but the molt count always can.
@@ -36,7 +36,7 @@ and structure, never the body.
 > lives at `knowledge/session-journal/<entry>/KNOWLEDGE.md` (a per-segment
 > sub-entry, not the parent index), exists, is non-empty UTF-8, and has valid
 > YAML frontmatter with `name` and `description`. You pass this file's path to
-> `psyche(action='context_molt', input={'session_journal_path': ...})`.
+> `context(action='molt', input={'session_journal_path': ...})`.
 
 > **YAML scalar safety:** keep `description` in the block-scalar form shown
 > below. Plain YAML values break when they contain a colon followed by a space
@@ -50,7 +50,7 @@ description: >-
   One-sentence hook — what this session segment did. Use this block style so
   colons such as "molt 53: runtime relay" remain valid YAML.
 date: <YYYY-MM-DD>
-molt_count: <current molt count, before calling psyche(action='context_molt')>
+molt_count: <current molt count, before calling context(action='molt')>
 type: session-journal
 ---
 

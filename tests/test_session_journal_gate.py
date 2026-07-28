@@ -1,6 +1,6 @@
 """Tests for the molt session-journal gate (issue #350).
 
-The gate makes ``psyche(action="context_molt", ...)`` require a
+The gate makes ``context(action="molt", ...)`` require a
 machine-checkable pointer to the session journal the agent wrote before
 shedding context. Validation runs BEFORE any state mutation — a rejected
 journal must leave molt_count and history untouched.
@@ -19,7 +19,7 @@ import pytest
 
 from lingtai.agent import Agent
 from lingtai.kernel.services.logging import query_sqlite_event_index
-from lingtai.tools.psyche._session_journal import (
+from lingtai.tools.context._session_journal import (
     validate_session_journal_path,
 )
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
@@ -297,14 +297,14 @@ def _emit_molt_call(agent, ToolCallBlock, wire_id, summary, journal_path=None):
     action_input = {"summary": summary}
     if journal_path is not None:
         action_input["session_journal_path"] = journal_path
-    args = {"action": "context_molt", "input": action_input}
+    args = {"action": "molt", "input": action_input}
     agent._session._chat.interface.add_assistant_message([
-        ToolCallBlock(id=wire_id, name="psyche", args=args),
+        ToolCallBlock(id=wire_id, name="context", args=args),
     ])
 
 
 def _call(agent, args):
-    return agent._intrinsics["psyche"](args)
+    return agent._intrinsics["context"](args)
 
 
 def test_molt_rejects_missing_journal_path(tmp_path):
@@ -314,7 +314,7 @@ def test_molt_rejects_missing_journal_path(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text")
         before_count = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": None,
@@ -340,7 +340,7 @@ def test_molt_rejects_nonexistent_journal(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", bad)
         before_count = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": bad,
@@ -366,7 +366,7 @@ def test_molt_rejects_outside_area(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         before_count = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": path,
@@ -395,7 +395,7 @@ def test_molt_rejects_invalid_frontmatter(tmp_path):
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         before_count = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": path,
@@ -419,7 +419,7 @@ def test_molt_accepts_valid_journal_and_records_path(tmp_path):
         wire = "toolu_gate_005"
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", path)
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": path,
@@ -450,7 +450,7 @@ def test_molt_absolute_journal_path_records_normalized_path_in_event_stores(tmp_
         wire = "toolu_gate_absolute_001"
         _emit_molt_call(agent, ToolCallBlock, wire, "summary text", absolute_path)
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "summary text",
                 "session_journal_path": absolute_path,
@@ -499,9 +499,9 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=wire,
-                name="psyche",
+                name="context",
                 args={
-                    "action": "context_molt",
+                    "action": "molt",
                     "input": {
                         "summary": "briefing",
                         "session_journal_path": None,
@@ -515,7 +515,7 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
         before_count = agent._molt_count
         before_chat = agent._session._chat
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "briefing",
                 "session_journal_path": None,
@@ -539,7 +539,7 @@ def test_molt_initiator_system_arg_cannot_bypass_gate(tmp_path):
 def test_system_forget_does_not_require_journal(tmp_path):
     """System-initiated molt (context_forget) must NOT require a journal —
     there is no agent turn to write one."""
-    from lingtai.tools.psyche import context_forget
+    from lingtai.tools.context import context_forget
 
     agent, _ = _molt_setup(tmp_path)
     try:

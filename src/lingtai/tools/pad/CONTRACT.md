@@ -9,7 +9,7 @@ related_files:
   - src/lingtai/tools/pad/_pad.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
-  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - tests/test_pad_lingtai_split.py
@@ -55,7 +55,7 @@ truth.
 - `load` and `manual` are read-only with respect to durable agent state.
   `load` writes only the prompt section it composes, which is derived state.
 - Agents tending the pad before a molt MUST follow `pad-manual`; the molt
-  procedure itself remains owned by `psyche` and `psyche-manual`.
+  procedure itself remains owned by `psyche` and `context-manual`.
 - A coding agent changing pad's actions, inputs, limits, or persistence paths
   MUST update this contract, the paired Anatomy, `pad-manual`, and the focused
   tests in the same change.

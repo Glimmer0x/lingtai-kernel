@@ -40,6 +40,7 @@ from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
+    context as context_intrinsic,
 )
 from tests._notification_store_helpers import (
     fingerprint_notifications,
@@ -235,8 +236,9 @@ def test_system_schema_drops_notification_and_dismiss() -> None:
     enum = sys_intrinsic.get_schema("en")["properties"]["action"]["enum"]
     assert "notification" not in enum
     assert "dismiss" not in enum
-    # summarize remains a system action.
-    assert "summarize" in enum
+    # ``summarize`` is no longer a system action either — context hygiene
+    # moved to context(action='summarize'|'rebuild').
+    assert "summarize" not in enum
     # The dismiss-only params are gone from the system schema too.
     props = sys_intrinsic.get_schema("en")["properties"]
     for key in ("channel", "force", "event_id", "ref_id"):
@@ -595,12 +597,14 @@ def _make_summarize_agent(tmp_path: Path, tool_call_id: str) -> _SummarizeAgent:
     return agent
 
 
-def test_system_summarize_success_clears_large_result_reminder(tmp_path: Path) -> None:
+def test_context_summarize_success_clears_large_result_reminder(tmp_path: Path) -> None:
     tool_call_id = "toolu_sum_ok"
     agent = _make_summarize_agent(tmp_path, tool_call_id)
     _publish_large_result_reminder(tmp_path, tool_call_id=tool_call_id)
 
-    res = sys_intrinsic.handle(
+    # The public action moved to ``context``; the legacy reminder auto-clear
+    # behavior it drives is unchanged.
+    res = context_intrinsic.handle(
         agent,
         {
             "action": "summarize",
@@ -616,12 +620,12 @@ def test_system_summarize_success_clears_large_result_reminder(tmp_path: Path) -
     assert not (tmp_path / ".notification" / "system.json").exists()
 
 
-def test_system_summarize_failure_does_not_clear_reminder(tmp_path: Path) -> None:
+def test_context_summarize_failure_does_not_clear_reminder(tmp_path: Path) -> None:
     reminder_tcid = "toolu_real"
     agent = _make_summarize_agent(tmp_path, "toolu_real")
     _publish_large_result_reminder(tmp_path, tool_call_id=reminder_tcid)
 
-    res = sys_intrinsic.handle(
+    res = context_intrinsic.handle(
         agent,
         {
             "action": "summarize",
@@ -1026,7 +1030,7 @@ def _shipped_post_molt_instructions(tmp_path: Path) -> str:
     back off the published channel, so the test asserts against what the agent
     actually receives rather than a copy restated in this file.
     """
-    from lingtai.tools.psyche._molt import _publish_post_molt
+    from lingtai.tools.context._molt import _publish_post_molt
 
     workdir = tmp_path / "post-molt-template"
     workdir.mkdir(parents=True, exist_ok=True)

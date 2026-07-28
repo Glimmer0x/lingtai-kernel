@@ -64,7 +64,7 @@ absent/false by default. Notification is a **short-result** family: `check`
 returns a small placeholder and the dismiss actions return compact receipts, so
 `summarize` is available but normally unnecessary — leave it false. Keep it
 false for `manual` in particular, so exact procedures and constraints are not
-summarized away. Note this is unrelated to `system(action='summarize')`, which
+summarized away. Note this is unrelated to `context(action='summarize')`, which
 is the separate action for compacting a large tool result.
 
 ## Installed manual retrieval
@@ -107,7 +107,7 @@ producer state, delivery fingerprints, or acknowledgement state.
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
-| Tool-result ranking, digest quality, `system(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../system-manual/reference/summarize-manual/SKILL.md` |
+| Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |
 | Runtime/kernel update nudges | `../system-manual/reference/runtime-update-checks/SKILL.md` |
 
@@ -121,7 +121,7 @@ producer state, delivery fingerprints, or acknowledgement state.
   override protected source-of-truth channels and never mutates producer state.
 - Large tool results are ranked under
   `_meta.agent_meta.agent_state.current_tool_result_chars`, not emitted as new
-  notifications. Follow `../system-manual/reference/summarize-manual/SKILL.md`;
+  notifications. Follow `../context-manual/reference/summarize-manual/SKILL.md`;
   do not invent a second summarization procedure here.
 
 ## Why the boundary is split this way

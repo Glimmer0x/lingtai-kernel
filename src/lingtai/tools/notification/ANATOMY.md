@@ -168,7 +168,7 @@ are unchanged.
   the `injection_seq` freshness field stays outside the envelope and never
   reaches the tool, since the pair is spliced onto the wire, not dispatched.
 - Large tool results are ranked and compacted through
-  `system(action="summarize")`. Notification dismissal retains only the legacy
+  `context(action="summarize")`. Notification dismissal retains only the legacy
   reminder escape hatch described by the manual.
 - Changes to notification read/dismiss semantics must also check
   `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md`; changes to Port behavior

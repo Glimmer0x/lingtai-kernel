@@ -41,10 +41,10 @@ ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
 refusal) lives there, so every guard holds through this tool by construction.
 Legacy ``large_tool_result`` reminders — the kernel no longer raises these
 (large results are ranked under ``_meta.agent_meta.agent_state.current_tool_result_chars``
-and compacted via ``system(action="summarize")``) — but any event still present
+and compacted via ``context(action="summarize")``) — but any event still present
 from before this change (or a pre-molt session) may be dismissed as an escape
 hatch; doing so acknowledges the ref_id.  Summarization via
-``system(action="summarize")`` still auto-clears any such matching reminder.
+``context(action="summarize")`` still auto-clears any such matching reminder.
 """
 from __future__ import annotations
 

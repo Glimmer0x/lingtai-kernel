@@ -161,8 +161,8 @@ class TestEstimateContextTokens:
 # ---------------------------------------------------------------------------
 
 
-def _make_agent_with_psyche(tmp_path):
-    """Create an Agent with psyche capability and mocked LLM service."""
+def _make_agent_with_context(tmp_path):
+    """Create an Agent with the context intrinsic and mocked LLM service."""
     from lingtai.agent import Agent
 
     svc = MagicMock()
@@ -171,7 +171,7 @@ def _make_agent_with_psyche(tmp_path):
     svc.model = "gemini-test"
     return Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["psyche"],
+        capabilities=["context"],
     )
 
 
@@ -181,7 +181,7 @@ def test_compaction_pressure_not_published_as_notification(tmp_path):
     agent state and is surfaced under ``_meta.agent_meta.agent_state.context.molt``
     (see ``meta_block.build_molt_context``); ``_check_molt_pressure`` only
     clears any stale legacy ``molt`` notification and never publishes."""
-    agent = _make_agent_with_psyche(tmp_path)
+    agent = _make_agent_with_context(tmp_path)
     agent.start()
     try:
         # Stamp a real int context_limit so build_meta() doesn't fall through

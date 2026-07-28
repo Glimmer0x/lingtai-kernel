@@ -17,6 +17,8 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/context/ANATOMY.md
+  - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/pad/ANATOMY.md
@@ -36,8 +38,8 @@ maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
   Browser is an internal browse child, not a second public capability. The
   generic tool_family package is optional composition infrastructure any
-  future family migration may adopt, not a second registry. psyche is its
-  eleventh consumer and the third migrated intrinsic. Update
+  future family migration may adopt, not a second registry. context is its
+  thirteenth consumer and the fifth migrated intrinsic. Update
   structural claims with code and keep reciprocal graph edges valid.
 ---
 # src/lingtai/tools/
@@ -70,12 +72,13 @@ capability names and lazy adapters.
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
   `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
-  ninth, `notification` its tenth, `system` its eleventh, and `psyche` its
-  twelfth
+  ninth, `notification` its tenth, `system` its eleventh, `daemon` its
+  twelfth, and `context` its thirteenth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
-  lifecycle, and context-hygiene actions behind one model-facing root
-  (`src/lingtai/tools/system/ANATOMY.md`). Like `soul` and `notification` it is
+  lifecycle, preset, and identity-naming actions behind one model-facing root
+  (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene
+  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` and `notification` it is
   an intrinsic rather than a manager-owning capability, so it composes its
   schema from a module-level schema-only family and builds a dispatching one
   per `handle(agent, args)` call.
@@ -96,14 +99,15 @@ capability names and lazy adapters.
   is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
   builds its dispatching family per call, because an intrinsic receives `agent`
   per call rather than owning a manager.
-- `psyche/` — mandatory intrinsic owning the public `psyche` family: the agent's
-  identity, pad, name, and context molt behind one root
-  (`src/lingtai/tools/psyche/ANATOMY.md`). Its public model-facing schema is the
-  ToolFamily-composed LTP v2 envelope; the former two-key `(object, action)`
-  matrix is now one flat action enum, one action per pre-migration pair. Like
-  `soul`/`notification` it builds its dispatching family per call, and it is
-  the one family that *consumes* the kernel-injected `_tc_id` rather than
-  merely dropping it.
+- `context/` — mandatory intrinsic owning the public `context` family: the
+  agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
+  `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
+  replaces the former `psyche` root, which no longer exists at any
+  model-visible or registry level: the two name actions moved to `system` and
+  the public `system` summarize action moved in, split into the explicit
+  record-only `summarize` and applying `rebuild`. Like `soul`/`notification` it
+  builds its dispatching family per call, and it is the one family that
+  *consumes* the kernel-injected `_tc_id` rather than merely dropping it.
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

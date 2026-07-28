@@ -1,4 +1,10 @@
-"""Tests for system(action='summarize') — agent-authored context summarization.
+"""Tests for agent-authored context summarization.
+
+The ENGINE (``lingtai.tools.system.summarize``) still lives under ``system``
+and is exercised directly here. Its PUBLIC ownership moved to ``context``:
+``context(action='summarize')`` records only and ``context(action='rebuild')``
+applies, replacing the former ``system(action='summarize', rebuild=<bool>)``
+boolean. The schema/dispatch tests below therefore assert against ``context``.
 
 Covers:
 - schema registration: summarize in action enum
@@ -99,46 +105,66 @@ def _marker_status(iface, tool_call_id):
 
 
 def test_summarize_in_schema_enum():
-    from lingtai.tools.system import get_schema
-    schema = get_schema("en")
-    assert "summarize" in schema["properties"]["action"]["enum"]
+    """The public actions live on ``context``, never on ``system``."""
+    from lingtai.tools.context import get_schema as context_schema
+    from lingtai.tools.system import get_schema as system_schema
+
+    actions = context_schema("en")["properties"]["action"]["enum"]
+    assert "summarize" in actions
+    assert "rebuild" in actions
+    # And no compatibility action survives on ``system``.
+    assert "summarize" not in system_schema("en")["properties"]["action"]["enum"]
 
 
 def test_schema_has_items_property():
-    # Post-LTP-v2 migration ``items`` is no longer a flat root sibling: it is
-    # a property of the ``summarize`` action's own strict ``input`` object.
+    # ``items`` is a property of each context action's own strict ``input``
+    # object, and belongs to no ``system`` action at all.
+    import lingtai.tools.context as context_tool
     from lingtai.tools.system.schema import INPUT_SCHEMAS
 
-    items_schema = INPUT_SCHEMAS["summarize"]["properties"]["items"]
-    # Declared in the provider-compatible nullable representation for a
-    # strict schema, so the array type is one member of the type union.
-    assert "array" in items_schema["type"]
-    assert items_schema["items"]["required"] == ["tool_call_id", "summary"]
-    # And it belongs to ``summarize`` alone — no other action accepts it.
+    for schema in (
+        context_tool._SUMMARIZE_INPUT_SCHEMA,
+        context_tool._REBUILD_INPUT_SCHEMA,
+    ):
+        items_schema = schema["properties"]["items"]
+        assert "array" in items_schema["type"]
+        assert items_schema["items"]["required"] == ["tool_call_id", "summary"]
+
+    # ``summarize`` requires items; ``rebuild`` accepts the nullable absent
+    # form for the ordinary pure-rebuild call.
+    assert context_tool._SUMMARIZE_INPUT_SCHEMA["properties"]["items"]["type"] == "array"
+    assert "null" in context_tool._REBUILD_INPUT_SCHEMA["properties"]["items"]["type"]
+
     for action, schema in INPUT_SCHEMAS.items():
-        if action != "summarize":
-            assert "items" not in schema["properties"], action
+        assert "items" not in schema["properties"], action
 
 
-def test_schema_has_rebuild_boolean_property():
+def test_rebuild_is_an_action_not_a_boolean_property():
+    """The explicit action replaced the old boolean discriminator."""
+    import lingtai.tools.context as context_tool
     from lingtai.tools.system.schema import INPUT_SCHEMAS
 
-    assert "boolean" in INPUT_SCHEMAS["summarize"]["properties"]["rebuild"]["type"]
+    assert "rebuild" in context_tool.ACTION_ORDER
+    # No context action carries a ``rebuild`` field — the action IS the
+    # discriminator, so a caller cannot ask summarize to rebuild.
+    for _name, schema, _handler in context_tool._CHILD_SPECS:
+        assert "rebuild" not in schema["properties"]
+    # And no system action carries one either.
     for action, schema in INPUT_SCHEMAS.items():
-        if action != "summarize":
-            assert "rebuild" not in schema["properties"], action
+        assert "rebuild" not in schema["properties"], action
 
 
 def test_schema_removed_legacy_rebuild_params():
     # The old public params are gone with NO legacy aliases retained.
+    import lingtai.tools.context as context_tool
     from lingtai.tools.system import get_schema
-    from lingtai.tools.system.schema import INPUT_SCHEMAS
 
     schema = get_schema("en")
     assert "rebuild_only" not in schema["properties"]
     assert "dry_run" not in schema["properties"]
-    assert "rebuild_only" not in INPUT_SCHEMAS["summarize"]["properties"]
-    assert "dry_run" not in INPUT_SCHEMAS["summarize"]["properties"]
+    for _name, child_schema, _handler in context_tool._CHILD_SPECS:
+        assert "rebuild_only" not in child_schema["properties"]
+        assert "dry_run" not in child_schema["properties"]
 
 
 def test_summarize_writes_pending_status_marker():
@@ -225,7 +251,9 @@ def test_missing_items_without_rebuild_is_invalid_no_op():
     result = _summarize(agent, {"action": "summarize"})
     assert result["status"] == "error"
     assert result["reason"] == "missing_items"
-    assert "invalid no-op" in result["message"]
+    # The message points at the current public surface: the explicit
+    # rebuild ACTION, not the removed rebuild boolean.
+    assert "context(action='rebuild')" in result["message"]
 
     result_false = _summarize(agent, {"action": "summarize", "rebuild": False})
     assert result_false["reason"] == "missing_items"
@@ -370,7 +398,11 @@ def test_summarize_only_pending_positive_offers_forced_boundary_and_proactive():
     assert result["pending_summary_totals"]["pending_summaries"] == 1
     recon = result["reconstruction"]
     assert "1.0 hard context boundary" in recon
-    assert "rebuild=true" in recon
+    # The proactive path is the explicit public action, applying what is already
+    # pending (no new items) — not the removed `rebuild=true` boolean.
+    assert "context(action='rebuild', input={}, reasoning='...')" in recon
+    assert "no new items" in recon
+    assert "system(action='summarize'" not in recon
     assert "Proactive is better" in recon
 
 
@@ -491,15 +523,19 @@ def test_summarize_single_item_success():
     # A summarize-only (rebuild=false, default) call is category A: summaries
     # recorded in runtime history, active provider context may still hold the old
     # raw result until rebuild. The comment names both apply-paths (the 1.0 forced
-    # boundary OR one tactical rebuild=true), warns against looping, and references
-    # the durable stores/molt fallback below the 0.75 recovery target.
+    # boundary OR one tactical context(action='rebuild')), warns against looping,
+    # and references the durable stores/molt fallback below the 0.75 recovery
+    # target. The guidance must name the CURRENT public call — this string is
+    # delivered to the model, so a stale `system(action='summarize', rebuild=true)`
+    # would teach a call that no longer exists.
     assert result["mode"] == "summarize"
     assert "reconstruction" in result
     assert "runtime history" in result["reconstruction"]
     assert "does NOT itself rebuild the active provider context" in result["reconstruction"]
     assert "old raw result" in result["reconstruction"]
     assert "1.0 hard context boundary" in result["reconstruction"]
-    assert "rebuild=true" in result["reconstruction"]
+    assert "context(action='rebuild', input={}, reasoning='...')" in result["reconstruction"]
+    assert "system(action='summarize'" not in result["reconstruction"]
     assert "0.75 recovery target" in result["reconstruction"]
     assert "do not loop rebuild/summarize" in result["reconstruction"]
     assert "meta_guidance" in result["reconstruction"]
@@ -771,10 +807,11 @@ def test_handle_dispatches_summarize(tmp_path):
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
-    result = agent._intrinsics["system"](
+    # The public action lives on ``context`` now; dispatch must reach the
+    # engine there (an ``items``-shaped error), not an unknown-action error.
+    result = agent._intrinsics["context"](
         {"action": "summarize", "input": {"items": []}}
     )
-    # Empty items → error, but the dispatch must reach _summarize (not unknown action)
     assert result["status"] == "error"
     assert "items" in result.get("message", "")
 
@@ -910,6 +947,13 @@ def test_summarize_runtime_threshold_change_rejected(tmp_path):
 
     assert result["status"] == "error"
     assert result["reason"] == "runtime_threshold_change_not_supported"
+    # The recovery guidance is model-visible, so it must name the CURRENT public
+    # call, not the removed `system(action='summarize', items=[...])`.
+    assert "context(action='summarize', input={'items': [...]}" in result["message"]
+    assert "system(action='summarize'" not in result["message"]
+    # `system(action='refresh')` IS still correct here — the threshold really is
+    # applied by a system refresh — so it must survive unchanged.
+    assert "system(action='refresh')" in result["message"]
     # Threshold must NOT have been updated
     assert agent._summarize_notification_threshold == original_threshold
 

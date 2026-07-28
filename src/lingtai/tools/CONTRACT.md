@@ -26,7 +26,7 @@ related_files:
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
-  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_browser_capability.py
@@ -125,9 +125,11 @@ model-facing schema or nested `input`.
 - The prohibition above is on the result-summarization **control**, identified by
   role and not by spelling. This contract reserves no name inside `input`: an
   action MAY declare a domain field named `summary` when that field is genuine
-  action input rather than a post-processing control. Today's psyche molt
-  retrospective (`input.summary`, a string the agent writes for the next session)
-  is such a field and stays legitimate after migration. The test is role: a
+  action input rather than a post-processing control. The `context` molt
+  retrospective (`input.summary`, a string the agent writes for the next
+  session) is such a field and remains legitimate. Note that `context` also
+  carries an ACTION named `summarize`; that too is a domain operation, distinct
+  from the root control, and no `context` child declares a `summarize` field. The test is role: a
   boolean asking the runtime to post-process this call's result belongs at root
   as `summarize`; a value the action itself consumes belongs in `input` under
   whatever name the domain calls it.
@@ -384,7 +386,7 @@ persistence path is unchanged; only the argument shape and the envelope layer
 around it moved. Envelope validation and its errors are necessarily new under
 this contract, and psyche's former two-key unknown-object/invalid-action guards
 became one unknown-action error (see
-`src/lingtai/tools/psyche/CONTRACT.md`). It
+`src/lingtai/tools/context/CONTRACT.md`). It
 owns no settings file at either level and its manual says so.
 
 Three psyche facts are envelope consequences worth naming here. Its molt
@@ -398,13 +400,25 @@ rather than dropping it, so it strips that key at its own Host boundary and
 threads it to the one action that needs it, instead of widening the shared
 envelope.
 
+**Current state (the paragraph above is migration history).** That family no
+longer exists. `pad` and `lingtai` split out into their own roots, and the rest
+was dissolved: the context molt became `context` (`molt | summarize | rebuild |
+manual`, `src/lingtai/tools/context/CONTRACT.md`), which also absorbed the
+public `system` summarize action and split it into the explicit record-only
+`summarize` and applying `rebuild`; the two name actions moved to `system`
+(`src/lingtai/tools/system/CONTRACT.md`). There is no `psyche` root, module, or
+alias at any model-visible or registry level, and no `system(action=
+'summarize')`. `context` is the family that consumes `_tc_id`, and it is the
+one family carrying both an action named `summarize` and the unrelated root
+`summarize` control — no `context` child declares a `summarize` field.
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
 `file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
-`daemon`, `email`, and `psyche`), so
+`daemon`, `email`, `pad`, `lingtai`, and `context`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the
@@ -455,9 +469,9 @@ verbatim, having no such diagnostics, `notification` is its tenth, using
 it the same way while retaining a thin outer `handle()` that strips the
 kernel-injected `_tc_id` every intrinsic receives, flattens the reserved
 `manual` child's canonical result to its own pinned public shape, and
-normalizes the generic unknown-action error to its own, and `psyche` is its
+normalizes the generic unknown-action error to its own, and `context` is its
 eleventh, using `soul`'s module-level composition shape while threading the
-`_tc_id` it actually consumes to its `context_molt` child out-of-band rather
+`_tc_id` it actually consumes to its `molt` child out-of-band rather
 than widening the shared envelope. `avatar` reuses
 `ToolFamily` but not `build_manual_child`, because its manual ships inside
 its own package rather than the agent's installed `.library` catalog —
@@ -533,13 +547,15 @@ performing no spawn or rules I/O. Every test there builds its own isolated
 temporary network and fakes the launcher Port, so it neither creates a live
 avatar nor writes a live `.rules` signal.
 
-`psyche`'s migration evidence (`tests/test_tool_family_psyche_migration.py`,
-plus the updated `tests/test_psyche.py`, `tests/test_pad.py`,
+`context`'s evidence (`tests/test_tool_family_context_migration.py`,
+plus the updated `tests/test_context.py`, `tests/test_pad.py`,
 `tests/test_eigen.py`, `tests/test_session_journal_gate.py`, and
 `tests/test_intrinsic_manual_actions.py`) is likewise one family's local
-evidence, chosen for a risk profile no earlier migration had: two destructive
-full rewrites and one irreversible operation behind the same root. It covers
-the preserved nine-action inventory and its exact pre-migration origins, the
+evidence, chosen for a risk profile no earlier migration had: the irreversible
+molt plus the record/apply pair that rewrites what the provider actually sees.
+It covers the exact four-action inventory (`molt | summarize | rebuild |
+manual`), the record-only-versus-applying split that replaced the former
+`rebuild` boolean, the proof that no `psyche` root survives anywhere, the
 closed root on both wires with the `allOf` correlation intact, per-action input
 isolation, envelope and cross-branch rejection before any file write or context
 shed, `_tc_id` isolation on the consume-rather-than-drop path, the molt

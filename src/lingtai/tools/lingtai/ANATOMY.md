@@ -3,7 +3,7 @@ related_files:
   - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
-  - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/tools/lingtai/__init__.py
   - src/lingtai/tools/lingtai/_lingtai.py
   - src/lingtai/tools/lingtai/glossary-en.md

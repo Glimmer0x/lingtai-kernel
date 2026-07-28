@@ -1,28 +1,38 @@
 """System intrinsic — runtime, lifecycle, and synchronization.
 
 An LTP v2 family (``../CONTRACT.md``): one model-facing root ``system`` with
-eleven fixed canonical action children, each owning its own strict ``input``
-object. The public tool name, every action value, all semantics, receipts,
-privilege gates, and errors are exactly what they were before the migration —
-only the argument *shape* moved from a flat root into ``action`` +
-per-action ``input``. Children never consume model tool slots.
+twelve fixed canonical action children, each owning its own strict ``input``
+object. Every retained action value, its semantics, receipts, privilege gates,
+and errors are exactly what they were. Children never consume model tool slots.
 
 Actions (voluntary, agent-callable):
-    refresh   — stop, reload MCP servers and config from working dir, restart
-    sleep     — self only, go to sleep (no karma needed)
-    lull      — put another agent to sleep (requires karma)
-    suspend   — suspend another agent (requires karma)
-    cpr       — resuscitate a suspended agent (requires karma)
-    interrupt — interrupt a running agent's current turn (requires karma)
-    clear     — force a full molt on another agent (requires karma)
-    nirvana   — permanently destroy an agent's working directory (requires nirvana)
-    presets   — list available presets in the agent's library
-    manual    — return the installed system-manual skill without mutation
-    summarize — record an agent-authored compact replacement for a prior
-                tool-result block in runtime history. Pick targets from
-                ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results``.
-                (Legacy: a successful summarize of a ``large_tool_result``
-                tool_call_id still auto-clears any leftover reminder.)
+    refresh       — stop, reload MCP servers and config from working dir, restart
+    sleep         — self only, go to sleep (no karma needed)
+    lull          — put another agent to sleep (requires karma)
+    suspend       — suspend another agent (requires karma)
+    cpr           — resuscitate a suspended agent (requires karma)
+    interrupt     — interrupt a running agent's current turn (requires karma)
+    clear         — force a full molt on another agent (requires karma)
+    nirvana       — permanently destroy an agent's working directory (requires nirvana)
+    presets       — list available presets in the agent's library
+    name_set      — set the agent's true name (真名), once and immutable
+    name_nickname — set/change the agent's display name (别名), mutable
+    manual        — return the installed system-manual skill without mutation
+
+Two ownership moves happened when the ``psyche`` family was dissolved:
+
+* ``name_set``/``name_nickname`` arrived here from ``psyche``. Naming is
+  runtime identity state, which is what this family owns. They update live
+  in-memory identity, persist ``.agent.json``, and rewrite the protected prompt
+  ``identity`` section — they are NOT raw init/config editing, and NOT the
+  physical agent address/workdir rename (an operator migration workflow
+  documented in ``system-manual``, unchanged and out of scope here).
+* The public ``summarize`` action LEFT for ``context``. Context hygiene is now
+  ``context(action='summarize')`` (record-only) and
+  ``context(action='rebuild')`` (apply), where the explicit action replaced the
+  old ``rebuild`` boolean. ``system`` exposes no ``summarize`` action and no
+  compatibility alias; ``summarize.py`` remains here only as the private
+  engine those actions call.
 
 Notification verbs (``check``/``dismiss_channel``/``dismiss_event``/
 ``dismiss_ref``) are **not** on ``system`` — they live exclusively on the
@@ -43,7 +53,9 @@ Sub-modules:
     karma.py         — _KARMA_ACTIONS, _NIRVANA_ACTIONS, _check_karma_gate(),
                        _sleep(), _lull(), _suspend(), _cpr(), _interrupt(),
                        _clear(), _nirvana().
-    summarize.py     — _summarize() function, SUMMARIZE_MARKER.
+    name.py          — _name_set(), _name_nickname().
+    summarize.py     — _summarize() engine, SUMMARIZE_MARKER. Private: the
+                       public actions that call it live on ``context``.
     schema.py        — ACTION_ORDER, INPUT_SCHEMAS, get_description().
 
 ``get_schema()`` is composed here from :data:`~.schema.INPUT_SCHEMAS` by the
@@ -68,8 +80,18 @@ from .._manual import load_installed_manual
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import build_manual_child
 
-# Summarize — agent-authored context summarization
+# Summarize — the agent-authored context-summarization ENGINE. This module
+# stays here, but ``system`` no longer exposes a public ``summarize`` action:
+# that public ownership moved to ``context(action='summarize'|'rebuild')``,
+# which imports ``_summarize`` as its private engine. These names remain
+# importable because the kernel and adapters use ``SUMMARIZE_MARKER`` and
+# ``mark_pending_summaries_done`` for the forced-rebuild path; they are an
+# internal runtime interface, NOT a model-visible compatibility alias.
 from .summarize import _summarize, SUMMARIZE_MARKER  # noqa: F401
+
+# Name — the agent's true name and nickname, moved here from the dissolved
+# ``psyche`` family.
+from .name import _name_set, _name_nickname  # noqa: F401
 
 # Notification submission — the canonical helper any producer (intrinsic
 # or in-process MCP) can call to surface a notification to the agent.
@@ -127,7 +149,8 @@ _ACTION_HANDLERS = {
     "clear": _clear,
     "nirvana": _nirvana,
     "presets": _presets,
-    "summarize": _summarize,
+    "name_set": _name_set,
+    "name_nickname": _name_nickname,
 }
 
 
@@ -259,11 +282,11 @@ def handle(agent, args: dict) -> dict:
     Notification verbs (``check``/``dismiss_*``) and the old ``notification``/
     ``dismiss`` compatibility aliases are **not** handled here: they live
     exclusively on the standalone ``notification`` tool, and remain unknown
-    actions.  ``summarize`` remains a system action (it is a context-hygiene
-    operation, not a notification verb).  Legacy: a successful summarize still
-    auto-clears any leftover ``large_tool_result`` reminder internally — though
-    the kernel no longer raises new ones (large results are ranked under
-    ``_meta.agent_meta.agent_state.current_tool_result_chars``).
+    actions.  ``summarize`` is likewise **not** a system action any more: it is
+    a context-hygiene operation and moved to ``context(action='summarize')``
+    with the applying half as ``context(action='rebuild')``.  No compatibility
+    alias is kept, so the old ``system(action='summarize')`` is an unknown
+    action here and fails loudly with the message below.
     """
     raw = dict(args or {})
     # ``base_agent._dispatch_tool`` injects the wire ``_tc_id`` into EVERY

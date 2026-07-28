@@ -110,7 +110,7 @@ Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
 history now, offers an explicit proactive rebuild path at 0.85 via
-`system(action="summarize", input={"rebuild": true})`, and otherwise the runtime forces a
+`context(action="rebuild")`, and otherwise the runtime forces a
 rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
 do not refresh just to "apply" a summarize.
 
@@ -157,7 +157,7 @@ canonical.
 1. **A priori — reasoning-guided** (`summary=true` on
    `bash`/`read`/`grep`/`daemon`/`glob`): the raw is replaced by a
    `reasoning`-driven generated summary *before* it enters your context.
-2. **A posteriori — agent-guided** (`system(action="summarize")`): replace a
+2. **A posteriori — agent-guided** (`context(action="summarize")`): replace a
    result you have *already seen* and digested with your own summary.
 3. **Molt — context-pressure-triggered** (§5): the whole-conversation
    continuation / reset.
@@ -252,7 +252,7 @@ Flow knowledge outward:
 
 When context pressure rises, tend durable stores before molting. The detailed
 molt procedure, session-journal / molt-history record, and successor briefing
-rules live in `psyche-manual`; this substrate reference only describes the
+rules live in `context-manual`; this substrate reference only describes the
 memory model.
 
 ## 6. Runtime logs and trace inspection
@@ -438,7 +438,7 @@ requires both `active` and `default` to be members of `allowed`.
    (LLM/config/capabilities/MCP/prompt reconstruction, preserving conversation
    history where a live session exists).
 4. A config, prompt, MCP, or capability edit needs `refresh` to take effect;
-   `system(action="summarize")` alone does not reconstruct the runtime and
+   `context(action="summarize")` alone does not reconstruct the runtime and
    must not be used as a refresh substitute.
 
 ### Daemon task worker path — explicit, omitted, and external CLI

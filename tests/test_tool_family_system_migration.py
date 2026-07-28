@@ -5,7 +5,13 @@ tests"), chosen for ``system``'s specific risks rather than as a conformance
 suite: it is the runtime/lifecycle family, so the things worth pinning are the
 privilege classes (self vs karma vs nirvana), the address rules, the exact
 per-action input partition, and the preserved receipts of ``refresh`` /
-``presets`` / ``summarize``.
+``presets``.
+
+The action surface changed once since the migration: the public ``summarize``
+action LEFT for ``context`` (which split it into the explicit
+``summarize``/``rebuild`` pair — evidence in
+``tests/test_tool_family_context_migration.py``), and the two name actions
+ARRIVED from the dissolved ``psyche``. Both moves are pinned below.
 
 Every lifecycle test here drives a disposable stub or a temporary directory —
 no live agent is slept, suspended, cleared, or destroyed.
@@ -27,17 +33,18 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 # Baseline inventory — the pre-migration action surface, pinned verbatim
 # ---------------------------------------------------------------------------
 
-# The exact enum order of the pre-migration flat schema (b0edf81a
-# ``system/schema.py::get_schema``). The migration is an envelope change: not
-# one action may be added, removed, renamed, or reordered.
+# The exact current public enum order. Every lifecycle/preset/admin action
+# keeps its pre-migration spelling and position; ``summarize`` left for
+# ``context`` and the two name actions arrived from ``psyche``.
 _LEGACY_ACTIONS = (
     "refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear",
-    "nirvana", "presets", "summarize", "manual",
+    "nirvana", "presets", "name_set", "name_nickname", "manual",
 )
 
-# The pre-migration flat sibling fields, and the action each belonged to.
-# Under LTP v2 each moves into exactly that action's own strict ``input``.
-_LEGACY_FLAT_FIELDS = ("reason", "address", "preset", "revert_preset", "rebuild", "items")
+# The pre-migration flat sibling fields that remain, and the action each
+# belonged to. Under LTP v2 each lives in exactly that action's own strict
+# ``input``. ``rebuild``/``items`` left with the summarize action.
+_LEGACY_FLAT_FIELDS = ("reason", "address", "preset", "revert_preset")
 
 
 class _StubAgent:
@@ -138,7 +145,8 @@ def test_children_consume_no_model_tool_slots() -> None:
         ("clear", {"address", "reason"}),
         ("nirvana", {"address", "reason"}),
         ("presets", set()),
-        ("summarize", {"items", "rebuild"}),
+        ("name_set", {"content"}),
+        ("name_nickname", {"content"}),
         ("manual", set()),
     ],
 )
@@ -210,12 +218,77 @@ def test_cross_action_input_is_rejected_before_any_lifecycle_io(tmp_path: Path) 
     assert agent.events == []
 
 
-def test_summarize_fields_are_rejected_on_other_actions(tmp_path: Path) -> None:
+def test_departed_summarize_fields_are_rejected_on_every_action(tmp_path: Path) -> None:
+    """``items``/``rebuild`` belong to ``context`` now, to no system action."""
     agent = _StubAgent(tmp_path)
     result = system_tool.handle(
         agent, {"action": "presets", "input": {"items": [], "rebuild": True}}
     )
     assert result["error_code"] == "INVALID_ARGUMENT"
+    for schema in INPUT_SCHEMAS.values():
+        assert "items" not in schema["properties"]
+        assert "rebuild" not in schema["properties"]
+
+
+def test_public_summarize_action_is_gone_and_fails_loudly(tmp_path: Path) -> None:
+    """No compatibility alias: the old public call is an unknown action."""
+    agent = _StubAgent(tmp_path)
+    assert "summarize" not in ACTION_ORDER
+    assert "summarize" not in INPUT_SCHEMAS
+    result = system_tool.handle(
+        agent,
+        {"action": "summarize", "input": {"items": [], "rebuild": None}},
+    )
+    assert result["status"] == "error"
+    assert result["message"] == "Unknown system action: summarize"
+
+
+def test_name_actions_preserve_identity_semantics(tmp_path: Path) -> None:
+    """The two moved actions keep their exact pre-move behavior.
+
+    They update live in-memory identity, persist ``.agent.json``, and rewrite
+    the protected prompt ``identity`` section — and they never touch the
+    agent's address or working directory, which is a separate operator
+    migration entirely.
+    """
+    from lingtai.agent import Agent
+    from tests._service_helpers import make_gemini_mock_service
+
+    workdir = tmp_path / "named"
+    agent = Agent(service=make_gemini_mock_service(), working_dir=workdir)
+    try:
+        before_dir = agent._working_dir
+
+        assert system_tool.handle(
+            agent, {"action": "name_set", "input": {"content": "悟空"}}
+        )["name"] == "悟空"
+        # Set-once: a second true name is refused.
+        assert "error" in system_tool.handle(
+            agent, {"action": "name_set", "input": {"content": "八戒"}}
+        )
+        # Empty is refused rather than clearing the true name.
+        assert "error" in system_tool.handle(
+            agent, {"action": "name_set", "input": {"content": ""}}
+        )
+
+        # Nickname updates freely and clears on empty.
+        for value, expected in (("monkey", "monkey"), ("king", "king"), ("", None)):
+            assert system_tool.handle(
+                agent, {"action": "name_nickname", "input": {"content": value}}
+            )["nickname"] == expected
+
+        # Durable identity, not just memory.
+        manifest = json.loads((workdir / ".agent.json").read_text())
+        assert manifest["agent_name"] == "悟空"
+        assert manifest["nickname"] is None
+        # The protected prompt ``identity`` section reflects the live name.
+        assert "悟空" in agent._prompt_manager.read_section("identity")
+        # Address / workdir are untouched by either name action — naming is
+        # NOT the physical agent rename.
+        assert agent._working_dir == before_dir
+        assert manifest["address"] == before_dir.name
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_unknown_root_field_is_rejected(tmp_path: Path) -> None:
@@ -355,11 +428,13 @@ def test_privileged_verbs_refuse_self_target(tmp_path: Path, action: str) -> Non
 
 
 def test_self_actions_need_no_karma(tmp_path: Path) -> None:
-    """``sleep``/``refresh``/``presets``/``summarize``/``manual`` are self actions."""
+    """``sleep``/``refresh``/``presets``/name actions/``manual`` are self actions."""
     from lingtai.tools.system.karma import _KARMA_ACTIONS, _NIRVANA_ACTIONS
 
     gated = _KARMA_ACTIONS | _NIRVANA_ACTIONS
-    self_actions = {"sleep", "refresh", "presets", "summarize", "manual"}
+    self_actions = {
+        "sleep", "refresh", "presets", "name_set", "name_nickname", "manual",
+    }
     assert self_actions.isdisjoint(gated)
     assert gated == {"lull", "interrupt", "suspend", "cpr", "clear", "nirvana"}
 
@@ -554,104 +629,6 @@ def test_presets_lists_the_allowed_library(tmp_path: Path) -> None:
     assert [entry["name"] for entry in result["available"]] == [str(preset_path)]
     # Credentials are never echoed.
     assert "api_key" not in json.dumps(result)
-
-
-def test_summarize_missing_items_without_rebuild_is_still_an_invalid_no_op(
-    tmp_path: Path,
-) -> None:
-    agent = _StubAgent(tmp_path)
-    result = system_tool.handle(
-        agent, {"action": "summarize", "input": {"items": None, "rebuild": None}}
-    )
-    assert result["status"] == "error"
-    assert result["reason"] == "missing_items"
-    assert result["notification_threshold_chars"] == 3000
-
-
-def test_summarize_rebuild_true_with_no_items_is_a_pure_rebuild(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    # No chat session — the pure-rebuild path reports that honestly.
-    result = system_tool.handle(
-        agent, {"action": "summarize", "input": {"items": None, "rebuild": True}}
-    )
-    assert result["status"] == "error"
-    assert result["reason"] == "no_chat_session"
-    assert result["notification_threshold_chars"] == 3000
-
-
-def test_summarize_records_a_pending_marker_and_reports_receipts(tmp_path: Path) -> None:
-    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
-    from lingtai.tools.system.summarize import SUMMARIZE_MARKER, SUMMARY_STATUS_PENDING
-
-    iface = ChatInterface()
-    iface.add_assistant_message([ToolCallBlock(id="tc-1", name="bash", args={})])
-    iface.add_tool_results(
-        [ToolResultBlock(id="tc-1", name="bash", content="X" * 400)]
-    )
-
-    agent = _StubAgent(tmp_path)
-    agent._chat = type("C", (), {"interface": iface})()
-
-    result = system_tool.handle(
-        agent,
-        {
-            "action": "summarize",
-            "input": {
-                "items": [{"tool_call_id": "tc-1", "summary": "digested"}],
-                "rebuild": None,
-            },
-        },
-    )
-    assert result["status"] == "ok"
-    assert result["mode"] == "summarize"
-    assert result["summarized"] == 1
-    assert result["failed"] == 0
-    assert "pending_summary_totals" in result
-    assert "reconstruction" in result
-    assert result["notification_threshold_chars"] == 3000
-
-    block = iface._entries[1].content[0]
-    assert block.content["artifact"] == SUMMARIZE_MARKER
-    assert block.content["status"] == SUMMARY_STATUS_PENDING
-
-
-def test_summarize_rebuild_true_marks_done_and_requests_rebuild(tmp_path: Path) -> None:
-    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
-    from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE
-
-    iface = ChatInterface()
-    iface.add_assistant_message([ToolCallBlock(id="tc-2", name="bash", args={})])
-    iface.add_tool_results(
-        [ToolResultBlock(id="tc-2", name="bash", content="Y" * 400)]
-    )
-
-    requested: list[str] = []
-
-    class _Chat:
-        interface = iface
-
-        def request_history_rebuild(self, reason: str = "") -> bool:
-            requested.append(reason)
-            return True
-
-    agent = _StubAgent(tmp_path)
-    agent._chat = _Chat()
-
-    result = system_tool.handle(
-        agent,
-        {
-            "action": "summarize",
-            "input": {
-                "items": [{"tool_call_id": "tc-2", "summary": "digested"}],
-                "rebuild": True,
-            },
-        },
-    )
-    assert result["mode"] == "rebuild"
-    assert result["rebuild_requested"] is True
-    assert result["marked_done"] == ["tc-2"]
-    assert requested == ["summarize_rebuild_only"]
-    assert iface._entries[1].content[0].content["status"] == SUMMARY_STATUS_DONE
 
 
 @pytest.mark.parametrize("action", _LEGACY_ACTIONS)

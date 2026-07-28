@@ -41,7 +41,7 @@ MOLT_NOTICE_THRESHOLD = 0.75  # legacy name; now the molt RECOVERY TARGET (see b
 #     usage is at/above this fraction counts as a "high" round.  The same
 #     inclusive threshold (``usage >= 0.85``) also continuously stamps
 #     ``_meta.agent_meta.agent_state.context.rebuild`` with permission to manually rebuild via
-#     ``system(action='summarize', rebuild=true)``.  It does NOT force an
+#     ``context(action='rebuild')``.  It does NOT force an
 #     automatic provider-context rebuild — it is the proactive hint boundary.
 #   * CONTEXT_PRESSURE_FORCED_REBUILD_RATIO (1.0) — the HARD boundary. Once
 #     context usage reaches this inclusive threshold, the runtime forces a

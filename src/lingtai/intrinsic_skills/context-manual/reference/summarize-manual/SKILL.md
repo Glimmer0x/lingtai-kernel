@@ -4,7 +4,7 @@ description: >-
   Detailed operational guide for tool-result summarization across LingTai's
   three context-compression / continuation modes: a-priori reasoning-guided
   (summary=true on bash/read/grep/daemon/glob), a-posteriori agent-guided
-  (system(action="summarize")), and molt. Covers what tool-result summarization
+  (context(action="summarize")), and molt. Covers what tool-result summarization
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
@@ -20,7 +20,7 @@ maintenance: |
 
 # Summarize Manual
 
-`system(action="summarize")` is context hygiene for completed tool results. It
+`context(action="summarize")` is context hygiene for completed tool results. It
 records an agent-authored compact replacement for one or more prior tool-result
 blocks in runtime history. It does **not** delete the original event; the raw
 result remains in logs for fallback, and the active provider continuation may
@@ -42,8 +42,8 @@ is canonical.
 | Mode | Trigger | When the raw is hidden | Authored by |
 |---|---|---|---|
 | **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep`/`daemon`/`glob` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
-| **A posteriori** — agent-guided | `system(action="summarize")` | *after* you have already seen and digested it | you |
-| **Molt** — context-pressure-triggered | `psyche(action='context_molt', ...)` | the whole conversation is continued/reset | you (briefing) |
+| **A posteriori** — agent-guided | `context(action="summarize")` | *after* you have already seen and digested it | you |
+| **Molt** — context-pressure-triggered | `context(action='molt', ...)` | the whole conversation is continued/reset | you (briefing) |
 
 Sections 1–6 below are mostly about the a-posteriori `summarize` action; §1a
 covers the a-priori `summary=true` option and when to prefer it; §6 contrasts
@@ -83,7 +83,7 @@ assumption-driven compression chosen *before* you inspect the result. Prefer it
 when you can state the narrow facts to retain before the call, because it avoids
 spending context on raw bulk at all. The runtime discards everything outside what
 your `reasoning` named, with no chance for you to notice what mattered, so it is
-**not** a substitute for a-posteriori `system(action="summarize")` when the
+**not** a substitute for a-posteriori `context(action="summarize")` when the
 important facts are unknowable before inspection, especially for
 high-information-density results — daemon outputs, code reviews, long reports,
 or anything whose important facts you cannot name in advance.
@@ -150,7 +150,7 @@ counted in `over_threshold_count`). `agent_meta` is a complete current final-car
 
 1. Read or inspect the result first.
 2. Decide what future-you needs from it.
-3. On a later step, call `system(action="summarize")` on the completed prior
+3. On a later step, call `context(action="summarize")` on the completed prior
    result. Do not try to summarize the current result in the same tool batch
    before it exists.
 4. Batch several already-digested results in one summarize call when convenient.
@@ -209,7 +209,7 @@ Summarize has two decoupled effects:
    and matching large-result reminders may clear.
 2. **Provider-side rebuild later.** The current provider continuation may still
    contain the old raw block until the runtime rebuilds the provider prefix around
-   compacted history. When that happens (manual `rebuild=true` or the 1.0 hard
+   compacted history. When that happens (a manual `context(action="rebuild")` or the 1.0 hard
    forced rebuild), the applied markers flip to `status: done`.
 
 The dynamic pending totals in the result comment scan only `status: pending`
@@ -228,8 +228,8 @@ summarize would discard cache benefit.
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
   is worth the cost, make one proactive tactical
-  `system(action="summarize", input={"rebuild": true})` call. `rebuild=true` **with** new
-  items records those summaries and then applies the pending set; `rebuild=true`
+  `context(action="rebuild", input={})` call. `rebuild` **with** new
+  items records those summaries and then applies the pending set; `rebuild`
   **with no items** is a pure rebuild that applies the already-pending summaries.
   Do not loop rebuild/summarize calls.
 - **At 1.0 of the context window (the full-context HARD boundary):** the runtime
@@ -242,7 +242,7 @@ summarize would discard cache benefit.
   future crossing can force exactly once again. Both automatic paths — the
   pre-request boundary check and the immediate post-`summarize` release — share
   this one latch, so they cannot double-fire. (Explicit
-  `system(action="summarize", input={"rebuild": true})` is independent and always available.)
+  `context(action="rebuild")` is independent and always available.)
   If pending summaries exist,
   they are applied and their markers marked done. `summarize` is the only
   historical tool-result body replacement a rebuild applies; the fresh replay
@@ -254,7 +254,7 @@ summarize would discard cache benefit.
   and must not be acted on. Every 1.0 forced rebuild ALWAYS carries a one-shot
   `_meta.agent_meta.agent_state.events.reconstruction.warning`: it reports the before→after context
   change, advises that reaching the full boundary means waiting was not ideal (prefer
-  a proactive 0.85 `rebuild=true`), and says that if the rebuilt context is still
+  a proactive 0.85 `context(action="rebuild")`), and says that if the rebuilt context is still
   above the 0.75 recovery target you should tend durable stores and molt. This is
   one unified warning — it does not branch on whether context dropped low or stayed
   high.
@@ -317,13 +317,13 @@ Bad uses:
 ## 6 · Summarize is not molt
 
 Neither summary mode is a molt. Both a-priori (`summary=true`) and a-posteriori
-(`system(action="summarize")`) reduce active-context bulk for selected tool
+(`context(action="summarize")`) reduce active-context bulk for selected tool
 results. Neither updates pad, character, knowledge, skills, or the
 session-journal, and neither sheds the conversation.
 
 Molt is a psyche operation. It preserves durable stores, writes the session
 journal and molt briefing, and starts a fresh conversation context. Before
-molting, read `psyche-manual` and follow its required checklist.
+molting, read `context-manual` and follow its required checklist.
 
 Use them together:
 

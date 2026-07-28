@@ -9,7 +9,7 @@ related_files:
   - src/lingtai/tools/lingtai/_lingtai.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
-  - src/lingtai/tools/psyche/CONTRACT.md
+  - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
   - tests/test_pad_lingtai_split.py
@@ -67,7 +67,7 @@ one resolve normally and the shared name creates no shadowing.
   third-party `base_prompt`, and the mechanical `identity` section. This family
   is the single canonical writer of the `character` section.
 - Agents tending the identity before a molt MUST follow `lingtai-manual`; the
-  molt procedure itself remains owned by `psyche` and `psyche-manual`.
+  molt procedure itself remains owned by `psyche` and `context-manual`.
 - A coding agent changing this family's actions, inputs, identity modes, or
   persistence paths MUST update this contract, the paired Anatomy,
   `lingtai-manual`, and the focused tests in the same change.

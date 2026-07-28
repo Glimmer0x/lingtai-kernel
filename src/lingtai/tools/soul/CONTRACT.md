@@ -47,7 +47,7 @@ migration; only the argument *shape* changed, from a flat root to
   (`src/lingtai/tools/notification/CONTRACT.md`). `soul(action='dismiss')` is a thin
   wrapper that clears only the `soul` channel via the shared helper.
 - Context molt / summarize: those are `psyche` and `system`
-  (`src/lingtai/tools/psyche/CONTRACT.md`, `src/lingtai/tools/system/CONTRACT.md`). Soul reads
+  (`src/lingtai/tools/context/CONTRACT.md`, `src/lingtai/tools/system/CONTRACT.md`). Soul reads
   molt snapshots as consultation substrate but does not create them.
 - Code navigation only: read `src/lingtai/tools/soul/ANATOMY.md`.
 

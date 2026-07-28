@@ -1,16 +1,16 @@
 ---
 related_files:
-- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+- src/lingtai/intrinsic_skills/context-manual/SKILL.md
 - tests/test_skills.py
 maintenance: |
-  Consequential-molt summary scaffold referenced by psyche-manual/SKILL.md and asserted on by tests/test_skills.py; keep its 9-section structure and heading text synced with both, since the test pins exact section headings verbatim.
+  Consequential-molt summary scaffold referenced by context-manual/SKILL.md and asserted on by tests/test_skills.py; keep its 9-section structure and heading text synced with both, since the test pins exact section headings verbatim.
 ---
 
 # Consequential Molt Summary Template
 
 Use this asset when a molt is more than routine: long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, active background jobs, or any handoff the next you could not reconstruct quickly.
 
-Fill every section. Write `None` rather than omitting a section. This template is for the `input.summary` argument to `psyche(action="context_molt", ...)`; tend durable stores before writing it.
+Fill every section. Write `None` rather than omitting a section. This template is for the `input.summary` argument to `context(action="molt", ...)`; tend durable stores before writing it.
 
 ## Summary scaffold
 
@@ -49,14 +49,14 @@ Fill every section. Write `None` rather than omitting a section. This template i
 
 ## Pre-molt verification checklist
 
-Before you call `psyche(action="context_molt", input={"summary": ..., "session_journal_path": ...}, reasoning=...)`, verify:
+Before you call `context(action="molt", input={"summary": ..., "session_journal_path": ...}, reasoning=...)`, verify:
 
 - The just-finished session segment is recorded as a session-journal child at
   `knowledge/session-journal/<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md`,
   written before the summary — **its path is the required
   `session_journal_path` argument and the kernel refuses the molt, before
   shedding any context, if it is missing, mislocated, or unmarked** (see
-  psyche-manual §4 and §6). The parent index has a new one-line, relative-path
+  context-manual §4 and §6). The parent index has a new one-line, relative-path
   hook for it, and the summary points at the child's path.
 - Pad, lingtai/character, knowledge, skills, and session journal were updated where needed before writing the summary.
 - Every outstanding task has an action checklist entry.

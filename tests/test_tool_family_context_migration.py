@@ -1,22 +1,23 @@
-"""Psyche's LTP v2 / ToolFamily migration evidence.
+"""Context's LTP v2 / ToolFamily evidence.
 
 One family's local evidence, in the sense `src/lingtai/tools/CONTRACT.md`
 "Contract tests" permits — not a universal conformance suite. Chosen for this
-family's own risks, which differ from `soul`'s: psyche owns a set-once true
-name and the molt — the single most irreversible operation any agent can
-perform. So the emphasis here is on *refusal before mutation*: a mis-shaped
-envelope must be rejected with nothing written, nothing shed, and no molt
-consumed.
+family's own risks: `context` owns the molt — the single most irreversible
+operation any agent can perform — plus the record/apply pair that rewrites what
+the provider actually sees. So the emphasis here is on *refusal before
+mutation*: a mis-shaped envelope must be rejected with nothing written, nothing
+shed, and no molt consumed.
 
-The two destructive full-rewrite operations this family used to own
-(`lingtai_update`, `pad_edit`) left with the pad/lingtai split; their evidence
-— and the proof that psyche no longer advertises them — lives in
-`tests/test_pad_lingtai_split.py`.
+This family replaces `psyche`, which mixed the context lifecycle with the
+agent's name. The two name actions moved to `system` (evidence in
+`tests/test_tool_family_system_migration.py`), the pad/lingtai roots split out
+earlier (`tests/test_pad_lingtai_split.py`), and the public
+`system(action='summarize')` moved *in* as the explicit `summarize`/`rebuild`
+action pair. The proof that no `psyche` root survives anywhere is below.
 
-Psyche is also the third migrated intrinsic, and the first family that
-genuinely *consumes* the kernel-injected `_tc_id` rather than merely dropping
-it — `context_molt` needs that wire id to locate and replay its own
-ToolCallBlock. The isolation tests below pin that boundary.
+Context is also the one family that genuinely *consumes* the kernel-injected
+`_tc_id` rather than merely dropping it — `molt` needs that wire id to locate
+and replay its own ToolCallBlock. The isolation tests below pin that boundary.
 """
 from __future__ import annotations
 
@@ -26,8 +27,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.tools import psyche as psyche_tool
-from lingtai.tools.psyche import ACTION_ORDER, get_schema
+from lingtai.tools import context as context_tool
+from lingtai.tools.context import ACTION_ORDER, get_schema
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -41,7 +42,7 @@ type: session-journal
 ---
 
 ## What this segment was about
-Testing the psyche ToolFamily migration.
+Testing the context ToolFamily contract.
 """
 
 _JOURNAL_REL = "knowledge/session-journal/2026-07-27-molt-1-test/KNOWLEDGE.md"
@@ -62,7 +63,7 @@ def _write_journal(agent, rel: str = _JOURNAL_REL) -> str:
 
 
 def _call(agent, args: dict) -> dict:
-    return agent._intrinsics["psyche"](args)
+    return agent._intrinsics["context"](args)
 
 
 def _molt_input(journal_path, summary="briefing", **over):
@@ -81,36 +82,44 @@ def _molt_input(journal_path, summary="briefing", **over):
 # ---------------------------------------------------------------------------
 
 
-def test_one_public_psyche_root_with_the_preserved_operation_inventory():
-    """The retained pairs survive as flat actions, unrenamed and unreordered.
+def test_one_public_context_root_with_the_exact_action_inventory():
+    """The four actions, in the exact public order, and nothing else.
 
-    The migration collapsed a two-key matrix into the flat LTP v2 `action`
-    enum, adding nothing, dropping nothing, renaming no capability, and merging
-    no two operations. The later pad/lingtai split *removed* five actions to
-    their own roots without touching the shape or spelling of the rest; that
-    removal is asserted in ``tests/test_pad_lingtai_split.py``.
+    `molt` is the lifecycle operation carried over from `psyche.context_molt`;
+    `summarize`/`rebuild` are the explicit pair that replaced the former
+    `system(action='summarize', rebuild=<bool>)` boolean discriminator.
     """
     schema = get_schema("en")
     assert schema["properties"]["action"]["enum"] == [
-        "context_molt",                        # context: molt
-        "name_set", "name_nickname",           # name: set | nickname
-        "manual",                              # root manual (family-owned)
+        "molt",                    # shed the conversation
+        "summarize",               # record only
+        "rebuild",                 # apply pending summaries
+        "manual",                  # root manual (family-owned)
     ]
-    # Three retained operations + the one reserved family-owned manual.
     assert len(ACTION_ORDER) == 4
 
 
-def test_psyche_is_registered_exactly_once_as_an_intrinsic():
+def test_context_is_registered_exactly_once_as_an_intrinsic():
     from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
 
-    assert INTRINSICS["psyche"]["module"] is psyche_tool
+    assert INTRINSICS["context"]["module"] is context_tool
     # Not also a capability, and no second model-facing root or alias.
+    assert "context" not in BUILTIN_TOOLS
+    # ``pad``/``lingtai`` are separate intrinsics — never a second context root
+    # and never a context alias.
+    assert INTRINSICS["pad"]["module"] is not context_tool
+    assert INTRINSICS["lingtai"]["module"] is not context_tool
+
+
+def test_no_psyche_root_survives_anywhere():
+    """The dissolved family leaves no registry entry, module, or alias."""
+    from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
+
+    assert "psyche" not in INTRINSICS
     assert "psyche" not in BUILTIN_TOOLS
     assert "anima" not in BUILTIN_TOOLS
-    # ``pad`` IS an intrinsic now, but a separate one — never a second psyche
-    # root and never a psyche alias.
-    assert INTRINSICS["pad"]["module"] is not psyche_tool
-    assert INTRINSICS["lingtai"]["module"] is not psyche_tool
+    with pytest.raises(ImportError):
+        __import__("lingtai.tools.psyche")
 
 
 def test_the_root_is_the_closed_ltp_v2_envelope():
@@ -139,10 +148,10 @@ def test_schema_and_dispatch_come_from_one_registry():
 def test_each_action_advertises_only_its_own_input():
     """Per-action fields no longer leak onto every other action.
 
-    Pre-migration one flat root advertised `content`, `files`, `summary`,
-    `keep_tool_calls`, `keep_last`, and `session_journal_path` to all eight
-    operations at once. Each now belongs to the action that consumes it — and
-    after the pad/lingtai split, `files` belongs to no psyche action at all.
+    Each field belongs only to the action that consumes it: the molt fields to
+    `molt`, and `items` to the two context-hygiene actions. `content` — the
+    former name-action field — belongs to no context action at all now that
+    naming lives on `system`.
     """
     schema = get_schema("en")
     props = {
@@ -150,12 +159,16 @@ def test_each_action_advertises_only_its_own_input():
             set(c["then"]["properties"]["input"]["properties"])
         for c in schema["allOf"]
     }
-    assert props["context_molt"] == {
+    assert props["molt"] == {
         "summary", "session_journal_path", "keep_tool_calls", "keep_last",
     }
-    assert props["name_set"] == {"content"}
-    assert props["name_nickname"] == {"content"}
+    assert props["summarize"] == {"items"}
+    assert props["rebuild"] == {"items"}
     assert props["manual"] == set()
+    # Naming left for ``system``; no context action advertises ``content``.
+    assert not any("content" in fields for fields in props.values())
+    # The root presentation bool is never domain input at any action.
+    assert not any("summarize" in fields for fields in props.values())
     # Every branch is closed.
     for cond in schema["allOf"]:
         assert cond["then"]["properties"]["input"]["additionalProperties"] is False
@@ -204,7 +217,7 @@ def test_unhashable_or_unknown_action_renders_the_stable_error(tmp_path, bad_act
     try:
         result = _call(agent, {"action": bad_action, "input": {}})
         assert "error" in result
-        assert "Unknown psyche action" in result["error"]
+        assert "Unknown context action" in result["error"]
     finally:
         agent.stop(timeout=1.0)
 
@@ -213,22 +226,20 @@ def test_wrong_branch_input_is_rejected_before_any_handler_io(tmp_path):
     """A cross-action smuggle writes nothing and sheds nothing."""
     agent = _agent(tmp_path)
     try:
-        # `summary` belongs to context_molt, not name_set.
+        # `summary` is a molt field; it belongs to no summarize/rebuild input.
         result = _call(agent, {
-            "action": "name_set",
-            "input": {"content": "x", "summary": "smuggled"},
+            "action": "summarize",
+            "input": {"items": [], "summary": "smuggled"},
         })
         assert result["status"] == "failed"
         assert result["error_code"] == "INVALID_ARGUMENT"
-        assert "unsupported psyche input field" in result["message"]
-        # No name set by the refused call.
-        assert not getattr(agent, "_true_name", None)
+        assert "unsupported context input field" in result["message"]
 
         # And the reverse: a foreign field cannot reach the molt. `files`
-        # belongs to the split-out pad family and to no psyche action at all.
+        # belongs to the split-out pad family and to no context action at all.
         before = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": _molt_input(_JOURNAL_REL, files=["x.txt"]),
         })
         assert result["status"] == "failed"
@@ -260,26 +271,24 @@ def test_reasoning_and_summarize_never_reach_a_handler(tmp_path):
     agent = _agent(tmp_path)
     seen: list[dict] = []
     try:
-        import lingtai.tools.psyche as mod
-
-        original = mod._name_nickname
+        import lingtai.tools.context as mod
 
         def spy(agent_arg, args):
             seen.append(dict(args))
-            return original(agent_arg, args)
+            return {"status": "ok"}
 
         saved = mod._CHILD_SPECS
         mod._CHILD_SPECS = tuple(
-            (n, s, spy if n == "name_nickname" else h) for n, s, h in saved
+            (n, s, spy if n == "rebuild" else h) for n, s, h in saved
         )
         try:
             result = _call(agent, {
-                "action": "name_nickname", "input": {"content": "nick"},
+                "action": "rebuild", "input": {"items": None},
                 "reasoning": "check", "summarize": True, "_tc_id": "toolu_x",
             })
             assert result["status"] == "ok"
             # The spy really ran — otherwise the assertions below are vacuous.
-            assert len(seen) == 1, "name_nickname handler was not the dispatched child"
+            assert len(seen) == 1, "rebuild handler was not the dispatched child"
             for reserved in ("reasoning", "_reasoning", "summarize", "_tc_id"):
                 assert reserved not in seen[0]
         finally:
@@ -291,18 +300,19 @@ def test_reasoning_and_summarize_never_reach_a_handler(tmp_path):
 def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
     """`_tc_id` is stripped from the closed root but still reaches the molt.
 
-    Psyche is the one migrated family that genuinely *consumes* this transport
-    key rather than merely dropping it (`soul`/`notification` drop it). It must
-    therefore neither break the closed-root check nor leak to any other action.
+    Context is the one migrated family that genuinely *consumes* this transport
+    key rather than merely dropping it (`soul`/`notification`/`system` drop
+    it). It must therefore neither break the closed-root check nor leak to any
+    other action.
     """
     agent = _agent(tmp_path)
     try:
         # It does not trip the unknown-root-field check on an unrelated action.
         result = _call(agent, {
-            "action": "name_nickname", "input": {"content": "nick"},
+            "action": "summarize", "input": {"items": []},
             "_tc_id": "toolu_abc",
         })
-        assert result["status"] == "ok"
+        assert "error_code" not in result
 
         # And a molt without it is refused with the internal-guard message
         # rather than shedding context, once the journal gate has passed.
@@ -310,7 +320,7 @@ def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
         agent._session.ensure_session()
         before = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt", "input": _molt_input(_JOURNAL_REL),
+            "action": "molt", "input": _molt_input(_JOURNAL_REL),
         })
         assert "error" in result
         assert "_tc_id" in result["error"]
@@ -326,25 +336,6 @@ def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
 
 
 
-
-
-def test_name_set_is_once_while_nickname_stays_mutable(tmp_path):
-    # No `agent_name=` at construction, so the true name is genuinely unset
-    # and `name_set` exercises the real set-once path.
-    agent = Agent(service=make_mock_service(), working_dir=tmp_path / "test")
-    try:
-        assert _call(agent, {"action": "name_set", "input": {"content": "悟空"}})["name"] == "悟空"
-        # Set-once: a second true name is refused.
-        assert "error" in _call(agent, {"action": "name_set", "input": {"content": "八戒"}})
-        # Empty is refused rather than clearing the true name.
-        assert "error" in _call(agent, {"action": "name_set", "input": {"content": ""}})
-
-        # Nickname updates freely and clears on empty.
-        assert _call(agent, {"action": "name_nickname", "input": {"content": "monkey"}})["nickname"] == "monkey"
-        assert _call(agent, {"action": "name_nickname", "input": {"content": "king"}})["nickname"] == "king"
-        assert _call(agent, {"action": "name_nickname", "input": {"content": ""}})["nickname"] is None
-    finally:
-        agent.stop(timeout=1.0)
 
 
 def test_read_only_actions_mutate_no_durable_state(tmp_path):
@@ -408,7 +399,7 @@ def _emit_molt_call(agent, wire_id, action_input):
 
     `_context_molt` replays this exact block into the fresh session, where it
     becomes model-visible history. So the fixture must emit what a real
-    provider call looks like — every key `context_molt`'s strict schema marks
+    provider call looks like — every key `molt`'s strict schema marks
     required, with unused optionals as explicit null — not a convenient partial
     dict. Emitting a partial here would let the replay assertions pass against
     a shape the advertised schema rejects.
@@ -423,8 +414,8 @@ def _emit_molt_call(agent, wire_id, action_input):
     )
     agent._session._chat.interface.add_assistant_message([
         ToolCallBlock(
-            id=wire_id, name="psyche",
-            args={"action": "context_molt", "input": payload},
+            id=wire_id, name="context",
+            args={"action": "molt", "input": payload},
         ),
     ])
 
@@ -444,7 +435,7 @@ def test_molt_refuses_before_shedding_on_an_invalid_journal(tmp_path, journal, r
         before_chat = agent._session._chat
 
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": _molt_input(journal),
             "_tc_id": wire,
         })
@@ -465,7 +456,7 @@ def test_molt_refuses_an_empty_summary_before_the_journal_gate(tmp_path):
         _write_journal(agent)
         before = agent._molt_count
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": _molt_input(_JOURNAL_REL, summary=""),
             "_tc_id": "toolu_psyche_empty",
         })
@@ -486,7 +477,7 @@ def test_successful_molt_lifecycle_in_a_disposable_workdir(tmp_path):
         _emit_molt_call(agent, wire, action_input)
 
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": _molt_input(journal, summary=summary),
             "_tc_id": wire,
             "reasoning": "context is full",
@@ -517,14 +508,15 @@ def test_successful_molt_lifecycle_in_a_disposable_workdir(tmp_path):
         last = [e for e in iface.entries if e.role == "assistant"][-1]
         replayed = [b for b in last.content if isinstance(b, ToolCallBlock)][0]
         assert replayed.id == wire
-        assert replayed.args["action"] == "context_molt"
+        assert replayed.name == "context"
+        assert replayed.args["action"] == "molt"
         assert replayed.args["input"]["summary"] == summary
         # The replayed block is model-visible history, so it must satisfy the
         # strict schema this family advertises — same obligation the synthesized
         # forced-molt pair carries.
         molt_schema = next(
             c["then"]["properties"]["input"] for c in get_schema("en")["allOf"]
-            if c["if"]["properties"]["action"]["const"] == "context_molt"
+            if c["if"]["properties"]["action"]["const"] == "molt"
         )
         assert set(replayed.args["input"]) == set(molt_schema["required"])
         assert not set(replayed.args["input"]) - set(molt_schema["properties"])
@@ -539,12 +531,13 @@ def test_system_forced_molt_synthesizes_the_current_envelope(tmp_path):
     """`context_forget`'s synthesized pair is model-visible history.
 
     It is replayed to the provider as an assistant `tool_use` block, so it must
-    carry the envelope the schema advertises — a model imitating the old flat
-    `{"object": "context", "action": "molt"}` would now be rejected.
+    carry the exact envelope the schema advertises: tool name `context`, action
+    `molt`, closed input, Host-authored reasoning. A model imitating a stale
+    `psyche`/`context_molt` shape would now be rejected.
     """
     from lingtai.kernel.llm.interface import ToolCallBlock
-    from lingtai.tools.psyche import context_forget
-    from lingtai.tools.psyche._molt import SYSTEM_FORCED_MOLT_REASONING
+    from lingtai.tools.context import context_forget
+    from lingtai.tools.context._molt import SYSTEM_FORCED_MOLT_REASONING
 
     agent = _molt_agent(tmp_path)
     try:
@@ -557,7 +550,7 @@ def test_system_forced_molt_synthesizes_the_current_envelope(tmp_path):
             b for e in iface.entries if e.role == "assistant"
             for b in e.content if isinstance(b, ToolCallBlock)
         ][-1]
-        assert synth.args["action"] == "context_molt"
+        assert synth.args["action"] == "molt"
         assert synth.args["reasoning"] == SYSTEM_FORCED_MOLT_REASONING
 
         # The replayed `input` must satisfy the strict schema this family
@@ -567,7 +560,7 @@ def test_system_forced_molt_synthesizes_the_current_envelope(tmp_path):
         # model imitating its own history a call the schema rejects.
         molt_schema = next(
             c["then"]["properties"]["input"] for c in get_schema("en")["allOf"]
-            if c["if"]["properties"]["action"]["const"] == "context_molt"
+            if c["if"]["properties"]["action"]["const"] == "molt"
         )
         action_input = synth.args["input"]
         assert set(action_input) == set(molt_schema["required"])
@@ -582,6 +575,7 @@ def test_system_forced_molt_synthesizes_the_current_envelope(tmp_path):
         assert not set(action_input) - set(molt_schema["properties"])
 
         # Provenance stays OUTSIDE input — it is not action input.
+        assert synth.name == "context"
         assert synth.args["_initiator"] == "system"
         assert "_initiator" not in action_input
         assert "_source" not in action_input
@@ -596,26 +590,37 @@ def test_kernel_detects_the_migrated_molt_call_shape():
     from lingtai.kernel.llm.base import ToolCall
 
     migrated = ToolCall(
-        name="psyche",
-        args={"action": "context_molt", "input": {"summary": "s"}},
+        name="context",
+        args={"action": "molt", "input": {"summary": "s"}},
         id="call_molt",
     )
     assert _batch_includes_context_molt([migrated]) is True
-    # A non-molt psyche call must not trigger the deferral.
+    # A non-molt context call must not trigger the deferral.
     other = ToolCall(
-        name="psyche", args={"action": "pad_load", "input": {}}, id="call_pad",
+        name="context", args={"action": "summarize", "input": {"items": []}},
+        id="call_sum",
     )
     assert _batch_includes_context_molt([other]) is False
+    # Neither may a stale `psyche` name, which no longer exists as a tool,
+    # nor the old `context_molt` action spelling on the current root.
+    stale_root = ToolCall(
+        name="psyche", args={"action": "context_molt", "input": {}}, id="call_old",
+    )
+    assert _batch_includes_context_molt([stale_root]) is False
+    stale_action = ToolCall(
+        name="context", args={"action": "context_molt", "input": {}}, id="call_old2",
+    )
+    assert _batch_includes_context_molt([stale_action]) is False
 
 
 # ---------------------------------------------------------------------------
-# Reserved manual: no double wrap, and no psyche operation.
+# Reserved manual: no double wrap, and no context operation.
 # ---------------------------------------------------------------------------
 
 
 def test_manual_child_returns_the_canonical_result_unwrapped(tmp_path):
     """`ToolFamily.handle()` returns the reserved child's result verbatim."""
-    from lingtai.tools.psyche import _build_children
+    from lingtai.tools.context import _build_children
     from lingtai.tools.tool_family import ToolFamily
 
     agent = _agent(tmp_path)
@@ -660,23 +665,25 @@ def test_manual_rejects_any_input_key(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_is_on_the_ltp_v2_summarize_allowlist():
+def test_context_is_on_the_ltp_v2_summarize_allowlist():
     """Advertising root `summarize` obliges joining the kernel allowlist."""
     from lingtai.kernel.tool_result_summary import summary_requested
 
-    assert summary_requested({"summarize": True}, tool_name="psyche") is True
-    assert summary_requested({"summarize": False}, tool_name="psyche") is False
-    # `summary` is psyche's own molt domain field, never this control.
-    assert summary_requested({"summary": "a briefing"}, tool_name="psyche") is False
+    assert summary_requested({"summarize": True}, tool_name="context") is True
+    assert summary_requested({"summarize": False}, tool_name="context") is False
+    # `summary` is context's own molt domain field, never this control.
+    assert summary_requested({"summary": "a briefing"}, tool_name="context") is False
+    # The dissolved family is not on the allowlist.
+    assert summary_requested({"summarize": True}, tool_name="psyche") is False
 
 
-def test_one_psyche_root_survives_both_wires_with_action_input_correlation(tmp_path):
+def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_path):
     """Exactly one public root, closed, `reasoning` required, on both wires.
 
     Also proves the root `allOf` action/input correlation reaches the provider
-    intact — including that `session_journal_path` stays bound to
-    `context_molt`'s branch, which is what lets a provider reject a mis-paired
-    molt before it is ever dispatched.
+    intact — including that `session_journal_path` stays bound to `molt`'s
+    branch, which is what lets a provider reject a mis-paired molt before it is
+    ever dispatched.
     """
     from lingtai.kernel.base_agent.tools import _build_tool_schemas
     from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
@@ -684,11 +691,12 @@ def test_one_psyche_root_survives_both_wires_with_action_input_correlation(tmp_p
     live = _agent(tmp_path)
     try:
         schemas = _build_tool_schemas(live)
-        psyche_schemas = [s for s in schemas if s.name == "psyche"]
-        assert len(psyche_schemas) == 1, "exactly one public psyche root"
+        context_schemas = [s for s in schemas if s.name == "context"]
+        assert len(context_schemas) == 1, "exactly one public context root"
+        assert not [s for s in schemas if s.name == "psyche"], "no psyche root"
 
-        chat = _build_tools(psyche_schemas)[0]["function"]["parameters"]
-        responses = _build_responses_tools(psyche_schemas)[0]["parameters"]
+        chat = _build_tools(context_schemas)[0]["function"]["parameters"]
+        responses = _build_responses_tools(context_schemas)[0]["parameters"]
         for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
             assert set(wire["properties"]) == {
                 "action", "input", "reasoning", "summarize",
@@ -705,8 +713,241 @@ def test_one_psyche_root_survives_both_wires_with_action_input_correlation(tmp_p
             assert len(wire["allOf"]) == len(ACTION_ORDER)
             molt = next(
                 c["then"]["properties"]["input"] for c in wire["allOf"]
-                if c["if"]["properties"]["action"]["const"] == "context_molt"
+                if c["if"]["properties"]["action"]["const"] == "molt"
             )
             assert "session_journal_path" in molt["properties"]
     finally:
         live.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# summarize / rebuild — the record-vs-apply split that replaced the old
+# ``system(action='summarize', rebuild=<bool>)`` boolean discriminator.
+# ---------------------------------------------------------------------------
+
+
+class _SummarizeStubAgent:
+    """Disposable double for the record/apply engine — never a live agent."""
+
+    def __init__(self, working_dir):
+        self._working_dir = working_dir
+        self.agent_name = "stub"
+        self.events: list = []
+        self._chat = None
+        self._summarize_notification_threshold = 3000
+
+    def _log(self, event, **fields):
+        self.events.append((event, fields))
+
+
+def _summarize_call(agent, args: dict) -> dict:
+    return context_tool.handle(agent, args)
+
+
+def test_summarize_requires_items_and_never_rebuilds(tmp_path):
+    """The record-only action refuses an empty call instead of rebuilding.
+
+    Under the old boolean surface ``rebuild=false`` with no items was the
+    ``missing_items`` invalid no-op. The explicit action keeps exactly that
+    behavior — it must not silently become a pure rebuild.
+    """
+    agent = _SummarizeStubAgent(tmp_path)
+    result = _summarize_call(agent, {"action": "summarize", "input": {"items": []}})
+    assert result["status"] == "error"
+    assert result["reason"] == "missing_items"
+    assert result["notification_threshold_chars"] == 3000
+
+    # ``items`` is REQUIRED on this action — it is not the rebuild branch.
+    assert context_tool._SUMMARIZE_INPUT_SCHEMA["required"] == ["items"]
+    assert "rebuild" not in context_tool._SUMMARIZE_INPUT_SCHEMA["properties"]
+
+
+def test_rebuild_items_is_optional_at_the_schema_and_wire_contract():
+    """`context(action='rebuild', input={})` must be schema-VALID, not just accepted.
+
+    The ordinary rebuild call carries no items. If ``items`` were listed in the
+    branch's ``required`` (the usual "required but nullable" convention this
+    package uses elsewhere), the schema would forbid the exact call the manual
+    and Contract document, and a strict provider could reject it before dispatch
+    ever ran. So this one field is genuinely optional at the family layer, and
+    the generated wire branch must agree with the source of truth.
+    """
+    # Source of truth: the canonical child schema.
+    assert context_tool._REBUILD_INPUT_SCHEMA["required"] == []
+    # Still closed, and an explicit null is still accepted for providers that
+    # materialize every declared property.
+    assert context_tool._REBUILD_INPUT_SCHEMA["additionalProperties"] is False
+    assert "null" in context_tool._REBUILD_INPUT_SCHEMA["properties"]["items"]["type"]
+
+    # Generated model-facing branch: composed by the generic ToolFamily from the
+    # schema above, so it must not reintroduce the requirement.
+    rebuild_branch = next(
+        cond["then"]["properties"]["input"] for cond in get_schema("en")["allOf"]
+        if cond["if"]["properties"]["action"]["const"] == "rebuild"
+    )
+    assert rebuild_branch.get("required", []) == []
+    # And the record-only action is unaffected: it still demands items.
+    summarize_branch = next(
+        cond["then"]["properties"]["input"] for cond in get_schema("en")["allOf"]
+        if cond["if"]["properties"]["action"]["const"] == "summarize"
+    )
+    assert summarize_branch["required"] == ["items"]
+
+
+def test_rebuild_items_stays_optional_on_both_provider_wires(tmp_path):
+    """The optional-`items` contract must survive Chat and Responses alike."""
+    from lingtai.kernel.base_agent.tools import _build_tool_schemas
+    from lingtai.llm.openai.adapter import _build_responses_tools, _build_tools
+
+    live = _agent(tmp_path)
+    try:
+        schemas = [s for s in _build_tool_schemas(live) if s.name == "context"]
+        chat = _build_tools(schemas)[0]["function"]["parameters"]
+        responses = _build_responses_tools(schemas)[0]["parameters"]
+        for wire, combinator in ((chat, "oneOf"), (responses, "anyOf")):
+            branches = {
+                b["title"]: b for b in wire["properties"]["input"][combinator]
+            }
+            assert branches["rebuild input"].get("required", []) == []
+            assert branches["summarize input"]["required"] == ["items"]
+    finally:
+        live.stop(timeout=1.0)
+
+
+def test_rebuild_with_no_items_is_the_ordinary_pure_rebuild(tmp_path):
+    """``{}`` and an explicit null are the same no-new-items rebuild call."""
+    agent = _SummarizeStubAgent(tmp_path)
+    # No chat session — the pure-rebuild path reports that honestly, exactly as
+    # ``system(action='summarize', rebuild=true)`` did.
+    for action_input in ({}, {"items": None}):
+        result = _summarize_call(agent, {"action": "rebuild", "input": action_input})
+        assert result["status"] == "error"
+        assert result["reason"] == "no_chat_session"
+        assert result["notification_threshold_chars"] == 3000
+
+
+def test_summarize_records_a_pending_marker_and_does_not_rebuild(tmp_path):
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.tools.system.summarize import SUMMARIZE_MARKER, SUMMARY_STATUS_PENDING
+
+    iface = ChatInterface()
+    iface.add_assistant_message([ToolCallBlock(id="tc-1", name="bash", args={})])
+    iface.add_tool_results([ToolResultBlock(id="tc-1", name="bash", content="X" * 400)])
+
+    requested: list = []
+
+    class _Chat:
+        interface = iface
+
+        def request_history_rebuild(self, reason: str = "") -> bool:
+            requested.append(reason)
+            return True
+
+    agent = _SummarizeStubAgent(tmp_path)
+    agent._chat = _Chat()
+
+    result = _summarize_call(agent, {
+        "action": "summarize",
+        "input": {"items": [{"tool_call_id": "tc-1", "summary": "digested"}]},
+    })
+    assert result["status"] == "ok"
+    assert result["mode"] == "summarize"
+    assert result["summarized"] == 1
+    assert result["failed"] == 0
+    assert "pending_summary_totals" in result
+    assert "reconstruction" in result
+    assert result["notification_threshold_chars"] == 3000
+
+    block = iface._entries[1].content[0]
+    assert block.content["artifact"] == SUMMARIZE_MARKER
+    assert block.content["status"] == SUMMARY_STATUS_PENDING
+    # Record-only: the action must NOT have asked for a provider rebuild.
+    assert requested == []
+
+
+def test_rebuild_with_items_records_and_applies_in_one_call(tmp_path):
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE
+
+    iface = ChatInterface()
+    iface.add_assistant_message([ToolCallBlock(id="tc-2", name="bash", args={})])
+    iface.add_tool_results([ToolResultBlock(id="tc-2", name="bash", content="Y" * 400)])
+
+    requested: list = []
+
+    class _Chat:
+        interface = iface
+
+        def request_history_rebuild(self, reason: str = "") -> bool:
+            requested.append(reason)
+            return True
+
+    agent = _SummarizeStubAgent(tmp_path)
+    agent._chat = _Chat()
+
+    result = _summarize_call(agent, {
+        "action": "rebuild",
+        "input": {"items": [{"tool_call_id": "tc-2", "summary": "digested"}]},
+    })
+    assert result["mode"] == "rebuild"
+    assert result["rebuild_requested"] is True
+    assert result["marked_done"] == ["tc-2"]
+    assert requested == ["summarize_rebuild_only"]
+    assert iface._entries[1].content[0].content["status"] == SUMMARY_STATUS_DONE
+
+
+def test_pending_summaries_survive_to_a_later_bare_rebuild(tmp_path):
+    """Record now, apply later — the two-call flow the split exists for."""
+    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE, SUMMARY_STATUS_PENDING
+
+    iface = ChatInterface()
+    iface.add_assistant_message([ToolCallBlock(id="tc-3", name="bash", args={})])
+    iface.add_tool_results([ToolResultBlock(id="tc-3", name="bash", content="Z" * 400)])
+
+    requested: list = []
+
+    class _Chat:
+        interface = iface
+
+        def request_history_rebuild(self, reason: str = "") -> bool:
+            requested.append(reason)
+            return True
+
+    agent = _SummarizeStubAgent(tmp_path)
+    agent._chat = _Chat()
+
+    _summarize_call(agent, {
+        "action": "summarize",
+        "input": {"items": [{"tool_call_id": "tc-3", "summary": "digested"}]},
+    })
+    assert iface._entries[1].content[0].content["status"] == SUMMARY_STATUS_PENDING
+    assert requested == []
+
+    result = _summarize_call(agent, {"action": "rebuild", "input": {"items": None}})
+    assert result["mode"] == "rebuild"
+    assert result["marked_done"] == ["tc-3"]
+    assert requested == ["summarize_rebuild_only"]
+    assert iface._entries[1].content[0].content["status"] == SUMMARY_STATUS_DONE
+
+
+def test_root_summarize_bool_is_never_domain_input_of_the_summarize_action(tmp_path):
+    """The ACTION named ``summarize`` and the ROOT bool named ``summarize``.
+
+    They coexist at different envelope levels and must never be conflated: the
+    root bool is the cross-cutting presentation control the generic dispatcher
+    strips, and no child declares a ``summarize`` property.
+    """
+    schema = get_schema("en")
+    assert schema["properties"]["summarize"]["type"] == "boolean"
+    for cond in schema["allOf"]:
+        assert "summarize" not in cond["then"]["properties"]["input"]["properties"]
+
+    # Passing the root bool alongside the summarize action reaches the engine
+    # as a normal record-only call — it is not read as domain input.
+    agent = _SummarizeStubAgent(tmp_path)
+    result = _summarize_call(agent, {
+        "action": "summarize", "input": {"items": []},
+        "reasoning": "why", "summarize": True,
+    })
+    assert result["reason"] == "missing_items"

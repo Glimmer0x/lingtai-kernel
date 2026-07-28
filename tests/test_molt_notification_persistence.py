@@ -21,8 +21,8 @@ from tests._molt_helpers import write_session_journal as _write_session_journal
 # ---------------------------------------------------------------------------
 
 
-def _make_agent_with_psyche(tmp_path):
-    """Create an Agent with psyche capability and mocked LLM service."""
+def _make_agent_with_context(tmp_path):
+    """Create an Agent with the context intrinsic and mocked LLM service."""
     from lingtai.agent import Agent
 
     svc = MagicMock()
@@ -31,7 +31,7 @@ def _make_agent_with_psyche(tmp_path):
     svc.model = "gemini-test"
     return Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["psyche"],
+        capabilities=["context"],
     )
 
 
@@ -112,7 +112,7 @@ class TestNotificationPersistenceAgentMolt:
     def test_notification_files_survive_agent_molt(self, tmp_path):
         """After an agent-initiated molt, .notification/ directory and its
         files should still exist on disk."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             # Create a notification file before molt
@@ -123,11 +123,11 @@ class TestNotificationPersistenceAgentMolt:
             mock_interface = _setup_mock_chat(agent)
 
             # Build a fake ToolCallBlock for the molt
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             from lingtai.kernel.llm.interface import ToolCallBlock
             tc_id = "toolu_test_123"
             tc_block = ToolCallBlock(
-                id=tc_id, name="psyche",
+                id=tc_id, name="context",
                 args={"object": "context", "action": "molt",
                       "summary": "test summary for molt"},
             )
@@ -165,7 +165,7 @@ class TestNotificationPersistenceAgentMolt:
 
     def test_multiple_notification_files_survive_agent_molt(self, tmp_path):
         """Multiple notification files should all survive molt."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             # Create multiple notification files
@@ -184,12 +184,12 @@ class TestNotificationPersistenceAgentMolt:
             # Set up mock chat
             mock_interface = _setup_mock_chat(agent)
 
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_456"
             tc_block = ToolCallBlock(
-                id=tc_id, name="psyche",
+                id=tc_id, name="context",
                 args={"object": "context", "action": "molt",
                       "summary": "multi-file test"},
             )
@@ -219,7 +219,7 @@ class TestNotificationPersistenceForceWipe:
     def test_notification_files_survive_context_forget(self, tmp_path):
         """After a system-initiated force molt, .notification/ directory
         and its files should still exist on disk."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             # Create a notification file before force molt
@@ -230,7 +230,7 @@ class TestNotificationPersistenceForceWipe:
             _setup_mock_chat(agent)
 
             # Perform system-initiated force molt
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
 
             # Force molt should succeed
@@ -254,7 +254,7 @@ class TestNotificationPersistenceForceWipe:
 
     def test_notification_files_survive_aed_forget(self, tmp_path):
         """Notification files survive context_forget triggered by AED."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             notif_path = _create_notification_file(agent, "email.json")
@@ -262,7 +262,7 @@ class TestNotificationPersistenceForceWipe:
 
             _setup_mock_chat(agent)
 
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="aed", attempts=3)
 
             assert result.get("status") == "ok"
@@ -285,7 +285,7 @@ class TestNotificationTrackingStateAfterMolt:
     def test_tracking_state_reset_after_agent_molt(self, tmp_path):
         """After agent-initiated molt, current in-memory notification
         tracking should reset while files stay on disk."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             # Create a notification file so the fingerprint is stable
@@ -302,12 +302,12 @@ class TestNotificationTrackingStateAfterMolt:
             # Set up mock chat
             mock_interface = _setup_mock_chat(agent)
 
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             from lingtai.kernel.llm.interface import ToolCallBlock
 
             tc_id = "toolu_test_789"
             tc_block = ToolCallBlock(
-                id=tc_id, name="psyche",
+                id=tc_id, name="context",
                 args={"object": "context", "action": "molt",
                       "summary": "tracking test"},
             )
@@ -341,7 +341,7 @@ class TestNotificationTrackingStateAfterMolt:
     def test_tracking_state_reset_after_context_forget(self, tmp_path):
         """After system-initiated context_forget, current in-memory
         notification tracking should reset while files stay on disk."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             # Create a notification file so the fingerprint is stable
@@ -359,7 +359,7 @@ class TestNotificationTrackingStateAfterMolt:
             # Set up mock chat
             _setup_mock_chat(agent)
 
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
 
             assert result.get("status") == "ok"

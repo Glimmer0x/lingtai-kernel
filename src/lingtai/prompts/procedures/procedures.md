@@ -68,9 +68,9 @@ Below the full-context boundary, pending summarized history is normal; keep
 working, do not assume the old raw block has left the current continuation, and
 do not use `refresh` to force it. Once context is at/above `0.85`, the runtime
 stamps `_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is worth
-the cost, make one proactive tactical `system(action="summarize", rebuild=true)`
-call (with new items to record and apply, or with no items to apply
-already-pending summaries); applied summaries flip to `status: done`. At context
+the cost, make one proactive tactical `context(action="rebuild")` call (with
+new items to record and apply, or with no items to apply already-pending
+summaries); applied summaries flip to `status: done`. At context
 usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
 the next request **regardless of whether pending summaries exist**, but only
 **once per continuous full-context episode** (it does not re-force while context
@@ -105,7 +105,7 @@ cache-miss budget reached (`cache_miss_budget` / `cache_miss_tokens`, default
 1,000,000 uncached-input tokens accumulated since your last molt — it survives a
 refresh), molt to shed the carried context. If you have already decided to molt,
 do not summarize first
-merely to prepare; read `psyche-manual`, tend the stores, and molt deliberately.
+merely to prepare; read `context-manual`, tend the stores, and molt deliberately.
 
 ### Write Skills As You Work
 
@@ -188,7 +188,7 @@ operations, preset swaps, notification handling, and karma actions.
 
 ### Molt and Durable Stores
 
-**If you are about to molt, first read `psyche-manual`.** It owns the molt
+**If you are about to molt, first read `context-manual`.** It owns the molt
 procedure — tending the durable stores, writing the session-journal / molt-history
 record, and routing consequential handoffs to the molt-template and entry
 templates. Read it while context is still cheap; do not wait until the last
@@ -206,7 +206,7 @@ discipline keeps multiple same-day molts chronologically stable.
 |---|---|
 | Agent runtime, lifecycle, communication, memory layers, resident substrate expansion | `system-manual` → `reference/substrate-manual/SKILL.md` |
 | Resident procedures expansion, action discipline, deliverables, issue/reporting workflow | `system-manual` → `reference/procedures-manual/SKILL.md` |
-| Molt, pad tending, session journaling, post-wipe recovery | `psyche-manual` |
+| Molt, pad tending, session journaling, post-wipe recovery | `context-manual` |
 | Spawning/managing avatars | `avatar-manual` |
 | Internal email protocol | `email-manual` |
 | Real email/chat/MCP configuration | `mcp-manual` plus the addon's README/resources |

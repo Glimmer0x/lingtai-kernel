@@ -2,15 +2,19 @@
 
 Contains:
     _context_molt    — agent-initiated molt
-    _name_set        — set true name (immutable)
-    _name_nickname   — set/change nickname (mutable)
     context_forget   — system-initiated forced molt
+
+The two name actions this module used to host (``_name_set``/
+``_name_nickname``) moved to ``lingtai.tools.system.name`` when the ``psyche``
+family was dissolved: naming is runtime identity state, which ``system`` owns,
+while this package owns the context lifecycle.
 """
 from __future__ import annotations
 
 import uuid
 from pathlib import Path
 
+from lingtai.kernel.agent_session import MOLT_BOUNDARY_EVENT
 from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 
 
@@ -24,7 +28,7 @@ _POST_MOLT_CHANNEL = "post-molt"
 # forced molt has no agent rationale to record, so this states that fact
 # plainly rather than inventing one — and it keeps the model-visible
 # synthesized call envelope-shaped (root ``reasoning`` is REQUIRED by the
-# composed psyche schema).
+# composed context schema).
 SYSTEM_FORCED_MOLT_REASONING = (
     "System-forced molt. You did not initiate this call — the kernel "
     "synthesized it and authored the summary."
@@ -175,7 +179,7 @@ def _context_molt(agent, args: dict) -> dict:
         return {"error": "summary cannot be empty — write what you need to remember."}
 
     # Session-journal gate (issue #350). Every molt that reaches this function
-    # is agent-initiated: it is dispatched from a model-issued psyche tool call
+    # is agent-initiated: it is dispatched from a model-issued context tool call
     # (context → molt), so it MUST point at the durable session-journal entry
     # written for the just-finished segment. The check runs BEFORE any state
     # mutation so a missing/invalid journal refuses the molt without shedding
@@ -456,7 +460,9 @@ def _context_molt(agent, args: dict) -> dict:
     agent._session.reset_session_token_usage(context_tokens=after_tokens)
 
     agent._log(
-        "psyche_molt",
+        # Legacy durable boundary key — see kernel/agent_session.py
+        # MOLT_BOUNDARY_EVENT. Not renamed with the tool.
+        MOLT_BOUNDARY_EVENT,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         molt_count=agent._molt_count,
@@ -500,7 +506,7 @@ def _context_molt(agent, args: dict) -> dict:
     lang = agent._config.language
     return {
         "status": "ok",
-        "note": t(lang, "psyche.molt_result_note"),
+        "note": t(lang, "context.molt_result_note"),
         "molt_count": agent._molt_count,
         "tokens_before": before_tokens,
         "tokens_after": after_tokens,
@@ -513,30 +519,6 @@ def _context_molt(agent, args: dict) -> dict:
             if summary_path is not None else None,
         "session_journal_path": session_journal_path,
     }
-
-
-# ---------------------------------------------------------------------------
-# Name actions
-# ---------------------------------------------------------------------------
-
-
-def _name_set(agent, args: dict) -> dict:
-    """Set the agent's true name."""
-    name = args.get("content", "").strip()
-    if not name:
-        return {"error": "Name cannot be empty. Provide your chosen name in 'content'."}
-    try:
-        agent.set_name(name)
-    except RuntimeError as e:
-        return {"error": str(e)}
-    return {"status": "ok", "name": name}
-
-
-def _name_nickname(agent, args: dict) -> dict:
-    """Set or change the agent's nickname (别名). Mutable."""
-    nickname = args.get("content", "").strip()
-    agent.set_nickname(nickname)
-    return {"status": "ok", "nickname": nickname or None}
 
 
 # ---------------------------------------------------------------------------
@@ -572,19 +554,19 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
 
     lang = agent._config.language
     if source == "warning_ladder":
-        summary = t(lang, "psyche.context_forget_summary")
+        summary = t(lang, "context.context_forget_summary")
     elif source == "aed":
-        summary = t(lang, "psyche.context_forget_summary_aed").replace("{attempts}", str(attempts))
+        summary = t(lang, "context.context_forget_summary_aed").replace("{attempts}", str(attempts))
     else:
-        summary = t(lang, "psyche.context_forget_summary_signal").replace("{source}", source)
+        summary = t(lang, "context.context_forget_summary_signal").replace("{source}", source)
 
     if agent._chat is None:
         return {"error": "No active chat session to molt."}
 
     synth_id = f"toolu_synth_{uuid.uuid4().hex[:16]}"
-    tool_name = "psyche"
+    tool_name = "context"
     # This call block is replayed to the provider as an assistant ``tool_use``
-    # block, so it is a model-visible example of how to call ``psyche`` and
+    # block, so it is a model-visible example of how to call ``context`` and
     # MUST carry the LTP v2 envelope the schema advertises: ``action`` +
     # strict per-action ``input`` + a Host-authored ``reasoning``. A model
     # imitating its own history and sending the pre-migration flat
@@ -613,13 +595,13 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     # behavior is unchanged.
     #
     # ``_initiator``/``_source`` stay OUTSIDE ``input`` — they are Host
-    # provenance metadata, not action input, and psyche's ``context_molt``
+    # provenance metadata, not action input, and context's ``molt``
     # ``input`` schema does not declare them.
     synth_call = ToolCallBlock(
         id=synth_id,
         name=tool_name,
         args={
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": summary,
                 "session_journal_path": None,
@@ -755,7 +737,7 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
 
     result_dict = {
         "status": "ok",
-        "note": t(lang, "psyche.molt_result_note"),
+        "note": t(lang, "context.molt_result_note"),
         "molt_count": agent._molt_count,
         "tokens_before": before_tokens,
         "tokens_after": after_tokens,
@@ -774,7 +756,9 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     ])
 
     agent._log(
-        "psyche_molt",
+        # Legacy durable boundary key — see kernel/agent_session.py
+        # MOLT_BOUNDARY_EVENT. Not renamed with the tool.
+        MOLT_BOUNDARY_EVENT,
         before_tokens=before_tokens,
         after_tokens=after_tokens,
         molt_count=agent._molt_count,

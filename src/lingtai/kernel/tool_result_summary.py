@@ -1,7 +1,8 @@
 """A-priori (reasoning-driven) tool-result summarization.
 
 This is the *a-priori* sibling of the agent-authored *a-posteriori*
-``system(action='summarize')`` path (``intrinsics/system/summarize.py``).
+``context(action='summarize'|'rebuild')`` path, whose private engine is
+``tools/system/summarize.py``.
 
 Difference in timing and authorship:
 
@@ -156,7 +157,7 @@ _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
         "web", "mcp", "knowledge", "file", "vision", "avatar", "soul",
         "shell", "skills", "notification", "system", "daemon", "email",
-        "psyche", "pad", "lingtai",
+        "context", "pad", "lingtai",
     }
 )
 

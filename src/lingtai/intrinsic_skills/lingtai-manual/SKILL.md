@@ -1,16 +1,16 @@
 ---
 name: lingtai-manual
 description: |
-  Operational guide for the lingtai tool — your 灵台 (character), the self-authored identity that distinguishes you from every other agent. Read this when: you are updating your identity; you need the tending rhythm; or you need to understand the two identity modes (self-evolve vs forced) and how configured values interact with your own writes. Identity is a store you tend before molting — the molt procedure itself lives in psyche-manual.
+  Operational guide for the lingtai tool — your 灵台 (character), the self-authored identity that distinguishes you from every other agent. Read this when: you are updating your identity; you need the tending rhythm; or you need to understand the two identity modes (self-evolve vs forced) and how configured values interact with your own writes. Identity is a store you tend before molting — the molt procedure itself lives in context-manual.
 version: 1.0.0
 last_changed_at: 2026-07-27T18:00:00-07:00
 related_files:
 - src/lingtai/tools/lingtai/__init__.py
 - src/lingtai/tools/lingtai/_lingtai.py
 - src/lingtai/tools/lingtai/CONTRACT.md
-- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
+- src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  Tracks the lingtai tool's behavior; update when that tool's actions, inputs, identity modes, or persistence paths change. Identity is one of the four durable stores tended before a molt — keep the routing line to psyche-manual (molt procedure) and to pad-manual (working index) accurate rather than restating either.
+  Tracks the lingtai tool's behavior; update when that tool's actions, inputs, identity modes, or persistence paths change. Identity is one of the four durable stores tended before a molt — keep the routing line to context-manual (molt procedure) and to pad-manual (working index) accurate rather than restating either.
 ---
 
 # LingTai Manual
@@ -87,7 +87,7 @@ Your 灵台 is one of the four durable stores. It survives a molt and is reloade
 into the fresh session's system prompt automatically — which is exactly why it
 must be current *before* you molt: the next you wakes with the identity you
 last wrote, not with the conversation you had. The molt procedure, the
-store-tending checklist, and the session-journal gate live in `psyche-manual`;
+store-tending checklist, and the session-journal gate live in `context-manual`;
 read it there rather than improvising from here.
 
 ## Settings

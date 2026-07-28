@@ -80,7 +80,7 @@ def test_synthesizes_for_fully_orphan_tool_calls():
                 {"id": "B", "type": "function", "function": {"name": "t", "arguments": "{}"}},
             ],
         },
-        # System interleaved — this is the real-world pathology from psyche
+        # System interleaved — this is the real-world pathology from context
         # mutating the prompt between assistant[tool_calls] and tool_results.
         {"role": "system", "content": "new system"},
         {"role": "user", "content": "next"},

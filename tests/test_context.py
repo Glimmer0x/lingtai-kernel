@@ -1,4 +1,10 @@
-"""Tests for the psyche intrinsic — identity, pad, context, and name."""
+"""Tests for the `context` intrinsic — molt, forced molt, and its public schema.
+
+Context behavior only. The pad and 灵台 identity operations that used to live
+behind this root are their own families now and are tested by their owners
+(`tests/test_pad.py`, `tests/test_pad_lingtai_split.py`); the two name actions
+moved to `system` (`tests/test_tool_family_system_migration.py`).
+"""
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -13,18 +19,8 @@ from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
 def _call(agent, args: dict) -> dict:
-    """Dispatch a psyche tool call directly through the registered intrinsic."""
-    return agent._intrinsics["psyche"](args)
-
-
-def _call_pad(agent, args: dict) -> dict:
-    """Dispatch a pad tool call — its own root since the pad/lingtai split."""
-    return agent._intrinsics["pad"](args)
-
-
-def _call_lingtai(agent, args: dict) -> dict:
-    """Dispatch a lingtai tool call — its own root since the pad/lingtai split."""
-    return agent._intrinsics["lingtai"](args)
+    """Dispatch a context tool call directly through the registered intrinsic."""
+    return agent._intrinsics["context"](args)
 
 
 _VALID_JOURNAL = """\
@@ -58,26 +54,40 @@ def _write_session_journal(agent, rel="knowledge/session-journal/2026-06-19-molt
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_is_intrinsic(tmp_path):
-    """Psyche is now an intrinsic, not a capability — always registered."""
+def test_context_is_intrinsic(tmp_path):
+    """Context is an intrinsic, not a capability — always registered."""
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    assert "psyche" in agent._intrinsics
+    assert "context" in agent._intrinsics
     assert "eigen" not in agent._intrinsics
     agent.stop(timeout=1.0)
 
 
-def test_psyche_capability_silently_dropped(tmp_path):
-    """Legacy init.json with capabilities=['psyche'] should be tolerated —
-    psyche is filtered out, the intrinsic still provides the tool."""
+def test_legacy_psyche_capability_is_tolerated_and_filtered(tmp_path):
+    """A stale init.json carrying capabilities=['psyche'] must not break boot.
+
+    This is **config tolerance, not a public alias**: an old on-disk manifest
+    naming the dissolved family is ignored the same way any unknown capability
+    is (logged, not raised), and it grants no tool. The real `context` tool
+    still arrives — as an intrinsic, which no capability list controls.
+    """
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         capabilities=["psyche"],
     )
-    assert "psyche" not in [name for name, _ in agent._capabilities]
-    assert "psyche" in agent._intrinsics
-    agent.stop(timeout=1.0)
+    try:
+        # The stale name is filtered out of the resolved capability set...
+        assert "psyche" not in [name for name, _ in agent._capabilities]
+        # ...and does not sneak in as an intrinsic either.
+        assert "psyche" not in agent._intrinsics
+        # It grants no tool: no public `psyche` root reaches the model.
+        assert "psyche" not in [s.name for s in agent._build_tool_schemas()]
+        # Context is unaffected — it is intrinsic, not capability-gated.
+        assert "context" in agent._intrinsics
+        assert "context" in [s.name for s in agent._build_tool_schemas()]
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_anima_alias_removed(tmp_path):
@@ -88,166 +98,6 @@ def test_anima_alias_removed(tmp_path):
     )
     assert "anima" not in [name for name, _ in agent._capabilities]
     agent.stop(timeout=1.0)
-
-
-# ---------------------------------------------------------------------------
-# Lingtai (identity) actions
-# ---------------------------------------------------------------------------
-
-
-def test_lingtai_update_writes_lingtai_md(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        covenant="You are helpful",
-    )
-    result = _call_lingtai(agent, {"action": "update", "input": {"content": "I am a PDF specialist"}})
-    assert result["status"] == "ok"
-    character = (agent.working_dir / "system" / "lingtai.md").read_text()
-    assert character == "I am a PDF specialist"
-    agent.stop(timeout=1.0)
-
-
-def test_lingtai_update_empty_clears(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    _call_lingtai(agent, {"action": "update", "input": {"content": "something"}})
-    _call_lingtai(agent, {"action": "update", "input": {"content": ""}})
-    character = (agent.working_dir / "system" / "lingtai.md").read_text()
-    assert character == ""
-    agent.stop(timeout=1.0)
-
-
-def test_lingtai_load_writes_character_section(tmp_path):
-    """lingtai.md populates the standalone `character` section, NOT covenant.
-
-    The two are semantically distinct: `covenant` is the operator-supplied
-    contract (covenant.md alone); `character` is the agent's self-authored
-    identity (lingtai.md alone). The character text must never leak into the
-    covenant section.
-    """
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        covenant="You are helpful",
-    )
-    agent.start()
-    try:
-        _call_lingtai(agent, {"action": "update", "input": {"content": "I specialize in PDFs"}})
-        _call_lingtai(agent, {"action": "load", "input": {}})
-
-        # character section carries lingtai.md alone
-        character = agent._prompt_manager.read_section("character")
-        assert character is not None
-        assert "I specialize in PDFs" in character
-
-        # covenant section carries covenant.md alone — character text not folded in
-        covenant = agent._prompt_manager.read_section("covenant") or ""
-        assert "You are helpful" in covenant
-        assert "I specialize in PDFs" not in covenant
-    finally:
-        agent.stop()
-
-
-# ---------------------------------------------------------------------------
-# Pad edit (with optional files=)
-# ---------------------------------------------------------------------------
-
-
-def test_pad_edit_content_only(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    result = _call_pad(agent, {"action": "edit", "input": {"content": "my notes", "files": None}})
-    assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "pad.md").read_text()
-    assert "my notes" in md
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_with_files(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    (agent.working_dir / "export1.txt").write_text("knowledge from export 1")
-    (agent.working_dir / "export2.txt").write_text("knowledge from export 2")
-
-    result = _call_pad(agent, {
-        "action": "edit",
-        "input": {
-            "content": "My working notes.",
-            "files": ["export1.txt", "export2.txt"],
-        },
-    })
-    assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "pad.md").read_text()
-    assert "My working notes." in md
-    assert "[file-1]" in md
-    assert "knowledge from export 1" in md
-    assert "[file-2]" in md
-    assert "knowledge from export 2" in md
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_files_only(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    (agent.working_dir / "data.txt").write_text("file data")
-
-    result = _call_pad(agent, {
-        "action": "edit",
-        "input": {"content": None, "files": ["data.txt"]},
-    })
-    assert result["status"] == "ok"
-    md = (agent.working_dir / "system" / "pad.md").read_text()
-    assert "[file-1]" in md
-    assert "file data" in md
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_missing_file_errors(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    result = _call_pad(agent, {
-        "action": "edit",
-        "input": {"content": "notes", "files": ["nonexistent.txt"]},
-    })
-    assert "error" in result
-    assert "nonexistent.txt" in result["error"]
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_empty_errors(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    result = _call_pad(agent, {"action": "edit", "input": {"content": None, "files": None}})
-    assert "error" in result
-    agent.stop(timeout=1.0)
-
-
-# ---------------------------------------------------------------------------
-# Pad load
-# ---------------------------------------------------------------------------
-
-
-def test_pad_load(tmp_path):
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    agent.start()
-    try:
-        system_dir = agent._working_dir / "system"
-        system_dir.mkdir(exist_ok=True)
-        (system_dir / "pad.md").write_text("loaded from disk")
-
-        result = _call_pad(agent, {"action": "load", "input": {}})
-        assert result["status"] == "ok"
-        section = agent._prompt_manager.read_section("pad")
-        assert "loaded from disk" in section
-    finally:
-        agent.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -286,9 +136,9 @@ def test_molt_returns_faint_memory(tmp_path):
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_wire_id,
-                name="psyche",
+                name="context",
                 args={
-                    "action": "context_molt",
+                    "action": "molt",
                     "input": {
                         "summary": molt_summary,
                         "session_journal_path": journal_path,
@@ -300,7 +150,7 @@ def test_molt_returns_faint_memory(tmp_path):
         ])
 
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": molt_summary,
                 "session_journal_path": journal_path,
@@ -330,7 +180,7 @@ def test_context_forget_still_works(tmp_path):
     is exhausted) uses the localized default summary and succeeds without
     any agent-provided summary."""
     from lingtai.kernel.llm.interface import ChatInterface, TextBlock
-    from lingtai.tools.psyche import context_forget
+    from lingtai.tools.context import context_forget
 
     svc = make_mock_service()
 
@@ -362,7 +212,7 @@ def test_context_forget_still_works(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_schema_preserves_the_retained_sub_action_surface():
+def test_context_schema_exposes_the_exact_action_surface():
     """The retained (object, action) pairs survive as flat actions, unrenamed.
 
     The LTP v2 migration collapsed the two-key matrix into the single-`action`
@@ -371,21 +221,21 @@ def test_psyche_schema_preserves_the_retained_sub_action_surface():
     ``tests/test_pad_lingtai_split.py`` — leaving the rest untouched in both
     spelling and order.
     """
-    from lingtai.tools.psyche import get_schema
+    from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     assert SCHEMA["properties"]["action"]["enum"] == [
-        "context_molt",
-        "name_set", "name_nickname",
+        "molt",
+        "summarize", "rebuild",
         "manual",
     ]
 
 
-def test_psyche_schema_is_the_closed_ltp_v2_envelope():
+def test_context_schema_is_the_closed_ltp_v2_envelope():
     # The pre-migration schema was deliberately flat with no combinators
     # (#114). The generic ToolFamily composer now supplies the closed root
     # plus the `allOf` action/input correlation adopted after the 2026-07-27
     # Responses probe, so both of those old assertions are inverted here.
-    from lingtai.tools.psyche import get_schema
+    from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     assert set(SCHEMA["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert SCHEMA["required"] == ["action", "input", "reasoning"]
@@ -395,9 +245,9 @@ def test_psyche_schema_is_the_closed_ltp_v2_envelope():
     assert "object" not in SCHEMA["properties"]
 
 
-def test_psyche_schema_has_no_files_field_after_the_pad_split():
+def test_context_schema_has_no_files_field_after_the_pad_split():
     """`files` left with the pad family; no psyche action advertises it."""
-    from lingtai.tools.psyche import get_schema
+    from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     with_files = {
         cond["if"]["properties"]["action"]["const"]
@@ -407,29 +257,29 @@ def test_psyche_schema_has_no_files_field_after_the_pad_split():
     assert with_files == set()
 
 
-def test_psyche_schema_has_session_journal_path_only_on_context_molt():
+def test_context_schema_has_session_journal_path_only_on_molt():
     """Issue #350: molt requires a structured session_journal_path arg.
 
-    After the migration it lives in `context_molt`'s own strict input, so no
-    other action advertises it.
+    It lives in `molt`'s own strict input, so no other action advertises it.
     """
-    from lingtai.tools.psyche import get_schema
+    from lingtai.tools.context import get_schema
     SCHEMA = get_schema("en")
     owners = {}
     for cond in SCHEMA["allOf"]:
         action = cond["if"]["properties"]["action"]["const"]
         owners[action] = cond["then"]["properties"]["input"]["properties"]
-    assert "session_journal_path" not in owners["name_set"]
-    prop = owners["context_molt"]["session_journal_path"]
+    assert "session_journal_path" not in owners["summarize"]
+    assert "session_journal_path" not in owners["rebuild"]
+    prop = owners["molt"]["session_journal_path"]
     assert prop["type"] == "string"
     assert prop["description"]
-    assert "session_journal_path" in owners["context_molt"]
+    assert "session_journal_path" in owners["molt"]
     # Look the branch up by its `action` const rather than by position — the
     # pad/lingtai split shifted every index, and position was never the fact
     # under test.
     molt_branch = next(
         cond for cond in SCHEMA["allOf"]
-        if cond["if"]["properties"]["action"]["const"] == "context_molt"
+        if cond["if"]["properties"]["action"]["const"] == "molt"
     )
     molt_required = molt_branch["then"]["properties"]["input"]["required"]
     assert "summary" in molt_required and "session_journal_path" in molt_required
@@ -447,7 +297,7 @@ def test_unknown_action_is_rejected(tmp_path):
     )
     result = _call(agent, {"action": "bogus", "input": {}})
     assert "error" in result
-    assert "Unknown psyche action" in result["error"]
+    assert "Unknown context action" in result["error"]
     agent.stop(timeout=1.0)
 
 
@@ -462,22 +312,10 @@ def test_pre_migration_object_action_shape_is_rejected(tmp_path):
     )
     result = _call(agent, {"object": "lingtai", "action": "submit"})
     assert "error" in result
-    assert "Unknown psyche action" in result["error"]
+    assert "Unknown context action" in result["error"]
     # And the pad on disk was never touched by the refused call.
     assert not (agent.working_dir / "system" / "lingtai.md").exists()
     agent.stop(timeout=1.0)
-
-
-def test_stop_does_not_overwrite_pad_md(tmp_path):
-    """Pad is disk-authoritative — stop() must not clobber existing pad.md."""
-    agent = Agent(
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-    )
-    pad_file = agent.working_dir / "system" / "pad.md"
-    pad_file.parent.mkdir(exist_ok=True)
-    pad_file.write_text("previous session pad")
-    agent.stop()
-    assert pad_file.read_text() == "previous session pad"
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +352,9 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
                 id=molt_id,
-                name="psyche",
+                name="context",
                 args={
-                    "action": "context_molt",
+                    "action": "molt",
                     "input": {
                         "summary": molt_summary,
                         "session_journal_path": journal_path,
@@ -528,7 +366,7 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
         ])
 
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": molt_summary,
                 "session_journal_path": journal_path,
@@ -558,7 +396,7 @@ def test_molt_writes_summary_file_for_agent_path(tmp_path):
 def test_context_forget_writes_summary_file_for_system_path(tmp_path):
     """System-initiated molt also persists summary; source field reflects trigger."""
     from lingtai.kernel.llm.interface import ChatInterface, TextBlock
-    from lingtai.tools.psyche import context_forget
+    from lingtai.tools.context import context_forget
 
     svc = make_mock_service()
 
@@ -595,7 +433,7 @@ def test_context_forget_writes_summary_file_for_system_path(tmp_path):
 def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
     """If summary write fails, molt still completes; summary_path is None."""
     from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
-    from lingtai.tools import psyche as psyche_mod
+    from lingtai.tools import context as psyche_mod
 
     monkeypatch.setattr(psyche_mod, "_write_molt_summary", lambda *a, **kw: None)
 
@@ -622,9 +460,9 @@ def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
         molt_id = "toolu_test_failguard_001"
         agent._session._chat.interface.add_assistant_message([
             ToolCallBlock(
-                id=molt_id, name="psyche",
+                id=molt_id, name="context",
                 args={
-                    "action": "context_molt",
+                    "action": "molt",
                     "input": {
                         "summary": "test",
                         "session_journal_path": journal_path,
@@ -636,7 +474,7 @@ def test_summary_write_failure_does_not_block_molt(tmp_path, monkeypatch):
         ])
 
         result = _call(agent, {
-            "action": "context_molt",
+            "action": "molt",
             "input": {
                 "summary": "test",
                 "session_journal_path": journal_path,
