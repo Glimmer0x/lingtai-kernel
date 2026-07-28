@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
@@ -63,8 +65,14 @@ capability names and lazy adapters.
   reusable ManualTool builder; `web` is its first real consumer, `mcp` its
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
   `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
-  ninth, and `notification` its tenth
+  ninth, `notification` its tenth, and `system` its eleventh
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `system/` — mandatory intrinsic owning the public `system` family: runtime,
+  lifecycle, and context-hygiene actions behind one model-facing root
+  (`src/lingtai/tools/system/ANATOMY.md`). Like `soul` and `notification` it is
+  an intrinsic rather than a manager-owning capability, so it composes its
+  schema from a module-level schema-only family and builds a dispatching one
+  per `handle(agent, args)` call.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).

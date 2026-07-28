@@ -15,7 +15,7 @@ description: >
   its folder may carry scripts/assets as the substrate reference grows.
 version: 1.3.0
 tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: "2026-07-27T17:02:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
@@ -110,7 +110,7 @@ Refresh is also the **emergency** context-reconstruction path: reach for it when
 context is broken or stale, or when an immediate provider-side rebuild is urgently
 needed. It is not part of the normal summarize flow — summarize records compact
 history now, offers an explicit proactive rebuild path at 0.85 via
-`system(action="summarize", rebuild=true)`, and otherwise the runtime forces a
+`system(action="summarize", input={"rebuild": true})`, and otherwise the runtime forces a
 rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
 do not refresh just to "apply" a summarize.
 
@@ -426,8 +426,9 @@ requires both `active` and `default` to be members of `allowed`.
 
 1. Call `system(action="presets")` and choose an exact returned path — not a
    shorthand or a name outside `allowed`.
-2. Call `system(action="refresh", preset=<path>)` for a named swap, or
-   `revert_preset=true` to read `manifest.preset.default` instead. An empty
+2. Call `system(action="refresh", input={"preset": <path>})` for a named swap, or
+   `system(action="refresh", input={"revert_preset": true})` to read
+   `manifest.preset.default` instead. An empty
    optional `preset` string normalizes to absent; supplying both a non-empty
    `preset` and `revert_preset` is a conflict.
 3. The refresh path checks the requested path's `allowed` membership, checks

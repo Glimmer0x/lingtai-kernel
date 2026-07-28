@@ -290,7 +290,7 @@ class TestSelfSleep:
         agent._set_state(AgentState.ACTIVE, reason="test")
 
         # Self-sleep: action=sleep with no address
-        result = handle(agent, {"action": "sleep"})
+        result = handle(agent, {"action": "sleep", "input": {}})
 
         assert result["status"] == "ok"
         assert agent._state == AgentState.ASLEEP

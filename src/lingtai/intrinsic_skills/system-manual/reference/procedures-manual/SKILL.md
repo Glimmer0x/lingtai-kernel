@@ -13,7 +13,7 @@ description: >
   guidance grows.
 version: 1.3.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-07-26T20:55:00-07:00"
+last_changed_at: "2026-07-27T17:02:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -84,7 +84,7 @@ force a rebuild.
 
 `reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
 `context.rebuild` stamp and the one proactive
-`system(action="summarize", rebuild=true)` call it permits, the 1.0
+`system(action="summarize", input={"rebuild": true})` call it permits, the 1.0
 once-per-episode forced rebuild, the `reconstruction.warning`, the persistent
 overflow `Molt IMMEDIATELY` line, and the task-boundary molt threshold. Do not
 loop rebuild/summarize. If summarize or a rebuild still cannot bring context

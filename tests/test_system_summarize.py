@@ -99,31 +99,46 @@ def _marker_status(iface, tool_call_id):
 
 
 def test_summarize_in_schema_enum():
-    from lingtai.tools.system.schema import get_schema
+    from lingtai.tools.system import get_schema
     schema = get_schema("en")
     assert "summarize" in schema["properties"]["action"]["enum"]
 
 
 def test_schema_has_items_property():
-    from lingtai.tools.system.schema import get_schema
-    schema = get_schema("en")
-    assert "items" in schema["properties"]
-    items_schema = schema["properties"]["items"]
-    assert items_schema["type"] == "array"
+    # Post-LTP-v2 migration ``items`` is no longer a flat root sibling: it is
+    # a property of the ``summarize`` action's own strict ``input`` object.
+    from lingtai.tools.system.schema import INPUT_SCHEMAS
+
+    items_schema = INPUT_SCHEMAS["summarize"]["properties"]["items"]
+    # Declared in the provider-compatible nullable representation for a
+    # strict schema, so the array type is one member of the type union.
+    assert "array" in items_schema["type"]
+    assert items_schema["items"]["required"] == ["tool_call_id", "summary"]
+    # And it belongs to ``summarize`` alone — no other action accepts it.
+    for action, schema in INPUT_SCHEMAS.items():
+        if action != "summarize":
+            assert "items" not in schema["properties"], action
 
 
 def test_schema_has_rebuild_boolean_property():
-    from lingtai.tools.system.schema import get_schema
-    schema = get_schema("en")
-    assert schema["properties"]["rebuild"]["type"] == "boolean"
+    from lingtai.tools.system.schema import INPUT_SCHEMAS
+
+    assert "boolean" in INPUT_SCHEMAS["summarize"]["properties"]["rebuild"]["type"]
+    for action, schema in INPUT_SCHEMAS.items():
+        if action != "summarize":
+            assert "rebuild" not in schema["properties"], action
 
 
 def test_schema_removed_legacy_rebuild_params():
     # The old public params are gone with NO legacy aliases retained.
-    from lingtai.tools.system.schema import get_schema
+    from lingtai.tools.system import get_schema
+    from lingtai.tools.system.schema import INPUT_SCHEMAS
+
     schema = get_schema("en")
     assert "rebuild_only" not in schema["properties"]
     assert "dry_run" not in schema["properties"]
+    assert "rebuild_only" not in INPUT_SCHEMAS["summarize"]["properties"]
+    assert "dry_run" not in INPUT_SCHEMAS["summarize"]["properties"]
 
 
 def test_summarize_writes_pending_status_marker():
@@ -756,7 +771,9 @@ def test_handle_dispatches_summarize(tmp_path):
 
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=svc, agent_name="test", working_dir=tmp_path / "ag", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "ag"))
 
-    result = agent._intrinsics["system"]({"action": "summarize", "items": []})
+    result = agent._intrinsics["system"](
+        {"action": "summarize", "input": {"items": []}}
+    )
     # Empty items → error, but the dispatch must reach _summarize (not unknown action)
     assert result["status"] == "error"
     assert "items" in result.get("message", "")
@@ -958,13 +975,22 @@ def test_summarize_result_always_contains_threshold(tmp_path):
 
 
 def test_schema_does_not_include_notification_threshold_chars():
-    """notification_threshold_chars must NOT appear in the system tool schema."""
-    from lingtai.tools.system.schema import get_schema
+    """notification_threshold_chars must NOT appear in the system tool schema.
+
+    Checked at both envelope levels after the LTP v2 migration: not as a root
+    field, and not inside any action's own ``input`` — so a strict dispatch
+    rejects it rather than silently accepting a runtime threshold change.
+    """
+    from lingtai.tools.system import get_schema
+    from lingtai.tools.system.schema import INPUT_SCHEMAS
+
     schema = get_schema("en")
     assert "notification_threshold_chars" not in schema["properties"], (
         "notification_threshold_chars must be removed from the schema — "
         "threshold is config-only (init.json + refresh), not runtime-mutable"
     )
+    for action, action_schema in INPUT_SCHEMAS.items():
+        assert "notification_threshold_chars" not in action_schema["properties"], action
 
 
 # ---------------------------------------------------------------------------

@@ -245,7 +245,7 @@ def test_system_schema_drops_notification_and_dismiss() -> None:
 
 def test_system_rejects_notification_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
-    res = sys_intrinsic.handle(agent, {"action": "notification"})
+    res = sys_intrinsic.handle(agent, {"action": "notification", "input": {}})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
 
@@ -254,7 +254,7 @@ def test_system_rejects_dismiss_action(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
     publish_test_payload(tmp_path, "soul", {"header": "soul flow"})
     _mark_delivered(agent)
-    res = sys_intrinsic.handle(agent, {"action": "dismiss", "channel": "soul"})
+    res = sys_intrinsic.handle(agent, {"action": "dismiss", "input": {"channel": "soul"}})
     assert res["status"] == "error"
     assert "Unknown system action" in res["message"]
     # The channel was NOT cleared — system can't dismiss anything.
@@ -604,7 +604,9 @@ def test_system_summarize_success_clears_large_result_reminder(tmp_path: Path) -
         agent,
         {
             "action": "summarize",
-            "items": [{"tool_call_id": tool_call_id, "summary": "digested"}],
+            "input": {
+                "items": [{"tool_call_id": tool_call_id, "summary": "digested"}]
+            },
         },
     )
 
@@ -623,7 +625,9 @@ def test_system_summarize_failure_does_not_clear_reminder(tmp_path: Path) -> Non
         agent,
         {
             "action": "summarize",
-            "items": [{"tool_call_id": "toolu_missing", "summary": "nope"}],
+            "input": {
+                "items": [{"tool_call_id": "toolu_missing", "summary": "nope"}]
+            },
         },
     )
 
