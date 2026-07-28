@@ -287,15 +287,24 @@ def test_mail_read_by_id(tmp_path):
         "received_at": "2026-03-18T10:00:00Z",
     }))
     # Use email intrinsic (was mail) — schema renamed `id` to `email_id`.
-    result = agent._intrinsics["email"]({"action": "read", "email_id": [msg_id]})
+    # ``email`` is a migrated LTP v2 family: ``email_id`` lives in ``read``'s
+    # own strict ``input`` object, not at the envelope root.
+    result = agent._intrinsics["email"]({"action": "read", "input": {"email_id": [msg_id]}})
     assert len(result["emails"]) == 1
     assert result["emails"][0]["message"] == "first"
 
 
 def test_mail_read_no_ids_returns_error(tmp_path):
-    """email read without email_id should return an error."""
+    """email read without email_id should return an error.
+
+    ``email_id`` is required by ``read``'s own strict ``input`` schema, so a
+    strict provider rejects its omission before the call. This asserts the
+    unchanged second, always-authoritative layer: a call that reaches dispatch
+    with an empty ``input`` still gets ``EmailManager._read``'s own
+    ``"email_id is required"`` error rather than reading anything.
+    """
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["email"]({"action": "read"})
+    result = agent._intrinsics["email"]({"action": "read", "input": {}})
     assert "error" in result
 
 

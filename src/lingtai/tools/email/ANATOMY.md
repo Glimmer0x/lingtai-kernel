@@ -2,10 +2,13 @@
 related_files:
   - src/lingtai/__init__.py
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/primitives.py
   - src/lingtai/tools/email/schema.py
+  - src/lingtai/tools/email/_family_schema.py
+  - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/email/glossary-en.md
   - src/lingtai/tools/email/glossary-zh.md
   - src/lingtai/tools/email/glossary-wen.md
@@ -18,13 +21,22 @@ maintenance: |
 ---
 # intrinsics/email
 
-Filesystem-based email system — mailbox I/O, composition, search, contacts, recurring schedules, and delivery. The agent's primary inter-process communication channel.
+Filesystem-based email system — mailbox I/O, composition, search, contacts, and delivery. The agent's primary inter-process communication channel. Recurring/scheduled sends were removed in favor of cron; the tool is request/response only.
 
 > **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
 
 ## Components
 
-- `__init__.py` — Package surface. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import (`__init__.py:27-32`) because `.notification/email.json` mirrors durable unread state. Contains the module-level `handle()` dispatcher (`__init__.py:80-93`) and idempotent `boot()` hook (`__init__.py:98-113`); `boot()` stops any prior manager's scheduler before wiring the fresh manager. External callers import `handle`, `boot`, `get_schema`, `get_description`, `EmailManager`, `_new_mailbox_id`, `mode_field` from this package.
+- `__init__.py` — Package surface and the LTP v2 family boundary. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import because `.notification/email.json` mirrors durable unread state. Owns the family composition and the module-level intrinsic protocol:
+  - `_schema_only_family()` / `_FAMILY` — the module-level schema-only `ToolFamily`. Email is an *intrinsic* (module-level `get_schema()`/`handle(agent, args)`, no per-Agent manager object to hang a family off at import), so this one never dispatches; constructing it at import is still load-bearing as the registry's duplicate/reserved-`manual`-collision check.
+  - `get_schema()` — the composed model-facing schema. Shadows the legacy flat `schema.get_schema` (re-exported as `get_flat_schema`) and replaces the generic composer's neutral `action` description with Email's own `ACTION_ENUM_DESCRIPTION`.
+  - `_build_family(agent)` — the per-call dispatching family. Every non-`manual` child re-enters `EmailManager.handle` with its unchanged historical flat shape; `manual` is `build_manual_child(agent, "email")`, registered directly and unwrapped.
+  - `_strip_nulls()` — turns provider-sent explicit `null`s back into absent keys so the manager's `args.get(...)`/`in args` defaulting is preserved.
+  - `_adapt_manual_result()` — Host/presentation-only flattening of the canonical ManualTool result to Email's pinned `{status, manual, manual_path}` public shape, strictly *after* dispatch.
+  - `handle(agent, args)` — strips `_tc_id`, renders the reserved `unread` rejection before dispatch, delegates to the family, then adapts `manual` and restores Email's own unknown/absent-action results.
+  - `boot(agent)` — idempotent boot hook wiring a fresh `EmailManager` onto the agent.
+
+- `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
 
 - `primitives.py` — Mailbox I/O and display helpers. Module-level functions operating on the agent's `mailbox/` directory tree.
   - ID and path helpers: `_new_mailbox_id` (re-exported from the kernel mail service — `primitives.py:20` imports `from lingtai.kernel.services.mail import _new_mailbox_id`), `mode_field` (`primitives.py:29-35`), `_mailbox_dir` / `_inbox_dir` / `_outbox_dir` / `_sent_dir` (`primitives.py:38-51`).
@@ -34,22 +46,23 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
   - Delivery: `_is_self_send` (`primitives.py:150-159`), `_persist_to_inbox` (`primitives.py:162-173`), `_persist_to_outbox` (`primitives.py:176-188`), `_move_to_sent` (`primitives.py:191-207`), `_mailman` (`primitives.py:210-267`) — daemon thread that waits, dispatches, and archives.
   - Filtering helpers: `_coerce_address_list` (`primitives.py:274-286`), `_preview` (`primitives.py:289-293`), `_email_time` (`primitives.py:296-298`).
 
-- `schema.py` — Tool registration. `get_description` (`schema.py:10-11`) and `get_schema` (`schema.py:14-130`) build the JSON Schema for the email tool. Imports `mode_field` from `primitives`.
+- `schema.py` — `get_description` (the registered intrinsic description, unchanged) and the legacy flat `get_schema`. Since the ToolFamily migration that flat schema is **no longer the model-facing schema**: it describes the *internal* `EmailManager.handle` argument shape and is re-exported from `__init__.py` as `get_flat_schema`. Imports `mode_field` from `primitives`.
 
-- `manager.py` — `EmailManager` class (`manager.py:46-876`). The core filesystem-based email manager. Key sections:
-  - Lifecycle: `__init__` (`manager.py:48-55`), `start_scheduler` (`manager.py:57-66`), `stop_scheduler` (`manager.py:68-72`).
-  - Filesystem helpers: `_load_email` (`manager.py:81-107`), `_list_emails` (`manager.py:109-132`), `_email_summary` (`manager.py:134-156`), `_inject_identity` (`manager.py:158-175`).
-  - Action dispatch: `handle` (`manager.py:180-209`).
-  - Schedules: `_handle_schedule` (`manager.py:214-224`), `_schedule_create` / `_cancel` / `_reactivate` / `_list` (`manager.py:226-363`), schedule helpers (`manager.py:368-442`), `_scheduler_loop` / `_scheduler_tick` (`manager.py:444-543`).
-  - Send: `_send` (`manager.py:548-650`). Dispatches via `_mailman` daemon threads.
-  - CRUD: `_check` (`manager.py:657-699`), `_read`, `_dismiss`, `_reply`, `_reply_all`, `_search`, `_archive`, `_delete`. `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in `_meta.agent_meta.notifications.persistent.email`" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
+- `manager.py` — `EmailManager` class (`manager.py:47-891`). The core filesystem-based email manager. Since the ToolFamily migration its flat `handle(args)` argument shape is an **internal** interface reached through the family's per-action children, not the model-facing surface; the behavioral engine below is unchanged by that migration; model-facing recovery guidance strings use the ToolFamily envelope. Key sections:
+  - Lifecycle: `__init__` (`manager.py:50-54`). Recurring/scheduled sends were removed in favor of cron, so there is no scheduler thread or schedule action.
+  - Filesystem helpers: `_load_email` (`manager.py:64-89`), `_list_emails` (`manager.py:91-114`), `_email_summary` (`manager.py:129-162`), `_inject_identity` (`manager.py:165-181`).
+  - Action dispatch: `handle` (`manager.py:187-218`).
+  - Send: `_send` (`manager.py:224-362`). Dispatches via `_mailman` daemon threads.
+  - CRUD: `_check` (`manager.py:368-412`), `_read` (`manager.py:414-476`), `_dismiss` (`manager.py:478-535`), `_reply` (`manager.py:623-649`), `_reply_all` (`manager.py:651-702`), `_search` (`manager.py:704-729`), `_archive` (`manager.py:731-768`), `_delete` (`manager.py:770-809`). `_dismiss` is the lightweight cousin of `_read` — same effect on read state and notification but returns no email bodies; intended for the "I already saw it in `_meta.agent_meta.notifications.persistent.email`" path. All four read-state mutators (`_read`, `_dismiss`, `_archive`, `_delete`) call `EmailManager._rerender_unread_digest()` after the mutation so `.notification/email.json` mirrors the new state.
   - Reply routing: `_resolve_reply_target` picks ``(address, mode)`` for `_reply` / `_reply_all`. Preference order is (1) inbound `_return_route` (embedded by abs sends), (2) absolute-path `from`, (3) bare `from` in peer mode. An ambiguity guard refuses to send when a peer-mode bare `from` would resolve to the responder's own workdir while the original message's `identity.agent_id` differs from the responder's own agent id — the live failure mode from issue #145 where two `.lingtai/` networks both host an agent with the same short name (e.g. both have "mimo-1").
   - Notification refresh: `_rerender_unread_digest` (method on `EmailManager`) — lazy-imports the kernel-side helper from `base_agent/messaging.py` and runs it. Centralised here so all read-state mutators share one call site.
-  - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:801-876`).
+  - Contacts: `_contacts_path` / `_load_contacts` / `_save_contacts` / `_contacts` / `_add_contact` / `_remove_contact` / `_edit_contact` (`manager.py:815-891`).
 
 ## Connections
 
-- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). `boot()` is called during agent construction in `base_agent/__init__.py`.
+- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`), which injects `_tc_id` into every intrinsic's args; `handle()` strips it at this family's own boundary. `boot()` is called during agent construction in `base_agent/__init__.py`.
+- **Inbound (kernel convenience API):** `base_agent/messaging.py:_mail` sends through this intrinsic and carries the LTP v2 envelope (`{"action": "send", "input": {...}}`).
+- **Outbound (generic composition):** `__init__.py` imports `ChildTool`/`ToolFamily` from `../tool_family/` and `build_manual_child`/`MANUAL_INPUT_SCHEMA` from `../tool_family/manual.py`. See `src/lingtai/tools/tool_family/ANATOMY.md`.
 - **Inbound (cross-module):** `_new_mailbox_id` is owned by the kernel mail service — defined at `src/lingtai/kernel/services/mail.py:29-44`. After the mail Ports & Adapters split it is imported explicitly by the POSIX mail adapter (`src/lingtai/adapters/posix/mail.py:29`) and consumed by its `send()` (`src/lingtai/adapters/posix/mail.py:118`), not by `kernel/services/mail.py` (which no longer defines a transport). The email package imports and re-exports it via `primitives.py:20` for back-compat with `lingtai.tools.email._new_mailbox_id` importers.
 - **Inbound (cross-module):** `EmailManager` is imported by `src/lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
@@ -62,12 +75,13 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, re
 - `_send(mode="abs")` embeds an explicit `_return_route` dict (`{"mode": "abs", "address": <sender abs workdir>, "sender_agent_id": <sender id>}`) into every dispatched payload AND the local `sent/{id}/message.json` record. This is the only safe return route across `.lingtai/` networks where short addresses can collide (issue #145). Recipients without the field — older messages — keep working through the existing absolute-`from` fallback in `_resolve_reply_target`.
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
-- Schedule status lifecycle: `active` → `inactive` (cancel) or `completed` (all sent). On startup, `_reconcile_schedules_on_startup` flips `active` → `inactive` so schedules don't fire until explicitly reactivated.
+- The model-facing root is one closed LTP v2 envelope (`action`, `input`, `reasoning`, `summarize`) over 14 internal children — one per public action — composed by the generic `ToolFamily` infra from the single `_family_schema.ACTION_ORDER`/`INPUT_SCHEMAS` registry. Children consume no model tool slots, so `email` still advertises exactly one tool. Because both the advertised schema and dispatch are generated from that one registry, an action cannot be advertised without being dispatchable. Cross-action `input` keys are rejected before any mailbox I/O — the property that matters most for a side-effecting family.
+- `unread` is kernel-synthesized digest state, **not** a public child: it is absent from `ACTION_ORDER` and the `action` enum, and `handle()` renders its exact reserved-action rejection before the family dispatches.
 - `.notification/email.json` is a **live mirror** of the current unread set. Any action that mutates the read state — `_read`, `_dismiss`, `_archive`, `_delete` — calls `_rerender_unread_digest(agent)` (lazy import from `base_agent/messaging.py`) so the wire's notification updates on the next heartbeat sync. The earlier "snapshot at last arrival" semantics led to the unread email notification carrying mails the agent had already replied to indefinitely.
 - `_dismiss` is the lightweight "mark read without returning content" path — used when the agent already saw the body in `_meta.agent_meta.notifications.persistent.email` and just wants to clear the notification entry. Same effect on `read.json` and `.notification/email.json` as `_read`, but no email bodies in the response. Accepts a list (`email_id=[id1, id2, ...]`).
-- The unread-mail notification envelope carries an ``instructions`` field (set by `_rerender_unread_digest`) telling the agent to call `email(action="read", ...)` or `email(action="dismiss", ...)` after handling a mail; until the agent does, the notification keeps reminding them. This is the producer-side directive — generic frontend code does not have to know about email's dismissal contract.
-- Each persistent email entry exposes the mailbox ID directly (under "ID:" in en, "ID：" in zh, "编号：" in wen). The agent passes that ID verbatim to `email_id` when calling `read` or `dismiss`. Without this, the agent has to call `email(action="check")` first just to discover the IDs, defeating the point of the inline notification.
-- **Contact** writes are atomic — temp-file + `os.replace` (`manager.py:830-834`) — to prevent corruption on crash. Note this is **not** uniform across all email persistence: message/inbox/outbox bodies are written with direct `Path.write_text(json.dumps(...))` (`primitives.py:202`, `:218`, `:239`), so a crash mid-write can leave a partial `message.json`. Unifying these on the shared atomic helper is tracked under the kernel persistence-helper work (issue #510).
+- The unread-mail notification envelope carries an ``instructions`` field (set by `_rerender_unread_digest`) telling the agent to call `email(action="read", input={...}, reasoning=...)` or `email(action="dismiss", input={...}, reasoning=...)` after handling a mail; until the agent does, the notification keeps reminding them. This is the producer-side directive — generic frontend code does not have to know about email's dismissal contract.
+- Each persistent email entry exposes the mailbox ID directly (under "ID:" in en, "ID：" in zh, "编号：" in wen). The agent passes that ID verbatim under `input.email_id` when calling `read` or `dismiss`. Without this, the agent has to call `email(action="check")` first just to discover the IDs, defeating the point of the inline notification.
+- **Contact** writes are atomic — temp-file + `os.replace` (`manager.py:827-842`) — to prevent corruption on crash. Note this is **not** uniform across all email persistence: message/inbox/outbox bodies are written with direct `Path.write_text(json.dumps(...))` (`primitives.py:202`, `:218`, `:239`), so a crash mid-write can leave a partial `message.json`. Unifying these on the shared atomic helper is tracked under the kernel persistence-helper work (issue #510).
 
 ## Notification format
 

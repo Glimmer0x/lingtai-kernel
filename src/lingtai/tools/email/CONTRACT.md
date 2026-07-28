@@ -1,14 +1,28 @@
 ---
 name: email-contract
 tool: email
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/_family_schema.py
+  - src/lingtai/tools/email/schema.py
+  - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_result_summary.py
+  - tests/test_tool_family_email_migration.py
+  - tests/test_tool_family_email_wire_parity.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits.
+  contract_version 2 records the LTP v2 / ToolFamily envelope migration: the
+  call shape moved to closed action/input/reasoning/summarize while the public
+  tool name, every action value, and every result shape stayed identical.
+  Update this contract, the paired ANATOMY.md, the per-action schemas in
+  _family_schema.py, and the kernel _LTP_V2_MIGRATED_FAMILIES allowlist
+  together when the envelope or an action's input surface changes.
 ---
 
 # Email capability contract
@@ -50,9 +64,45 @@ storage; abs/peer reply routing -> §Anchored claims.
 
 ## Tool surface
 
-The schema (`src/lingtai/tools/email/schema.py`) accepts `action` from a fixed enum plus
-shared address/filter fields. Dispatch is `EmailManager.handle`
-(`src/lingtai/tools/email/manager.py`).
+`email` is a migrated LTP v2 family (`src/lingtai/tools/CONTRACT.md`). The
+model-facing root is the closed envelope — exactly `action`, `input`,
+`reasoning`, and `summarize`, with `additionalProperties: false` and
+`required: [action, input, reasoning]`. The public tool name is unchanged, and
+so is every `action` value; only the call shape moved, from one open flat
+argument bag to one strict per-action `input` object.
+
+Each action is one canonical internal child with its own closed
+`input_schema` (`src/lingtai/tools/email/_family_schema.py`); children consume
+no model tool slots, so the family still advertises exactly one tool. The
+composed schema is built by the generic `ToolFamily` infra
+(`src/lingtai/tools/tool_family/`) from that one child registry, so the
+advertised `action` enum, the `input.oneOf` branches, the root `allOf`
+correlation, and dispatch cannot drift apart. `summarize` guidance profile:
+**bulky-result** for `check`, `read`, and `search` (mailbox listings and full
+bodies can be large); **short-result** for every other action, whose receipts
+(`{status: "sent", ...}`, `dismissed`, `archived`, contact records) are small
+and meant to be read exactly. Calls to `manual` normally use
+`summarize=false`.
+
+Dispatch is two layers. `ToolFamily.handle` validates the envelope first —
+unknown `action`, non-boolean `summarize`, unknown root fields, and any
+`input` key outside the selected action's own branch are rejected **before any
+mailbox I/O, delivery thread, or read-state change**. It then calls
+`EmailManager.handle` (`src/lingtai/tools/email/manager.py`), whose historical
+flat argument shape (`{"action": ..., **input}`) is retained unchanged as a
+purely *internal* interface — the same seam `shell` kept for `ShellManager`.
+`src/lingtai/tools/email/schema.py`'s flat `get_schema()` is that internal
+shape's schema and is **no longer the model-facing schema**; it is re-exported
+as `get_flat_schema`.
+
+Nullable-and-required is how an optional field is expressed (per
+`tools/CONTRACT.md` "Envelope"); `__init__.py` strips explicit `null`s back to
+*absent* before the manager runs, so `folder`/`n`/`filter` defaulting and
+`edit_contact`'s `if "name" in args` semantics are preserved exactly.
+
+The tables below list each action's inputs. Under the envelope they are that
+action's `input` properties — e.g. `email(action='read', input={'email_id':
+[...]}, reasoning='...')`.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
@@ -71,10 +121,34 @@ shared address/filter fields. Dispatch is `EmailManager.handle`
 | `edit_contact` | `address` | `name`, `note` | `{status: "updated", contact}` | `{error: "address is required"}`; `{error: "Contact not found: ..."}` |
 
 Missing/absent `action` returns `{error: "action is required"}`; an unrecognized
-action returns `{error: "Unknown email action: ..."}`. `email(action='unread')`
-returns an explicit reserved-action `{status: "error", message: ...}` from the
-module dispatcher before reaching the manager. When `boot()` has not run,
-`handle()` returns `{error: "Internal: email manager not initialized..."}`.
+action returns `{error: "Unknown email action: ..."}`. Both are Email's own
+pre-migration public results, restored at this family's Host boundary from the
+generic dispatcher's `ACTION_REQUIRED` envelope failure rather than by widening
+that generic shape. An unhashable `action` (`[]`/`{}` from invalid JSON — the
+issue #513 class) renders the same stable typed error instead of raising.
+
+`email(action='unread')` returns an explicit reserved-action
+`{status: "error", message: ...}` from the module dispatcher **before** the
+family dispatches. `unread` is kernel-synthesized digest state, **not** a
+public child: it is absent from `action`'s enum and from the child registry, so
+this exact rejection — not the generic unknown-action result — is what a direct
+invocation gets. When `boot()` has not run, `handle()` returns
+`{error: "Internal: email manager not initialized..."}`.
+
+`manual` is the reserved, family-owned child. It is registered directly and
+unwrapped, so `ToolFamily.handle()` returns the canonical ManualTool result
+verbatim (full `SKILL.md` body at `content[0].text`, host-local path at
+`structuredContent.manual_path`, no double wrap). Email's own public result is
+unchanged from `load_installed_manual`'s pre-migration flat shape — exactly
+`{status, manual, manual_path}` (+ `error` when degraded) — produced strictly
+*after* dispatch by `_adapt_manual_result` in this family's Host layer. The
+generic `content`/`structuredContent` fields are not added to Email's public
+result, because it never exposed them.
+
+Envelope metadata never reaches an action implementation: `reasoning`,
+`_reasoning`, `summarize`, and the kernel-injected `_tc_id` (which
+`base_agent._dispatch_tool` adds to every intrinsic's args) are all stripped at
+this family's own boundary.
 
 ## State & storage
 
@@ -128,6 +202,16 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Scheduled/recurring sends are removed from the schema and not routed | `src/lingtai/tools/email/schema.py` | `tests/test_layers_email.py::test_email_schedule_removed_from_schema`, `tests/test_layers_email.py::test_email_schedule_payload_is_not_routed` |
 | Sender identity is carried on inbound mail and surfaced on read | `src/lingtai/tools/email/manager.py:_inject_identity` | `tests/test_email_identity.py` |
 | Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
+| The model-facing root is the closed LTP v2 envelope and nothing else | `src/lingtai/tools/email/__init__.py:get_schema` | `tests/test_tool_family_email_migration.py::test_root_is_the_closed_ltp_v2_envelope_and_nothing_else` |
+| All 14 public action values and their order are unchanged | `src/lingtai/tools/email/_family_schema.py:ACTION_ORDER` | `tests/test_tool_family_email_migration.py::test_public_action_values_and_order_are_unchanged` |
+| One child registry drives both the advertised schema and dispatch | `src/lingtai/tools/email/__init__.py:_build_family` | `tests/test_tool_family_email_migration.py::test_one_canonical_child_registry_drives_schema_and_dispatch` |
+| A cross-action key is rejected before any mailbox I/O or delivery | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_email_migration.py::test_cross_action_key_is_rejected_before_any_mailbox_io`, `::test_send_fields_cannot_be_smuggled_through_a_read_call` |
+| Reserved `unread` keeps its exact rejection and is not a public child | `src/lingtai/tools/email/__init__.py:handle` | `tests/test_tool_family_email_migration.py::test_reserved_unread_keeps_its_exact_rejection_before_dispatch` |
+| `manual` returns the canonical child result verbatim, adapted to Email's exact public shape after dispatch | `src/lingtai/tools/email/__init__.py:_adapt_manual_result` | `tests/test_tool_family_email_migration.py::test_manual_child_returns_the_canonical_result_verbatim_no_double_wrap`, `::test_manual_public_result_is_emails_exact_pre_migration_shape` |
+| Envelope metadata never reaches an action implementation | `src/lingtai/tools/email/__init__.py:handle` | `tests/test_tool_family_email_migration.py::test_reasoning_and_summarize_never_reach_the_action_implementation` |
+| Explicit nulls become absent so pre-existing defaulting is preserved | `src/lingtai/tools/email/__init__.py:_strip_nulls` | `tests/test_tool_family_email_migration.py::test_explicit_nulls_are_stripped_so_defaults_still_apply`, `::test_edit_contact_null_name_does_not_blank_the_stored_name` |
+| The closed root and `allOf` correlation survive both provider wires | `src/lingtai/tools/tool_family/__init__.py:build_schema` | `tests/test_tool_family_email_wire_parity.py` |
+| `email` is on the kernel `summarize` allowlist it advertises | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_email_migration.py::test_email_joined_the_ltp_v2_summarize_allowlist` |
 
 ## Verification matrix
 
@@ -139,10 +223,13 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Duplicate-send loop guard holds | `tests/test_layers_email.py::test_email_blocks_identical_consecutive_send` | Send the same message twice in a row | Runaway send loops |
 | Abs replies do not self-misroute | `tests/test_email_abs_reply_route.py` | Reply to mail from a same-named agent in another network | Replies silently land in own inbox (#145) |
 
+| One model-facing `email` tool; children consume no tool slots | `tests/test_tool_family_email_wire_parity.py::test_email_is_exactly_one_model_facing_tool` | Boot an agent and count built schemas | A child leaking out as its own root would double the mail surface |
+| Cross-action smuggle rejected before side effects | `tests/test_tool_family_email_migration.py::test_send_fields_cannot_be_smuggled_through_a_read_call` | Call `read` with `address`/`message` in `input` | Mail could leave the agent via a read-shaped call |
+
 Run before merging email changes:
 
 ```bash
-python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py -q
+python -m pytest tests/test_layers_email.py tests/test_email_identity.py tests/test_email_abs_reply_route.py tests/test_system_dismiss.py tests/test_tool_family_email_migration.py tests/test_tool_family_email_wire_parity.py -q
 ```
 
 ## Schema and glossary ownership

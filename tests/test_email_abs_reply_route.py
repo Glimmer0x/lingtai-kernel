@@ -290,6 +290,9 @@ def test_reply_self_route_with_different_agent_id_is_refused(tmp_path):
         "message": "should be refused",
     })
     assert "error" in result, f"expected ambiguity error, got {result!r}"
+    assert "email(action='send', input={'mode': 'abs'," in result["error"]
+    assert "reasoning=" in result["error"]
+    assert "email(action='send', mode='abs'" not in result["error"]
     err = result["error"].lower()
     assert "ambig" in err or "abs" in err or "self" in err, (
         f"error should explain the ambiguity, got: {result['error']!r}"
