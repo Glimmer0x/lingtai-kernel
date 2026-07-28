@@ -1831,25 +1831,26 @@ class Agent(BaseAgent):
         # path calls `_compose_catalog`, the pure-read composer.
         #
         # Each is guarded by whether the capability is enabled, so a disabled
-        # domain keeps its existing behavior (no section written, no scan) and a
-        # failure to scan one catalog cannot abort the whole rebuild.
+        # domain keeps its existing behavior: no section written and no scan.
+        #
+        # Composition failures deliberately propagate. `tools/context/CONTRACT.md`
+        # "Full reconstruction ordering" requires that ALL canonical sources be
+        # recomposed and that a reconstruction failure return
+        # `context_reconstruction_failed` WITHOUT applying summaries or requesting
+        # provider replay. Catching here and continuing would publish a prompt
+        # missing a durable section while still reporting success — exactly the
+        # silent half-composed state that contract forbids.
         enabled_capabilities = {name: kwargs for name, kwargs in self._capabilities}
         if "skills" in enabled_capabilities:
-            try:
-                from lingtai.tools import skills as _skills
-                _skills._reconcile(
-                    self,
-                    list(enabled_capabilities["skills"].get("paths", []) or []),
-                    publish=False,
-                )
-            except Exception as e:
-                self._log("skills_recompose_failed", reason=str(e))
+            from lingtai.tools import skills as _skills
+            _skills._reconcile(
+                self,
+                list(enabled_capabilities["skills"].get("paths", []) or []),
+                publish=False,
+            )
         if "knowledge" in enabled_capabilities:
-            try:
-                from lingtai.tools import knowledge as _knowledge
-                _knowledge._compose_catalog(self, publish=False)
-            except Exception as e:
-                self._log("knowledge_recompose_failed", reason=str(e))
+            from lingtai.tools import knowledge as _knowledge
+            _knowledge._compose_catalog(self, publish=False)
 
         # --- Principle (kernel-owned top-level progressive-disclosure contract) ---
         # The principle section is LingTai-owned, not operator-owned: init.json

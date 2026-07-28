@@ -52,7 +52,8 @@ file, or reloads prompt state.
 To change a durable source, an agent MUST use the generic text operations —
 `file.write` for a full create/overwrite, `file.edit` for exact replacement — on
 that domain's own source, and then apply the change with one explicit
-`context(action="rebuild")` or let passive refresh/molt reconstruction apply it.
+`context(action="rebuild", input={}, reasoning="...")` or let passive
+refresh/molt reconstruction apply it.
 File mutation never hot-loads the prompt.
 
 Agents SHOULD read the relevant domain manual before acting on a domain they do
@@ -77,8 +78,10 @@ and `reasoning` are required. The public action inventory is exactly:
 | `skills` | strict empty `{}` | same shape — the installed skills manual |
 | `manual` | strict empty `{}` | same shape — `substrate-manual`, the routing table |
 
-All five children share one strict-empty `input` schema, so every `input` key is
-an unknown key. Unknown or missing actions, any `input` key, non-object `input`,
+Every call carries required root `action`, `input`, and `reasoning`; a public
+call is spelled `substrate(action="<domain>", input={}, reasoning="...")`. All
+five children share one strict-empty `input` schema, so every `input` key is an
+unknown key. Unknown or missing actions, any `input` key, non-object `input`,
 unknown root fields, and a non-boolean root `summarize` fail with the LTP v2
 envelope errors before any file is read. Root `summarize`, `reasoning`, and the
 intrinsic-only `_tc_id` never become child input.

@@ -349,3 +349,111 @@ def test_retired_roots_are_not_ltp_v2_summarize_families(name):
     from lingtai.kernel.tool_result_summary import _LTP_V2_MIGRATED_FAMILIES
 
     assert name not in _LTP_V2_MIGRATED_FAMILIES
+
+
+# ---------------------------------------------------------------------------
+# Fail-loud full reconstruction (tools/context/CONTRACT.md)
+# ---------------------------------------------------------------------------
+#
+# The Skills and Knowledge catalogs are two of the four durable domains the one
+# reconstruction contract must recompose. A composer failure must abort the whole
+# rebuild: `context.rebuild` returns `context_reconstruction_failed` and applies
+# no summaries and requests no provider replay. Catching and continuing would
+# publish a prompt missing a durable section while reporting success.
+
+@pytest.mark.parametrize(
+    "module_name,attr",
+    [("lingtai.tools.skills", "_reconcile"),
+     ("lingtai.tools.knowledge", "_compose_catalog")],
+)
+def test_catalog_composer_failure_fails_the_whole_rebuild(
+    tmp_path, monkeypatch, module_name, attr
+):
+    import importlib
+
+    from lingtai.tools import context as context_tool
+
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        agent._prompt_manager.write_section("comment", "CURRENT-COMMENT")
+        module = importlib.import_module(module_name)
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("catalog scan exploded")
+
+        monkeypatch.setattr(module, attr, _boom)
+
+        # Instrument the two stages that must NOT be reached. `_flush_system_prompt`
+        # is the single final publish (contract step 3); `_summarize_engine` is the
+        # entry point for recording/applying summaries and requesting provider
+        # replay (contract steps 4-5). Neither may run when a composer raises.
+        publishes: list[int] = []
+        original_flush = agent._flush_system_prompt
+        agent._flush_system_prompt = (
+            lambda *a, **k: (publishes.append(1), original_flush(*a, **k))[1]
+        )
+
+        summarize_calls: list[dict] = []
+
+        def _sentinel_engine(_agent, args):  # pragma: no cover - must never run
+            summarize_calls.append(args)
+            raise AssertionError(
+                "summary processing/provider replay was reached despite a "
+                "reconstruction failure"
+            )
+
+        monkeypatch.setattr(context_tool, "_summarize_engine", _sentinel_engine)
+
+        # Nonempty `items` makes the skipped stage unambiguous: with pending
+        # summaries supplied, reaching step 4 at all would call the engine.
+        result = context_tool.handle(
+            agent,
+            {
+                "action": "rebuild",
+                "input": {"items": [{"tool_call_id": "tc-1", "summary": "s"}]},
+                "reasoning": "r",
+            },
+        )
+        agent._flush_system_prompt = original_flush
+
+        # Fail loud: the typed reconstruction error and no success marker.
+        assert result["status"] == "error"
+        assert result["reason"] == "context_reconstruction_failed"
+        assert "prompt_reconstructed" not in result
+        # Ordering proof: no final publish, and the summary/replay stage never ran.
+        assert publishes == []
+        assert summarize_calls == []
+        # And no partially composed prompt was left behind.
+        assert agent._prompt_manager.read_section("comment") == "CURRENT-COMMENT"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_successful_rebuild_still_publishes_exactly_once(tmp_path):
+    """The fail-loud path must not disturb the single-publish invariant."""
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        system = agent._working_dir / "system"
+        system.mkdir(exist_ok=True)
+        (system / "pad.md").write_text("PAD-BODY", encoding="utf-8")
+        (system / "lingtai.md").write_text("I AM", encoding="utf-8")
+
+        publishes = []
+        original = agent._flush_system_prompt
+
+        def _counting(*args, **kwargs):
+            publishes.append(1)
+            return original(*args, **kwargs)
+
+        agent._flush_system_prompt = _counting
+        agent._reconstruct_context()
+        agent._flush_system_prompt = original
+
+        assert publishes == [1]
+        read = agent._prompt_manager.read_section
+        assert "PAD-BODY" in read("pad")
+        assert "I AM" in read("character")
+        assert read("skills")
+        assert "knowledge" in agent._prompt_manager._sections
+    finally:
+        agent.stop(timeout=1.0)

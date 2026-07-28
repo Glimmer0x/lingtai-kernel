@@ -8,9 +8,11 @@ related_files:
 - src/lingtai/tools/pad/__init__.py
 - src/lingtai/tools/pad/_pad.py
 - src/lingtai/tools/pad/CONTRACT.md
+- src/lingtai/tools/substrate/CONTRACT.md
+- src/lingtai/intrinsic_skills/substrate-manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  Keep the append-only public surface, no-hot-load rule, file ownership, delayed activation, limits, and context-manual route synchronized with code.
+  Keep the manual-only public route through substrate, generic file ownership of both durable sources, the no-hot-load rule, delayed activation, and the context-manual route synchronized with code. Pad exposes no mutating action.
 ---
 
 # Pad Manual
@@ -18,17 +20,16 @@ maintenance: |
 Pad is your living index in `system/pad.md`, plus a durable list of pinned
 read-only references in `system/pad_append.json`.
 
-## Public calls
+## Public call
 
 ```text
-pad(action="append", input={"files": ["path/one.md", "path/two.py"]}, reasoning="pin references")
-pad(action="append", input={"files": []}, reasoning="clear references")
-pad(action="append", input={"files": null}, reasoning="inspect references")
-pad(action="manual", input={}, reasoning="load Pad guidance", summarize=false)
+substrate(action="pad", input={}, reasoning="load Pad guidance", summarize=false)
 ```
 
-The exact public actions are `append | manual`. There is no Pad body edit or
-load action and no compatibility alias.
+That is the **only** public Pad call, and it just returns this manual. Pad has no
+mutating action: both of its durable sources are ordinary files you edit with
+`file`. There is no append, edit, load, or reload action and no compatibility
+alias.
 
 ## Mutate durable Pad content with file
 
@@ -48,14 +49,26 @@ them later.
 
 ## Pin references
 
-`pad.append` validates every supplied path as existing UTF-8 text and enforces a
-100,000-token aggregate limit before persisting the list. `[]` clears; null only
-queries. Paths may be workdir-relative or absolute.
+The pinned list lives in `system/pad_append.json`: a JSON array of paths, each
+workdir-relative or absolute. Edit it like any other durable file —
 
-**Append also never hot-loads the prompt.** Its result says
-`prompt_reload: false` and names when it takes effect. Use `context.rebuild`
-when the new list must become visible now. The reconstruction path re-reads each
-pinned file, so later file changes also appear only after reconstruction.
+```text
+file(action="write", input={"file_path": "system/pad_append.json",
+  "content": "[\"notes/design.md\", \"src/api.py\"]"}, reasoning="pin references")
+```
+
+Write `[]` to clear the list. Reconstruction reads each listed file and appends
+its contents to the Pad section as read-only reference.
+
+**Editing the list never hot-loads the prompt**, exactly like editing
+`system/pad.md`. Run one `context.rebuild` when the new list must become visible.
+Reconstruction re-reads each pinned file every time, so later edits to a pinned
+file also appear only after the next reconstruction.
+
+Two things to know, because nothing validates this list for you any more: a path
+that does not exist is reported as `append_not_found` at compose time rather than
+rejected at write time, and pinned content counts against your context budget —
+keep the list short and text-only.
 
 Keep Pad concise: current goal, state, next action, blockers, collaborators, and
 pointers to substantive knowledge/artifacts. Archive completed narrative in

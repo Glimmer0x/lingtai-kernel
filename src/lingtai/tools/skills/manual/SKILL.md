@@ -71,67 +71,59 @@ The `skills` section of your system prompt is a YAML list. Each skill is one
 `SKILL.md`) and a `description:` block scalar. To read a skill's body, `read` the
 file at its `location`.
 
-`skills` is one LingTai Tool Protocol v2 family. Its model-facing root is closed
-and exactly `action`, `input`, `reasoning`, `summarize`. `action`, its nested
-`input` object, and top-level `reasoning` are required; root `summarize` is an
-optional boolean, absent or false by default. Both actions take the **empty**
-input object — there is no field to pass on either — and neither branch admits
-`reasoning`, `_reasoning`, or `summarize`.
+Skills is one action of the `substrate` LTP v2 family. That root is closed and
+exactly `action`, `input`, `reasoning`, `summarize`. `action`, its nested `input`
+object, and **root `reasoning`** are required; root `summarize` is an optional
+boolean, absent or false by default. Every substrate action takes the **empty**
+input object — there is no field to pass — and no *input branch* admits
+`reasoning`, `_reasoning`, or `summarize`: those are root envelope fields and are
+never nested inside `input`.
 
 ```text
-skills(action="info", input={}, reasoning="check catalogue health")
+substrate(action="skills", input={}, reasoning="load skills guidance")
 ```
 
-refreshes/reconciles the catalog and returns a runtime snapshot —
-`skills_dir`/`library_dir`, `catalog_size`, resolved paths with
-exist/skill-count info, and any `problems` (invalid frontmatter, unreadable
-folders) — without the manual body. Use it first when a skill you expect is
-missing.
-
-```text
-skills(action="manual", input={}, reasoning="load skills guidance")
-```
-
-returns this SKILL.md body instead, and performs no catalogue scan, prompt
-injection, or other `info`-side effect. A `status` of `"degraded"` carries an
-error message naming the fix — typically a missing manual under
+This call returns this SKILL.md body. It is the only public Skills call, and it
+performs no catalogue scan or prompt injection. A `status` of `"degraded"`
+carries an error message naming the fix — typically a missing manual under
 `intrinsic/capabilities/skills/`, meaning the initializer did not install
 manuals correctly.
 
-An unknown action, or any key at all inside `input`, fails before either
-handler runs with a typed envelope failure
+The catalogue itself is reconciled for you: setup/refresh and every full
+`context(action="rebuild", input={}, reasoning="...")` rescan `.library/` plus
+your configured skills paths and recompose the `skills` prompt section. When a
+skill you expect is missing, add or fix it on disk and rebuild.
+
+An unknown action, or any key at all inside `input`, fails before the manual is
+read, with a typed envelope failure
 (`{"status": "failed", "error_code": ...}`).
 
 ### `summarize` for this family
 
-`info` follows the **short-result** profile: its health snapshot is normally
-small, so `summarize` is available but normally unnecessary — leave it false.
-`manual` follows the **bulky-result** profile: this body is long, so
+Loading this manual follows the **bulky-result** profile: this body is long, so
 `summarize=true` is reasonable when you only need the gist, but calls meant to
 follow an exact procedure should keep the default `summarize=false` so precise
 steps, paths, and constraints are not summarized away. `summarize` is a root,
 cross-cutting field — never nested inside `input`, and never an implementation
-argument to either action. A call that fails always returns its exact,
-unsummarized error regardless of `summarize`.
+argument. A call that fails always returns its exact, unsummarized error
+regardless of `summarize`.
 
 ### Settings
 
-`skills` supports **no settings file at all** — neither a family-level
-`settings/skills.json` nor any action-level `settings/skills.<action>.json`.
+There is no skills settings file at all — neither a family-level
+`settings/substrate.json` nor an action-level `settings/substrate.skills.json`.
 Nothing is read from either address, and creating one has no effect. The
 catalogue's only configuration input is `manifest.capabilities.skills.paths`
 in `init.json`, described above.
 
 To pin a skill's body into your pad so it survives a molt and rides in the cached
-system-prompt prefix:
-
-```
-pad({"action": "append", "input": {"files": ["<location>"]}, "reasoning": "pin reference"})
-```
+system-prompt prefix, add its `location` to the JSON array in
+`system/pad_append.json` with `file(action="write", ...)`, then apply it with one
+`context(action="rebuild", input={}, reasoning="apply pinned references")`.
 
 Pinning is cheap per-token over a session; repeated `read`s of the same file are
-not. Pad semantics (read-only reference section, clearing with `files: []`, the
-token ceiling) belong to `context-manual` §5 — read it there.
+not. Pad semantics (the read-only reference section, clearing with `[]`, and
+budget discipline) belong to `pad-manual` — read it there.
 
 ## External skill intake (default flow)
 

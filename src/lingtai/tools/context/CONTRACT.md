@@ -71,7 +71,12 @@ must execute in this order:
 2. through `Agent._reload_prompt_sections`, re-read/recompose **all** canonical
    configured, durable, and packaged prompt sources: base prompt, covenant,
    configured/self-authored character, substrate, rules, Pad body plus pinned
-   references, principle, procedures, guidance mirror, brief, and comment;
+   references, the enabled Skills and Knowledge catalogs, principle, procedures,
+   guidance mirror, brief, and comment. The Skills and Knowledge catalogs are
+   rescanned from disk through their capabilities' own private composers; a
+   disabled domain is skipped entirely (no section written, no scan), and the
+   Knowledge one-time legacy migration is **not** reachable from this path — it
+   remains owned by that capability's setup/refresh lifecycle;
 3. perform exactly one final full prompt build/flush through the Agent override
    after every section is composed; private Pad/LingTai composers must not
    publish intermediate prompts, and the live interface plus `system/system.md`

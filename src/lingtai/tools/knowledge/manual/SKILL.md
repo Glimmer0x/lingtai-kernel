@@ -82,22 +82,22 @@ Required fields are `name` and `description`. Supporting files are optional and 
 
 The system prompt only receives a compact catalog: each entry's `name`, `description`, and `location`. The body of `KNOWLEDGE.md` and supporting files stay on disk until you explicitly read them. This keeps the prompt small while still making the memory discoverable.
 
-Call `knowledge(action="info", input={}, reasoning="rescan the knowledge catalog")` to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant.
+The catalog is rescanned for you: setup/refresh and every full `context.rebuild` re-read `knowledge/` and recompose the section. Use `read` on the listed `location` when an entry becomes relevant.
 
 ## Call shape
 
-`knowledge` is one tool family with two actions. Every call carries exactly
-four root fields — `action`, `input`, `reasoning` (all required) and the
-optional `summarize`:
+Knowledge has one public call, and it just returns this manual:
 
-- `knowledge(action="info", input={}, reasoning="...")` — rescan the catalog
-  and return health only: `knowledge_dir`, `catalog_size`, and `problems`.
-- `knowledge(action="manual", input={}, reasoning="...")` — return this
-  manual's body and its path. It does **not** rescan the catalog.
+```text
+substrate(action="knowledge", input={}, reasoning="load knowledge guidance")
+```
 
-Both actions take a strict-empty `input`: there is no argument to pass, and any
-field you put inside `input` is rejected before the action runs. This tool is a
-signpost — it never creates, edits, searches, or loads entries. Author and
+Every call carries exactly four root fields — `action`, `input`, `reasoning`
+(all required) and the optional root `summarize`.
+
+It takes a strict-empty `input`: there is no argument to pass, and any field you
+put inside `input` is rejected before the action runs. This is a signpost — it
+never creates, edits, searches, rescans, or loads entries. Author and
 revise entries by writing `knowledge/<name>/KNOWLEDGE.md` with `write`/`edit`,
 and load bodies with `read`.
 
@@ -195,5 +195,5 @@ PY
 
 Recommended cadence: before molt if knowledge sprawl is confusing, after major
 projects, and monthly for long-lived agents. If cleanup is approved with explicit user consent, record the
-entries consolidated/removed in `logs/cleanup.jsonl` and update the catalog with
-`knowledge(action="info", input={}, reasoning="refresh after cleanup")`.
+entries consolidated/removed in `logs/cleanup.jsonl` and apply the catalog change
+with `context(action="rebuild", input={}, reasoning="refresh after cleanup")`.

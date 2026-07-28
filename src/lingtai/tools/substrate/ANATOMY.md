@@ -19,28 +19,34 @@ maintenance: |
 
 Mandatory LTP v2 family that is the one public root for the four durable
 domains. Every action is a read-only manual loader; the package owns no domain
-state, no catalog, and no composer.
+state, no catalog, and no composer of its own. Its only non-dispatch code is the
+`boot` lifecycle hook, which invokes composers the domain packages still own.
 
 ## Components
 
 - `DOMAIN_MANUALS` — the one fixed registry mapping each domain action to the
-  installed manual it loads (`src/lingtai/tools/substrate/__init__.py:63-68`).
+  installed manual it loads (`src/lingtai/tools/substrate/__init__.py:67-75`).
 - `ACTION_ORDER` — the exact public inventory `pad | lingtai | knowledge |
   skills | manual`, derived from that registry
-  (`src/lingtai/tools/substrate/__init__.py:72`).
+  (`src/lingtai/tools/substrate/__init__.py:76-79`).
 - `_ROUTER_MANUAL` — the routing-table manual name loaded by the reserved
-  `manual` child (`src/lingtai/tools/substrate/__init__.py:76`).
+  `manual` child (`src/lingtai/tools/substrate/__init__.py:80-81`).
 - `_build_children` — builds all five children from the shared
   `build_manual_child` loader with one strict-empty input schema
-  (`src/lingtai/tools/substrate/__init__.py:81-107`).
-- `_FAMILY`, `get_schema`, `get_description` — schema-only family plus the
-  model-facing routing prose (`src/lingtai/tools/substrate/__init__.py:110-152`).
+  (`src/lingtai/tools/substrate/__init__.py:85-110`).
+- `_FAMILY`, `_ACTION_ENUM_DESCRIPTION`, `get_description`, `get_schema` —
+  schema-only family plus the model-facing routing prose
+  (`src/lingtai/tools/substrate/__init__.py:111-157`).
 - `_adapt_manual_result` — the one post-dispatch Host adapter producing the flat
   `{status, manual, manual_path}` shape
-  (`src/lingtai/tools/substrate/__init__.py:155-172`).
+  (`src/lingtai/tools/substrate/__init__.py:158-175`).
 - `handle` — drops intrinsic `_tc_id`, dispatches through the generic family,
   and renders substrate-shaped unknown-action errors
-  (`src/lingtai/tools/substrate/__init__.py:175-196`).
+  (`src/lingtai/tools/substrate/__init__.py:176-200`).
+- `boot` — lifecycle only: runs the Pad and LingTai domains' private composers
+  once at construction, since those packages are no longer registered intrinsics
+  and the kernel boot loop no longer reaches them
+  (`src/lingtai/tools/substrate/__init__.py:201-225`).
 
 ## Connections
 
@@ -56,8 +62,11 @@ state, no catalog, and no composer.
   `intrinsic_skills/`, `knowledge` and `skills` from those packages' own
   `manual/` directories. The routing table ships as
   `intrinsic_skills/substrate-manual/`.
-- No edge runs the other way: nothing in this package is imported by the domain
-  packages, `Agent._reload_prompt_sections`, or the catalog composers.
+- `boot` imports `pad._pad_load` and `lingtai._lingtai_load` and calls them once
+  at construction; those are the domains' own composers, the same ones
+  `Agent._reload_prompt_sections` reuses. No edge runs the other way: nothing in
+  this package is imported by the domain packages, by
+  `Agent._reload_prompt_sections`, or by the catalog composers.
 
 ## Composition
 

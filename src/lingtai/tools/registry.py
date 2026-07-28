@@ -15,7 +15,7 @@ Import discipline: capability modules are resolved with ``importlib`` *inside*
 :func:`setup_capability` / :func:`get_all_providers`, never at module top, so
 ``import lingtai.tools.registry`` does not eagerly import every tool (and, for the two
 capability tools that lazily import ``lingtai`` services, does not pull
-``lingtai``). The seven intrinsic modules ARE imported statically below because
+``lingtai``). The six intrinsic modules ARE imported statically below because
 they are mandatory and cheap; they live under ``lingtai.tools`` and import only
 ``lingtai.kernel``.
 """
@@ -53,13 +53,13 @@ from . import email, system, context, soul, notification  # noqa: E402  (lingtai
 # or for the retired ``pad.append`` / ``skills.info`` / ``knowledge.info``
 # actions.
 #
-# The four domain packages still exist and are still imported — but as PRIVATE
-# owners only. ``pad``/``lingtai`` keep ``boot()`` and their canonical prompt
-# composers; ``knowledge``/``skills`` keep their capability ``setup()``, catalog
+# The four domain packages still exist — but as PRIVATE owners only.
+# ``pad``/``lingtai`` keep their canonical prompt composers and no longer define
+# ``boot()``; ``substrate.boot`` invokes those composers instead, since the
+# kernel's boot loop only reaches registered intrinsics.
+# ``knowledge``/``skills`` keep their capability ``setup()``, catalog
 # composition, configured paths, and one-time legacy migration. None of them
-# registers a public tool. ``lingtai`` here would be ``lingtai.tools.lingtai``,
-# the domain package rather than the top-level package; it is no longer imported
-# at this seam at all, since it exposes no intrinsic.
+# registers a public tool, and none is imported at this seam any more.
 #
 # ``context`` is the department that owns the agent's context (molt, summarize,
 # rebuild). It replaces ``psyche``, whose remaining name actions moved to

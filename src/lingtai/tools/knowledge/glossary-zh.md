@@ -15,8 +15,9 @@ maintenance: |
 ---
 **术语对照**
 
-- `knowledge`：【路标工具】此工具不会创建、编辑、搜索或加载知识条目；`info` 只重新扫描 knowledge 目录并返回健康状态；`manual` 才返回 knowledge-manual 正文。你的跨凝蜕长存私有知识目录——所学、所断、所悟之记。每条目皆为 knowledge/<名>/ 下之一夹，内含 KNOWLEDGE.md（YAML frontmatter 须有 name 与 description），可附脚本、素材、笔记、原始日志等支撑文件。系统提示中之知识目录为 YAML 列表——每条目为一 `- name:` 块，附 `location:` 与 `description:` 字段；正文按需以 read 工具取之，与 skills 同。知识为汝私有：条目可引本地路径、邮件 ID、日志——此皆为 skills 所不可依赖之物。新条目以 write/edit 直接写入 knowledge/<名>/KNOWLEDGE.md；修订同法。调 `knowledge(action='info', input={}, reasoning='...')` 可刷新目录并查看健康状态；调 `knowledge(action='manual', input={}, reasoning='...')` 取手册正文。用此工具前，必先读 `knowledge-manual` 技能，无例外。
-- `action`：info：重新扫描 knowledge/ 并返回运行时健康快照（目录大小、根路径、损坏条目），不带 manual 正文。manual：只返回 knowledge-manual 技能正文，且不重新扫描。
-- `input`：所选 action 之专属入参对象。info 与 manual 皆为严格空对象（strict-empty）：不接受任何字段，多余字段在动作执行前即被拒。
+- `knowledge`：私有长存知识域；无公开工具根。其手册经 `substrate(action='knowledge', input={}, reasoning='...')` 取之，唯还手册，不扫目录、不改盘。
+- 条目以 `file.write`/`file.edit` 直书 `knowledge/<名>/KNOWLEDGE.md`，再以 `context.rebuild` 使之现于提示；旧 `knowledge.info` 已废，无别名。
+- `action`：substrate 之动作，取 `knowledge` 即还本域手册；旧 `info` 已废。
+- `input`：严格空对象（strict-empty）：不接受任何字段，多余字段在动作执行前即被拒。
 - `reasoning`：必填的根级调用理由，属宿主审计元数据，绝不下沉入 input。
-- `summarize`：可选的根级结果后处理开关，默认为假；非动作入参。knowledge 结果本就短小，通常无需开启。
+- `summarize`：可选的根级结果后处理开关，默认为假；非动作入参。手册宜留假，以免略去确切步骤。
