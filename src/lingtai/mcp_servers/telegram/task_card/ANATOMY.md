@@ -103,9 +103,10 @@ data source. Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
 ## Automatic event-tail projection paths
 
 - **Rows/timestamps:** after validating `type == "tool_call"`,
-  `_project_tool_call_row` reads only `tool_name`, redacted/bounded
-  `tool_args._reasoning`, and top-level Unix-epoch `ts`; raw action is excluded.
-  `_format_task_card_row_timestamp` projects a valid value as optional
+  `_project_tool_call_row` reads only `tool_name`, a non-empty string
+  `tool_args.action` projected as `tool_action`, redacted/bounded
+  `tool_args._reasoning`, and top-level Unix-epoch `ts`; all other raw arguments
+  are excluded. `_format_task_card_row_timestamp` projects a valid value as optional
   `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
   or out-of-range values omit it. `_meta`, row arguments, notifications, and
   render time are never timestamp sources. Navigation:

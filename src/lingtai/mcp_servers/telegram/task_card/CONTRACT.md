@@ -168,8 +168,9 @@ the procedure lives in [`SKILL.md`](SKILL.md), not here:
     `ensure` once; the existing account `task_cards` id is rehydrated on restart
     and updated in place. Explicit `taskcard: false` suppresses presentation;
     explicit on notifies the resident and reprojects the same id exactly once.
-12. Automatic events accept only canonical public `diary` text and tool name plus
-    redacted/bounded `_reasoning`; raw action/arguments/results are excluded.
+12. Automatic events accept only canonical public `diary` text and tool name, a
+    non-empty string `tool_args.action` projected as `tool_action`, plus
+    redacted/bounded `_reasoning`; all other raw arguments/results are excluded.
     Hidden thinking, system prompts, raw tool args/results, auth/secrets, and
     private runtime logs never reach the card. Rows/text are redacted and bounded.
     Events sharing one provider `api_call_id` form one render group and produce
@@ -336,8 +337,9 @@ The automatic slot is a bounded projection of the agent's authoritative
 one source of truth for each projection axis:
 
 1. **Tool rows and timestamps.** A row is projected only from a validated
-   `type == "tool_call"` event. Its allowlisted fields are `tool_name` and
-   redacted/capped `tool_args._reasoning`; raw `action` is excluded. Its optional
+   `type == "tool_call"` event. Its allowlisted fields are `tool_name`, a
+   non-empty string `tool_args.action` projected as `tool_action`, and
+   redacted/capped `tool_args._reasoning`; all other raw arguments are excluded. Its optional
    `started_at` is derived only from that same event's top-level Unix-epoch `ts`
    and uses `HH:MM:SS UTC±HH`. Missing, boolean, non-numeric, non-finite, or
    out-of-range `ts` omits `started_at` without failing the tail. `_meta`, row
