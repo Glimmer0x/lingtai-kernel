@@ -688,6 +688,9 @@ def test_email_read_not_found(tmp_path):
     result = mgr.handle({"action": "read", "email_id": "nonexistent"})
     assert result["status"] == "ok"
     assert result["not_found"] == ["nonexistent"]
+    assert 'email(action="check", input={"filter": {"unread_only": true}}' in result["hint"]
+    assert "reasoning=" in result["hint"]
+    assert 'email(action="check", unread_only=true)' not in result["hint"]
 
 
 def test_email_intrinsic_no_mail_intrinsic(tmp_path):
@@ -811,8 +814,8 @@ def test_email_archive_already_archived(tmp_path):
 
 def test_email_schedule_removed_from_schema(tmp_path):
     """The built-in recurring-send scheduler was removed in favor of host cron."""
-    from lingtai.tools.email import get_schema
-    schema = get_schema("en")
+    from lingtai.tools.email import get_flat_schema
+    schema = get_flat_schema("en")
     assert "schedule" not in schema["properties"]
 
 
@@ -976,6 +979,9 @@ def test_email_dismiss_unknown_id_goes_to_not_found(tmp_path):
 
     assert result["dismissed"] == [eid_real]
     assert result["not_found"] == ["nope-xxx"]
+    assert 'email(action="check", input={"filter": {"unread_only": true}}' in result["hint"]
+    assert "reasoning=" in result["hint"]
+    assert 'email(action="check", unread_only=true)' not in result["hint"]
 
 
 def test_email_dismiss_requires_email_id(tmp_path):
@@ -1030,7 +1036,10 @@ def test_email_dismiss_carries_instructions_in_envelope(tmp_path):
     assert "50,000" in text
     assert "secondary" not in text
     assert "email(action='dismiss'" in text
-    assert "email.reply/reply_all" in text
+    assert "input={'email_id': [id1, id2, ...]}" in text
+    assert "email_id=[id1, id2, ...]" not in text
+    assert "reply/reply_all actions" in text
+    assert "email(action='check', input=" in text
 
 
 def test_email_read_rerenders_notification(tmp_path):

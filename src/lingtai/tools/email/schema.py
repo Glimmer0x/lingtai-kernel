@@ -1,11 +1,23 @@
-"""Schema and description for the email intrinsic tool."""
+"""Description and the legacy flat schema for the email intrinsic tool.
+
+``get_description`` remains the registered intrinsic description.
+
+``get_schema`` below is the **legacy flat** schema. Since the ToolFamily
+migration it is no longer the model-facing schema: the composed LTP v2 family
+schema lives in ``__init__.py::get_schema``, and this one now describes the
+*internal* ``EmailManager.handle`` argument shape (the same seam ``shell``
+kept for ``ShellManager``). ``__init__.py`` re-exports it as
+``get_flat_schema``. Retained rather than deleted because it is the honest
+description of that still-live internal interface — see the keep/remove ledger
+in the migration report.
+"""
 from __future__ import annotations
 
 from .primitives import mode_field
 
 
 def get_description(lang: str = "en") -> str:
-    return "LingTai email protocol within your .lingtai/ network — NOT real internet email (for Gmail/Outlook use the imap tool). Addresses are bare paths under .lingtai/ with no @ signs (e.g. human for the operator). Reply discipline: always reply on the channel the message arrived on; prefer reply over send. Never reply via text output — that is your private diary, not a comms channel. Always address people by sender_nickname if set, else sender_name. Call email(action='manual') to return the installed email-manual skill."
+    return "LingTai email protocol within your .lingtai/ network — NOT real internet email (for Gmail/Outlook use the imap tool). Addresses are bare paths under .lingtai/ with no @ signs (e.g. human for the operator). Every call takes action + input + reasoning; input is the strict argument object for the selected action, so each action's own fields live there (email_id for read/dismiss/reply, query for search, filter/n for check, address/message for send) and a field from another action is refused at dispatch. Reply discipline: always reply on the channel the message arrived on; prefer reply over send. Never reply via text output — that is your private diary, not a comms channel. Always address people by sender_nickname if set, else sender_name. Call email(action='manual', input={}) to return the installed email-manual skill."
 
 
 def get_schema(lang: str = "en") -> dict:

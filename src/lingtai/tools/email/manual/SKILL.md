@@ -7,11 +7,14 @@ description: >
   `mimo-1`) and `peer`/`abs` modes, self-send notes that survive molt, delayed
   self-send time capsules, the full-body persistent notification contract, and
   the 50,000-char send cap. INTERNAL only — real internet email is `mcp-manual`;
-  recurring schedules are `shell-manual`.
-version: 1.0.2
+  recurring schedules are `shell-manual`. Calls use the LTP v2
+  action/input/reasoning envelope.
+version: 1.1.0
 tags: [capabilities, email, communication]
 last_changed_at: "2026-07-27T00:00:00Z"
 related_files:
+- src/lingtai/tools/email/__init__.py
+- src/lingtai/tools/email/_family_schema.py
 - src/lingtai/tools/email/manager.py
 - src/lingtai/tools/email/primitives.py
 - src/lingtai/tools/email/ANATOMY.md
@@ -23,6 +26,44 @@ maintenance: |
 # Email Manual — the internal `email` tool
 
 > LingTai email protocol between agents in your `.lingtai/` network. Not the internet. No IMAP, no SMTP, no DNS. Messages are JSON files written under `mailbox/inbox/` of the recipient agent and `mailbox/sent/` of the sender.
+
+## 0. How to call it — the envelope
+
+Every call takes `action` + `input` + `reasoning`, where `input` is the strict
+argument object **for the selected action only**:
+
+```python
+email(action="check", input={}, reasoning="check for new mail")
+email(action="read", input={"email_id": ["<id>"]}, reasoning="read the request")
+email(action="send", input={"address": "human", "message": "done"},
+      reasoning="report completion")
+```
+
+Two rules follow from that, and they are enforced at dispatch, not just in the
+schema:
+
+- **Each argument belongs to one action.** `query` only exists on `search`,
+  `filter`/`n` only on `check`, `attachments`/`delay`/`mode` only on `send`. A
+  key from another action's branch is refused *before* anything is read, sent,
+  or marked read — you get `unsupported email input field`, not a silent
+  ignore.
+- **`reasoning` and `summarize` are root fields, never inside `input`.**
+  `reasoning` is required and is recorded in your diary; `summarize` is the
+  optional result post-processing control.
+
+**`summarize` guidance for this family.** `check`, `read`, and `search` are
+**bulky-result** actions — mailbox listings and full bodies can be long, so
+`summarize=true` is reasonable when you only need the gist. Leave it false
+when you need exact IDs, addresses, or verbatim body text, because you will
+act on those literally. Every other action (`send`, `dismiss`, `reply`,
+`reply_all`, `archive`, `delete`, the four contact verbs) is
+**short-result**: its receipt is small and meant to be read exactly, so leave
+`summarize` false. Call `manual` itself with `summarize=false` so procedure
+and constraints are not summarized away.
+
+**Settings:** `email` supports no settings file at either level — there is no
+`settings/email.json` and no `settings/email.<action>.json`. Its behavior is
+governed by this manual and the tool's own defaults.
 
 ## 1. What is internal email
 
@@ -59,8 +100,10 @@ Addresses are **bare directory names** inside `.lingtai/`. No `@`, no domains, n
 Multiple recipients: pass `address` as a string or a list, plus optional `cc` / `bcc`.
 
 ```python
-email(action="send", address=["mimo-1", "scribe"], cc=["human"],
-      subject="status", message="ready")
+email(action="send",
+      input={"address": ["mimo-1", "scribe"], "cc": ["human"],
+             "subject": "status", "message": "ready"},
+      reasoning="report status to the team")
 ```
 
 To discover who exists: glob `.lingtai/*/.agent.json` from a shell. Use the `agent_name` field of each as the address. Do not invent addresses — a refused dispatch produces an `email.bounce` event and queues no recipient inbox entry.
@@ -137,17 +180,25 @@ Internal email bodies are capped at 50,000 characters at **send time**. The reas
 `check` accepts a structured `filter` for narrowing the inbox without round-tripping:
 
 ```python
-email(action="check", filter={
-    "unread_only":     True,
-    "from":            "mimo-1",
-    "subject":         "status",
-    "contains":        "blocker",
-    "after":           "2026-05-18T00:00:00Z",
-    "has_attachments": False,
-    "sort":            "newest",
-    "truncate":        500,    # body preview length per entry
-}, n=20)
+email(action="check",
+      input={
+          "n": 20,
+          "filter": {
+              "unread_only":     True,
+              "from":            "mimo-1",
+              "subject":         "status",
+              "contains":        "blocker",
+              "after":           "2026-05-18T00:00:00Z",
+              "has_attachments": False,
+              "sort":            "newest",
+              "truncate":        500,    # body preview length per entry
+          },
+      },
+      reasoning="find unread blockers from mimo-1")
 ```
+
+`filter` and `n` belong to `check` alone. Any field you do not need may simply
+be omitted (or sent as `null`, which is treated the same as omitting it).
 
 Use this aggressively. Pulling 100 messages with `check` and then post-filtering in your head is wasteful.
 
@@ -163,7 +214,7 @@ Use this for: TODOs you want to remember after a memory rotation, breadcrumbs ab
 
 ## 7. Time capsule — delayed self-send
 
-Add `delay=<seconds>` to defer delivery. The outbox entry is written immediately; the `_mailman` daemon thread sleeps until the deadline, then dispatches. Combined with self-send this gives you cheap one-shot alarms without standing up a cron; the notification is delivered exactly once.
+Add `"delay": <seconds>` to `send`'s `input` to defer delivery. The outbox entry is written immediately; the `_mailman` daemon thread sleeps until the deadline, then dispatches. Combined with self-send this gives you cheap one-shot alarms without standing up a cron; the notification is delivered exactly once.
 
 Use delayed self-send as a **future nudge**, not delayed tool execution. The message should tell the future you what to inspect and why, then let that future turn decide with current context whether to run `shell(action="poll")`, `daemon(check)`, a channel read, or nothing at all. It is one of the escape hatches when a repeated-call `_advisory` says you may be polling the same thing: write one concrete reminder, then yield/idle.
 
@@ -173,7 +224,7 @@ Use delayed self-send as a **future nudge**, not delayed tool execution. The mes
 
 The mailbox UUID (`email_id`) is **local to your working directory**. Never paste a raw mailbox ID into a message to another agent or to the human — it has no meaning outside your tree and reveals nothing useful. Refer to messages by `subject` + `from` + approximate time.
 
-The exception: when you call `email(action="read"/"dismiss"/"reply", email_id=[...])`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
+The exception: when you call `email(action="read"/"dismiss"/"reply", input={"email_id": [...]})`, you pass IDs you read out of *your own* persistent notification or mailbox listing. That's internal plumbing, fine.
 
 ## 9. Addon ownership — what this skill does NOT cover
 
@@ -193,37 +244,52 @@ Those MCP addons are separate processes with separate auth surfaces and failure 
 
 ```python
 # Handle content already injected into notification_persistent.email
-email(action="dismiss", email_id=["<id-from-persistent-email>"])
+email(action="dismiss", input={"email_id": ["<id-from-persistent-email>"]},
+      reasoning="clear mail already handled from the notification")
 
 # Need source-of-truth refresh / attachments / metadata
-email(action="read", email_id=["<id-from-persistent-email>"])
+email(action="read", input={"email_id": ["<id-from-persistent-email>"]},
+      reasoning="read the full body and attachments")
 
 # Optional mailbox listing / filters
-email(action="check", filter={"unread_only": True}, n=20)
+email(action="check", input={"n": 20, "filter": {"unread_only": True}},
+      reasoning="list pending unread mail")
 
 # Thread-preserving reply
-email(action="reply", email_id=["<id>"], message="ack, looking now")
+email(action="reply", input={"email_id": ["<id>"], "message": "ack, looking now"},
+      reasoning="acknowledge on the channel it arrived on")
 
 # Self-note that survives molt
-email(action="send", address="<self>", subject="resume",
-      message="Picked the Helmholtz approach; see paper/drafts/2026-05-18.md")
+email(action="send",
+      input={"address": "<self>", "subject": "resume",
+             "message": "Picked the Helmholtz approach; see paper/drafts/2026-05-18.md"},
+      reasoning="leave a breadcrumb for after the next molt")
 
 # 5-minute timer
-email(action="send", address="<self>", delay=300,
-      subject="ding", message="check the deploy")
+email(action="send",
+      input={"address": "<self>", "delay": 300,
+             "subject": "ding", "message": "check the deploy"},
+      reasoning="set a one-shot nudge to re-check the deploy")
 
 # Reach an agent in another .lingtai/ network on this machine
-email(action="send", mode="abs", address="/Users/alice/projectB/.lingtai/外援",
-      subject="cross-network", message="ping")
+email(action="send",
+      input={"mode": "abs", "address": "/Users/alice/projectB/.lingtai/外援",
+             "subject": "cross-network", "message": "ping"},
+      reasoning="contact an agent in another network by absolute path")
 
 # Find related mail
-email(action="search", query="helmholtz",
-      filter={"after": "2026-05-01T00:00:00Z"})
+email(action="search", input={"query": "helmholtz"},
+      reasoning="find prior discussion of this approach")
 
 # Address book
-email(action="add_contact", address="mimo-1", name="MiMo (vision)",
-      note="reachable for image-analysis requests")
+email(action="add_contact",
+      input={"address": "mimo-1", "name": "MiMo (vision)",
+             "note": "reachable for image-analysis requests"},
+      reasoning="record a durable contact")
 ```
+
+Note that `search` takes `query` (and optionally `folder`) — the `filter`
+object belongs to `check`, and passing it to `search` is refused at dispatch.
 
 ---
 > **Found a bug or issue?** If you encounter any problems with this skill, load the `lingtai-issue-report` skill and follow its instructions to report it.

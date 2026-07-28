@@ -24,6 +24,8 @@ related_files:
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/daemon/CONTRACT.md
+  - src/lingtai/tools/email/CONTRACT.md
+  - src/lingtai/tools/email/__init__.py
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -348,13 +350,31 @@ completion signaling, cancellation, timeouts, and terminal notifications are
 untouched by the migration. Its pre-migration flat `summary` boolean is
 replaced by the canonical root `summarize`, joining the allowlist below in the
 same change. See `src/lingtai/tools/daemon/CONTRACT.md`.
+`email` (`send | check | read | dismiss | reply | reply_all | search |
+archive | delete | contacts | add_contact | remove_contact | edit_contact |
+manual`) is the thirteenth family migrated to this contract, and the widest
+child registry so far. Its final model-facing root is exactly `action`,
+`input`, `reasoning`, and `summarize`; the public tool name and all fourteen
+action values are unchanged, and each action's arguments now live only in that
+action's own strict `input` (so `query` belongs to `search`, `filter`/`n` to
+`check`, and `attachments`/`delay`/`mode` to `send`) instead of the one open
+flat bag every action previously shared. It is the fourth migrated *intrinsic*,
+so it composes its dispatching family per call and strips the kernel-injected
+`_tc_id` at its own boundary. Two facts are envelope consequences worth naming
+here: its `unread` action is kernel-synthesized digest state and is
+deliberately **not** a public child, keeping its own exact pre-migration
+rejection rendered before dispatch; and `EmailManager`'s historical flat
+argument shape is retained unchanged as a purely internal interface, exactly
+as `shell` kept `ShellManager`'s. It owns no settings file at either level.
+See `src/lingtai/tools/email/CONTRACT.md` (contract_version 2).
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
 `file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
-and `daemon`), so
+`daemon`, and `email`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the

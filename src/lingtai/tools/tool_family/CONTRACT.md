@@ -22,6 +22,8 @@ related_files:
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/email/CONTRACT.md
+  - src/lingtai/tools/email/__init__.py
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -291,6 +293,28 @@ replaces a pre-migration flat `summary` boolean with the canonical root
 `_LTP_V2_MIGRATED_FAMILIES` in the same change — the allowlist step this
 contract notes is part of a migration, not something this package does on a
 family's behalf.
+`email/__init__.py` (`../email/CONTRACT.md`) is the ninth production
+Adapter/consumer, and the largest child registry this package composes: one
+`_build_family(agent)` registers fourteen children — thirteen action children
+whose handlers re-enter the unchanged `EmailManager.handle`, plus
+`manual.build_manual_child(agent, "email")` directly and unwrapped — while an
+import-time `_schema_only_family()` (whose handlers are unreachable) backs
+`get_schema()`, the same module-level shape `soul` and `notification`
+established for an intrinsic. Both come from one `ACTION_ORDER`/
+`INPUT_SCHEMAS` registry in `../email/_family_schema.py`, so the composed
+schema advertises exactly the children dispatch registers. Its
+`manual` child declares this package's exported `MANUAL_INPUT_SCHEMA` literal
+rather than a local copy, and `email`'s own `handle()` flattens the canonical
+manual result to that family's pinned `status`/`manual`/`manual_path` shape
+strictly post-dispatch. It also shows a Host boundary the earlier consumers
+did not need: a **reserved non-public action**. `email(action='unread')` is
+kernel-synthesized digest state, deliberately absent from the child registry,
+and its exact pre-migration rejection is rendered by `email`'s own `handle()`
+*before* delegating — the generic `ACTION_REQUIRED` envelope is never widened
+to carry a family's reserved-name semantics. `email` additionally restores its
+own unknown- versus absent-action results (`"Unknown email action: <x>"` vs
+`"action is required"`), which this package's single envelope failure
+deliberately collapses.
 
 Every other built-in family remains fully independent of this package until
 its own scoped migration.

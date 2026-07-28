@@ -470,8 +470,10 @@ class EmailManager:
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
                               "using stale notification IDs. Call "
-                              "email(action=\"check\", unread_only=true) to see "
-                              "current pending mail.")
+                              "email(action=\"check\", input={\"filter\": "
+                              "{\"unread_only\": true}}, reasoning=\"Refresh "
+                              "pending mail after stale IDs.\") to see current "
+                              "pending mail.")
 
         return result
 
@@ -530,8 +532,10 @@ class EmailManager:
             result["hint"] = ("not_found IDs were likely already read, dismissed, "
                               "or archived via another path — this is normal when "
                               "using stale notification IDs. Call "
-                              "email(action=\"check\", unread_only=true) to see "
-                              "current pending mail.")
+                              "email(action=\"check\", input={\"filter\": "
+                              "{\"unread_only\": true}}, reasoning=\"Refresh "
+                              "pending mail after stale IDs.\") to see current "
+                              "pending mail.")
         return result
 
     def _lookup(self, email_id: str) -> dict | None:
@@ -613,8 +617,10 @@ class EmailManager:
                     f"from our own agent_id={own_id!r}. The original "
                     "sender likely lives in a different .lingtai/ network "
                     "that shares the same bare address. Resend with "
-                    "email(action='send', mode='abs', address='<absolute "
-                    "path of the original sender>') instead."
+                    "email(action='send', input={'mode': 'abs', "
+                    "'address': '<absolute path of the original sender>'}, "
+                    "reasoning='Use the original sender absolute return "
+                    "route.') instead."
                 )
             }
 

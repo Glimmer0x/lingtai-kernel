@@ -3,10 +3,22 @@
 Re-exports the full public surface of the former monolithic email.py so all
 existing import sites continue to work unchanged.
 
+The tool is an LTP v2 family (``../CONTRACT.md``): the model-facing root is
+the closed ``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope,
+and each action's arguments live in its own strict ``input`` object composed
+by the generic ``ToolFamily`` infra (``lingtai.tools.tool_family``) from the
+per-action schemas in :mod:`._family_schema`. The public tool name stays
+``email`` and every ``action`` value is unchanged; only the call envelope
+moved. ``EmailManager.handle``'s historical flat argument shape is retained
+unchanged as a purely *internal* interface — the same seam ``shell`` kept for
+its ``ShellManager`` (``tools/CONTRACT.md`` "Relationship to current
+runtime") — and :func:`handle` translates the envelope into it.
+
 Sub-modules:
-    primitives.py  — Mailbox I/O, ID generation, read tracking, delivery, display.
-    schema.py      — Tool registration (get_description, get_schema).
-    manager.py     — EmailManager class (the core filesystem manager).
+    primitives.py     — Mailbox I/O, ID generation, read tracking, delivery, display.
+    _family_schema.py — Canonical per-action ``input`` schemas + action order.
+    schema.py         — Legacy flat schema/description (internal manager shape).
+    manager.py        — EmailManager class (the core filesystem manager).
 
 Storage layout:
     working_dir/mailbox/inbox/{uuid}/message.json     — received
@@ -25,13 +37,19 @@ tool is now request/response only.
 """
 from __future__ import annotations
 
+from typing import Any, Mapping
 
 from lingtai.kernel.notifications import register_generic_dismiss_guard
-from .._manual import load_installed_manual
+from .._manual import load_installed_manual  # noqa: F401  (public re-export)
+from ..tool_family import ChildTool, ToolFamily
+from ..tool_family.manual import build_manual_child
 
 register_generic_dismiss_guard(
     "email",
-    "email(action='dismiss', email_id=[...]) or email(action='read', email_id=[...])",
+    (
+        "email(action='dismiss', input={'email_id': [...]}, reasoning='handled') "
+        "or email(action='read', input={'email_id': [...]}, reasoning='refresh')"
+    ),
 )
 
 # --- Re-exports from sub-modules for backward compatibility ---
@@ -65,11 +83,210 @@ from .primitives import (  # noqa: F401
     mode_field,
 )
 
-# Schema (tool registration)
-from .schema import get_description, get_schema  # noqa: F401
+# Schema — the legacy flat description/schema. ``get_description`` remains the
+# registered intrinsic description; ``get_schema`` is re-exported under its
+# historical name ``schema.get_schema`` but is NO LONGER the model-facing
+# schema (see ``get_schema`` below, which shadows it with the composed one).
+from .schema import get_description  # noqa: F401
+from .schema import get_schema as get_flat_schema  # noqa: F401
+
+# Canonical per-action data driving the composed model-facing schema.
+from ._family_schema import ACTION_ENUM_DESCRIPTION, ACTION_ORDER, INPUT_SCHEMAS
 
 # Manager
 from .manager import EmailManager  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# LTP v2 family composition — one model-facing root, one child per action
+# ---------------------------------------------------------------------------
+
+# The installed intrinsic-skill directory ``manual`` reads. Unchanged from the
+# pre-migration ``load_installed_manual(agent, "email")`` call.
+_MANUAL_SKILL_NAME = "email"
+
+# The exact pre-migration reserved-action rejection for ``unread``. It is a
+# kernel-synthesized digest action, NOT a public child: it is absent from
+# ``ACTION_ORDER`` and therefore from the ``action`` enum, so the generic
+# dispatcher would answer it with its own generic ``ACTION_REQUIRED``
+# envelope. This exact message is a pinned public promise
+# (``CONTRACT.md`` "Tool surface"), so :func:`handle` renders it itself,
+# before delegating — the same Host-boundary seam ``mcp`` uses for its own
+# legacy envelope, and never a widening of the generic dispatcher.
+_UNREAD_RESERVED_RESULT: dict[str, Any] = {
+    "status": "error",
+    "message": (
+        "email(action='unread', ...) is reserved for kernel-"
+        "synthesized unread-mail digests and cannot be invoked "
+        "directly. Use email(action='check') to view your inbox."
+    ),
+}
+
+
+def _schema_only_family() -> ToolFamily:
+    """Build the module-level ``ToolFamily`` used only to compose the schema.
+
+    Email is an *intrinsic*: the kernel imports this module once and calls
+    ``get_schema()``/``handle(agent, args)`` on the module itself, so unlike
+    ``web`` there is no per-Agent manager instance to hang a family off at
+    import time. The real handlers need an ``agent``, which only arrives per
+    call, so :func:`handle` builds a per-call family with bound handlers and
+    this module-level one never dispatches. Constructing it at import time is
+    still load-bearing: it proves the fixed fourteen-child registry has no
+    duplicate and no reserved-name collision on ``manual``
+    (``ToolFamilyError`` raises here, at import, rather than shipping
+    silently).
+    """
+
+    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+    return ToolFamily(
+        "email",
+        [
+            ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
+            for action in ACTION_ORDER
+        ],
+    )
+
+
+_FAMILY = _schema_only_family()
+
+
+def get_schema(lang: str = "en") -> dict[str, Any]:
+    """Return the composed model-facing ``email`` family schema.
+
+    Composed by the generic ``ToolFamily`` infra from each action's own
+    canonical ``input_schema`` in :mod:`._family_schema`, rather than
+    hand-assembled. ``lang`` is accepted for source compatibility and ignored:
+    schema prose is canonical English and language-independent, exactly as
+    ``CONTRACT.md`` "Schema and glossary ownership" already promised.
+
+    This shadows the legacy flat ``schema.get_schema`` (re-exported above as
+    ``get_flat_schema``), which is now only the internal ``EmailManager``
+    argument shape.
+    """
+    schema = _FAMILY.build_schema()
+    # The generic composer writes a neutral "Required operation within the
+    # email family." description. Email's own per-action prose (the 50,000-char
+    # cap rationale, the read-vs-dismiss preference, the reply discipline) is
+    # the model's only in-schema guide to *which* action to pick, so it
+    # replaces that placeholder here rather than being lost.
+    schema["properties"]["action"]["description"] = ACTION_ENUM_DESCRIPTION
+    return schema
+
+
+def _strip_nulls(action_input: Mapping[str, Any]) -> dict:
+    """Drop explicit ``null``s so absent-vs-null defaulting is preserved.
+
+    Strict provider schemas express an optional field as a required nullable
+    property, so the model sends ``{"folder": null}`` for "no folder". The
+    pre-existing ``EmailManager`` handlers distinguish absent from present via
+    ``args.get("folder", "inbox")``, ``args.get("folder")`` (``_read``:
+    ``if folder:`` selects a direct path lookup), ``_search``'s
+    "folder or both", and ``_edit_contact``'s ``if "name" in args``. Null must
+    therefore become *absent* before they run, or ``check`` would list a
+    folder named ``None`` and ``edit_contact`` would blank a stored name the
+    caller never mentioned.
+
+    Strict-provider nested objects need the same one-level normalization.
+    ``check.filter`` is mostly read through truthiness, but ``truncate`` uses
+    ``f.get("truncate", 500)`` and therefore treats an explicit ``null`` as
+    ``None`` rather than as the historical 500-character default. Drop nested
+    nulls at the family boundary while leaving the manager's flat interface
+    and defaulting rules unchanged.
+    """
+    cleaned: dict[str, Any] = {}
+    for key, value in action_input.items():
+        if value is None:
+            continue
+        if isinstance(value, Mapping):
+            value = {
+                nested_key: nested_value
+                for nested_key, nested_value in value.items()
+                if nested_value is not None
+            }
+        cleaned[key] = value
+    return cleaned
+
+
+def _adapt_manual_result(mcp_result: dict) -> dict:
+    """Flatten the ManualTool child's canonical result to Email's exact shape.
+
+    ``ToolFamily.handle()`` has already dispatched to the registered ``manual``
+    child (``tool_family.manual.build_manual_child``) and returned its
+    canonical result *verbatim* (no double wrap) — full body at
+    ``content[0].text``, host-local path at
+    ``structuredContent.manual_path``. Email's pre-migration public result was
+    ``load_installed_manual(agent, "email")``'s own flat dict — exactly
+    ``status`` / ``manual`` / ``manual_path`` (+ ``error`` when degraded) — so
+    this Host-owned adapter runs strictly *after* dispatch, in :func:`handle`,
+    never inside a registered child, per the no-double-wrap rule
+    (``tool_family/CONTRACT.md`` "Dispatch and actions").
+
+    The generic result carries no field Email did not expose pre-migration:
+    ``content``/``structuredContent`` are dropped here rather than added to
+    Email's public shape, and the loader's ``error`` sentence is forwarded
+    verbatim because this family's installed skill directory really is named
+    ``email`` — so the loader's own ``f"{skill_name} manual missing — ..."``
+    text is byte-identical to the pre-migration one, with nothing to restate.
+    """
+    flat: dict[str, Any] = {
+        "status": mcp_result.get("status", "ok"),
+        "manual": mcp_result["content"][0]["text"],
+        "manual_path": mcp_result["structuredContent"]["manual_path"],
+    }
+    if "error" in mcp_result:
+        flat["error"] = mcp_result["error"]
+    return flat
+
+
+def _build_family(agent) -> ToolFamily:
+    """Build the per-call dispatching family with handlers bound to *agent*.
+
+    Every non-``manual`` child re-enters the unchanged ``EmailManager.handle``
+    with its historical flat argument shape (``{"action": ..., **input}``),
+    which keeps the whole engine — delivery threads, the duplicate-send guard,
+    read tracking, the digest rerender, reply routing, contacts — untouched by
+    this migration. The child's own strict ``input_schema`` is what makes that
+    safe: ``ToolFamily.handle()`` has already rejected any key outside the
+    selected action's own branch before the handler runs, so no cross-action
+    field can reach the flat dispatcher.
+
+    The reserved ``manual`` child is registered directly and unwrapped, per
+    ``tool_family/CONTRACT.md``: ``ToolFamily.handle()`` returns its canonical
+    ``content``/``structuredContent`` result verbatim, and
+    :func:`_adapt_manual_result` reshapes it afterwards in :func:`handle`.
+    """
+
+    def _bind(action: str):
+        def _dispatch(action_input: Mapping[str, Any]) -> dict[str, Any]:
+            mgr = getattr(agent, "_email_manager", None)
+            if mgr is None:
+                return {
+                    "error": (
+                        "Internal: email manager not initialized. "
+                        "boot() was not called."
+                    )
+                }
+            return mgr.handle({"action": action, **_strip_nulls(action_input)})
+
+        return _dispatch
+
+    children = []
+    for action in ACTION_ORDER:
+        if action == "manual":
+            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
+        else:
+            children.append(
+                ChildTool(
+                    action,
+                    INPUT_SCHEMAS[action],
+                    _bind(action),
+                    title=f"{action} input",
+                )
+            )
+    return ToolFamily("email", children)
 
 
 # ---------------------------------------------------------------------------
@@ -78,27 +295,53 @@ from .manager import EmailManager  # noqa: F401
 
 
 def handle(agent, args: dict) -> dict:
-    """Module-level dispatcher — delegates to the agent's EmailManager.
+    """Handle the ``email`` family root — validate the envelope, dispatch one action.
 
-    Boot must have run first to instantiate the manager. If not (e.g. someone
-    calls handle() before boot() in a test harness), return a clear error.
+    The generic ``ToolFamily`` dispatcher validates ``action``, type-checks and
+    strips root ``summarize``, rejects unknown root fields, and — crucially for
+    a mutating family — rejects ``input`` keys outside the selected action's
+    own declared schema *before* any handler runs. That is what makes a
+    cross-action smuggle such as ``action='check', input={'email_id': [...]}``
+    fail with no mailbox I/O at all.
+
+    ``_tc_id`` is stripped first. ``base_agent.tools._dispatch_tool`` injects
+    it into **every** intrinsic's args (only ``psyche`` molt consumes it), so
+    it is kernel plumbing that predates and is invisible to the LTP v2
+    envelope — the same boundary ``soul`` and ``notification`` own.
+
+    Two Email-specific results are rendered here, before/after the generic
+    dispatcher, rather than by changing its canonical shapes:
+
+    * the reserved ``unread`` action's exact rejection, which must still fire
+      *before* dispatch because ``unread`` is deliberately not a public child;
+    * ``manual``'s pre-migration flat public shape, adapted strictly after
+      dispatch (:func:`_adapt_manual_result`).
+
+    An unknown or absent action keeps the pre-migration public result exactly
+    (``{"error": "Unknown email action: <x>"}`` / ``{"error": "action is
+    required"}``), which ``CONTRACT.md`` "Tool surface" pins.
     """
-    action = args.get("action")
-    if action == "manual":
-        return load_installed_manual(agent, "email")
+    raw = dict(args or {})
+    raw.pop("_tc_id", None)
+
+    action = raw.get("action")
     if action == "unread":
-        return {
-            "status": "error",
-            "message": (
-                "email(action='unread', ...) is reserved for kernel-"
-                "synthesized unread-mail digests and cannot be invoked "
-                "directly. Use email(action='check') to view your inbox."
-            ),
-        }
-    mgr = getattr(agent, "_email_manager", None)
-    if mgr is None:
-        return {"error": "Internal: email manager not initialized. boot() was not called."}
-    return mgr.handle(args)
+        return dict(_UNREAD_RESERVED_RESULT)
+
+    result = _build_family(agent).handle(raw)
+
+    if action == "manual" and "content" in result:
+        return _adapt_manual_result(result)
+    if result.get("error_code") == "ACTION_REQUIRED":
+        # Preserve Email's pre-migration unknown/absent-action results
+        # verbatim. ``EmailManager.handle`` returned "action is required" for
+        # a falsy action and "Unknown email action: <x>" otherwise; the
+        # generic dispatcher collapses both into one envelope failure, so the
+        # distinction is restored here at Email's own Host boundary.
+        if not action:
+            return {"error": "action is required"}
+        return {"error": f"Unknown email action: {action}"}
+    return result
 
 
 def boot(agent) -> None:

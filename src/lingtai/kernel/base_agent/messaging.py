@@ -236,9 +236,16 @@ def _notify(agent, sender: str, text: str) -> None:
 def _mail(agent, address: str, message: str, subject: str = "") -> dict:
     """Send a message to another agent (public API). Requires MailService.
 
-    Routes through the email intrinsic (renamed from mail in 0.7.5).
+    Routes through the email intrinsic (renamed from mail in 0.7.5). ``email``
+    is an LTP v2 family (``tools/CONTRACT.md``), so the call carries the
+    closed ``action``/``input`` envelope; the send arguments live in
+    ``send``'s own strict ``input`` object. The returned result is the
+    unchanged ``{"status": "sent", ...}`` send result.
     """
-    return agent._intrinsics["email"]({"action": "send", "address": address, "message": message, "subject": subject})
+    return agent._intrinsics["email"]({
+        "action": "send",
+        "input": {"address": address, "message": message, "subject": subject},
+    })
 
 
 def _send(agent, content: str | dict, sender: str = "user") -> None:

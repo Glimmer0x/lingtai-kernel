@@ -64,12 +64,16 @@ def test_mail_send_passes_attachments(tmp_path):
     attachment = tmp_path / "file.png"
     attachment.write_bytes(b"PNG_DATA")
 
-    # Call the email handler directly (mail intrinsic was renamed in 0.7.5)
+    # Call the email handler directly (mail intrinsic was renamed in 0.7.5).
+    # ``email`` is a migrated LTP v2 family: the send arguments live in
+    # ``send``'s own strict ``input`` object, not at the envelope root.
     result = agent._intrinsics["email"]({
         "action": "send",
-        "address": str(tmp_path / "other"),
-        "message": "here is a file",
-        "attachments": [str(attachment)],
+        "input": {
+            "address": str(tmp_path / "other"),
+            "message": "here is a file",
+            "attachments": [str(attachment)],
+        },
     })
     assert result["status"] == "sent"
     # Delivery is async via mailman thread — wait for it
