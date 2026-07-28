@@ -12,7 +12,6 @@ import logging
 import os
 import tempfile
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +26,38 @@ httpx: Any = None
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _FILE_BASE = "https://api.telegram.org/file/bot{token}/{file_path}"
+
+
+class TelegramRateLimitError(RuntimeError):
+    """Telegram rejected one request with HTTP 429.
+
+    ``retry_after`` is copied only when Telegram supplied a valid integer number
+    of seconds.  Missing or malformed provider metadata stays ``None``; callers
+    must never invent a cooldown or schedule an automatic retry.
+    """
+
+    error_code = 429
+
+    def __init__(self, retry_after: int | None) -> None:
+        self.retry_after = retry_after
+        message = "Telegram API rate limited"
+        if retry_after is not None:
+            message += f"; retry after {retry_after} seconds"
+        super().__init__(message)
+
+
+def _retry_after_from_payload(payload: Any) -> int | None:
+    """Return Telegram's valid integer cooldown without coercion or defaults."""
+    if not isinstance(payload, dict):
+        return None
+    parameters = payload.get("parameters")
+    if not isinstance(parameters, dict):
+        return None
+    retry_after = parameters.get("retry_after")
+    if type(retry_after) is not int or retry_after < 0:
+        return None
+    return retry_after
+
 
 # Default slash commands registered with @BotFather via setMyCommands on
 # bot startup. Override per-account via the "commands" config field.
@@ -218,14 +249,23 @@ class TelegramAccount:
             self._client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
 
     def _request(self, method: str, **kwargs: Any) -> dict:
-        """Make a Bot API request. Returns the 'result' field or raises."""
+        """Make one Bot API request. Returns the result or raises immediately."""
         self._ensure_client()
         resp = self._client.post(self._api_url(method), **kwargs)
         if resp.status_code == 429:
-            retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
-            logger.warning("Rate limited, sleeping %ds", retry_after)
-            time.sleep(retry_after)
-            resp = self._client.post(self._api_url(method), **kwargs)
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+            retry_after = _retry_after_from_payload(data)
+            if retry_after is None:
+                logger.warning("Telegram rate limited the request without a valid retry_after")
+            else:
+                logger.warning(
+                    "Telegram rate limited the request; retry_after=%d seconds",
+                    retry_after,
+                )
+            raise TelegramRateLimitError(retry_after)
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"Telegram API error: {data.get('description', data)}")

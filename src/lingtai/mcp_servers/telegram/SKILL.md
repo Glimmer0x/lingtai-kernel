@@ -8,8 +8,8 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.2
-last_changed_at: 2026-07-19T00:00:00Z
+version: 1.5.3
+last_changed_at: 2026-07-28T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
@@ -307,6 +307,12 @@ chat-history cardinality. Normative source:
   failure (e.g. missing `chat_id`, unreadable `media.path`, bad `parse_mode`).
   Check for the `'error'` key and surface or act on it rather than assuming the
   message was delivered.
+- Telegram HTTP 429 responses fail fast with `status: 'error'`,
+  `error_code: 429`, `retryable: false`, and the provider's numeric
+  `retry_after` when Telegram supplied one. Wait at least that many seconds and
+  do not retry the action automatically. The addon never sleeps inside the tool
+  call or schedules a hidden second side effect; missing or malformed cooldown
+  metadata is omitted rather than replaced with a guessed default.
 - The hosted Telegram Bot API limits `getFile` downloads to 20 MB. If an inbound
   document cannot be downloaded, `read` retains its available Telegram metadata
   without a local path, adds a safe bounded provider reason in `download_error`,
