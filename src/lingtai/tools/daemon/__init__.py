@@ -421,6 +421,11 @@ EMANATION_BLACKLIST = {
     "daemon",
     "avatar",
     "psyche",
+    # Split out of ``psyche`` into their own model-visible roots; they carry
+    # exactly the identity/prompt-mutation authority psyche was blacklisted
+    # for, so the boundary follows them rather than being lost in the split.
+    "pad",
+    "lingtai",
     "skills",
     "knowledge",
 }

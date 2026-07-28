@@ -65,7 +65,10 @@ def test_intrinsics_enabled_by_default(tmp_path):
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
-    assert len(agent._intrinsics) == 5  # email, system, psyche, soul, notification
+    # pad and lingtai are model-visible roots split out of psyche.
+    assert "pad" in agent._intrinsics
+    assert "lingtai" in agent._intrinsics
+    assert len(agent._intrinsics) == 7  # email, system, psyche, pad, lingtai, soul, notification
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +538,7 @@ def test_agent_pad_persists_via_edit(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "updated knowledge", "files": None}})
+    agent._intrinsics["pad"]({"action": "edit", "input": {"content": "updated knowledge", "files": None}})
     pad_file = agent.working_dir / "system" / "pad.md"
     assert pad_file.is_file()
     assert pad_file.read_text() == "updated knowledge"

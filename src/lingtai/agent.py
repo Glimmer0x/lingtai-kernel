@@ -1566,13 +1566,17 @@ class Agent(BaseAgent):
         # procedures, brief, rules, pad, comment) from init.json and disk.
         self._reload_prompt_sections(data)
 
-        # Re-boot psyche so the post-molt hook is re-registered on the cleared
-        # hook list. `boot` also reloads `character`/`pad` — both `boot` and
-        # `_reload_prompt_sections` now route through the same canonical
-        # composers (`_lingtai_load`, `_pad_load`), so they produce identical
-        # content and the result is independent of which runs last.
-        from lingtai.tools import psyche as _psyche
-        _psyche.boot(self)
+        # Re-boot the two prompt-section owners so their post-molt hooks are
+        # re-registered on the cleared hook list. Each `boot` also reloads its
+        # own section — both `boot` and `_reload_prompt_sections` route through
+        # the same canonical composers (`_lingtai_load`, `_pad_load`), so they
+        # produce identical content and the result is independent of which runs
+        # last. `psyche` no longer participates: pad and lingtai split into
+        # their own families and took this boot work with them.
+        from lingtai.tools import lingtai as _lingtai_tool
+        from lingtai.tools import pad as _pad
+        _lingtai_tool.boot(self)
+        _pad.boot(self)
 
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
         # ``email.boot`` stops the previous manager's scheduler before
@@ -1738,7 +1742,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer so boot/refresh/molt all
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering.
-        from lingtai.tools.psyche import _lingtai_load
+        from lingtai.tools.lingtai import _lingtai_load
         _lingtai_load(self, {})
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
@@ -1799,7 +1803,7 @@ class Agent(BaseAgent):
         # Delegate to the single canonical composer rather than re-reading
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
-        from lingtai.tools.psyche import _pad_load
+        from lingtai.tools.pad import _pad_load
         _pad_load(self, {})
 
         # --- Principle (kernel-owned top-level progressive-disclosure contract) ---

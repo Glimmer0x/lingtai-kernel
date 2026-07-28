@@ -31,11 +31,18 @@ def make_mock_service():
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_in_all_intrinsics():
+def test_intrinsics_include_psyche_pad_and_lingtai():
+    """``pad`` is its own intrinsic root since the pad/lingtai split.
+
+    Before the split ``pad`` was deliberately absent — the three pad
+    operations were ``psyche`` leaves. Now it is a model-visible root parallel
+    to ``knowledge`` and ``skills``, and ``psyche`` no longer advertises them.
+    """
     assert "psyche" in ALL_INTRINSICS
-    assert "pad" not in ALL_INTRINSICS
-    info = ALL_INTRINSICS["psyche"]
-    mod = info["module"]
+    assert "pad" in ALL_INTRINSICS
+    assert "lingtai" in ALL_INTRINSICS
+
+    mod = ALL_INTRINSICS["pad"]["module"]
     schema = mod.get_schema()
     # The registered schema is the ToolFamily-composed LTP v2 envelope: the
     # `allOf` action/input correlation replaced the former deliberately-flat
@@ -43,14 +50,18 @@ def test_psyche_in_all_intrinsics():
     assert "allOf" in schema
     assert "object" not in schema["properties"]
     actions = schema["properties"]["action"]["enum"]
-    assert {"pad_edit", "pad_load", "pad_append", "context_molt"} <= set(actions)
+    assert actions == ["edit", "load", "append", "manual"]
     assert mod.ACTION_ORDER == tuple(actions)
 
+    psyche_actions = ALL_INTRINSICS["psyche"]["module"].get_schema()["properties"]["action"]["enum"]
+    assert not any(action.startswith("pad_") for action in psyche_actions)
 
-def test_psyche_wired_in_agent(tmp_path):
+
+def test_psyche_and_pad_wired_in_agent(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert "psyche" in agent._intrinsics
-    assert "pad" not in agent._intrinsics
+    assert "pad" in agent._intrinsics
+    assert "lingtai" in agent._intrinsics
     agent.stop(timeout=1.0)
 
 
@@ -137,7 +148,7 @@ def test_existing_system_files_not_overwritten(tmp_path):
 def test_pad_edit(tmp_path):
     """Edit should write content to disk without injecting into prompt."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "hello world", "files": None}})
+    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "hello world", "files": None}})
     assert result["status"] == "ok"
     assert result["size_bytes"] == len("hello world".encode())
     pad_file = agent.working_dir / "system" / "pad.md"
@@ -151,7 +162,7 @@ def test_pad_edit_then_load(tmp_path):
     agent.start()
     try:
         # edit writes content and auto-loads into prompt manager
-        result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "important fact", "files": None}})
+        result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "important fact", "files": None}})
         assert result["status"] == "ok"
 
         # Verify file was written
@@ -163,7 +174,7 @@ def test_pad_edit_then_load(tmp_path):
         assert "important fact" in section
 
         # Second load call should not detect new changes (file unchanged)
-        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert result["status"] == "ok"
         # changed=False because file was already committed by edit's internal load
     finally:
@@ -176,7 +187,7 @@ def test_pad_load(tmp_path):
     try:
         pad_file = agent.working_dir / "system" / "pad.md"
         pad_file.write_text("# Pad\n\nimportant fact\n")
-        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "important fact" in section
@@ -188,11 +199,11 @@ def test_pad_load_empty_removes_section(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
-        agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "some content", "files": None}})
-        agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        agent._intrinsics["pad"]({"action": "edit", "input": {"content": "some content", "files": None}})
+        agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert agent._prompt_manager.read_section("pad") is not None
-        agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "", "files": None}})
-        agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        agent._intrinsics["pad"]({"action": "edit", "input": {"content": "", "files": None}})
+        agent._intrinsics["pad"]({"action": "load", "input": {}})
         section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
     finally:
@@ -203,8 +214,8 @@ def test_pad_load_no_change_no_commit(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     agent.start()
     try:
-        agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
-        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        agent._intrinsics["pad"]({"action": "load", "input": {}})
+        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert result["status"] == "ok"
     finally:
         agent.stop()
@@ -225,7 +236,7 @@ def test_pad_creates_files_if_missing(tmp_path):
         missing_system.mkdir()
         agent._working_dir = missing_system
         agent._notification_store = notification_store_for(missing_system)
-        result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "test", "files": None}})
+        result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "test", "files": None}})
         assert result["status"] == "ok"
         assert (agent.working_dir / "system" / "pad.md").is_file()
     finally:

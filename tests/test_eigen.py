@@ -29,7 +29,7 @@ def test_psyche_pad_edit(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "hello world", "files": None}})
+    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "hello world", "files": None}})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == "hello world"
@@ -45,9 +45,9 @@ def test_psyche_pad_edit_empty_clears(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     # First write something
-    agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "data", "files": None}})
+    agent._intrinsics["pad"]({"action": "edit", "input": {"content": "data", "files": None}})
     # Then clear it (must pass content="" — empty args alone is rejected)
-    result = agent._intrinsics["psyche"]({"action": "pad_edit", "input": {"content": "", "files": None}})
+    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "", "files": None}})
     assert result["status"] == "ok"
     pad_path = agent._working_dir / "system" / "pad.md"
     assert pad_path.read_text() == ""
@@ -74,7 +74,7 @@ def test_psyche_pad_load(tmp_path):
         system_dir.mkdir(exist_ok=True)
         (system_dir / "pad.md").write_text("loaded content")
 
-        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "loaded content" in section
@@ -92,7 +92,7 @@ def test_psyche_pad_load_empty(tmp_path):
     )
     agent.start()
     try:
-        result = agent._intrinsics["psyche"]({"action": "pad_load", "input": {}})
+        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert section is None or section.strip() == ""
@@ -347,8 +347,8 @@ def test_eigen_unknown_action(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_eigen_is_intrinsic_not_pad(tmp_path):
-    """psyche replaces pad in intrinsics."""
+def test_eigen_is_intrinsic_and_pad_is_its_own_root(tmp_path):
+    """`eigen` is gone; `psyche` and the split-out `pad` are both intrinsics."""
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
@@ -356,7 +356,9 @@ def test_eigen_is_intrinsic_not_pad(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     assert "psyche" in agent._intrinsics
-    assert "pad" not in agent._intrinsics
+    assert "pad" in agent._intrinsics
+    assert "lingtai" in agent._intrinsics
+    assert "eigen" not in agent._intrinsics
     agent.stop(timeout=1.0)
 
 

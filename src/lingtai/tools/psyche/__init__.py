@@ -1,16 +1,21 @@
-"""Psyche intrinsic — bare essentials of agent self.
+"""Psyche intrinsic — context lifecycle and the agent's name.
 
-Eight operations plus the reserved ``manual``, each a canonical
+Three operations plus the reserved ``manual``, each a canonical
 :class:`~lingtai.tools.tool_family.ChildTool` behind the one public ``psyche``
-family root. The pre-migration ``(object, action)`` matrix is preserved
-verbatim as flat action names — one action per former ``(object, action)``
-pair, the same collapse ``notification`` made for its three atomic dismiss
-verbs:
+family root:
 
-    lingtai update   -> lingtai_update      pad edit   -> pad_edit
-    lingtai load     -> lingtai_load        pad load   -> pad_load
-    name set         -> name_set            pad append -> pad_append
-    name nickname    -> name_nickname       context molt -> context_molt
+    name set      -> name_set        context molt -> context_molt
+    name nickname -> name_nickname
+
+``pad`` and ``lingtai`` were split out of this family into their own
+model-visible roots (``lingtai.tools.pad`` / ``lingtai.tools.lingtai``): they
+are concepts parallel to ``knowledge`` and ``skills``, not psyche leaves. The
+five former leaves (``pad_edit``/``pad_load``/``pad_append``/
+``lingtai_update``/``lingtai_load``) are gone with no compatibility alias —
+they are unknown actions here and fail loudly. The remaining three action
+names and every one of their semantics are unchanged by that split; whether
+psyche itself should later shrink, be renamed, or disappear is a separate
+open design question this change deliberately does not answer.
 
 Per-operation behavior, inputs, and result/error shapes live in
 ``CONTRACT.md``; the model-facing text lives in the schema descriptions below
@@ -19,19 +24,17 @@ and in the ``psyche-manual`` skill. Neither is restated here.
 Action separation is structural: :data:`_CHILD_SPECS` is the single registry
 of name, schema, and handler, so the model-facing schema and dispatch are
 generated from one source and cannot drift. Every success payload, error
-string, log event, and persistence path is exactly what it was before the
-migration — only the argument *shape* moved from a flat ``object``/``action``
-root into ``action`` + per-action ``input``.
+string, log event, and persistence path for the retained actions is exactly
+what it was before the split.
 
 Sub-modules:
     _snapshots.py — Snapshot and summary persistence for the molt machinery.
-    _pad.py       — Pad CRUD and append-file management.
-    _lingtai.py   — Lingtai identity/character management.
     _molt.py      — Context molt core, name handlers, system-initiated molt.
 
 Internal:
-    boot — boot-time hook: load lingtai + pad into prompt, register post-molt
-        reload. Called from base_agent.__init__ after intrinsics are wired.
+    boot — boot-time hook: register the post-molt prompt-reload hook. Called
+        from base_agent.__init__ after intrinsics are wired. Pad and lingtai
+        each own their own boot and post-molt reload now.
 """
 from __future__ import annotations
 
@@ -41,12 +44,6 @@ from typing import Any, Mapping
 
 # Snapshots (used by consultation, inquiry, etc.)
 from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_molt_summary  # noqa: F401
-
-# Pad (used by boot, and cross-referenced by lingtai/append)
-from ._pad import _pad_edit, _pad_load, _pad_append  # noqa: F401
-
-# Lingtai (used by boot, and cross-referenced by pad)
-from ._lingtai import _lingtai_update, _lingtai_load  # noqa: F401
 
 # Molt (the public surface)
 from ._molt import _context_molt, _name_set, _name_nickname, context_forget  # noqa: F401
@@ -67,71 +64,7 @@ from ..tool_family.manual import build_manual_child
 # The property descriptions are carried over from the pre-migration flat
 # schema; only their location changed (one shared flat root -> the one action
 # that actually consumes them). That relocation is the whole point of the
-# migration: ``pad_load`` no longer advertises ``summary``, and ``name_set``
-# no longer advertises ``keep_tool_calls``.
-#
-# ``content`` is a destructive FULL REWRITE for ``lingtai_update`` and
-# ``pad_edit``. Both keep the pre-migration "intended, non-empty" safety: the
-# nullable representation below plus ``_strip_nulls`` reproduces the exact
-# ``"content" not in args`` distinction the handlers key off, so a bare
-# ``pad_edit`` with neither content nor files is still refused rather than
-# silently clearing the pad.
-
-_LINGTAI_UPDATE_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "content": {
-            "type": "string",
-            "description": 'Your full identity — this REPLACES system/lingtai.md entirely, it is not a delta. Carry forward who you have become. Pass an empty string to clear it. Writes and auto-loads immediately; a nonempty configured init `lingtai` value (inline or resolved from `lingtai_file`) replaces it on boot, refresh, and post-molt reconstruction, while absent/empty configuration preserves your self-authored identity.',
-        },
-    },
-    "required": ["content"],
-    "additionalProperties": False,
-}
-
-_LINGTAI_LOAD_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-_PAD_EDIT_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "content": {
-            "type": ["string", "null"],
-            "description": 'Written as-is to system/pad.md. This REPLACES the pad entirely — a full rewrite, not an append. Pass an empty string to clear the pad explicitly; pass null to supply only `files`. Providing neither content nor files is refused.',
-        },
-        "files": {
-            "type": ["array", "null"],
-            "items": {"type": "string"},
-            "description": 'Optional file paths (text files only) whose contents are imported into the pad body as [file-N] blocks at edit time. Distinct from pad_append, which pins files as re-read read-only reference. Paths relative to working directory. Pass null when not importing files.',
-        },
-    },
-    "required": ["content", "files"],
-    "additionalProperties": False,
-}
-
-_PAD_LOAD_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-_PAD_APPEND_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "files": {
-            "type": ["array", "null"],
-            "items": {"type": "string"},
-            "description": 'File paths (text files only) pinned as read-only reference in your system prompt — re-read on every load including after molt. Pass files=[] to clear the pin list. Pass null to read the current list without changing it. Max 100k tokens total. Paths relative to working directory. See psyche-manual for detailed usage.',
-        },
-    },
-    "required": ["files"],
-    "additionalProperties": False,
-}
+# migration: ``name_set`` no longer advertises ``keep_tool_calls``.
 
 _CONTEXT_MOLT_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -191,18 +124,13 @@ _NAME_NICKNAME_INPUT_SCHEMA: dict[str, Any] = {
 # child can never be schema-advertised but dispatch-rejected.
 #
 # Order here is the model-facing ``action`` enum order and the
-# ``input.oneOf`` branch order. It follows the pre-migration ``_VALID_ACTIONS``
-# object order (lingtai, pad, context, name) so the surface reads the same way
-# it always did.
+# ``input.oneOf`` branch order. It preserves the relative order the retained
+# actions have always had (context, then name), with the five split-out
+# pad/lingtai leaves removed rather than reordered.
 #
 # ``manual`` is absent: ``build_manual_child`` owns that child's schema and
 # handler, and :func:`_build_children` appends it last.
 _CHILD_SPECS: tuple[tuple[str, dict[str, Any], Any], ...] = (
-    ("lingtai_update", _LINGTAI_UPDATE_INPUT_SCHEMA, _lingtai_update),
-    ("lingtai_load", _LINGTAI_LOAD_INPUT_SCHEMA, _lingtai_load),
-    ("pad_edit", _PAD_EDIT_INPUT_SCHEMA, _pad_edit),
-    ("pad_load", _PAD_LOAD_INPUT_SCHEMA, _pad_load),
-    ("pad_append", _PAD_APPEND_INPUT_SCHEMA, _pad_append),
     ("context_molt", _CONTEXT_MOLT_INPUT_SCHEMA, _context_molt),
     ("name_set", _NAME_SET_INPUT_SCHEMA, _name_set),
     ("name_nickname", _NAME_NICKNAME_INPUT_SCHEMA, _name_nickname),
@@ -238,7 +166,7 @@ def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
-    """Build the nine children from the one canonical registry.
+    """Build the four children from the one canonical registry.
 
     ``agent`` may be ``None`` for the module-level schema-only family, whose
     children are never dispatched — only their schemas are read.
@@ -287,25 +215,20 @@ _FAMILY = ToolFamily("psyche", _build_children(None))
 #: guidance the model actually needs to pick an action replaces it in
 #: :func:`get_schema` rather than being lost.
 _ACTION_ENUM_DESCRIPTION = (
-    'Required operation. lingtai_update | lingtai_load: your 灵台 — what '
-    'distinguishes you from every other agent. lingtai_update is a FULL '
-    'REWRITE and auto-loads; a configured nonempty value forces it on '
-    'reconstruction, while absent/empty configuration lets it self-evolve.\n'
-    'pad_edit | pad_load | pad_append: your sketchboard in your system prompt '
-    '(system/pad.md). pad_edit is a FULL REWRITE and auto-loads; pad_append '
-    'pins files as re-read read-only reference.\n'
+    'Required operation. '
     'context_molt: shed your conversation context, keep the durable stores. '
     'Requires `summary` and a valid `session_journal_path` — tend the four '
     'stores BEFORE molting. See psyche-manual.\n'
     'name_set: your true name, set once and immutable. name_nickname: your '
     'display name, mutable.\n'
     'manual: return the installed psyche-manual skill without performing any '
-    'psyche operation.'
+    'psyche operation.\n'
+    'Your 灵台 and your pad are separate tools: use lingtai(...) and pad(...).'
 )
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Identity, pad, name, and context management. One tool, nine actions, each with its own strict input object: psyche(action=..., input={...}, reasoning=\'why\'). lingtai_update/lingtai_load: your 灵台 (character) — psyche updates it immediately, while a nonempty configured lingtai value is authoritative on reconstruction and an absent or empty value enables self-evolution. lingtai_update REPLACES your whole identity. pad_edit/pad_load/pad_append: system-prompt sketchboard (system/pad.md) — plans, tasks, notes; pad_edit REPLACES the whole pad, pad_append pins read-only reference files. context_molt: molt (凝蜕) — shed conversation, keep stores; requires a written session journal. name_set: true name (once). name_nickname: display name (mutable). manual: return the installed psyche-manual skill. Results are small, so leave root summarize false (short-result profile); call manual with summarize=false so the exact molt procedure is not summarized away.'
+    return 'Name and context management. One tool, four actions, each with its own strict input object: psyche(action=..., input={...}, reasoning=\'why\'). context_molt: molt (凝蜕) — shed conversation, keep stores; requires a written session journal. name_set: true name (once). name_nickname: display name (mutable). manual: return the installed psyche-manual skill. Your 灵台 (character) and your pad are separate tools — use lingtai(action=\'update\'|\'load\') and pad(action=\'edit\'|\'load\'|\'append\'). Results are small, so leave root summarize false (short-result profile); call manual with summarize=false so the exact molt procedure is not summarized away.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -393,15 +316,11 @@ def handle(agent, args: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Boot hook
 # ---------------------------------------------------------------------------
-
-
-def boot(agent) -> None:
-    """Boot-time hook: load lingtai + pad into the prompt, register post-molt
-    reload. Called from base_agent.__init__ after intrinsics are wired."""
-    _pad_load(agent, {})
-    _lingtai_load(agent, {})
-    if not hasattr(agent, "_post_molt_hooks"):
-        agent._post_molt_hooks = []
-    agent._post_molt_hooks.append(
-        lambda: (_lingtai_load(agent, {}), _pad_load(agent, {}))
-    )
+#
+# Psyche no longer defines ``boot``. Its only boot-time work was loading the
+# pad and the lingtai identity into the prompt and registering their post-molt
+# reload; both moved with their families to ``lingtai.tools.pad.boot`` and
+# ``lingtai.tools.lingtai.boot``, which the same generic intrinsic boot loop
+# (``base_agent.__init__``) runs. Psyche's own retained actions have no
+# boot-time state to establish, so an empty passthrough hook would be
+# ceremony rather than behavior.

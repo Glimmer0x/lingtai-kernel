@@ -36,25 +36,17 @@ Molt is yours to perform. The covenant teaches the philosophy (§V); this is the
 
 For `lingtai` and `knowledge`, tending happens *once* per task, at the end — not mid-task. Hold updates in your head while working, then commit them in a single pass before going idle (or before molting). Mid-task edits create noise and waste tokens. The exception is a long-running task where a crash would genuinely destroy work — checkpoint deliberately in that case.
 
-Pad has a different rhythm — see §5 "Tending the Pad" below.
+Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-### Identity mode
+Two of the four stores are their own tools with their own manuals, and this manual does not restate them:
 
-`lingtai` supports two intentional modes. The recommended self-evolve mode
-omits the configured identity (or sets it empty), so boot, refresh, and
-post-molt reconstruction leave `system/lingtai.md` untouched and psyche-authored
-identity changes persist. Forced identity mode uses a nonempty resolved
-`lingtai` value, either inline or from `lingtai_file`; that value is authoritative
-and is materialized into `system/lingtai.md` on each reconstruction. A
-`psyche(action='lingtai_update')` still writes and auto-loads immediately, but a forced
-configured value replaces it at the next reconstruction. Keep `lingtai` distinct
-from the operator `covenant`, the third-party `base_prompt`, and the mechanical
-`identity` section.
+- **`lingtai`** — the two identity modes (self-evolve vs forced), the full-rewrite rule, and the tending rhythm live in `lingtai-manual`.
+- **`pad`** — what belongs in the pad, the tending rhythm, `append` pinning, and archiving live in `pad-manual`.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — `psyche(action='lingtai_update', input={'content': <full identity>}, reasoning='...')`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
-- **pad** — your living index of what you're working on. Edit it to reflect your current goal and the references that point at where the substance lives. See §5 for the full practice.
+- **lingtai** — `lingtai(action='update', input={'content': <full identity>}, reasoning='...')`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become. See `lingtai-manual`.
+- **pad** — your living index of what you're working on. `pad(action='edit', input={'content': <body>, 'files': null}, reasoning='...')` to reflect your current goal and the references that point at where the substance lives. See `pad-manual`.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for any long-term private context worth keeping. The filesystem is the API — use `write`/`edit` directly.
 - **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
@@ -102,30 +94,11 @@ Updating the parent index at each session is part of the practice — append one
 
 ## 5. Tending the Pad
 
-Pad is your **living index** of what you're working on right now. It is not a sketchpad or scratchpad. Treat it as your personal table of contents.
+**Pad is its own tool with its own manual — read `pad-manual` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, `pad(action='append')` file pinning and its 100k-token ceiling, and how to archive a completed pad.
 
-**Purpose: progressive disclosure for your future self.** Pad is shallow and direct; the things it points at are deep and structured. A glance at pad tells the next you the *shape* of what's going on.
+What matters here is only the molt-relevant fact: pad is one of the four durable stores, it survives the molt and is reloaded into the fresh session's system prompt, so it must be accurate **before** you molt. A stale pad is the fastest way to make the next you lose the thread.
 
-**What belongs in pad:**
-
-- **The active goal** — what you're working on, in your own words.
-- **Where you are in it** — the next concrete step, the current blocker.
-- **Timestamps** — always include when each entry was last updated. Without them, you cannot distinguish old information from new.
-- **Pointers to where the substance lives:**
-  - knowledge entry paths (`knowledge/<name>/KNOWLEDGE.md`)
-  - skills SKILL.md paths (`.library/custom/<name>/SKILL.md`)
-  - email message IDs of load-bearing conversations
-  - file paths under your workdir that matter
-  - URLs you're tracking
-- **Collaborators** — who you're working with, who's waiting on what.
-
-**What does NOT belong in pad:** large blobs of inlined text, full file contents, transcripts. If you find yourself pasting a long passage, stop — write it as knowledge and *point at* the path instead. Pad indexes the depths; it does not become them.
-
-**When to update pad:** whenever the index meaningfully changes — a new reference, a goal shift, a step change. Don't churn on every step, but don't hoard updates for the end either. A stale pad is worse than a noisy pad.
-
-**`pad_append` for file pinning:** `psyche(action='pad_append', input={'files': [...]}, reasoning='...')` pins file contents as read-only reference in your system prompt — they are re-read and appended on every load (including after molt). Pin anything you want persistent visibility on: source files, skill docs, configs. Pass `files=[]` to clear. Total appended content must not exceed 100k tokens. Paths relative to working directory.
-
-**Archiving completed pads:** When a goal completes, archive to `archive/pad-<goal-slug>-<YYYY-MM-DD>.md`. Then `psyche(action='pad_edit', input={'content': <next goal>, 'files': null}, reasoning='...')`. Note `pad_edit` is a FULL REWRITE of the pad, not an append.
+Your 灵台 is likewise its own tool — see `lingtai-manual` for the identity modes and the full-rewrite rule.
 
 ## 6. Step 2 — Write the Summary and Molt
 
@@ -145,9 +118,13 @@ psyche(
 Every psyche call uses this one envelope: a single `action`, that action's own
 strict `input` object, and a root `reasoning`. There is no `object` argument
 any more — the former `(object, action)` pair is one flat action name
-(`pad_edit`, `context_molt`, `name_set`, ...). Leave the root `summarize`
-false: psyche results are small (short-result profile), and summarizing a
-`manual` call would drop the exact procedure you called it for.
+(`context_molt`, `name_set`, `name_nickname`, `manual`). Leave the root
+`summarize` false: psyche results are small (short-result profile), and
+summarizing a `manual` call would drop the exact procedure you called it for.
+
+Psyche now owns only the context molt and your name. Your 灵台 and your pad are
+separate tools with the same envelope — `lingtai(action='update'|'load')` and
+`pad(action='edit'|'load'|'append')` — each with its own manual.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel

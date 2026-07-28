@@ -453,7 +453,9 @@ _ALL_PACKAGES = sorted(
     | {path.rsplit(".", 1)[-1] for path in BUILTIN_TOOLS.values()}
     | set(INTRINSICS)
 )
-assert len(_ALL_PACKAGES) == 16, _ALL_PACKAGES
+# 16 before ``pad`` and ``lingtai`` were split out of ``psyche`` into their own
+# glossary-owning intrinsic packages.
+assert len(_ALL_PACKAGES) == 18, _ALL_PACKAGES
 # The five pre-migration file packages were deleted into ``file``; their
 # glossaries must not come back.
 assert "file" in _ALL_PACKAGES

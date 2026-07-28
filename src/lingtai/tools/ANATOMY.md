@@ -19,6 +19,10 @@ related_files:
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/knowledge/CONTRACT.md
+  - src/lingtai/tools/pad/ANATOMY.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/ANATOMY.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/bash/ANATOMY.md

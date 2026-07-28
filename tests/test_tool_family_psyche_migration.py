@@ -2,11 +2,16 @@
 
 One family's local evidence, in the sense `src/lingtai/tools/CONTRACT.md`
 "Contract tests" permits — not a universal conformance suite. Chosen for this
-family's own risks, which differ from `soul`'s: psyche owns two destructive
-full-rewrite operations (`lingtai_update`, `pad_edit`), a set-once identity,
-and the molt — the single most irreversible operation any agent can perform.
-So the emphasis here is on *refusal before mutation*: a mis-shaped envelope
-must be rejected with nothing written, nothing shed, and no molt consumed.
+family's own risks, which differ from `soul`'s: psyche owns a set-once true
+name and the molt — the single most irreversible operation any agent can
+perform. So the emphasis here is on *refusal before mutation*: a mis-shaped
+envelope must be rejected with nothing written, nothing shed, and no molt
+consumed.
+
+The two destructive full-rewrite operations this family used to own
+(`lingtai_update`, `pad_edit`) left with the pad/lingtai split; their evidence
+— and the proof that psyche no longer advertises them — lives in
+`tests/test_pad_lingtai_split.py`.
 
 Psyche is also the third migrated intrinsic, and the first family that
 genuinely *consumes* the kernel-injected `_tc_id` rather than merely dropping
@@ -77,22 +82,22 @@ def _molt_input(journal_path, summary="briefing", **over):
 
 
 def test_one_public_psyche_root_with_the_preserved_operation_inventory():
-    """Every pre-migration (object, action) pair survives as exactly one action.
+    """The retained pairs survive as flat actions, unrenamed and unreordered.
 
     The migration collapsed a two-key matrix into the flat LTP v2 `action`
-    enum. It added nothing, dropped nothing, renamed no capability, and merged
-    no two operations into one.
+    enum, adding nothing, dropping nothing, renaming no capability, and merging
+    no two operations. The later pad/lingtai split *removed* five actions to
+    their own roots without touching the shape or spelling of the rest; that
+    removal is asserted in ``tests/test_pad_lingtai_split.py``.
     """
     schema = get_schema("en")
     assert schema["properties"]["action"]["enum"] == [
-        "lingtai_update", "lingtai_load",     # lingtai: update | load
-        "pad_edit", "pad_load", "pad_append",  # pad: edit | load | append
         "context_molt",                        # context: molt
         "name_set", "name_nickname",           # name: set | nickname
         "manual",                              # root manual (family-owned)
     ]
-    # Eight migrated operations + the one reserved family-owned manual.
-    assert len(ACTION_ORDER) == 9
+    # Three retained operations + the one reserved family-owned manual.
+    assert len(ACTION_ORDER) == 4
 
 
 def test_psyche_is_registered_exactly_once_as_an_intrinsic():
@@ -102,7 +107,10 @@ def test_psyche_is_registered_exactly_once_as_an_intrinsic():
     # Not also a capability, and no second model-facing root or alias.
     assert "psyche" not in BUILTIN_TOOLS
     assert "anima" not in BUILTIN_TOOLS
-    assert "pad" not in INTRINSICS
+    # ``pad`` IS an intrinsic now, but a separate one — never a second psyche
+    # root and never a psyche alias.
+    assert INTRINSICS["pad"]["module"] is not psyche_tool
+    assert INTRINSICS["lingtai"]["module"] is not psyche_tool
 
 
 def test_the_root_is_the_closed_ltp_v2_envelope():
@@ -133,7 +141,8 @@ def test_each_action_advertises_only_its_own_input():
 
     Pre-migration one flat root advertised `content`, `files`, `summary`,
     `keep_tool_calls`, `keep_last`, and `session_journal_path` to all eight
-    operations at once. Each now belongs to the action that consumes it.
+    operations at once. Each now belongs to the action that consumes it — and
+    after the pad/lingtai split, `files` belongs to no psyche action at all.
     """
     schema = get_schema("en")
     props = {
@@ -141,11 +150,6 @@ def test_each_action_advertises_only_its_own_input():
             set(c["then"]["properties"]["input"]["properties"])
         for c in schema["allOf"]
     }
-    assert props["lingtai_update"] == {"content"}
-    assert props["lingtai_load"] == set()
-    assert props["pad_edit"] == {"content", "files"}
-    assert props["pad_load"] == set()
-    assert props["pad_append"] == {"files"}
     assert props["context_molt"] == {
         "summary", "session_journal_path", "keep_tool_calls", "keep_last",
     }
@@ -209,18 +213,19 @@ def test_wrong_branch_input_is_rejected_before_any_handler_io(tmp_path):
     """A cross-action smuggle writes nothing and sheds nothing."""
     agent = _agent(tmp_path)
     try:
-        # `summary` belongs to context_molt, not pad_edit.
+        # `summary` belongs to context_molt, not name_set.
         result = _call(agent, {
-            "action": "pad_edit",
+            "action": "name_set",
             "input": {"content": "x", "summary": "smuggled"},
         })
         assert result["status"] == "failed"
         assert result["error_code"] == "INVALID_ARGUMENT"
         assert "unsupported psyche input field" in result["message"]
-        # No pad written by the refused call.
-        assert not (agent._working_dir / "system" / "pad.md").read_text()
+        # No name set by the refused call.
+        assert not getattr(agent, "_true_name", None)
 
-        # And the reverse: pad fields cannot reach the molt.
+        # And the reverse: a foreign field cannot reach the molt. `files`
+        # belongs to the split-out pad family and to no psyche action at all.
         before = agent._molt_count
         result = _call(agent, {
             "action": "context_molt",
@@ -236,7 +241,7 @@ def test_wrong_branch_input_is_rejected_before_any_handler_io(tmp_path):
 def test_non_object_input_is_rejected(tmp_path):
     agent = _agent(tmp_path)
     try:
-        result = _call(agent, {"action": "pad_load", "input": "notanobject"})
+        result = _call(agent, {"action": "manual", "input": "notanobject"})
         assert result["status"] == "failed"
         assert result["error_code"] == "INVALID_ARGUMENT"
         assert "input must be an object" in result["message"]
@@ -257,7 +262,7 @@ def test_reasoning_and_summarize_never_reach_a_handler(tmp_path):
     try:
         import lingtai.tools.psyche as mod
 
-        original = mod._pad_load
+        original = mod._name_nickname
 
         def spy(agent_arg, args):
             seen.append(dict(args))
@@ -265,16 +270,16 @@ def test_reasoning_and_summarize_never_reach_a_handler(tmp_path):
 
         saved = mod._CHILD_SPECS
         mod._CHILD_SPECS = tuple(
-            (n, s, spy if n == "pad_load" else h) for n, s, h in saved
+            (n, s, spy if n == "name_nickname" else h) for n, s, h in saved
         )
         try:
             result = _call(agent, {
-                "action": "pad_load", "input": {},
+                "action": "name_nickname", "input": {"content": "nick"},
                 "reasoning": "check", "summarize": True, "_tc_id": "toolu_x",
             })
             assert result["status"] == "ok"
             # The spy really ran — otherwise the assertions below are vacuous.
-            assert len(seen) == 1, "pad_load handler was not the dispatched child"
+            assert len(seen) == 1, "name_nickname handler was not the dispatched child"
             for reserved in ("reasoning", "_reasoning", "summarize", "_tc_id"):
                 assert reserved not in seen[0]
         finally:
@@ -294,7 +299,8 @@ def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
     try:
         # It does not trip the unknown-root-field check on an unrelated action.
         result = _call(agent, {
-            "action": "pad_load", "input": {}, "_tc_id": "toolu_abc",
+            "action": "name_nickname", "input": {"content": "nick"},
+            "_tc_id": "toolu_abc",
         })
         assert result["status"] == "ok"
 
@@ -318,82 +324,8 @@ def test_tc_id_is_isolated_to_the_molt_handler(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_pad_edit_is_a_full_rewrite_that_still_refuses_a_bare_call(tmp_path):
-    """Empty content clears deliberately; neither-content-nor-files is refused.
-
-    This is the pre-migration safety kept verbatim across the nullable
-    representation: `{"content": null, "files": null}` is the strict-schema
-    spelling of "no argument given" and must stay a refusal, not a silent wipe.
-    """
-    agent = _agent(tmp_path)
-    try:
-        assert _call(agent, {
-            "action": "pad_edit", "input": {"content": "notes", "files": None},
-        })["status"] == "ok"
-        pad = agent._working_dir / "system" / "pad.md"
-        assert pad.read_text() == "notes"
-
-        # Bare call refused — the existing pad survives.
-        result = _call(agent, {
-            "action": "pad_edit", "input": {"content": None, "files": None},
-        })
-        assert "error" in result
-        assert pad.read_text() == "notes"
-
-        # Explicit empty string clears (intended destruction).
-        assert _call(agent, {
-            "action": "pad_edit", "input": {"content": "", "files": None},
-        })["status"] == "ok"
-        assert pad.read_text() == ""
-    finally:
-        agent.stop(timeout=1.0)
 
 
-def test_lingtai_update_is_a_full_rewrite(tmp_path):
-    agent = _agent(tmp_path)
-    try:
-        _call(agent, {"action": "lingtai_update", "input": {"content": "first"}})
-        _call(agent, {"action": "lingtai_update", "input": {"content": "second"}})
-        # Replaced entirely, not appended.
-        assert (agent._working_dir / "system" / "lingtai.md").read_text() == "second"
-    finally:
-        agent.stop(timeout=1.0)
-
-
-def test_pad_append_pinning_and_read_only_reload(tmp_path):
-    """null reads the list; [] clears it; a set list is pinned and reloaded."""
-    agent = _agent(tmp_path)
-    agent.start()
-    try:
-        (agent._working_dir / "ref.txt").write_text("pinned reference")
-
-        # null == query, mutating nothing.
-        result = _call(agent, {"action": "pad_append", "input": {"files": None}})
-        assert result == {"status": "ok", "files": [], "count": 0}
-
-        result = _call(agent, {"action": "pad_append", "input": {"files": ["ref.txt"]}})
-        assert result["status"] == "ok"
-        assert result["action"] == "set"
-        assert "pinned reference" in agent._prompt_manager.read_section("pad")
-
-        result = _call(agent, {"action": "pad_append", "input": {"files": []}})
-        assert result["action"] == "cleared"
-    finally:
-        agent.stop()
-
-
-def test_pad_append_rejects_missing_and_binary_files(tmp_path):
-    agent = _agent(tmp_path)
-    try:
-        result = _call(agent, {"action": "pad_append", "input": {"files": ["nope.txt"]}})
-        assert "Files not found" in result["error"]
-
-        binary = agent._working_dir / "blob.bin"
-        binary.write_bytes(b"\x00\x01\x02")
-        result = _call(agent, {"action": "pad_append", "input": {"files": ["blob.bin"]}})
-        assert "Only text files" in result["error"]
-    finally:
-        agent.stop(timeout=1.0)
 
 
 def test_name_set_is_once_while_nickname_stays_mutable(tmp_path):
@@ -415,16 +347,26 @@ def test_name_set_is_once_while_nickname_stays_mutable(tmp_path):
         agent.stop(timeout=1.0)
 
 
-@pytest.mark.parametrize("action", ["lingtai_load", "pad_load", "manual"])
-def test_read_only_actions_mutate_no_durable_state(tmp_path, action):
+def test_read_only_actions_mutate_no_durable_state(tmp_path):
+    """`manual` is psyche's only remaining pure read.
+
+    ``lingtai_load``/``pad_load`` left with their families; the equivalent
+    assertion for them lives in ``tests/test_pad_lingtai_split.py``. The pad
+    and identity files are still checked here, because a psyche `manual` call
+    must not disturb another family's durable state either.
+    """
     agent = _agent(tmp_path)
     agent.start()
     try:
-        _call(agent, {"action": "pad_edit", "input": {"content": "keep me", "files": None}})
-        _call(agent, {"action": "lingtai_update", "input": {"content": "identity"}})
+        agent._intrinsics["pad"](
+            {"action": "edit", "input": {"content": "keep me", "files": None}}
+        )
+        agent._intrinsics["lingtai"](
+            {"action": "update", "input": {"content": "identity"}}
+        )
         before_molt = agent._molt_count
 
-        _call(agent, {"action": action, "input": {}})
+        _call(agent, {"action": "manual", "input": {}})
 
         assert (agent._working_dir / "system" / "pad.md").read_text() == "keep me"
         assert (agent._working_dir / "system" / "lingtai.md").read_text() == "identity"

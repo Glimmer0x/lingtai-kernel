@@ -17,6 +17,16 @@ def _call(agent, args: dict) -> dict:
     return agent._intrinsics["psyche"](args)
 
 
+def _call_pad(agent, args: dict) -> dict:
+    """Dispatch a pad tool call — its own root since the pad/lingtai split."""
+    return agent._intrinsics["pad"](args)
+
+
+def _call_lingtai(agent, args: dict) -> dict:
+    """Dispatch a lingtai tool call — its own root since the pad/lingtai split."""
+    return agent._intrinsics["lingtai"](args)
+
+
 _VALID_JOURNAL = """\
 ---
 name: 2026-06-19-molt-1-test
@@ -90,7 +100,7 @@ def test_lingtai_update_writes_lingtai_md(tmp_path):
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
         covenant="You are helpful",
     )
-    result = _call(agent, {"action": "lingtai_update", "input": {"content": "I am a PDF specialist"}})
+    result = _call_lingtai(agent, {"action": "update", "input": {"content": "I am a PDF specialist"}})
     assert result["status"] == "ok"
     character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == "I am a PDF specialist"
@@ -101,8 +111,8 @@ def test_lingtai_update_empty_clears(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    _call(agent, {"action": "lingtai_update", "input": {"content": "something"}})
-    _call(agent, {"action": "lingtai_update", "input": {"content": ""}})
+    _call_lingtai(agent, {"action": "update", "input": {"content": "something"}})
+    _call_lingtai(agent, {"action": "update", "input": {"content": ""}})
     character = (agent.working_dir / "system" / "lingtai.md").read_text()
     assert character == ""
     agent.stop(timeout=1.0)
@@ -122,8 +132,8 @@ def test_lingtai_load_writes_character_section(tmp_path):
     )
     agent.start()
     try:
-        _call(agent, {"action": "lingtai_update", "input": {"content": "I specialize in PDFs"}})
-        _call(agent, {"action": "lingtai_load", "input": {}})
+        _call_lingtai(agent, {"action": "update", "input": {"content": "I specialize in PDFs"}})
+        _call_lingtai(agent, {"action": "load", "input": {}})
 
         # character section carries lingtai.md alone
         character = agent._prompt_manager.read_section("character")
@@ -147,7 +157,7 @@ def test_pad_edit_content_only(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {"action": "pad_edit", "input": {"content": "my notes", "files": None}})
+    result = _call_pad(agent, {"action": "edit", "input": {"content": "my notes", "files": None}})
     assert result["status"] == "ok"
     md = (agent.working_dir / "system" / "pad.md").read_text()
     assert "my notes" in md
@@ -161,8 +171,8 @@ def test_pad_edit_with_files(tmp_path):
     (agent.working_dir / "export1.txt").write_text("knowledge from export 1")
     (agent.working_dir / "export2.txt").write_text("knowledge from export 2")
 
-    result = _call(agent, {
-        "action": "pad_edit",
+    result = _call_pad(agent, {
+        "action": "edit",
         "input": {
             "content": "My working notes.",
             "files": ["export1.txt", "export2.txt"],
@@ -184,8 +194,8 @@ def test_pad_edit_files_only(tmp_path):
     )
     (agent.working_dir / "data.txt").write_text("file data")
 
-    result = _call(agent, {
-        "action": "pad_edit",
+    result = _call_pad(agent, {
+        "action": "edit",
         "input": {"content": None, "files": ["data.txt"]},
     })
     assert result["status"] == "ok"
@@ -199,8 +209,8 @@ def test_pad_edit_missing_file_errors(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {
-        "action": "pad_edit",
+    result = _call_pad(agent, {
+        "action": "edit",
         "input": {"content": "notes", "files": ["nonexistent.txt"]},
     })
     assert "error" in result
@@ -212,7 +222,7 @@ def test_pad_edit_empty_errors(tmp_path):
     agent = Agent(
         service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
     )
-    result = _call(agent, {"action": "pad_edit", "input": {"content": None, "files": None}})
+    result = _call_pad(agent, {"action": "edit", "input": {"content": None, "files": None}})
     assert "error" in result
     agent.stop(timeout=1.0)
 
@@ -232,7 +242,7 @@ def test_pad_load(tmp_path):
         system_dir.mkdir(exist_ok=True)
         (system_dir / "pad.md").write_text("loaded from disk")
 
-        result = _call(agent, {"action": "pad_load", "input": {}})
+        result = _call_pad(agent, {"action": "load", "input": {}})
         assert result["status"] == "ok"
         section = agent._prompt_manager.read_section("pad")
         assert "loaded from disk" in section
@@ -352,17 +362,18 @@ def test_context_forget_still_works(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_psyche_schema_preserves_the_object_sub_action_surface():
-    """Every pre-migration (object, action) pair survives as one flat action.
+def test_psyche_schema_preserves_the_retained_sub_action_surface():
+    """The retained (object, action) pairs survive as flat actions, unrenamed.
 
-    The migration collapsed the two-key matrix into the LTP v2 single-`action`
-    envelope; it did not add, drop, rename, or merge an operation.
+    The LTP v2 migration collapsed the two-key matrix into the single-`action`
+    envelope without adding, dropping, renaming, or merging an operation. The
+    pad/lingtai split then *removed* five actions to their own roots — see
+    ``tests/test_pad_lingtai_split.py`` — leaving the rest untouched in both
+    spelling and order.
     """
     from lingtai.tools.psyche import get_schema
     SCHEMA = get_schema("en")
     assert SCHEMA["properties"]["action"]["enum"] == [
-        "lingtai_update", "lingtai_load",
-        "pad_edit", "pad_load", "pad_append",
         "context_molt",
         "name_set", "name_nickname",
         "manual",
@@ -384,8 +395,8 @@ def test_psyche_schema_is_the_closed_ltp_v2_envelope():
     assert "object" not in SCHEMA["properties"]
 
 
-def test_psyche_schema_has_files_field_only_on_the_pad_actions():
-    """`files` belongs to pad_edit/pad_append, not to every action."""
+def test_psyche_schema_has_no_files_field_after_the_pad_split():
+    """`files` left with the pad family; no psyche action advertises it."""
     from lingtai.tools.psyche import get_schema
     SCHEMA = get_schema("en")
     with_files = {
@@ -393,7 +404,7 @@ def test_psyche_schema_has_files_field_only_on_the_pad_actions():
         for cond in SCHEMA["allOf"]
         if "files" in cond["then"]["properties"]["input"]["properties"]
     }
-    assert with_files == {"pad_edit", "pad_append"}
+    assert with_files == set()
 
 
 def test_psyche_schema_has_session_journal_path_only_on_context_molt():
@@ -408,12 +419,19 @@ def test_psyche_schema_has_session_journal_path_only_on_context_molt():
     for cond in SCHEMA["allOf"]:
         action = cond["if"]["properties"]["action"]["const"]
         owners[action] = cond["then"]["properties"]["input"]["properties"]
-    assert "session_journal_path" not in owners["pad_edit"]
+    assert "session_journal_path" not in owners["name_set"]
     prop = owners["context_molt"]["session_journal_path"]
     assert prop["type"] == "string"
     assert prop["description"]
     assert "session_journal_path" in owners["context_molt"]
-    molt_required = SCHEMA["allOf"][5]["then"]["properties"]["input"]["required"]
+    # Look the branch up by its `action` const rather than by position — the
+    # pad/lingtai split shifted every index, and position was never the fact
+    # under test.
+    molt_branch = next(
+        cond for cond in SCHEMA["allOf"]
+        if cond["if"]["properties"]["action"]["const"] == "context_molt"
+    )
+    molt_required = molt_branch["then"]["properties"]["input"]["required"]
     assert "summary" in molt_required and "session_journal_path" in molt_required
 
 

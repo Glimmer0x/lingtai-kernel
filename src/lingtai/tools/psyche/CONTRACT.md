@@ -1,7 +1,7 @@
 ---
 name: psyche-contract
 tool: psyche
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/psyche/__init__.py
   - src/lingtai/tools/psyche/_molt.py
@@ -9,9 +9,12 @@ related_files:
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - tests/test_tool_family_psyche_migration.py
+  - tests/test_pad_lingtai_split.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -22,12 +25,35 @@ maintenance: |
 
 # Psyche capability contract
 
-`psyche` is the bare essentials of agent self: the working `pad`, the
-configured-or-self-authored `lingtai` identity, the true `name`/nickname, and `context` molt
-(shed history, keep a briefing). It is dispatched on a flat `action` enum under
-the LTP v2 envelope; the pre-migration `(object, action)` matrix is described
-below only to make the preserved inventory auditable. The implementation lives
-in `src/lingtai/tools/psyche/`; the code is the source of truth.
+`psyche` is the agent's true `name`/nickname and its `context` molt (shed
+history, keep a briefing). It is dispatched on a flat `action` enum under the
+LTP v2 envelope; the pre-migration `(object, action)` matrix is described below
+only to make the preserved inventory auditable. The implementation lives in
+`src/lingtai/tools/psyche/`; the code is the source of truth.
+
+## Split boundary
+
+The working `pad` and the configured-or-self-authored `lingtai` identity were
+**split out of this family** into their own model-visible roots
+(`src/lingtai/tools/pad/CONTRACT.md`, `src/lingtai/tools/lingtai/CONTRACT.md`):
+they are concepts parallel to `knowledge` and `skills`, not leaves of the
+context lifecycle. That split removed five actions from this family —
+`pad_edit`, `pad_load`, `pad_append`, `lingtai_update`, `lingtai_load` — with
+**no compatibility alias**: they are unknown psyche actions and fail loudly with
+this family's stable unknown-action error.
+
+The split is public-surface-only for this family. Every retained action name,
+input, success payload, error string, log event, persistence path, and molt
+semantic is exactly what it was before it, and the retained actions were not
+renamed or reordered. Psyche no longer defines `boot()`: its only boot-time work
+was loading the pad and identity sections and registering their post-molt
+reload, and both moved with their families.
+
+**Psyche's ultimate fate is deliberately undecided by this contract.** Whether
+it should later shrink further, be renamed (`molt`/`name`/`nickname` were
+considered and explicitly deferred), survive as-is, or disappear is a separate
+human design decision to be made after this split's evidence exists. Do not read
+the reduced surface here as a commitment either way.
 
 `psyche` is migrated to the LingTai Tool Protocol v2 shape defined in
 `src/lingtai/tools/CONTRACT.md` and builds its schema composition and envelope
@@ -42,18 +68,23 @@ validation is new (see §Envelope enforcement), and the former
 migration; operation-level parity is what is preserved. The former two-key
 `(object, action)` matrix is now one flat `action` enum — each pre-migration
 pair became exactly one action, the same collapse `notification` made for its
-three atomic dismiss verbs. Nothing was added, dropped, renamed, or merged.
+three atomic dismiss verbs. That migration added, renamed, and merged nothing;
+the only subsequent inventory change is the pad/lingtai split described above,
+which *removed* five actions to their own roots without touching the shape or
+semantics of the ones that remain.
 
 ## Routing Card
 
 **Use this when:**
-- You are editing the pad (`system/pad.md`), the configured-or-self-authored identity
-  (`system/lingtai.md` → `character` prompt section), or the true-name/nickname
-  handlers.
+- You are editing the true-name/nickname handlers.
 - You are reviewing the context molt machinery — snapshotting, history archive,
   keep-lists, and the post-molt reminder.
 
 **Do not use this for:**
+- The pad (`system/pad.md`) or the configured-or-self-authored identity
+  (`system/lingtai.md` → `character` prompt section): those are the separate
+  `pad` and `lingtai` families
+  (`src/lingtai/tools/pad/CONTRACT.md`, `src/lingtai/tools/lingtai/CONTRACT.md`).
 - Provider-context rebuild after summarizing: that is `system(action=
   'summarize', rebuild=true)` (`src/lingtai/tools/system/CONTRACT.md`). Molt sheds
   *history*; summarize rebuilds the *active context* from pending summaries.
@@ -70,14 +101,13 @@ paths -> §State & storage.
 - The root property set is exactly `action`, `input`, `reasoning`, and
   `summarize`, with `additionalProperties: false`. `action`, `input`, and
   `reasoning` are required; `summarize` is optional Host presentation and is
-  never action input. The action enum is `lingtai_update`, `lingtai_load`,
-  `pad_edit`, `pad_load`, `pad_append`, `context_molt`, `name_set`,
+  never action input. The action enum is `context_molt`, `name_set`,
   `name_nickname`, `manual` — one canonical child each, where the child's name
   is simultaneously the public action value and the dispatch key.
 - Each action owns one strict, closed `input` object. Declared optional fields
   use the provider-compatible nullable representation; null means "absent" at
-  dispatch, which is what preserves `pad_edit`'s bare-call refusal and
-  `pad_append`'s null-means-read query.
+  dispatch, which is what preserves `context_molt`'s nullable
+  `keep_tool_calls`/`keep_last` semantics.
 - `summarize` guidance profile: **short-result** for every action — psyche's
   payloads are small, so leave it false. Call `manual` with `summarize=false`
   so the exact molt procedure is not summarized away.
@@ -85,21 +115,11 @@ paths -> §State & storage.
   consumes (the agent's retrospective), explicitly permitted by
   `src/lingtai/tools/CONTRACT.md` "Envelope". It is not the root
   result-summarization control, which is the separate `summarize` boolean.
-- Non-goals: notification verbs, summarize/rebuild, mailbox actions.
+- Non-goals: notification verbs, summarize/rebuild, mailbox actions, and — after
+  the split — pad and identity editing.
 - Former name `anima` is not a compatibility alias, and neither is the
-  pre-migration flat `(object, action)` call shape: it is simply an unknown
-  action and fails loudly.
-
-## Identity modes
-
-`lingtai` has two supported modes. In forced identity mode, a nonempty resolved
-`lingtai` value—inline or loaded from `lingtai_file`—is authoritative and is
-materialized into `system/lingtai.md` during boot, refresh, and post-molt prompt
-reconstruction. `psyche(action='lingtai_update')` still writes and auto-loads
-immediately in the current cycle, but the configured forced value replaces it at
-the next reconstruction. In self-evolve identity mode, the configured identity
-is absent or empty; reconstruction leaves `system/lingtai.md` untouched, so
-psyche-authored changes persist across refresh and molt.
+  pre-migration flat `(object, action)` call shape nor any of the five removed
+  `pad_*`/`lingtai_*` leaves: each is simply an unknown action and fails loudly.
 
 ## Tool surface
 
@@ -114,11 +134,6 @@ inventory is auditable.
 
 | Action (was) | Required `input` | Optional `input` | Success output | Error shapes |
 |---|---|---|---|---|
-| `lingtai_update` (`lingtai`→`update`) | `content` (empty clears; FULL REWRITE) | — | `{status: "ok", path}` | — |
-| `lingtai_load` (`lingtai`→`load`) | — (strict empty) | — | `{status: "ok", size_bytes, content_preview}` | — |
-| `pad_edit` (`pad`→`edit`) | `content` (empty clears; FULL REWRITE) **or** `files` (both nullable) | the other of the two | `{status: "ok", path, size_bytes}` | `{error: "Provide content ... files, or both."}`; `{error: "Files not found: ..."}` |
-| `pad_load` (`pad`→`load`) | — (strict empty) | — | `{status: "ok", path, size_bytes, content_preview, append_*}` | — |
-| `pad_append` (`pad`→`append`) | `files` (nullable: `[]` clears; null returns current) | — | `{status: "ok", action, files, count}` | `{error: "Files not found: ..."}`; `{error: "Only text files ..."}`; `{error: "Append files total ... token limit ..."}` |
 | `context_molt` (`context`→`molt`) | `summary`, `session_journal_path` | `keep_tool_calls`, `keep_last` (nullable) | `{status: "ok", note, molt_count, tokens_before/after/shed, kept_*, archive_path, summary_path, session_journal_path}` | `{error: "summary is required ..."}`; journal-validation `{error}`; `{error: "No active chat session to molt."}`; `{error, unmatched_ids}` / `{error, missing_call_ids}` for bad keep-lists; `{error: "keep_last must be ..."}` |
 | `name_set` (`name`→`set`) | `content` | — | `{status: "ok", name}` | `{error: "Name cannot be empty..."}`; `{error}` (name already set / immutable) |
 | `name_nickname` (`name`→`nickname`) | `content` (empty clears) | — | `{status: "ok", nickname}` | — |
@@ -137,12 +152,14 @@ to distinguish.
   mismatched pairing before invocation; `input.oneOf` discloses every action's
   exact shape in one place.
 - Dispatch remains the always-authoritative, fail-closed boundary. An `input`
-  key belonging to another action's branch (e.g. `action='pad_edit'` with
+  key belonging to another action's branch (e.g. `action='name_set'` with
   `input={'summary': ...}`) is rejected with
   `{status: "failed", error_code: "INVALID_ARGUMENT", message: "unsupported psyche input field"}`
   **before** any handler I/O — no file write, no context shed, no log event.
-  This matters more here than for most families: two psyche actions are
-  destructive full rewrites and one is irreversible.
+  This matters more here than for most families: `context_molt` is
+  irreversible and `name_set` is set-once. (The two destructive full rewrites
+  that used to sit behind this root, `pad_edit` and `lingtai_update`, moved to
+  the `pad` and `lingtai` families, which state the same rule for themselves.)
 - A non-boolean `summarize`, an unknown root field, a non-object `input`, and
   an unhashable `action` (`[]`/`{}` from invalid JSON) each fail with a stable
   typed envelope error rather than raising out of the dispatcher.
@@ -226,9 +243,6 @@ pair, carrying `_initiator='system'` as root provenance.
 All paths are relative to the agent working directory (`agent._working_dir`).
 
 ```text
-system/pad.md                          — the working pad (pad edit/load)
-system/pad_append.json                 — pinned read-only reference file list
-system/lingtai.md                      — self-authored identity → `character` section
 system/summaries/molt_<count>_<ts>.md  — molt retrospective (agent- or system-authored)
 history/snapshots/snapshot_<count>_<ts>.json — frozen pre-molt ChatInterface substrate
 history/chat_history.jsonl             — live chat history (moved on molt)
@@ -236,8 +250,10 @@ history/chat_history_archive.jsonl     — appended pre-molt history on each mol
 .notification/post-molt.json           — post-molt "resume work" reminder (published on molt)
 ```
 
-- `pad edit`/`lingtai update` write their file, then reload the corresponding
-  protected prompt section (`pad` / `character`) and flush the system prompt.
+`system/pad.md`, `system/pad_append.json`, and `system/lingtai.md` are no longer
+psyche state: they belong to the `pad` and `lingtai` families, whose own
+post-molt hooks reload their prompt sections after a shed.
+
 - `context molt` writes a snapshot, wipes the session, increments `molt_count`
   (persisted to `init.json` manifest), archives + unlinks `chat_history.jsonl`,
   replays `keep_last`/`keep_tool_calls` into the fresh session, writes a summary,
@@ -249,8 +265,6 @@ history/chat_history_archive.jsonl     — appended pre-molt history on each mol
 - All file access is via `pathlib.Path` (`read_text`/`write_text`,
   `mkdir`, `unlink`) with UTF-8 for text sections; snapshot/summary writes go to
   a `.tmp` sibling then `Path.replace` for atomicity. DOCUMENT.
-- Append-file paths may be absolute or workdir-relative (`_resolve_path`);
-  binary files are rejected (`_is_text_file` null-byte + UTF-8 check). DOCUMENT.
 - No subprocess/PTY; molt operates on in-memory `ChatInterface` objects plus the
   history-file archive. DOCUMENT — no platform-specific behavior; all file access
   via pathlib.
@@ -259,8 +273,8 @@ history/chat_history_archive.jsonl     — appended pre-molt history on each mol
 
 | Claim | Source | Test |
 |---|---|---|
-| `psyche` is a wired intrinsic; `anima` is not an alias | `src/lingtai/tools/psyche/__init__.py` | `tests/test_psyche.py::test_psyche_is_intrinsic`, `tests/test_psyche.py::test_anima_alias_removed`, `tests/test_pad.py::test_psyche_in_all_intrinsics` |
-| Every pre-migration `(object, action)` pair survives as exactly one flat action; nothing added, dropped, renamed, or merged | `src/lingtai/tools/psyche/__init__.py:_CHILD_SPECS`, `get_schema` | `tests/test_tool_family_psyche_migration.py::test_one_public_psyche_root_with_the_preserved_operation_inventory`, `tests/test_psyche.py::test_psyche_schema_preserves_the_object_sub_action_surface` |
+| `psyche` is a wired intrinsic; `anima` is not an alias | `src/lingtai/tools/psyche/__init__.py` | `tests/test_psyche.py::test_psyche_is_intrinsic`, `tests/test_psyche.py::test_anima_alias_removed`, `tests/test_pad.py::test_intrinsics_include_psyche_pad_and_lingtai` |
+| The retained actions keep their exact pre-split names, order, and semantics; the five `pad_*`/`lingtai_*` leaves are removed with no alias | `src/lingtai/tools/psyche/__init__.py:_CHILD_SPECS`, `get_schema` | `tests/test_tool_family_psyche_migration.py::test_one_public_psyche_root_with_the_preserved_operation_inventory`, `tests/test_pad_lingtai_split.py::test_psyche_no_longer_exposes_pad_or_lingtai_leaves` |
 | The root is the closed LTP v2 envelope with required `reasoning`, and `object` is gone with no alias | `src/lingtai/tools/psyche/__init__.py:get_schema` | `tests/test_tool_family_psyche_migration.py::test_the_root_is_the_closed_ltp_v2_envelope`, `tests/test_psyche.py::test_psyche_schema_is_the_closed_ltp_v2_envelope` |
 | Each action advertises only its own `input`; schema and dispatch come from one registry | `src/lingtai/tools/psyche/__init__.py:_CHILD_SPECS`/`_build_children` | `tests/test_tool_family_psyche_migration.py::test_each_action_advertises_only_its_own_input`, `::test_schema_and_dispatch_come_from_one_registry` |
 | Cross-action `input` is rejected before any handler I/O | `src/lingtai/tools/psyche/__init__.py:handle` via `tool_family.ToolFamily.handle` | `tests/test_tool_family_psyche_migration.py::test_wrong_branch_input_is_rejected_before_any_handler_io` |
@@ -271,27 +285,24 @@ history/chat_history_archive.jsonl     — appended pre-molt history on each mol
 | The kernel's molt-batch deferral reads the migrated `action` spelling | `src/lingtai/kernel/base_agent/turn.py:_is_context_molt_call` | `tests/test_tool_family_psyche_migration.py::test_kernel_detects_the_migrated_molt_call_shape` |
 | `psyche` is on the kernel `summarize` allowlist, and its molt `summary` is domain input rather than that control | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_psyche_migration.py::test_psyche_is_on_the_ltp_v2_summarize_allowlist` |
 | The reserved `manual` child returns the canonical result unwrapped; psyche's flat public shape is restored post-dispatch | `src/lingtai/tools/psyche/__init__.py:_adapt_manual_result`, `tool_family/manual.py:build_manual_child` | `tests/test_tool_family_psyche_migration.py::test_manual_child_returns_the_canonical_result_unwrapped`, `::test_manual_public_result_is_flattened_post_dispatch`, `tests/test_intrinsic_manual_actions.py` |
-| `lingtai update` writes `system/lingtai.md` and loads the `character` section | `src/lingtai/tools/psyche/_lingtai.py:_lingtai_update`/`_lingtai_load` | `tests/test_psyche.py::test_lingtai_update_writes_lingtai_md`, `tests/test_psyche.py::test_lingtai_load_writes_character_section` |
-| `pad edit` writes `system/pad.md`; empty content clears; bare edit is rejected | `src/lingtai/tools/psyche/_pad.py:_pad_edit` | `tests/test_psyche.py::test_pad_edit_content_only`, `tests/test_psyche.py::test_pad_edit_empty_errors` |
-| `pad edit` imports files and errors on missing paths | `src/lingtai/tools/psyche/_pad.py:_pad_edit` | `tests/test_psyche.py::test_pad_edit_with_files`, `tests/test_psyche.py::test_pad_edit_missing_file_errors` |
+| Identity and pad behavior moved with their families and is claimed there, not here | `src/lingtai/tools/lingtai/CONTRACT.md`, `src/lingtai/tools/pad/CONTRACT.md` | `tests/test_pad_lingtai_split.py`, `tests/test_pad.py`, `tests/test_eigen.py` |
 | `context molt` returns the faint-memory result and shed counts | `src/lingtai/tools/psyche/_molt.py:_context_molt` | `tests/test_psyche.py::test_molt_returns_faint_memory` |
 | Molt writes a summary file under `system/summaries/` | `src/lingtai/tools/psyche/_snapshots.py:_write_molt_summary` | `tests/test_psyche.py::test_molt_writes_summary_file_for_agent_path` |
 | System-forced molt (`context_forget`) still works and writes its own summary | `src/lingtai/tools/psyche/_molt.py:context_forget` | `tests/test_psyche.py::test_context_forget_still_works`, `tests/test_psyche.py::test_context_forget_writes_summary_file_for_system_path` |
 | A failed summary write does not block the molt | `src/lingtai/tools/psyche/_molt.py`, `_snapshots.py` | `tests/test_psyche.py::test_summary_write_failure_does_not_block_molt` |
 | An unknown action (including the pre-migration flat shape) is rejected before any handler runs | `src/lingtai/tools/psyche/__init__.py:handle` | `tests/test_psyche.py::test_unknown_action_is_rejected`, `tests/test_psyche.py::test_pre_migration_object_action_shape_is_rejected`, `tests/test_tool_family_psyche_migration.py::test_unhashable_or_unknown_action_renders_the_stable_error` |
-| Destructive full rewrites keep their intended/non-empty safety | `src/lingtai/tools/psyche/_pad.py:_pad_edit`, `_lingtai.py:_lingtai_update` | `tests/test_tool_family_psyche_migration.py::test_pad_edit_is_a_full_rewrite_that_still_refuses_a_bare_call`, `::test_lingtai_update_is_a_full_rewrite` |
 | True name is set-once while nickname stays mutable | `src/lingtai/tools/psyche/_molt.py:_name_set`/`_name_nickname` | `tests/test_tool_family_psyche_migration.py::test_name_set_is_once_while_nickname_stays_mutable` |
-| `manual` and every load action mutate no durable state | `src/lingtai/tools/psyche/__init__.py` | `tests/test_tool_family_psyche_migration.py::test_read_only_actions_mutate_no_durable_state` |
-| The stop path does not overwrite `system/pad.md` | `src/lingtai/tools/psyche/_pad.py` | `tests/test_psyche.py::test_stop_does_not_overwrite_pad_md` |
+| `manual` mutates no durable state | `src/lingtai/tools/psyche/__init__.py` | `tests/test_tool_family_psyche_migration.py::test_read_only_actions_mutate_no_durable_state` |
+| The stop path does not overwrite `system/pad.md` (now a `pad`-family fact) | `src/lingtai/tools/pad/_pad.py` | `tests/test_psyche.py::test_stop_does_not_overwrite_pad_md` |
 
 ## Verification matrix
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | The action guard rejects unknowns pre-dispatch | `tests/test_psyche.py::test_unknown_action_is_rejected` | Call `psyche(action='foo', input={})` | Silent no-ops or wrong handler |
-| A cross-action `input` never reaches a handler | `tests/test_tool_family_psyche_migration.py::test_wrong_branch_input_is_rejected_before_any_handler_io` | Send `action='pad_edit'` with `input={'summary': 'x'}` | A mis-paired call overwriting the pad or shedding context |
+| A cross-action `input` never reaches a handler | `tests/test_tool_family_psyche_migration.py::test_wrong_branch_input_is_rejected_before_any_handler_io` | Send `action='name_set'` with `input={'summary': 'x'}` | A mis-paired call shedding context or setting a name |
 | Synthesized system molts stay envelope-shaped | `tests/test_tool_family_psyche_migration.py::test_system_forced_molt_synthesizes_the_current_envelope` | Force a molt, read the appended pair's args | History teaching a shape dispatch rejects |
-| Pad/lingtai edits reload their prompt sections | `tests/test_psyche.py::test_lingtai_load_writes_character_section`, `tests/test_pad.py::test_pad_edit_then_load` | Edit pad, inspect prompt sections | Stale identity/notes in prompt |
+| Pad/lingtai edits reload their prompt sections (now owned by those families) | `tests/test_pad.py::test_pad_edit_then_load`, `tests/test_pad_lingtai_split.py` | Edit pad, inspect prompt sections | Stale identity/notes in prompt |
 | Molt archives history and increments count | `tests/test_psyche.py::test_molt_returns_faint_memory` | Molt, inspect `history/` + manifest | Lost history / miscounted molts |
 | Molt journal gate refuses without a valid session-journal path | `src/lingtai/tools/psyche/_molt.py:_context_molt` (journal validation) | Molt without `session_journal_path` | Context shed with no durable trail |
 | Snapshot/summary write failure is non-fatal | `tests/test_psyche.py::test_summary_write_failure_does_not_block_molt` | Make summaries dir unwritable, molt | A disk hiccup wedges the agent |
@@ -300,7 +311,8 @@ Run before merging psyche changes:
 
 ```bash
 python -m pytest tests/test_psyche.py tests/test_pad.py \
-  tests/test_tool_family_psyche_migration.py tests/test_session_journal_gate.py \
+  tests/test_tool_family_psyche_migration.py tests/test_pad_lingtai_split.py \
+  tests/test_session_journal_gate.py \
   tests/test_eigen.py tests/test_intrinsic_manual_actions.py -q
 ```
 

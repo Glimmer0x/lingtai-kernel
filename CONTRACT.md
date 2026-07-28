@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
