@@ -1,4 +1,10 @@
-"""Private Pad composition and public append-list persistence."""
+"""Private Pad composition over the durable body and pinned reference list.
+
+Everything here is internal. There is no public ``pad`` tool root and no
+``append`` action; the pinned reference list is a durable *source* that this
+module reads and composes, and that the agent edits with ``file.write`` /
+``file.edit`` like any other durable text.
+"""
 from __future__ import annotations
 
 import json
@@ -7,11 +13,10 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# Pad append-file management
+# Pad append-file reading
 # ---------------------------------------------------------------------------
 
 _APPEND_LIST_PATH = "system/pad_append.json"
-_APPEND_TOKEN_LIMIT = 100_000
 
 
 def _append_list_file(agent) -> Path:
@@ -30,13 +35,6 @@ def _load_append_list(agent) -> list[str]:
     except (json.JSONDecodeError, OSError):
         pass
     return []
-
-
-def _save_append_list(agent, files: list[str]) -> None:
-    """Persist the append file list to disk."""
-    path = _append_list_file(agent)
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(files, ensure_ascii=False))
 
 
 def _resolve_path(agent, fpath: str) -> Path:
@@ -58,23 +56,8 @@ def _read_append_content(agent, files: list[str]) -> tuple[str, list[str]]:
     return "\n\n".join(parts), not_found
 
 
-def _is_text_file(path: Path, sample_size: int = 8192) -> bool:
-    """Check if a file is a text file by reading the first chunk."""
-    try:
-        chunk = path.read_bytes()[:sample_size]
-    except OSError:
-        return False
-    if b"\x00" in chunk:
-        return False
-    try:
-        chunk.decode("utf-8")
-        return True
-    except UnicodeDecodeError:
-        return False
-
-
 # ---------------------------------------------------------------------------
-# Pad actions
+# Pad composition
 # ---------------------------------------------------------------------------
 
 
@@ -126,60 +109,3 @@ def _pad_load(agent, args: dict, *, publish: bool = True) -> dict:
     }
     result.update(append_meta)
     return result
-
-
-def _pad_append(agent, args: dict) -> dict:
-    """Set the list of files pinned as read-only pad reference.
-
-    Pass files=[] to clear. Persisted to system/pad_append.json. This action
-    never reloads or mutates the current prompt; the list is composed only by
-    explicit context.rebuild or passive refresh/molt reconstruction. Only text
-    files are accepted.
-    """
-    files = args.get("files")
-    if files is None:
-        # No files param — return current list
-        current = _load_append_list(agent)
-        return {
-            "status": "ok",
-            "files": current,
-            "count": len(current),
-            "prompt_reload": False,
-            "takes_effect": "context.rebuild or passive refresh/molt reconstruction",
-        }
-
-    not_found: list[str] = []
-    not_text: list[str] = []
-    for fpath in files:
-        resolved = _resolve_path(agent, fpath)
-        if not resolved.is_file():
-            not_found.append(fpath)
-        elif not _is_text_file(resolved):
-            not_text.append(fpath)
-    if not_found:
-        return {"error": f"Files not found: {', '.join(not_found)}"}
-    if not_text:
-        return {"error": f"Only text files are accepted. Binary files: {', '.join(not_text)}"}
-
-    if files:
-        from lingtai.kernel.token_counter import count_tokens
-        combined, _ = _read_append_content(agent, files)
-        tokens = count_tokens(combined)
-        if tokens > _APPEND_TOKEN_LIMIT:
-            return {
-                "error": f"Append files total {tokens:,} tokens, "
-                         f"exceeding the {_APPEND_TOKEN_LIMIT:,} token limit. "
-                         f"Reduce the number or size of files.",
-            }
-
-    _save_append_list(agent, files)
-
-    action = "cleared" if not files else "set"
-    return {
-        "status": "ok",
-        "action": action,
-        "files": files,
-        "count": len(files),
-        "prompt_reload": False,
-        "takes_effect": "context.rebuild or passive refresh/molt reconstruction",
-    }

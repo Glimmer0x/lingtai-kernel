@@ -29,6 +29,7 @@ related_files:
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -401,10 +402,17 @@ threads it to the one action that needs it, instead of widening the shared
 envelope.
 
 **Current state (the paragraph above is migration history).** That family no
-longer exists. `pad` now exposes exactly `append | manual`; `lingtai` is a
-`manual`-only signpost. Their former mutation/load actions have no aliases:
-generic durable mutation belongs to `file.write`/`file.edit`, which never
-hot-load prompt state, and `pad.append` likewise only validates/persists. The
+longer exists, and neither do the `pad`/`lingtai`/`knowledge`/`skills` public
+roots that briefly succeeded it. The four durable domains are now taught by one
+read-only root, `psyche` (`pad | lingtai | knowledge | skills | manual`,
+`src/lingtai/tools/psyche/CONTRACT.md`, the equation
+`pad + lingtai + knowledge + skills = psyche`): every action returns that domain's
+manual and mutates nothing. Those four packages remain as private lifecycle
+owners — Pad/LingTai composers and the Skills/Knowledge catalogs plus the
+Knowledge legacy migration — and register no tool. Generic durable mutation
+belongs to `file.write`/`file.edit`, which never hot-load prompt state; the
+retired `pad.append`, `skills.info`, and `knowledge.info` actions have no
+aliases. The
 context lifecycle is `context` (`molt | summarize | rebuild | manual`,
 `src/lingtai/tools/context/CONTRACT.md`): `summarize` records only, while
 `rebuild` is the one active operation that first recomposes every canonical

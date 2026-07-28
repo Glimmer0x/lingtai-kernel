@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - tests/test_tool_family_knowledge_migration_parity.py
 maintenance: |

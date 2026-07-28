@@ -8,9 +8,11 @@ related_files:
 - src/lingtai/tools/lingtai/__init__.py
 - src/lingtai/tools/lingtai/_lingtai.py
 - src/lingtai/tools/lingtai/CONTRACT.md
+- src/lingtai/tools/psyche/CONTRACT.md
+- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  Keep the manual-only public root, generic file ownership, no-hot-load rule, identity modes, and context reconstruction route synchronized with code.
+  Keep the manual-only public route through psyche, generic file ownership, the no-hot-load rule, identity modes, and the context reconstruction route synchronized with code.
 ---
 
 # LingTai Manual
@@ -22,12 +24,12 @@ the protected `character` system-prompt section.
 ## Public call
 
 ```text
-lingtai(action="manual", input={}, reasoning="load identity guidance", summarize=false)
+psyche(action="lingtai", input={}, reasoning="load identity guidance", summarize=false)
 ```
 
-`manual` is the **only** public LingTai action. It is a signpost, like the
-skills/knowledge manuals, and performs no disk or prompt mutation. There is no
-public update/load action and no compatibility alias.
+That is the **only** public LingTai call, and it just returns this manual. It
+performs no disk or prompt mutation. There is no update, load, or reload action
+and no compatibility alias.
 
 ## Change durable identity with file
 

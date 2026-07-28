@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/pad/__init__.py
   - src/lingtai/tools/pad/_pad.py
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
@@ -83,9 +84,9 @@ refresh and active `context.rebuild`.
 
 ## State and evidence
 
-Persistent state is `system/pad.md` (owned for mutation by `file`) and
-`system/pad_append.json` (owned for persistence by `pad.append`). The prompt
-`pad` section and `system/system.md` are derived.
+Persistent state is `system/pad.md` and `system/pad_append.json`, both owned for
+mutation by `file` — there is no Pad-owned writer. The prompt `pad` section and
+`system/system.md` are derived by the private `_pad_load` composer.
 
 Focused evidence:
 

@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/daemon/ANATOMY.md

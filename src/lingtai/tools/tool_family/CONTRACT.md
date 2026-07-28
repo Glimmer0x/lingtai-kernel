@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py

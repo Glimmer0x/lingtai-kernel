@@ -27,9 +27,9 @@ Your name is not a context operation: use `system(action='name_set')` / `system(
 
 ## Full context rebuild
 
-`context(action="rebuild", input={}, reasoning="...")` is the **one active full reconstruction operation**. Every call first re-reads and recomposes all canonical system-prompt sources (configured and durable identity, base prompt, covenant, packaged layers, rules, Pad body and pinned references, brief, comment, tools/runtime guidance), then applies already-pending summaries, then asks the provider to replay the new prompt/history. Bare `{}` is valid and still reconstructs/replays when zero summaries are pending. With `items`, prompt composition still happens first; the new summaries are then recorded/applied before provider replay.
+`context(action="rebuild", input={}, reasoning="...")` is the **one active full reconstruction operation**. Every call first re-reads and recomposes all canonical system-prompt sources (configured and durable identity, base prompt, covenant, packaged layers, rules, Pad body and pinned references, the enabled Skills and Knowledge catalogs, brief, comment, tools/runtime guidance), then applies already-pending summaries, then asks the provider to replay the new prompt/history. Bare `{}` is valid and still reconstructs/replays when zero summaries are pending. With `items`, prompt composition still happens first; the new summaries are then recorded/applied before provider replay.
 
-Generic durable mutations do not hot-load: use `file.write` for full-file create/overwrite and `file.edit` for exact replacement, then call `context.rebuild` when changes must apply now. `pad.append` likewise validates/persists its pinned list without changing the current prompt. Passive refresh and molt invoke the same internal reconstruction contract while retaining their distinct lifecycle effects. Do not loop rebuild.
+Generic durable mutations do not hot-load: use `file.write` for full-file create/overwrite and `file.edit` for exact replacement, then call `context.rebuild` when changes must apply now. That is the only mutation path for all four durable stores — there is no per-store append, info, or reload action. Passive refresh and molt invoke the same internal reconstruction contract while retaining their distinct lifecycle effects. Do not loop rebuild.
 
 ## Asset catalog
 
@@ -52,17 +52,17 @@ For `lingtai` and `knowledge`, tending happens *once* per task, at the end — n
 
 Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-Two stores have dedicated signpost manuals; generic mutation still belongs to `file`:
+All four durable stores are taught by manuals loaded through the one `psyche` root (pad + lingtai + knowledge + skills = psyche); generic mutation belongs to `file`:
 
-- **`lingtai`** — `lingtai(action='manual', input={})` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
-- **`pad`** — `pad-manual` explains the Pad body and `pad.append` pinning. Mutate `system/pad.md` with `file.write`/`file.edit`; append and file mutations take effect only after reconstruction.
+- **`lingtai`** — `psyche(action="lingtai", input={}, reasoning="load identity guidance")` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
+- **`pad`** — `psyche(action="pad", input={}, reasoning="load Pad guidance")` explains the Pad body and the pinned-reference list. Mutate `system/pad.md` and `system/pad_append.json` with `file.write`/`file.edit`; both take effect only after reconstruction.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `lingtai(action='manual', input={})` for forced/self-evolve behavior.
-- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; use `pad(action='append')` only for the durable pinned-reference list. See `pad-manual`.
+- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `psyche(action="lingtai", input={}, reasoning="...")` for forced/self-evolve behavior.
+- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; edit `system/pad_append.json` the same way for the durable pinned-reference list. See `psyche(action="pad", input={}, reasoning="...")`.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for long-term private context using `file.write`/`file.edit`.
-- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system(action='refresh', input={'reason': 'rescan skills catalog', 'preset': null, 'revert_preset': null}, reasoning='...')` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
+- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `context(action="rebuild", input={}, reasoning="rescan skills catalog")` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
 
 All five happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
@@ -108,11 +108,11 @@ Updating the parent index at each session is part of the practice — append one
 
 ## 5. Tending the Pad
 
-**Pad is its own tool with its own manual — read `pad-manual` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, `pad(action='append')` file pinning and its 100k-token ceiling, and how to archive a completed pad.
+**Pad has its own manual — read `psyche(action="pad", input={}, reasoning="load Pad guidance")` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, how the `system/pad_append.json` pinned list works, and how to archive a completed pad.
 
 What matters here is only the molt-relevant fact: pad is one of the four durable stores, it survives the molt and is reloaded into the fresh session's system prompt, so it must be accurate **before** you molt. A stale pad is the fastest way to make the next you lose the thread.
 
-Your 灵台 is likewise a manual-only signpost — call `lingtai(action='manual', input={})` for identity modes and file/rebuild guidance.
+Your 灵台 is likewise taught by a manual — call `psyche(action="lingtai", input={}, reasoning="load identity guidance")` for identity modes and file/rebuild guidance.
 
 ## 6. Step 2 — Write the Summary and Molt
 
@@ -142,7 +142,7 @@ control. They never mean the same thing, and no action takes `summarize` as
 input.
 
 `context` owns only your context. Your name is `system(action='name_set')` /
-`system(action='name_nickname')`. Your 灵台 and Pad have separate strict roots: `lingtai(action='manual')` is a signpost, while `pad(action='append'|'manual')` owns pinned references. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
+`system(action='name_nickname')`. Your four durable stores share one read-only root: `psyche(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={}, reasoning="...")` returns the matching manual and nothing else. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
@@ -221,7 +221,7 @@ If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or
 1. Read the `summary_path` from the post-molt notification
 2. `email(check)` — see what arrived while you were down
 3. Check `knowledge/session-journal/KNOWLEDGE.md` — your session history index
-4. `skills(action="info", input={}, reasoning="confirm my skills")` — confirm which skills you have
+4. Read the `skills` section of your system prompt — it lists every skill you have
 5. `shell({"command": "tail -n 200 logs/events.jsonl | grep ..."})` — surgical reads if needed
 
 Reconstruct your situation from these sources.

@@ -16,12 +16,18 @@ Knowledge is structurally isomorphic to skills but physically separate:
   private, agent-owned, and may reference agent-local paths, mail ids, and
   logs that skills must not depend on.
 
-Tool surface (LTP v2 family; see ``src/lingtai/tools/CONTRACT.md``): the public
-tool stays ``knowledge`` with the same two action values. ``info`` returns a
-runtime health snapshot (catalog size, problems) without the manual body;
-``manual`` returns the knowledge-manual body on demand. Both take a strict empty
-``input``. Knowledge entry bodies are read via the ``read`` tool, the same way
-the agent opens a ``SKILL.md``.
+Tool surface: **none**. This capability registers no model-facing tool. The
+former public ``knowledge`` root and its ``info`` action were removed as a clean
+break — the one public root for this domain is now ``psyche``, whose
+read-only ``psyche(action='knowledge')`` returns this package's manual. There
+is no alias or compatibility wrapper for the old root or for ``knowledge.info``.
+
+What remains is this capability's private lifecycle ownership, unchanged:
+``setup()`` performs the one-time legacy JSON migration and then reconciles the
+catalog into the YAML ``knowledge`` prompt section. That migration is reachable
+only from this lifecycle path, never from a model-facing action. Knowledge entry
+bodies are read via the ``read`` tool, the same way the agent opens a
+``SKILL.md``.
 
 Usage: ``Agent(capabilities={"knowledge": {}})`` or via init.json.
 """
@@ -33,10 +39,9 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING
 
 from .._catalog import build_catalog_yaml, scan_markdown_catalog
-from ..tool_family import ChildTool, ToolFamily
 from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
@@ -228,30 +233,37 @@ def _migrate_legacy_json(working_dir: Path, knowledge_dir: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Core reconciliation (shared by setup and `info`)
+# Catalog composition and the separate one-time migration step
 # ---------------------------------------------------------------------------
 
-def _reconcile(agent: "BaseAgent") -> dict:
-    """Scan ``<agent>/knowledge/``, inject catalog, report status.
+def _compose_catalog(agent: "BaseAgent", *, publish: bool = True) -> dict:
+    """Scan ``<agent>/knowledge/``, inject the catalog, report status.
 
-    Pure presentation: never writes inside ``knowledge/``. The agent is the
-    sole author of its knowledge entries; the capability only renders them.
+    Pure presentation and pure read: it never writes inside ``knowledge/`` and
+    never migrates. The agent is the sole author of its knowledge entries; this
+    only renders them. Safe to call from any catalog recompose, including the
+    full-context reconstruction path.
+
+    ``publish=False`` mirrors the Pad/LingTai composers: it writes the section
+    without flushing, so full-context reconstruction composes every section
+    before the one final prompt publication and no intermediate prompt is ever
+    published.
     """
-    working_dir = agent._working_dir
-    knowledge_dir = working_dir / "knowledge"
+    knowledge_dir = agent._working_dir / "knowledge"
 
-    migration_problems = _migrate_legacy_json(working_dir, knowledge_dir)
     entries, problems = scan_markdown_catalog(
         knowledge_dir, filename="KNOWLEDGE.md", kind="knowledge entry",
     )
-    problems = migration_problems + problems
 
     lang = agent._config.language
     catalog_yaml = build_catalog_yaml(entries, t(lang, "knowledge.preamble"))
-    if catalog_yaml:
-        agent.update_system_prompt("knowledge", catalog_yaml, protected=True)
+    if publish:
+        agent.update_system_prompt("knowledge", catalog_yaml or "", protected=True)
     else:
-        agent.update_system_prompt("knowledge", "", protected=True)
+        agent._prompt_manager.write_section(
+            "knowledge", catalog_yaml or "", protected=True,
+        )
+        agent._token_decomp_dirty = True
 
     return {
         "status": "ok",
@@ -261,152 +273,38 @@ def _reconcile(agent: "BaseAgent") -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Tool dispatch
-# ---------------------------------------------------------------------------
+def _reconcile(agent: "BaseAgent") -> dict:
+    """Migrate once, then compose — the setup/refresh lifecycle entry point.
 
-def _knowledge_manual(agent: "BaseAgent") -> dict:
-    """Return the knowledge manual body without refreshing catalog health."""
-    manual_path = agent._working_dir / ".library" / "intrinsic" / "capabilities" / "knowledge" / "SKILL.md"
-    if not manual_path.is_file():
-        return {
-            "status": "degraded",
-            "knowledge_manual": "",
-            "manual_path": str(manual_path),
-            "error": "knowledge manual missing — initializer may have failed or capability not installed correctly",
-        }
-    return {
-        "status": "ok",
-        "knowledge_manual": manual_path.read_text(encoding="utf-8"),
-        "manual_path": str(manual_path),
-    }
-
-
-# ---------------------------------------------------------------------------
-# LTP v2 family composition
-# ---------------------------------------------------------------------------
-
-# Neither action ever took an argument, so both children share the canonical
-# strict-empty input. That is what mechanically enforces the signpost contract:
-# with no declared property, *every* ``input`` key is an unknown key and is
-# rejected before the handler runs.
-_EMPTY_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-# The one source of truth for knowledge's children: name -> the operation that
-# child performs on a bound agent. Both share ``_EMPTY_INPUT_SCHEMA`` and the
-# ``"<name> input"`` title, so the spec carries only what differs. Each
-# operation is a lambda rather than a direct function reference so the
-# module-level global is resolved when the child runs, not when this tuple is
-# built at import — the no-rescan/pre-I/O tests patch those globals to prove a
-# handler never ran.
-#
-# ``manual`` is this package's own child rather than the generic
-# ``build_manual_child`` because knowledge's public result is keyed
-# ``knowledge_manual``, not the generic ``content``/``structuredContent`` shape.
-# Using the generic builder would mean wrapping into a shape this family never
-# exposes only to flatten it back in a Host adapter; registering our own child
-# satisfies no-double-wrap without that round trip.
-_CHILD_SPECS: tuple[tuple[str, Callable[["BaseAgent"], dict]], ...] = (
-    ("info", lambda agent: _reconcile(agent)),
-    ("manual", lambda agent: _knowledge_manual(agent)),
-)
-
-
-def _build_family(agent: "BaseAgent | None") -> ToolFamily:
-    """Build one ``knowledge`` :class:`ToolFamily` from :data:`_CHILD_SPECS`.
-
-    With an ``agent``, children dispatch that agent's real operations. With
-    ``None`` — the module-level :data:`_FAMILY` backing ``get_schema()`` — they
-    raise if invoked, since a schema-only family never dispatches. Either way
-    construction validates the registry, so a duplicate or reserved-name
-    collision raises :class:`ToolFamilyError` at import time.
+    This is the ONLY path that performs the legacy JSON migration. It is
+    deliberately distinct from :func:`_compose_catalog`: migration writes inside
+    ``knowledge/`` and renames the legacy source, so it belongs to the private
+    setup/refresh lifecycle and must not run on every catalog recompose. A
+    model-facing action can reach neither function — this domain registers no
+    tool.
     """
-
-    def bind(operation: "Callable[[BaseAgent], dict]") -> Callable[[Mapping[str, Any]], dict]:
-        if agent is None:
-            def unused(_input: Mapping[str, Any]) -> dict:
-                raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-            return unused
-        return lambda _input: operation(agent)
-
-    return ToolFamily(
-        "knowledge",
-        [
-            ChildTool(name, _EMPTY_INPUT_SCHEMA, bind(operation), title=f"{name} input")
-            for name, operation in _CHILD_SPECS
-        ],
-    )
-
-
-_FAMILY = _build_family(None)
-
-
-def get_description(lang: str = "en") -> str:
-    return "SIGNPOST ONLY: this tool does not create, edit, search, or load knowledge entries; `info` only re-scans the knowledge catalog and reports health; `manual` returns the knowledge-manual body. Your private durable knowledge catalog across molts — what you've learned, decided, and discovered. Each entry is a folder at knowledge/<name>/ containing KNOWLEDGE.md (YAML frontmatter with name + description) and any supporting files (scripts, assets, notes, raw logs). The knowledge catalog in your system prompt is a YAML list — each entry is a `- name:` block with `location:` and `description:` — bodies load on demand via the read tool, just like skills. Knowledge is private and agent-owned: entries may reference local paths, mail ids, and logs that skills must not depend on. Author new entries by writing knowledge/<name>/KNOWLEDGE.md with write/edit; revise the same way. Call knowledge(action='info', input={}, reasoning='refresh the knowledge catalog') to refresh the catalog and inspect health, and knowledge(action='manual', input={}, reasoning='load knowledge guidance') for the manual body. Before using this tool, read the `knowledge-manual` skill — no exceptions."
-
-
-def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema`` rather than hand-assembled. The public action values are
-    # unchanged (``info``, ``manual``); what changes is the root envelope, which
-    # is now the closed LTP v2 ``action``/``input``/``reasoning``/``summarize``
-    # shape with per-action ``input`` correlation on both provider wires.
-    return _FAMILY.build_schema()
-
-
-def handle(family: ToolFamily, args: dict | None) -> dict:
-    """Dispatch one ``knowledge`` family call and normalize its envelope error.
-
-    ``family`` is the per-agent :class:`ToolFamily` ``setup()`` builds once at
-    registration. Dispatch itself lives entirely in the generic
-    ``ToolFamily.handle``; the only thing this Host layer adds is the
-    unknown-action normalization below.
-
-    Knowledge's pre-migration public unknown-action result was
-    ``{"status": "error", "message": "unknown action: ..., only 'info' or
-    'manual' is supported"}`` for any bad action value, including an unhashable
-    one such as ``[]`` or ``{}``, and rendering a *missing* ``action`` as the
-    empty-string default (``kernel/tool_dispatch.py``'s ``default=""``). That
-    exact shape — including that default — is preserved here, after dispatch,
-    rather than by changing the generic dispatcher's own canonical
-    ``ACTION_REQUIRED`` envelope error.
-    """
-    action = args.get("action", "") if isinstance(args, Mapping) else ""
-    result = family.handle(args)
-    if result.get("error_code") == "ACTION_REQUIRED":
-        return {
-            "status": "error",
-            "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
-        }
+    working_dir = agent._working_dir
+    migration_problems = _migrate_legacy_json(working_dir, working_dir / "knowledge")
+    result = _compose_catalog(agent)
+    if migration_problems:
+        result["problems"] = migration_problems + result["problems"]
     return result
 
 
 def setup(agent: "BaseAgent", **_ignored) -> None:
     """Set up the knowledge capability.
 
-    Scans ``<agent>/knowledge/`` for ``<name>/KNOWLEDGE.md`` entries and
-    injects the catalog into the system prompt. Registers the ``knowledge``
-    family with ``info`` for runtime health and ``manual`` for the
-    progressive-disclosure manual body.
+    Runs the one-time legacy JSON migration, then scans
+    ``<agent>/knowledge/`` for ``<name>/KNOWLEDGE.md`` entries and injects the
+    catalog into the system prompt.
+
+    It registers **no** tool. Both steps are private lifecycle: migration runs
+    only from here (setup/refresh), catalog composition runs from here and from
+    the one full-context reconstruction path, and neither is reachable from a
+    model-facing action. The public surface for this domain is the read-only
+    ``psyche(action='knowledge')`` manual loader.
 
     Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
     ignored — the file-backed catalog has no fixed-size limit.
     """
     _reconcile(agent)
-    family = _build_family(agent)
-
-    def handle_knowledge(args: dict) -> dict:
-        return handle(family, args)
-
-    agent.add_tool(
-        "knowledge",
-        schema=get_schema(),
-        handler=handle_knowledge,
-        description=get_description(),
-        glossary_package=__package__,
-    )

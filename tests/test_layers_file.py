@@ -244,13 +244,14 @@ def test_base_agent_has_no_file_intrinsics(tmp_path):
 def test_base_agent_kernel_only(tmp_path):
     """BaseAgent's exact intrinsic set.
 
-    ``pad`` and ``lingtai`` joined it when they were split out of ``psyche``
-    into their own model-visible roots.
+    ``psyche`` replaced the former ``pad`` and ``lingtai`` roots (and the
+    ``knowledge``/``skills`` capability tools) as the one public root for the
+    four durable domains.
     """
     from lingtai.kernel.base_agent import BaseAgent
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
     assert set(agent._intrinsics.keys()) == {
-        "email", "system", "context", "pad", "lingtai", "soul", "notification",
+        "email", "system", "context", "psyche", "soul", "notification",
     }
     agent.stop(timeout=1.0)
 

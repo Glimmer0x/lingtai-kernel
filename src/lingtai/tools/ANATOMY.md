@@ -2,6 +2,7 @@
 related_files:
   - ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md

@@ -21,8 +21,11 @@ maintenance: |
 
 Knowledge is an agent's private long-term memory. It is for facts, decisions, observations, local paths, mail context, and operational lessons that are useful to this agent but are not necessarily portable to every other agent.
 
-The private-memory capability is named `knowledge`, and it registers exactly one
-tool, also named `knowledge`.
+The private-memory capability is named `knowledge`. It registers **no** public
+tool. It owns the private catalog composer that scans `<agent>/knowledge/` and
+injects the catalog into your `knowledge` prompt section; the only model-facing
+surface is the read-only signpost `psyche(action="knowledge", ...)`, which
+returns this manual and nothing else.
 
 ## Knowledge vs skills
 
@@ -34,9 +37,9 @@ with different audiences:
 
 | Term / path | Meaning |
 |---|---|
-| `knowledge` tool / capability | Private per-agent durable memory catalog. |
+| `knowledge` capability | Private per-agent durable memory catalog (no public tool). |
 | `<agent>/knowledge/<name>/KNOWLEDGE.md` | One private knowledge entry. |
-| `skills` tool / capability | Catalog of reusable portable procedures. |
+| `skills` capability | Catalog of reusable portable procedures (no public tool). |
 | `.library/intrinsic`, `.library/custom`, `.library_shared` | Skill shelves holding `SKILL.md` files — never private `knowledge` entries. |
 
 Knowledge is **private, local, and non-portable** by default: it may reference
@@ -82,37 +85,48 @@ Required fields are `name` and `description`. Supporting files are optional and 
 
 The system prompt only receives a compact catalog: each entry's `name`, `description`, and `location`. The body of `KNOWLEDGE.md` and supporting files stay on disk until you explicitly read them. This keeps the prompt small while still making the memory discoverable.
 
-Call `knowledge(action="info", input={}, reasoning="rescan the knowledge catalog")` to rescan the catalog and refresh the prompt section, then use `read` on the listed `location` when an entry becomes relevant.
+The catalog is rescanned for you: setup/refresh and every full `context.rebuild` re-read `knowledge/` and recompose the section. Use `read` on the listed `location` when an entry becomes relevant.
 
 ## Call shape
 
-`knowledge` is one tool family with two actions. Every call carries exactly
-four root fields — `action`, `input`, `reasoning` (all required) and the
-optional `summarize`:
+Knowledge has one public call, and it just returns this manual:
 
-- `knowledge(action="info", input={}, reasoning="...")` — rescan the catalog
-  and return health only: `knowledge_dir`, `catalog_size`, and `problems`.
-- `knowledge(action="manual", input={}, reasoning="...")` — return this
-  manual's body and its path. It does **not** rescan the catalog.
+```text
+psyche(action="knowledge", input={}, reasoning="load knowledge guidance")
+```
 
-Both actions take a strict-empty `input`: there is no argument to pass, and any
-field you put inside `input` is rejected before the action runs. This tool is a
-signpost — it never creates, edits, searches, or loads entries. Author and
-revise entries by writing `knowledge/<name>/KNOWLEDGE.md` with `write`/`edit`,
-and load bodies with `read`.
+Every call carries exactly four root fields — `action`, `input`, `reasoning`
+(all required) and the optional root `summarize`.
+
+It takes a strict-empty `input`: there is no argument to pass, and any field you
+put inside `input` is rejected before the action runs. This is a signpost — it
+never creates, edits, searches, rescans, or loads entries.
+
+Mutation and loading belong to the generic `file` family:
+
+- author or fully rewrite an entry with
+  `file(action="write", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "content": "..."}, reasoning="...")`;
+- make a bounded exact change with
+  `file(action="edit", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="...")`;
+- load a body on demand with
+  `file(action="read", input={"file_path": "<location>", "offset": null,
+  "limit": null, "max_chars": null}, reasoning="...")`.
+
+Writing an entry does not hot-load the catalog. Apply it with one
+`context(action="rebuild", input={}, reasoning="...")`, or let passive
+refresh/molt reconstruction apply it.
 
 ### `summarize`
 
-`knowledge` is a **short-result** family: both actions return small results, so
-root `summarize` is available but normally unnecessary — leave it false. Keep it
-false for `manual` in particular, so exact procedure and constraints are not
-summarized away. `summarize` is a root field; it is never part of `input`.
+Loading this manual follows the **short-result** profile: root `summarize` is
+available but normally unnecessary — leave it false, so exact procedure and
+constraints are not summarized away. `summarize` is a root field; it is never
+part of `input`.
 
 ### Settings
 
-`knowledge` supports no settings surface: there is no `settings/knowledge.json`
-and no `settings/knowledge.<action>.json`; nothing in this family reads
-settings.
+There is no Knowledge settings surface: no `settings/psyche.json` and no
+`settings/psyche.knowledge.json`. Nothing here reads settings.
 
 ## Nesting and sub-knowledge
 
@@ -195,5 +209,5 @@ PY
 
 Recommended cadence: before molt if knowledge sprawl is confusing, after major
 projects, and monthly for long-lived agents. If cleanup is approved with explicit user consent, record the
-entries consolidated/removed in `logs/cleanup.jsonl` and update the catalog with
-`knowledge(action="info", input={}, reasoning="refresh after cleanup")`.
+entries consolidated/removed in `logs/cleanup.jsonl` and apply the catalog change
+with `context(action="rebuild", input={}, reasoning="refresh after cleanup")`.
