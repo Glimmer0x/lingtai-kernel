@@ -28,6 +28,7 @@ import threading
 
 from .. import _skill
 from . import updates as tg_updates
+from .account import TelegramRateLimitError
 from .task_card.resident import TaskCardResident
 
 if TYPE_CHECKING:
@@ -680,6 +681,21 @@ class TelegramManager:
                 return self._handle_task_card_update(args)
             else:
                 return {"error": f"Unknown telegram action: {action}"}
+        except TelegramRateLimitError as exc:
+            result: dict[str, Any] = {
+                "status": "error",
+                "error": str(exc),
+                "error_code": exc.error_code,
+                "retryable": False,
+                "guidance": "Do not retry this Telegram action automatically.",
+            }
+            if exc.retry_after is not None:
+                result["retry_after"] = exc.retry_after
+                result["guidance"] = (
+                    "Do not retry this Telegram action for at least "
+                    f"{exc.retry_after} seconds."
+                )
+            return result
         except Exception as e:
             return {"error": str(e)}
 
