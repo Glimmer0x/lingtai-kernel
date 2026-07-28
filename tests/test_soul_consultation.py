@@ -134,7 +134,7 @@ def test_write_soul_tokens_keeps_only_safe_pool_usage_extra(tmp_path):
 def _write_snapshot(workdir: Path, *, molt_count: int, unix_ts: int,
                     entries: list[dict] | None = None) -> Path:
     """Write a snapshot file in the same shape as
-    psyche._write_molt_snapshot produces."""
+    context._write_molt_snapshot produces."""
     snaps = workdir / "history" / "snapshots"
     snaps.mkdir(parents=True, exist_ok=True)
     if entries is None:
@@ -1331,7 +1331,7 @@ class TestRenderCurrentDiary:
         agent = _FakeAgent(tmp_path, with_chat=False)
         self._write_events(tmp_path, [
             {"type": "boot", "ts": 1},
-            {"type": "tool_call", "name": "psyche"},
+            {"type": "tool_call", "name": "context"},
         ])
         assert _render_current_diary(agent) == ""
 
@@ -1536,10 +1536,10 @@ class TestSnapshotVerbatimLoading:
         iface.add_assistant_message([
             ThinkingBlock(text="reasoning"),
             TextBlock(text="I'll call a tool"),
-            ToolCallBlock(id="tc_1", name="psyche", args={"action": "show"}),
+            ToolCallBlock(id="tc_1", name="context", args={"action": "show"}),
         ])
         iface.add_tool_results([
-            ToolResultBlock(id="tc_1", name="psyche", content="result"),
+            ToolResultBlock(id="tc_1", name="context", content="result"),
         ])
         iface.add_assistant_message([TextBlock(text="final answer")])
         path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
@@ -1559,10 +1559,10 @@ class TestSnapshotVerbatimLoading:
         iface.add_user_message("question")
         iface.add_assistant_message([
             TextBlock(text="calling"),
-            ToolCallBlock(id="tc_1", name="psyche", args={}),
+            ToolCallBlock(id="tc_1", name="context", args={}),
         ])
         iface.add_tool_results([
-            ToolResultBlock(id="tc_1", name="psyche", content="data"),
+            ToolResultBlock(id="tc_1", name="context", content="data"),
         ])
         path = _write_snapshot(tmp_path, molt_count=1, unix_ts=1, entries=iface.to_dict())
 
@@ -1608,7 +1608,7 @@ class TestSnapshotVerbatimLoading:
         # survives verbatim so historic calls/results remain legible.
         frozen_tools = [
             {
-                "name": "psyche",
+                "name": "context",
                 "description": "molt yourself",
                 "input_schema": {"type": "object"},
             },

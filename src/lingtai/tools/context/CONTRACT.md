@@ -1,0 +1,128 @@
+---
+name: context-contract
+tool: context
+contract_version: 5
+related_files:
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/_molt.py
+  - src/lingtai/tools/context/_session_journal.py
+  - src/lingtai/tools/context/ANATOMY.md
+  - src/lingtai/agent.py
+  - src/lingtai/kernel/base_agent/prompt.py
+  - src/lingtai/tools/system/summarize.py
+  - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
+  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
+  - tests/test_context_ownership_redesign.py
+  - tests/test_tool_family_context_migration.py
+  - tests/test_deep_refresh.py
+maintenance: |
+  Keep related paths real and the paired Anatomy reciprocal. Update schemas,
+  model prose, manuals, results, lifecycle wiring, private summary engine, and
+  focused evidence together. Version 5 is the breaking full-context ownership
+  redesign: rebuild now recomposes all canonical prompt sources first; Pad and
+  LingTai public mutation/load actions are retired.
+---
+
+# Context capability contract
+
+## Purpose and public ownership
+
+`context` owns the agent's context lifecycle. Its exact public actions are:
+
+- `molt` — shed conversation history while preserving durable stores;
+- `summarize` — record compact replacements in local runtime history only;
+- `rebuild` — the **one active full context reconstruction operation**;
+- `manual` — return `context-manual` without a lifecycle operation.
+
+There is no `psyche` root or compatibility alias. Name changes remain
+`system.name_set | system.name_nickname`. Pad body and LingTai identity mutation
+belong to `file.write | file.edit`; `pad` exposes `append | manual`, and
+`lingtai` exposes `manual` only.
+
+## LTP v2 port
+
+The root is the strict closed envelope `action`, `input`, `reasoning`, optional
+root `summarize`; `action`, `input`, and `reasoning` are required. Root
+`summarize` is unrelated Host result presentation and never child input.
+Schema and dispatch derive from one child registry.
+
+| Action | Input | Result / errors |
+|---|---|---|
+| `molt` | required `summary`, `session_journal_path`, nullable `keep_tool_calls`, `keep_last` | preserved molt receipt/errors and refusal-before-shed gates |
+| `summarize` | required nonempty `items` | record-only marker/result; no prompt composition or provider rebuild |
+| `rebuild` | optional nullable `items`; bare `{}` is valid | summary-engine rebuild result plus `prompt_reconstructed: true`; LTP-shaped reconstruction/no-session errors |
+| `manual` | strict `{}` | flat manual result |
+
+Unknown actions and branch/root shape errors fail before handler I/O. `_tc_id` is
+stripped from the closed root and reaches `molt` only. No retired Pad/LingTai or
+system-summarize spelling is accepted.
+
+## Full reconstruction ordering
+
+Every `context.rebuild`, including bare `{}` with **zero pending summaries**,
+must execute in this order:
+
+1. call `Agent._reconstruct_context()`;
+2. through `Agent._reload_prompt_sections`, re-read/recompose **all** canonical
+   configured, durable, and packaged prompt sources: base prompt, covenant,
+   configured/self-authored character, substrate, rules, Pad body plus pinned
+   references, principle, procedures, guidance mirror, brief, and comment;
+3. perform exactly one final full prompt build/flush through the Agent override
+   after every section is composed; private Pad/LingTai composers must not
+   publish intermediate prompts, and the live interface plus `system/system.md`
+   must contain the same newly composed prompt;
+4. only then record newly supplied summaries and/or mark already-pending
+   summaries applied;
+5. only then request provider history replay/rebuild with the new prompt and
+   rewritten history.
+
+The private Pad/LingTai composers remain reused; composition logic is not
+copied into the context handler. Reconstruction failure returns
+`context_reconstruction_unavailable` or `context_reconstruction_failed` without
+applying summaries or requesting provider replay.
+
+## Passive lifecycle scenarios
+
+Refresh and molt are passive scenarios invoking the same internal
+`Agent._reconstruct_context` contract:
+
+- refresh passes its already-resolved init mapping, completes the final prompt
+  flush, then rebuilds the session with preserved history;
+- Agent registers exactly one post-molt hook (`_reconstruct_context`), invoked
+  before the fresh session is created;
+- Pad/LingTai `boot` functions do initial private composition only and register
+  no competing section-specific hooks.
+
+Their distinct lifecycle effects remain unchanged: refresh rebuilds runtime
+configuration/capabilities while preserving conversation; molt validates the
+journal and keep sets, snapshots/archives, sheds/replays selected history,
+updates `molt_count`, writes its summary, and publishes the post-molt reminder.
+
+## Molt safety invariants
+
+Agent-initiated molt requires a nonempty retrospective and a valid
+`knowledge/session-journal/<entry>/KNOWLEDGE.md` with session-journal
+frontmatter. Validation and keep-list checks occur before snapshot/archive/wipe
+or count mutation. The true system-forced `context_forget` path remains distinct
+and synthesizes its own model-visible call/result pair. Durable history and
+summary paths remain under `history/` and `system/summaries/`; notification files
+survive the shed.
+
+## Evidence
+
+Focused verification:
+
+```bash
+python -m pytest -q tests/test_context_ownership_redesign.py \
+  tests/test_tool_family_context_migration.py tests/test_deep_refresh.py \
+  tests/test_pad_lingtai_split.py
+```
+
+Evidence pins public action sets and strict retirement; file and append no-hot-
+load; bare zero-pending reconstruction; compose-before-summary-before-provider
+ordering (including provider replay observing the new prompt); all canonical
+durable sources; one shared refresh/molt hook; manual strictness; provider-wire parity; and existing molt refusal/lifecycle semantics.

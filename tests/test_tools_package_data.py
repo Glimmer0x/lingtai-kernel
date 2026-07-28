@@ -33,17 +33,21 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Every shipped tool package owning a top-level CONTRACT.md. ``file`` is the
 # sole owner of the file surface: the five pre-migration per-operation packages
 # (read/write/edit/glob/grep), their contracts, and their glossaries were
-# deleted into it.
+# deleted into it. ``pad`` and ``lingtai`` are two roots split out of the
+# former ``psyche``, and ``context`` is what remained of it after the name
+# actions moved to ``system``; each owns its own contract and glossary set.
 _BUILTIN_TOOLS = [
     "avatar",
     "bash",
+    "context",
     "daemon",
     "email",
     "file",
     "knowledge",
+    "lingtai",
     "mcp",
     "notification",
-    "psyche",
+    "pad",
     "skills",
     "soul",
     "system",

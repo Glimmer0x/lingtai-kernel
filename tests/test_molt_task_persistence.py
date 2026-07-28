@@ -44,13 +44,13 @@ def _make_mock_service():
 
 
 def _make_agent(tmp_path):
-    """Create an Agent with psyche capability and a working mock session."""
+    """Create an Agent with the context intrinsic and a working mock session."""
     from lingtai.agent import Agent
 
     svc = _make_mock_service()
     agent = Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["psyche"],
+        capabilities=["context"],
     )
     return agent
 
@@ -79,7 +79,7 @@ def _add_molt_call(agent, summary="Test summary"):
     iface = agent._chat.interface
     molt_block = ToolCallBlock(
         id=tc_id,
-        name="psyche",
+        name="context",
         args={
             "object": "context",
             "action": "molt",
@@ -105,7 +105,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_default_preserves_20(self, tmp_path):
         """Default (no keep_last): keeps last 20 entries (default)."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -140,7 +140,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_zero_archives_all(self, tmp_path):
         """keep_last=0 explicitly disables keeping, archives all."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -171,7 +171,7 @@ class TestContextMoltKeepLast:
             # Only the replayed molt call
             assert len(non_system) == 1
             assert any(
-                isinstance(b, ToolCallBlock) and b.name == "psyche"
+                isinstance(b, ToolCallBlock) and b.name == "context"
                 for b in non_system[0].content
             )
         finally:
@@ -179,7 +179,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_preserves_entries(self, tmp_path):
         """keep_last=2 preserves the last 2 conversation entries."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -227,7 +227,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_larger_than_total(self, tmp_path):
         """keep_last > total entries: preserves all non-system entries (excluding molt call)."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -271,7 +271,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_deduplicates_with_keep_tool_calls(self, tmp_path):
         """Entries already in keep_tool_calls are removed from keep_last."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
         from lingtai.kernel.llm.interface import ToolResultBlock
 
         agent = _make_agent(tmp_path)
@@ -339,7 +339,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_invalid_type_rejected(self, tmp_path):
         """Non-integer keep_last is rejected."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -363,7 +363,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_negative_rejected(self, tmp_path):
         """Negative keep_last is rejected."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -387,7 +387,7 @@ class TestContextMoltKeepLast:
 
     def test_keep_last_with_keep_tool_calls(self, tmp_path):
         """keep_last and keep_tool_calls can be used together."""
-        from lingtai.tools.psyche._molt import _context_molt
+        from lingtai.tools.context._molt import _context_molt
         from lingtai.kernel.llm.interface import ToolResultBlock
 
         agent = _make_agent(tmp_path)
@@ -445,7 +445,7 @@ class TestContextForgetKeepLast:
 
     def test_context_forget_default_no_keep(self, tmp_path):
         """Default context_forget archives everything (no keep_last)."""
-        from lingtai.tools.psyche._molt import context_forget
+        from lingtai.tools.context._molt import context_forget
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -464,7 +464,7 @@ class TestContextForgetKeepLast:
 
     def test_context_forget_with_keep_last(self, tmp_path):
         """context_forget with keep_last preserves recent entries."""
-        from lingtai.tools.psyche._molt import context_forget
+        from lingtai.tools.context._molt import context_forget
 
         agent = _make_agent(tmp_path)
         agent.start()
@@ -502,7 +502,7 @@ class TestContextForgetKeepLast:
 
     def test_context_forget_no_task_snapshot_saved_field(self, tmp_path):
         """context_forget no longer includes task_snapshot_saved in result."""
-        from lingtai.tools.psyche._molt import context_forget
+        from lingtai.tools.context._molt import context_forget
 
         agent = _make_agent(tmp_path)
         agent.start()

@@ -24,6 +24,9 @@ related_files:
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/context/CONTRACT.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
@@ -316,6 +319,22 @@ own unknown- versus absent-action results (`"Unknown email action: <x>"` vs
 `"action is required"`), which this package's single envelope failure
 deliberately collapses.
 
+`context/__init__.py` (`../context/CONTRACT.md`) follows the intrinsic
+module-level composition shape: a schema-only `ToolFamily` at import time
+(which is also the registry collision check) and an agent-bound one per
+`handle(agent, args)` call, both from one `_CHILD_SPECS` source. It registers
+`build_manual_child(agent, "context-manual")` directly and unwrapped.
+
+It also exercises a boundary the earlier intrinsics could only half-prove.
+`soul`, `notification`, `system`, and `email` merely *drop* the kernel-injected
+`_tc_id` at their Host boundaries; `context` genuinely **consumes** it because
+`molt` locates its own ToolCallBlock by that wire id for replay into the fresh
+session. Context strips it from the closed root and threads it to that single
+child out-of-band — the same seam `avatar` uses for root `_reasoning` — rather
+than widening `_ROOT_FIELDS` or relaxing the rule that no envelope field
+reaches a child. The sibling `pad` and manual-only `lingtai` roots compose their
+own final child inventories independently.
+
 Every other built-in family remains fully independent of this package until
 its own scoped migration.
 
@@ -436,6 +455,15 @@ unknown-root rejection before any engine I/O, read-only vs side-effectful
 receipt truth, the reserved `manual` child's no-double-wrap result and its
 separation from the engine's retained internal flat branch, and the composed
 schema (including the nested task object) surviving both wires.
+
+`tests/test_tool_family_context_migration.py` and
+`tests/test_context_ownership_redesign.py` are the family-specific evidence for
+`context` (`../context/CONTRACT.md`): the final action inventory, strict branch
+isolation, `_tc_id` isolation on the consume-rather-than-drop molt path,
+refusal-before-shed journal gates, the manual child, and full reconstruction
+ordering. `tests/test_pad_lingtai_split.py` independently pins the two sibling
+families' narrower public inventories.
+
 `tests/test_tool_family_soul_migration.py` is the equivalent family-specific
 evidence for `soul` (`../soul/CONTRACT.md`), and independently exercises this
 package against an intrinsic consumer: all six child schemas and handlers, the

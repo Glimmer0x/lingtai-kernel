@@ -1,21 +1,35 @@
 ---
-name: psyche-manual
+name: context-manual
 description: |
-  Router and operational guide for the psyche tool — molt, pad management, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls, keep_last, and pad.append. Routes consequential molt handoffs to assets/molt-template.md while keeping routine guidance compact.
-version: 1.1.0
-last_changed_at: 2026-07-27T04:30:00-07:00
+  Router and operational guide for the context tool — molt, tool-result summarize/rebuild, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to compact or rebuild your provider context; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls and keep_last. Routes consequential molt handoffs to assets/molt-template.md and summarize/rebuild procedure to reference/summarize-manual, keeping routine guidance compact.
+version: 2.0.0
+last_changed_at: 2026-07-28T00:00:00-07:00
 related_files:
-- src/lingtai/tools/psyche/__init__.py
-- src/lingtai/tools/psyche/_molt.py
-- src/lingtai/tools/psyche/_pad.py
-- src/lingtai/tools/psyche/_session_journal.py
+- src/lingtai/tools/context/__init__.py
+- src/lingtai/tools/context/_molt.py
+- src/lingtai/tools/context/_session_journal.py
+- src/lingtai/tools/system/summarize.py
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
-# Psyche Manual
+# Context Manual
 
-This manual is the router for `psyche` operations. Keep routine guidance here; load the supporting asset only when you need the full consequential-molt scaffold.
+This manual is the router for `context` operations — `molt`, `summarize`, and `rebuild`. Keep routine guidance here; load the supporting asset or reference only when you need the full scaffold or the detailed summarize/rebuild procedure.
+
+Your name is not a context operation: use `system(action='name_set')` / `system(action='name_nickname')`.
+
+## Reference catalog
+
+| Reference | When to load |
+|---|---|
+| `reference/summarize-manual/SKILL.md` | Compacting bulky tool results with `context(action='summarize')`, applying them during a full `context(action='rebuild')`, recovery by `tool_call_id`, and summarize-versus-molt tradeoffs |
+
+## Full context rebuild
+
+`context(action="rebuild", input={}, reasoning="...")` is the **one active full reconstruction operation**. Every call first re-reads and recomposes all canonical system-prompt sources (configured and durable identity, base prompt, covenant, packaged layers, rules, Pad body and pinned references, brief, comment, tools/runtime guidance), then applies already-pending summaries, then asks the provider to replay the new prompt/history. Bare `{}` is valid and still reconstructs/replays when zero summaries are pending. With `items`, prompt composition still happens first; the new summaries are then recorded/applied before provider replay.
+
+Generic durable mutations do not hot-load: use `file.write` for full-file create/overwrite and `file.edit` for exact replacement, then call `context.rebuild` when changes must apply now. `pad.append` likewise validates/persists its pinned list without changing the current prompt. Passive refresh and molt invoke the same internal reconstruction contract while retaining their distinct lifecycle effects. Do not loop rebuild.
 
 ## Asset catalog
 
@@ -36,27 +50,19 @@ Molt is yours to perform. The covenant teaches the philosophy (§V); this is the
 
 For `lingtai` and `knowledge`, tending happens *once* per task, at the end — not mid-task. Hold updates in your head while working, then commit them in a single pass before going idle (or before molting). Mid-task edits create noise and waste tokens. The exception is a long-running task where a crash would genuinely destroy work — checkpoint deliberately in that case.
 
-Pad has a different rhythm — see §5 "Tending the Pad" below.
+Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-### Identity mode
+Two stores have dedicated signpost manuals; generic mutation still belongs to `file`:
 
-`lingtai` supports two intentional modes. The recommended self-evolve mode
-omits the configured identity (or sets it empty), so boot, refresh, and
-post-molt reconstruction leave `system/lingtai.md` untouched and psyche-authored
-identity changes persist. Forced identity mode uses a nonempty resolved
-`lingtai` value, either inline or from `lingtai_file`; that value is authoritative
-and is materialized into `system/lingtai.md` on each reconstruction. A
-`psyche(lingtai, update)` still writes and auto-loads immediately, but a forced
-configured value replaces it at the next reconstruction. Keep `lingtai` distinct
-from the operator `covenant`, the third-party `base_prompt`, and the mechanical
-`identity` section.
+- **`lingtai`** — `lingtai(action='manual', input={})` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
+- **`pad`** — `pad-manual` explains the Pad body and `pad.append` pinning. Mutate `system/pad.md` with `file.write`/`file.edit`; append and file mutations take effect only after reconstruction.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — `psyche(lingtai, update, content=<full identity>)`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become.
-- **pad** — your living index of what you're working on. Edit it to reflect your current goal and the references that point at where the substance lives. See §5 for the full practice.
-- **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for any long-term private context worth keeping. The filesystem is the API — use `write`/`edit` directly.
-- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system({"action": "refresh"})` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
+- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `lingtai(action='manual', input={})` for forced/self-evolve behavior.
+- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; use `pad(action='append')` only for the durable pinned-reference list. See `pad-manual`.
+- **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for long-term private context using `file.write`/`file.edit`.
+- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system(action='refresh', input={'reason': 'rescan skills catalog', 'preset': null, 'revert_preset': null}, reasoning='...')` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
 
 All five happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
@@ -96,48 +102,47 @@ detail belongs in the child.
 
 **The sub-entry `<YYYY-MM-DD>-molt-<molt-count>-<slug>/KNOWLEDGE.md` is the substance** — write it as the molt-history record of the segment, *before* you molt, via `write`/`edit` directly. Read `assets/session-journal-entry-template.md` from this skill directory for the frontmatter (including `molt_count`, the required `type: session-journal` marker, and the YAML block-scalar `description` that keeps a `: ` in the text from breaking the gate) and the section layout. It is a journal, not a transcript. Several thousand tokens is fine when the segment was rich; keep it concise when it was small.
 
-This sub-entry's path is what you pass to `psyche(context, molt, session_journal_path=...)`, and the kernel validates it before letting the molt proceed (see §6).
+This sub-entry's path is what you pass as `context(action='molt', input={'session_journal_path': ...})`, and the kernel validates it before letting the molt proceed (see §6).
 
 Updating the parent index at each session is part of the practice — append one line referencing the new sub-entry. Then write the successor summary (§6), which points back at this entry's path.
 
 ## 5. Tending the Pad
 
-Pad is your **living index** of what you're working on right now. It is not a sketchpad or scratchpad. Treat it as your personal table of contents.
+**Pad is its own tool with its own manual — read `pad-manual` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, `pad(action='append')` file pinning and its 100k-token ceiling, and how to archive a completed pad.
 
-**Purpose: progressive disclosure for your future self.** Pad is shallow and direct; the things it points at are deep and structured. A glance at pad tells the next you the *shape* of what's going on.
+What matters here is only the molt-relevant fact: pad is one of the four durable stores, it survives the molt and is reloaded into the fresh session's system prompt, so it must be accurate **before** you molt. A stale pad is the fastest way to make the next you lose the thread.
 
-**What belongs in pad:**
-
-- **The active goal** — what you're working on, in your own words.
-- **Where you are in it** — the next concrete step, the current blocker.
-- **Timestamps** — always include when each entry was last updated. Without them, you cannot distinguish old information from new.
-- **Pointers to where the substance lives:**
-  - knowledge entry paths (`knowledge/<name>/KNOWLEDGE.md`)
-  - skills SKILL.md paths (`.library/custom/<name>/SKILL.md`)
-  - email message IDs of load-bearing conversations
-  - file paths under your workdir that matter
-  - URLs you're tracking
-- **Collaborators** — who you're working with, who's waiting on what.
-
-**What does NOT belong in pad:** large blobs of inlined text, full file contents, transcripts. If you find yourself pasting a long passage, stop — write it as knowledge and *point at* the path instead. Pad indexes the depths; it does not become them.
-
-**When to update pad:** whenever the index meaningfully changes — a new reference, a goal shift, a step change. Don't churn on every step, but don't hoard updates for the end either. A stale pad is worse than a noisy pad.
-
-**`pad.append` for file pinning:** `psyche(pad, append, files=[...])` pins file contents as read-only reference in your system prompt — they are re-read and appended on every load (including after molt). Pin anything you want persistent visibility on: source files, skill docs, configs. Pass `files=[]` to clear. Total appended content must not exceed 100k tokens. Paths relative to working directory.
-
-**Archiving completed pads:** When a goal completes, archive to `archive/pad-<goal-slug>-<YYYY-MM-DD>.md`. Then `psyche(pad, edit, content=<next goal>)`.
+Your 灵台 is likewise a manual-only signpost — call `lingtai(action='manual', input={})` for identity modes and file/rebuild guidance.
 
 ## 6. Step 2 — Write the Summary and Molt
 
 ```
-psyche(
-    object="context",
+context(
     action="molt",
-    summary=<your charge to the next you>,
-    session_journal_path="knowledge/session-journal/<entry>/KNOWLEDGE.md",
-    ...
+    input={
+        "summary": <your charge to the next you>,
+        "session_journal_path": "knowledge/session-journal/<entry>/KNOWLEDGE.md",
+        "keep_tool_calls": null,
+        "keep_last": null,
+    },
+    reasoning="why you are molting now",
 )
 ```
+
+Every `context` call uses this one envelope: a single `action`, that action's
+own strict `input` object, and a root `reasoning`. The four actions are `molt`,
+`summarize`, `rebuild`, and `manual`. Leave the root `summarize` **boolean**
+false: `context` results are small (short-result profile), and summarizing a
+`manual` call would drop the exact procedure you called it for.
+
+Note the two levels that share the word: the **action** `summarize` is the
+domain operation that records compact replacements for bulky tool results, while
+the optional **root** `summarize` boolean is the unrelated result-presentation
+control. They never mean the same thing, and no action takes `summarize` as
+input.
+
+`context` owns only your context. Your name is `system(action='name_set')` /
+`system(action='name_nickname')`. Your 灵台 and Pad have separate strict roots: `lingtai(action='manual')` is a signpost, while `pad(action='append'|'manual')` owns pinned references. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
@@ -182,7 +187,7 @@ Quick routing:
 | Consequential molt / successor handoff — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. Fill every section; write `None` rather than omitting one. |
 | Unsure whether the handoff is complex | Use the asset; extra structure is cheaper than a bad handoff. |
 
-Before you call `psyche(object="context", action="molt", ...)`, always verify at minimum:
+Before you call `context(action="molt", ...)`, always verify at minimum:
 
 - The session-journal sub-entry for the just-finished segment exists and is
   written *before* the summary (§4) — it is the narrative the summary points
@@ -201,7 +206,7 @@ Before you call `psyche(object="context", action="molt", ...)`, always verify at
 
 Context pressure is agent state, not a dismissible notification. Tool results surface a natural-language reminder under `_meta.agent_meta.agent_state.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 85%). It rides on the current `agent_meta` snapshot (carried on the designated final result of each batch; restamped there while active) so the reminder persists. The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
-When this reminder appears, batch already-digested noisy history into one summarize pass rather than summarizing a small piece at a time — the summarize cadence, rebuild semantics, and recovery target are owned by `system-manual` → `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/reconstruction pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
+When this reminder appears, batch already-digested noisy history into one `context(action='summarize')` pass rather than summarizing a small piece at a time, then run one `context(action='rebuild')` to recompose all canonical prompt sources, apply summaries, and request provider replay — the summarize cadence, rebuild semantics, and recovery target are owned by this manual's own `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/rebuild pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
 
 ### Cache-miss budget
 
@@ -211,7 +216,7 @@ Once the since-last-molt cache-miss total reaches or exceeds the budget, tool re
 
 ## 8. Post-Wipe Recovery
 
-If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. Your character and pad were reloaded, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:
+If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. All canonical prompt sources (including character and Pad) were reconstructed, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:
 
 1. Read the `summary_path` from the post-molt notification
 2. `email(check)` — see what arrived while you were down

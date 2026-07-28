@@ -467,7 +467,7 @@ def _heartbeat_loop(agent) -> None:
             except OSError:
                 pass
             try:
-                context_forget = agent._intrinsic_hook("psyche", "context_forget")
+                context_forget = agent._intrinsic_hook("context", "context_forget")
                 if context_forget is not None:
                     context_forget(agent, source=source)
                 agent._log("clear_received", source=source)

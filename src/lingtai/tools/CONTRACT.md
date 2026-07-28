@@ -26,6 +26,9 @@ related_files:
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/context/CONTRACT.md
+  - src/lingtai/tools/pad/CONTRACT.md
+  - src/lingtai/tools/lingtai/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -122,9 +125,11 @@ model-facing schema or nested `input`.
 - The prohibition above is on the result-summarization **control**, identified by
   role and not by spelling. This contract reserves no name inside `input`: an
   action MAY declare a domain field named `summary` when that field is genuine
-  action input rather than a post-processing control. Today's psyche molt
-  retrospective (`input.summary`, a string the agent writes for the next session)
-  is such a field and stays legitimate after migration. The test is role: a
+  action input rather than a post-processing control. The `context` molt
+  retrospective (`input.summary`, a string the agent writes for the next
+  session) is such a field and remains legitimate. Note that `context` also
+  carries an ACTION named `summarize`; that too is a domain operation, distinct
+  from the root control, and no `context` child declares a `summarize` field. The test is role: a
   boolean asking the runtime to post-process this call's result belongs at root
   as `summarize`; a value the action itself consumes belongs in `input` under
   whatever name the domain calls it.
@@ -314,6 +319,7 @@ only in that action's own strict `input` (so `channel` belongs to
 `dismiss_ref`), and it is the second migrated *intrinsic* — it therefore
 composes its dispatching family per call rather than owning a per-Agent
 manager (see `src/lingtai/tools/notification/CONTRACT.md`).
+
 `system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
 nirvana | presets | summarize | manual`) is the eleventh, and the third
 migrated *intrinsic*: its final model-facing root is likewise exactly `action`,
@@ -368,13 +374,54 @@ argument shape is retained unchanged as a purely internal interface, exactly
 as `shell` kept `ShellManager`'s. It owns no settings file at either level.
 See `src/lingtai/tools/email/CONTRACT.md` (contract_version 2).
 
+`psyche` (`lingtai_update | lingtai_load | pad_edit | pad_load | pad_append |
+context_molt | name_set | name_nickname | manual`) is the fourteenth, and the
+fifth migrated *intrinsic*. It is the first migration to fold a **two-key**
+public surface into this envelope: psyche was addressed as an
+`(object, action)` matrix, and each pair became exactly one flat action, the
+same collapse `notification` made for its atomic dismiss verbs. The operation
+inventory is preserved exactly — nothing added, dropped, renamed, or merged —
+and every operation-level success payload and error, every log event, and every
+persistence path is unchanged; only the argument shape and the envelope layer
+around it moved. Envelope validation and its errors are necessarily new under
+this contract, and psyche's former two-key unknown-object/invalid-action guards
+became one unknown-action error (see
+`src/lingtai/tools/context/CONTRACT.md`). It
+owns no settings file at either level and its manual says so.
+
+Three psyche facts are envelope consequences worth naming here. Its molt
+retrospective is `input.summary` — the domain field this contract's "Envelope"
+section explicitly permits, never the root `summarize` control. Its two
+destructive full rewrites (`lingtai_update`, `pad_edit`) and its irreversible
+`context_molt` make the "reject before dispatch" rule load-bearing rather than
+merely tidy: a wrong-branch key must fail with nothing written and nothing
+shed. And it is the first family that *consumes* the intrinsic-only `_tc_id`
+rather than dropping it, so it strips that key at its own Host boundary and
+threads it to the one action that needs it, instead of widening the shared
+envelope.
+
+**Current state (the paragraph above is migration history).** That family no
+longer exists. `pad` now exposes exactly `append | manual`; `lingtai` is a
+`manual`-only signpost. Their former mutation/load actions have no aliases:
+generic durable mutation belongs to `file.write`/`file.edit`, which never
+hot-load prompt state, and `pad.append` likewise only validates/persists. The
+context lifecycle is `context` (`molt | summarize | rebuild | manual`,
+`src/lingtai/tools/context/CONTRACT.md`): `summarize` records only, while
+`rebuild` is the one active operation that first recomposes every canonical
+prompt source, then applies pending/new summaries, then requests provider
+replay; bare `{}` remains valid with zero pending summaries. Refresh and molt
+invoke that same internal reconstruction contract as passive scenarios. Name
+actions moved to `system`. There is no `psyche` root/module/alias and no public
+`system(action='summarize')`. `context` alone consumes `_tc_id`; its action
+named `summarize` remains unrelated to the root boolean control.
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
 `file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
-`daemon`, and `email`), so
+`daemon`, `email`, `pad`, `lingtai`, and `context`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the
@@ -421,11 +468,14 @@ manager instance to hold one, `shell` is its eighth, using it the same
 way while retaining a thin outer `handle()` that narrows the generic
 unknown-action message to its own four actions, `skills` is its ninth,
 using it the same way but returning its canonical envelope failures
-verbatim, having no such diagnostics, and `notification` is its tenth, using
+verbatim, having no such diagnostics, `notification` is its tenth, using
 it the same way while retaining a thin outer `handle()` that strips the
 kernel-injected `_tc_id` every intrinsic receives, flattens the reserved
 `manual` child's canonical result to its own pinned public shape, and
-normalizes the generic unknown-action error to its own. `avatar` reuses
+normalizes the generic unknown-action error to its own, and `context` is its
+eleventh, using `soul`'s module-level composition shape while threading the
+`_tc_id` it actually consumes to its `molt` child out-of-band rather
+than widening the shared envelope. `avatar` reuses
 `ToolFamily` but not `build_manual_child`, because its manual ships inside
 its own package rather than the agent's installed `.library` catalog —
 adopting part of the infrastructure is conforming. Using it is never
@@ -499,6 +549,22 @@ and path validation, the karma gate and distribution for `rules`, and `manual`
 performing no spawn or rules I/O. Every test there builds its own isolated
 temporary network and fakes the launcher Port, so it neither creates a live
 avatar nor writes a live `.rules` signal.
+
+`context`'s evidence (`tests/test_tool_family_context_migration.py`,
+plus the updated `tests/test_context.py`, `tests/test_pad.py`,
+`tests/test_eigen.py`, `tests/test_session_journal_gate.py`, and
+`tests/test_intrinsic_manual_actions.py`) is likewise one family's local
+evidence, chosen for a risk profile no earlier migration had: the irreversible
+molt plus the record/apply pair that rewrites what the provider actually sees.
+It covers the exact four-action inventory (`molt | summarize | rebuild |
+manual`), the record-only-versus-applying split that replaced the former
+`rebuild` boolean, the proof that no `psyche` root survives anywhere, the
+closed root on both wires with the `allOf` correlation intact, per-action input
+isolation, envelope and cross-branch rejection before any file write or context
+shed, `_tc_id` isolation on the consume-rather-than-drop path, the molt
+journal gate refusing before any shed, a full successful molt lifecycle in a
+disposable workdir, the synthesized system-forced pair carrying the current
+envelope, and the reserved `manual` child's no-double-wrap result.
 
 `soul`'s migration evidence (`tests/test_tool_family_soul_migration.py`, plus
 the updated `tests/test_soul.py`, `tests/test_soul_consultation.py`,

@@ -420,7 +420,16 @@ _SOURCE_ROOT = Path(__file__).resolve().parents[3]
 EMANATION_BLACKLIST = {
     "daemon",
     "avatar",
-    "psyche",
+    # The context department: it owns ``molt``, the most irreversible operation
+    # an agent can perform, plus the summarize/rebuild pair that rewrites the
+    # provider context. This is the same boundary the former ``psyche`` root
+    # carried; it follows the capability, not the old name.
+    "context",
+    # Also split out of the former ``psyche`` into their own model-visible
+    # roots; they carry exactly the identity/prompt-mutation authority that
+    # root was blacklisted for, so the boundary follows them too.
+    "pad",
+    "lingtai",
     "skills",
     "knowledge",
 }

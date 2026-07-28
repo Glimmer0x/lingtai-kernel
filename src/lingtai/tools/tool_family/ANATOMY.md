@@ -15,6 +15,9 @@ related_files:
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/context/ANATOMY.md
+  - src/lingtai/tools/pad/ANATOMY.md
+  - src/lingtai/tools/lingtai/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -213,6 +216,17 @@ assertions in `daemon/__init__.py`. It registers
 `build_manual_child(agent, "daemon")` directly and returns its canonical result
 verbatim; its only Host normalization is narrowing this package's generic
 `ACTION_REQUIRED` message to daemon's exact six actions.
+
+`context/__init__.py` ([`../context/ANATOMY.md`](../context/ANATOMY.md)) uses
+the module-level schema-only / per-call agent-bound composition shape from one
+`_CHILD_SPECS` registry. It is the intrinsic family that genuinely **consumes**
+the kernel-injected `_tc_id` rather than dropping it: `molt` needs that wire id
+to locate and replay its own ToolCallBlock. `handle()` strips it from the closed
+root and threads it to that child out-of-band, via the same Host-owned seam
+`avatar` uses for its spawn mission brief. The generic package is not widened:
+`_ROOT_FIELDS` is unchanged and no envelope field reaches any child. The sibling
+`pad` and `lingtai` families are independent consumers with their own final
+action inventories.
 
 ## Composition
 

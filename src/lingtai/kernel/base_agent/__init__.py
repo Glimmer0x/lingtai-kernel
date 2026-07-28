@@ -787,7 +787,7 @@ class BaseAgent:
 
         # Boot intrinsics that define an optional ``boot(agent)`` hook. Order
         # follows the injected registry; the two intrinsics that historically
-        # booted (psyche, email) both define ``boot`` and run here without
+        # booted (pad/lingtai, email) both define ``boot`` and run here without
         # name special-casing. Absent-intrinsic = nothing to boot.
         for name in self._intrinsics:
             module = self._intrinsic_modules.get(name)
@@ -2369,7 +2369,7 @@ class BaseAgent:
         Large tool results no longer raise a ``large_tool_result`` system
         notification here.  They are ranked instead through
         ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` and digested
-        via ``system(action="summarize")`` (see meta_block.current_tool_result_chars).
+        via ``context(action="summarize")`` (see meta_block.current_tool_result_chars).
         """
         return None
 
@@ -2450,7 +2450,7 @@ class BaseAgent:
         results are surfaced as a ranked list under
         ``_meta.agent_meta.agent_state.current_tool_result_chars.top_results`` (see
         :func:`meta_block.current_tool_result_chars`) and digested via
-        ``system(action="summarize")``.  The result still flows into normal
+        ``context(action="summarize")``.  The result still flows into normal
         tool-result history and the char-ranking; it simply creates no
         ``.notification/system.json`` event.
 

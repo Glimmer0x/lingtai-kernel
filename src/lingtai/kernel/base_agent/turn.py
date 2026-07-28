@@ -1041,7 +1041,7 @@ def _check_molt_pressure(agent) -> None:
     be a dismissible notification. Post-molt continuation still uses the
     notification system and is handled separately.
     """
-    if "psyche" not in agent._intrinsics:
+    if "context" not in agent._intrinsics:
         return
     from ..notifications import clear
 
@@ -1083,22 +1083,29 @@ def _turn_boundary_housekeeping(agent) -> None:
 
 
 def _is_context_molt_call(tc) -> bool:
-    """Return True when ``tc`` is ``psyche(context, molt, ...)``.
+    """Return True when ``tc`` is ``context(action="molt", ...)``.
 
-    A post-molt notification is published before the ``psyche.molt`` tool
+    A post-molt notification is published before the ``context.molt`` tool
     result returns.  If that same result batch were active-stamped with the
     notification and committed its fingerprint, the subsequent IDLE boundary
     would see no change and would not inject the synthesized notification +
     ``MSG_TC_WAKE`` continuation.  Only the molt batch needs this deferral:
     later ACTIVE batches may consume the post-molt notification normally, while
     an immediate IDLE boundary will wake from the still-uncommitted file state.
+
+    Reads only ``args["action"]``, the exact public spelling the ``context``
+    family advertises and the exact shape the kernel itself synthesizes for a
+    forced molt (``tools/context/_molt.py``).  This is a read path over the
+    live batch, not a second accepted call shape: nothing in ``context``
+    dispatch admits the former ``psyche``/``context_molt`` spellings, and no
+    tool named ``psyche`` exists to produce one.
     """
-    if getattr(tc, "name", None) != "psyche":
+    if getattr(tc, "name", None) != "context":
         return False
     args = getattr(tc, "args", None)
     if not isinstance(args, dict):
         return False
-    return args.get("object") == "context" and args.get("action") == "molt"
+    return args.get("action") == "molt"
 
 
 def _batch_includes_context_molt(tool_calls) -> bool:

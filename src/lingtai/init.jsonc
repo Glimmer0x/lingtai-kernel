@@ -66,8 +66,9 @@
     // The kernel reader owns this classification; these comments are informative
     // shape guidance, not a migration registry or a runtime history file.
     // The kernel boots the `lingtai.core.*` floor by default on every
-    // agent: knowledge, skills, shell, avatar, daemon, mcp, read, write,
-    // edit, glob, grep — plus the always-on intrinsics psyche and email.
+    // agent: knowledge, skills, shell, avatar, daemon, mcp, and file — plus
+    // the always-on system, context, pad, lingtai, soul, notification, and email
+    // intrinsics.
     // You do NOT need to list those here unless you want to OVERRIDE
     // their default kwargs (e.g. give `shell` a deny-list policy file
     // instead of the default yolo mode).
@@ -249,14 +250,17 @@
   // Procedures prompt content is managed by the TUI as system/procedures.md;
   // init.json procedures/procedures_file overrides are no longer honored by the kernel.
 
-  // Initial pad — pre-loaded into system/pad.md.
-  // The agent can edit this via the eigen intrinsic.
+  // Initial pad — materialized into system/pad.md. Generic changes belong to
+  // file.write/file.edit and take effect in the live prompt only after explicit
+  // context.rebuild (or passive refresh/molt reconstruction). pad.append only
+  // persists the pinned reference list; it never hot-loads the prompt.
   "pad": ""
   // Or use a file: "pad_file": "pad.md"
 
   // Character / 灵台 supports two modes. The recommended default is
   // self-evolve: omit `lingtai` (or set it to an empty string), and the
-  // agent's psyche-authored system/lingtai.md survives refresh and molt.
+  // agent-authored system/lingtai.md remains the durable self-evolved source and
+  // is re-read by explicit context.rebuild and passive refresh/molt reconstruction.
   //
   // Forced identity examples (add a comma after `"pad": ""` above, then
   // uncomment one only when the configured value must be authoritative on

@@ -226,7 +226,7 @@ def _write_soul_tokens(agent, response) -> None:
 
 
 def _load_snapshot_interface(path):
-    """Load a snapshot file written by psyche._write_molt_snapshot and
+    """Load a snapshot file written by context._write_molt_snapshot and
     return its verbatim ``ChatInterface``, or None on any failure.
 
     The consultation substrate is the past self's canonical chat. Tool

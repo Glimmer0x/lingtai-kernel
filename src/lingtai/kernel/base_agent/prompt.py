@@ -58,7 +58,10 @@ def _build_system_prompt_batches(agent) -> list[str]:
 
 def _flush_system_prompt(agent) -> None:
     """Rebuild system prompt, persist to system/system.md, update live session."""
-    prompt = _build_system_prompt(agent)
+    # Honor the composition-root override: Agent injects base_prompt and app tool
+    # descriptions into the canonical prompt. Calling this module's helper
+    # directly would flush/replay a reduced Core-only prompt.
+    prompt = agent._build_system_prompt()
     system_md = agent._working_dir / "system" / "system.md"
     system_md.parent.mkdir(exist_ok=True)
     system_md.write_text(prompt)

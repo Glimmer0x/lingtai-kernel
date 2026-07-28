@@ -15,7 +15,7 @@ Import discipline: capability modules are resolved with ``importlib`` *inside*
 :func:`setup_capability` / :func:`get_all_providers`, never at module top, so
 ``import lingtai.tools.registry`` does not eagerly import every tool (and, for the two
 capability tools that lazily import ``lingtai`` services, does not pull
-``lingtai``). The five intrinsic modules ARE imported statically below because
+``lingtai``). The seven intrinsic modules ARE imported statically below because
 they are mandatory and cheap; they live under ``lingtai.tools`` and import only
 ``lingtai.kernel``.
 """
@@ -45,12 +45,25 @@ if TYPE_CHECKING:
 # ``handle(agent, args)``, and optionally ``boot(agent)``. ``BaseAgent`` iterates
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
-from . import email, system, psyche, soul, notification  # noqa: E402  (lingtai.tools.<pkg>)
+from . import email, system, context, soul, notification  # noqa: E402  (lingtai.tools.<pkg>)
+# ``pad`` and ``lingtai`` are model-visible concepts parallel to ``knowledge``
+# and ``skills``, split out of the former ``psyche`` into their own roots.
+# ``lingtai`` here is ``lingtai.tools.lingtai`` — the tool family, not the
+# top-level package; it is aliased on import so the two names cannot be
+# confused at a callsite.
+#
+# ``context`` is the department that owns the agent's context (molt, summarize,
+# rebuild). It replaces ``psyche``, whose remaining name actions moved to
+# ``system``; there is no ``psyche`` intrinsic and no alias for one.
+from . import pad  # noqa: E402  (lingtai.tools.pad)
+from . import lingtai as lingtai_tool  # noqa: E402  (lingtai.tools.lingtai)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
     "email": {"module": email},
     "system": {"module": system},
-    "psyche": {"module": psyche},
+    "context": {"module": context},
+    "pad": {"module": pad},
+    "lingtai": {"module": lingtai_tool},
     "soul": {"module": soul},
     "notification": {"module": notification},
 }

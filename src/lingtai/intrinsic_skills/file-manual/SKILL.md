@@ -1,7 +1,7 @@
 ---
 name: file-manual
 description: "Operational guide for LingTai's built-in `file` tool and its actions: read, write, edit, glob, and grep. Use when working with local text files, deciding whether to use file tools versus bash, handling large files, avoiding binary/image misuse, or reading non-UTF-8 text via explicit bash/Python/iconv instead of complicating the core read tool. Covers UTF-8 policy, safe write/edit discipline, search workflows, and examples for GBK/Shift-JIS/Latin-1 conversion."
-version: 0.1.0
+version: 0.2.0
 tags: [files, read, write, edit, grep, glob, encoding, utf-8]
 last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
@@ -111,6 +111,14 @@ modifications to large files — use `edit`.
 
 `action="edit"` replaces an exact string and fails when the old string is absent
 or ambiguous. That failure is a feature: it prevents accidental broad changes.
+
+`write` and `edit` are generic durable mutations only. Even when their target is
+`system/*.md` or another configured prompt source, they **never reload or mutate
+the current system prompt**. The disk change takes effect at the next canonical
+reconstruction. When it must take effect now, finish the file operation first,
+then make one `context(action="rebuild", input={}, reasoning="apply durable prompt changes")`
+call; passive refresh or molt also reconstructs. Do not use rebuild for ordinary
+source-code edits, and do not loop it.
 
 1. `read` the relevant lines.
 2. Copy an exact old-string region with enough surrounding context to be unique.

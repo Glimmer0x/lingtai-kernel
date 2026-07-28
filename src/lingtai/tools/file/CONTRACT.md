@@ -1,7 +1,7 @@
 ---
 name: file-contract
 tool: file
-contract_version: 2
+contract_version: 3
 related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/_read.py
@@ -67,7 +67,11 @@ inputs/outputs/errors -> §Per-action behavior; caps and continuation ->
   name is simultaneously the public `action` value and the dispatch key — one
   name, no mapping layer.
 - Non-goals: no second summarizer, no family-owned result envelope, no
-  settings surface, and no change to any operation's own semantics.
+  settings surface, and no hidden prompt/context lifecycle side effect. In
+  particular, `write` and `edit` mutate only the requested durable file: they do
+  not reload, recompose, or otherwise mutate the current system prompt. An
+  explicit `context.rebuild` (or passive refresh/molt reconstruction) is the
+  separate activation boundary for changed prompt sources.
 
 ## Tool surface
 

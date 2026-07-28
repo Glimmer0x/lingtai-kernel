@@ -40,7 +40,7 @@ The kernel's message catalog — a flat key-value string table covering system n
 |---|---|---|
 | `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
 | `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:223`, `src/lingtai/tools/system/karma.py:71`, `src/lingtai/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
-| `lingtai/tools/psyche/` | `src/lingtai/tools/psyche/_molt.py:490`, `src/lingtai/tools/psyche/_molt.py:562-566`, `src/lingtai/tools/psyche/_molt.py:708` | `psyche.*` runtime manager prose |
+| `lingtai/tools/context/` | `src/lingtai/tools/context/_molt.py:490`, `src/lingtai/tools/context/_molt.py:562-566`, `src/lingtai/tools/context/_molt.py:708` | `psyche.*` runtime manager prose |
 | `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:375`, `src/lingtai/tools/soul/config.py:385`, `src/lingtai/tools/soul/consultation.py:372` | `soul.*` runtime manager prose |
 | `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:288` | `email.*` runtime manager prose |
 

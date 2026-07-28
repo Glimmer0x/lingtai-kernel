@@ -211,7 +211,7 @@ def test_current_molt_context_prose_from_third_round():
     assert "batched summarize/reconstruction pass" in molt
     assert "stop repeating summarize" in molt
     assert "molt deliberately" in molt
-    assert "psyche-manual" in molt
+    assert "context-manual" in molt
 
 
 def test_render_current_molt_context_is_pure_and_natural_language():
@@ -245,7 +245,7 @@ def test_annotate_reconstruction_above_recovery_but_below_ratio():
     assert "75%" in molt
     assert "one batch" in molt
     assert "molt deliberately" in molt
-    assert "psyche-manual" in molt
+    assert "context-manual" in molt
 
 
 def test_annotate_reconstruction_still_above_ratio_says_stop_looping():
@@ -319,7 +319,7 @@ def test_session_manager_delegates_streak_to_reminder():
 
 def _agent_with_reminder(reminder):
     return SimpleNamespace(
-        _intrinsics={"psyche": object()},
+        _intrinsics={"context": object()},
         _session=SimpleNamespace(context_pressure_reminder=reminder),
     )
 
@@ -327,7 +327,7 @@ def _agent_with_reminder(reminder):
 def _agent_with_compat_attrs(*, active, streak):
     # No context_pressure_reminder attribute -> meta_block falls back.
     return SimpleNamespace(
-        _intrinsics={"psyche": object()},
+        _intrinsics={"context": object()},
         _session=SimpleNamespace(
             context_pressure_warning_active=active,
             context_pressure_streak=streak,

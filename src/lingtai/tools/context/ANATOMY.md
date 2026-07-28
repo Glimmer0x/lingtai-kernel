@@ -1,0 +1,94 @@
+---
+related_files:
+  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
+  - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/context/CONTRACT.md
+  - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/pad/ANATOMY.md
+  - src/lingtai/tools/lingtai/ANATOMY.md
+  - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/system/summarize.py
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/_molt.py
+  - src/lingtai/tools/context/_session_journal.py
+  - src/lingtai/tools/context/_snapshots.py
+  - src/lingtai/agent.py
+  - src/lingtai/kernel/base_agent/prompt.py
+maintenance: |
+  Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
+  Contract and connected anatomies. Update this graph with schema, lifecycle,
+  composition-path, summary-engine, or state-ownership changes.
+---
+# tools/context
+
+Context lifecycle family with exact public actions
+`molt | summarize | rebuild | manual`. `rebuild` is the sole active full
+reconstruction operation; refresh and molt invoke the same internal contract as
+passive lifecycle scenarios.
+
+## Components
+
+- `__init__.py`
+  - strict per-action schemas, including genuinely optional `rebuild.items` so
+    bare `{}` is schema-valid;
+  - `_summarize_action` pins record-only engine mode;
+  - `_rebuild_action` calls `agent._reconstruct_context` before invoking the
+    private summary engine, handles reconstruction failures as result dicts, and
+    marks successful engine results `prompt_reconstructed: true`;
+  - `_CHILD_SPECS`, `_build_children`, `_FAMILY`, `get_schema`, `handle` provide
+    single-registry schema/dispatch and isolate `_tc_id` to molt;
+  - manual adaptation resolves `context-manual` once after dispatch.
+- `../system/summarize.py` — private history-summary engine. It records pending
+  marker replacements, marks the applied set done, persists history, and only
+  then calls `chat.request_history_rebuild`. It is not a public `system` action.
+- `_molt.py` — agent and system molt implementations, replay selection,
+  archive/wipe, post-molt hook invocation before fresh-session creation, and
+  post-molt notification publishing.
+- `_session_journal.py` — fail-closed journal-path/frontmatter gate.
+- `_snapshots.py` — atomic pre-molt snapshots and retrospective persistence.
+- `agent.py`
+  - `_reload_prompt_sections` is the authoritative all-source composer and
+    reuses private `_lingtai_load`/`_pad_load`;
+  - `_reconstruct_context` wraps that composer and performs the final full
+    prompt flush;
+  - `_setup_from_init` routes refresh through this method and registers exactly
+    this method as the one post-molt hook.
+- `kernel/base_agent/prompt.py::_flush_system_prompt` calls the virtual
+  `agent._build_system_prompt`, preserving Agent-owned `base_prompt` and tool
+  composition in the published/provider-visible prompt.
+
+## Ordering and connections
+
+Active rebuild flow:
+
+```text
+context.handle
+  -> _rebuild_action
+  -> Agent._reconstruct_context
+     -> Agent._reload_prompt_sections
+        -> private LingTai/Pad composers + every other canonical source
+     -> virtual full prompt build/flush to disk and live interface
+  -> private summary engine (new and/or pending summaries)
+  -> chat.request_history_rebuild (provider replay)
+```
+
+Bare rebuild follows the same flow even when there are no pending markers.
+Refresh supplies already-resolved init data and later rebuilds its session with
+preserved history. Molt invokes the one registered `_reconstruct_context` hook
+before `ensure_session`. Pad/LingTai boot functions only perform initial
+composition; they do not register hooks.
+
+## State and invariants
+
+Context-owned persistent paths are `system/summaries/`, `history/snapshots/`,
+`history/chat_history.jsonl`, `history/chat_history_archive.jsonl`, and the
+post-molt notification. Pad and LingTai files are durable sources owned by their
+families/file mutation, but the context reconstruction path composes them along
+with base prompt, covenant, packaged layers, rules, brief, comment, guidance,
+and current tool/meta sections.
+
+`summarize` never reconstructs. `rebuild` always composes before history
+mutation and provider request. `molt` retains refusal-before-shed and its distinct
+archive/count/replay effects. No retired root or action is an alias.

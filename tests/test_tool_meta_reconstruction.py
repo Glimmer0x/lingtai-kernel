@@ -109,7 +109,7 @@ _MANUAL_MOLT_EVENT = {
         "but the rebuilt context is still at 80% of the context window, at or "
         "above the 75% recovery target. If more digested tool results can be "
         "summarized, do that first; otherwise tend durable stores and molt "
-        "deliberately. See psyche-manual."
+        "deliberately. See context-manual."
     ),
 }
 

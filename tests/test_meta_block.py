@@ -1735,7 +1735,7 @@ def _recon_agent(
         context_pressure_streak=0,
     )
     agent = SimpleNamespace(
-        _intrinsics={"psyche": object()},
+        _intrinsics={"context": object()},
         _config=SimpleNamespace(
             context_limit=context_limit, time_awareness=True, timezone_awareness=True
         ),
@@ -1795,7 +1795,8 @@ def test_forced_rebuild_always_carries_unified_warning_even_when_low():
     assert "100000 tokens (100%) before" in warning
     assert "40000 tokens (40%) after" in warning
     assert "prefer a proactive" in warning
-    assert "rebuild=true" in warning
+    # The proactive rebuild is now the explicit public action, not a boolean.
+    assert "context(action='rebuild')" in warning
     assert "0.85" in warning or "85%" in warning
     assert "75%" in warning or "0.75" in warning
     assert "molt" in warning
@@ -3598,7 +3599,7 @@ def test_clear_active_notification_holder_handles_missing_key():
 # Post-molt active stamping regression.
 #
 # ``post-molt`` itself is an ordinary notification channel for active stamping.
-# The race is narrower: the *same* ``psyche.molt`` result batch that publishes
+# The race is narrower: the *same* ``context.molt`` result batch that publishes
 # post-molt must skip stamping/committing it.  That per-batch deferral lives in
 # ``base_agent.turn``; once a later ACTIVE tool batch exists, the post-molt
 # notification may be consumed normally.
@@ -4152,14 +4153,14 @@ def test_attach_active_runtime_is_wired_into_turn_boundary():
 # ---------------------------------------------------------------------------
 
 
-def _molt_agent(*, warning_active=False, streak=0, psyche=True):
+def _molt_agent(*, warning_active=False, streak=0, context_intrinsic=True):
     """Minimal agent stand-in for build_molt_context.
 
-    build_molt_context reads agent._intrinsics (must contain 'psyche') and the
+    build_molt_context reads agent._intrinsics (must contain 'context') and the
     session's sustained-pressure streak state (set by SessionManager).
     """
     return SimpleNamespace(
-        _intrinsics={"psyche": object()} if psyche else {},
+        _intrinsics={"context": object()} if context_intrinsic else {},
         _config=SimpleNamespace(
             context_limit=None,
             time_awareness=True,
@@ -4172,9 +4173,9 @@ def _molt_agent(*, warning_active=False, streak=0, psyche=True):
     )
 
 
-def test_build_molt_context_absent_without_psyche():
-    agent = _molt_agent(warning_active=True, streak=5, psyche=False)
-    # Even with a fully-armed streak, no molt context when psyche is absent.
+def test_build_molt_context_absent_without_context():
+    agent = _molt_agent(warning_active=True, streak=5, context_intrinsic=False)
+    # Even with a fully-armed streak, no molt context when context is absent.
     assert build_molt_context(agent, 0.95) is None
 
 
@@ -4204,7 +4205,7 @@ def test_build_molt_context_warns_from_third_high_round():
     assert "batched summarize/reconstruction pass" in molt
     assert "stop repeating summarize" in molt
     assert "molt deliberately" in molt
-    assert "psyche-manual" in molt
+    assert "context-manual" in molt
 
 
 def test_build_molt_context_keeps_warning_while_streak_sustained():
@@ -4229,7 +4230,7 @@ def test_build_molt_context_is_natural_language_not_tag_payload():
 
 
 def test_build_molt_context_handles_missing_session_gracefully():
-    agent = SimpleNamespace(_intrinsics={"psyche": object()})
+    agent = SimpleNamespace(_intrinsics={"context": object()})
     # No _session attribute at all -> no warning, no crash.
     assert build_molt_context(agent, 0.90) is None
 
@@ -4287,7 +4288,7 @@ def _molt_agent_with_reminder(reminder):
         context_pressure_reminder=reminder,
     )
     return SimpleNamespace(
-        _intrinsics={"psyche": object()},
+        _intrinsics={"context": object()},
         _config=SimpleNamespace(
             context_limit=None, time_awareness=True, timezone_awareness=True
         ),
@@ -4345,7 +4346,7 @@ def _budget_agent(
     budget=1_000_000,
     input_tokens=0,
     cached_tokens=0,
-    psyche=True,
+    context_intrinsic=True,
     warning_active=False,
     streak=0,
     has_getter=True,
@@ -4363,7 +4364,7 @@ def _budget_agent(
         context_pressure_streak=streak,
     )
     agent = SimpleNamespace(
-        _intrinsics={"psyche": object()} if psyche else {},
+        _intrinsics={"context": object()} if context_intrinsic else {},
         _config=SimpleNamespace(
             cache_miss_budget=budget,
             context_limit=None,
@@ -4419,9 +4420,9 @@ def test_cache_miss_budget_context_honors_custom_budget():
     assert ctx["cache_miss_budget"] == 250_000
 
 
-def test_cache_miss_budget_context_absent_without_psyche():
-    # Consistent with build_molt_context: no psyche intrinsic -> no reminder.
-    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, psyche=False)
+def test_cache_miss_budget_context_absent_without_context():
+    # Consistent with build_molt_context: no context intrinsic -> no reminder.
+    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, context_intrinsic=False)
     assert build_cache_miss_budget_context(agent) is None
 
 
@@ -4539,7 +4540,8 @@ def test_build_context_rebuild_hint_stamps_after_high_ratio():
 
     assert hint is not None
     assert "context now above 85%" in hint
-    assert "rebuild=true" in hint
+    # The proactive rebuild is now the explicit public action, not a boolean.
+    assert "context(action='rebuild')" in hint
     # The hint clarifies that recording summaries does not itself rebuild the
     # provider context, that rebuild=true is a permitted option (not required),
     # and that the runtime forces a rebuild at the 1.0 hard boundary otherwise.
@@ -4768,7 +4770,7 @@ def test_build_meta_preserves_sustained_overflow_and_budget_molt_lines():
 
     chat = _overflow_chat(1000 / 900)  # ~1.111 > 1.0 -> overflow warning active
     agent = SimpleNamespace(
-        _intrinsics={"psyche", "system"},
+        _intrinsics={"context", "system"},
         _config=SimpleNamespace(
             time_awareness=False,
             timezone_awareness=False,

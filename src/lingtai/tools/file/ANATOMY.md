@@ -62,6 +62,9 @@ operation once at construction; no import or closure rebuild happens per call.
 Every operation reaches the working tree only through the injected
 `agent._file_io` service, resolving relative paths via the shared
 `_file_paths.resolve_workdir_path`; this package performs no I/O of its own.
+`write` and `edit` stop at that durable I/O boundary: they have no prompt-manager
+or context-reconstruction connection and never hot-load a changed prompt source.
+Activation is owned separately by `context.rebuild` and passive refresh/molt.
 The reserved `manual` child loads the `file-manual` intrinsic skill bundle
 through `tool_family.manual`, which reads it from the agent's installed
 `.library/intrinsic/capabilities/` tree.

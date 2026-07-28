@@ -20,7 +20,7 @@ from lingtai.kernel.base_agent import turn
 class _FakeAgent:
     def __init__(self):
         self.calls = []
-        # No "psyche" intrinsic → real _check_molt_pressure returns early,
+        # No "context" intrinsic → real _check_molt_pressure returns early,
         # but tests monkeypatch it anyway to assert it is invoked first.
         self._intrinsics = {}
         self.sync_raises = False
@@ -76,8 +76,8 @@ def test_molt_pressure_error_propagates(monkeypatch):
     assert agent.calls == []
 
 
-def test_real_check_molt_pressure_noop_without_psyche():
-    # Exercises the real _check_molt_pressure early-return path (no "psyche"
+def test_real_check_molt_pressure_noop_without_context():
+    # Exercises the real _check_molt_pressure early-return path (no "context"
     # intrinsic), confirming the helper wires the real function, not a stub.
     agent = _FakeAgent()
     turn._turn_boundary_housekeeping(agent)

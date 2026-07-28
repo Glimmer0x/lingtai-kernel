@@ -78,7 +78,7 @@ The `input.name` field (required for `spawn`) doubles as the avatar's working-di
 - No slashes, no dots, no spaces, no leading `.`
 - Max 64 characters
 
-The avatar's display name (nickname) can be set separately via `psyche(name, nickname, ...)` and has no such constraints.
+The avatar's display name (nickname) can be set separately via `system(action="name_nickname", input={"content": "<nickname>"}, reasoning="...")` and has no such constraints.
 
 ## 4. The `reasoning` Field — Mission Briefing
 
@@ -110,7 +110,7 @@ Every `avatar(action="spawn", ...)` call creates an independent process that con
 After spawning, record the avatar's address (working-directory name), the
 mission you gave it, and why you delegated. Pad is the roster of delegations you
 are accountable for — update it when the avatar reports back or completes.
-(Pad practice itself: `psyche-manual` §5.)
+(Pad practice itself: `context-manual` §5.)
 
 ### When an avatar goes quiet
 

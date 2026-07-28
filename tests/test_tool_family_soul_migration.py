@@ -705,8 +705,12 @@ def test_soul_is_a_migrated_ltp_v2_family_for_the_root_summarize_control():
     assert summary_requested({"summarize": True}, tool_name="soul") is True
     assert summary_requested({"summarize": False}, tool_name="soul") is False
     # Scoped by name: an unmigrated tool's own ``summarize``-named domain field
-    # is never reinterpreted as this cross-cutting control.
-    assert summary_requested({"summarize": True}, tool_name="psyche") is False
+    # is never reinterpreted as this cross-cutting control. ``psyche`` and
+    # ``system`` were each the example here until they migrated onto the same
+    # envelope and joined the allowlist; every currently registered family is
+    # now migrated, so this negative control names a non-allowlisted tool
+    # directly rather than tracking whichever family migrates next.
+    assert summary_requested({"summarize": True}, tool_name="unmigrated_tool") is False
 
 
 # ---------------------------------------------------------------------------

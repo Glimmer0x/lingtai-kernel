@@ -150,7 +150,7 @@ three deliberate ways to keep it lean, ordered from local to whole-conversation:
    outputs, reviews, long reports, or any result whose important facts you cannot
    name in advance. For those, leave `summary=false`, consume the result, then
    summarize a posteriori — or molt for whole-conversation pressure.
-2. **A posteriori — agent-guided.** Use `system(action="summarize")` after you
+2. **A posteriori — agent-guided.** Use `context(action="summarize")` after you
    have consumed a result and no longer need its raw text. Keep a useful
    agent-authored summary; the original remains recoverable from durable logs by
    `tool_call_id`.
@@ -162,18 +162,21 @@ Both summary modes are non-canonical: the raw original is preserved in durable
 logs and recoverable by `tool_call_id`. A priori avoids ever spending context on
 the raw; a posteriori reclaims context after the fact.
 
-**Forced context rebuild boundary:** summarize has two mechanisms. It records a
-compact replacement in runtime history marked `status: pending`, but it does not
-by itself rebuild the active provider-side context. Below the full-context
-boundary, pending summarized history may remain at the provider layer while the
-session keeps appending; from the agent's perspective, the old raw block may
-still be in the current continuation. Do not call `refresh` just to apply
-summarize. Once context is at/above `0.85`, the runtime stamps
-`_meta.agent_meta.agent_state.context.rebuild`, which permits a proactive manual rebuild with
-`system(action="summarize", rebuild=true)` — either with new items (record then
-apply) or with no items (apply already-pending summaries) — when the fresh
-context is worth the cost; applied summaries flip to `status: done`. The manual
-rebuild action's own tool result, including its `context` snapshot plus
+**Forced context rebuild boundary:** `context(action="summarize")` records a
+compact replacement in runtime history marked `status: pending`, but does not
+by itself rebuild the active provider context. Below the full-context boundary,
+pending summarized history may remain at the provider layer while the session
+keeps appending; the old raw block may still be in the current continuation. Do
+not call lifecycle refresh merely to apply summarize. Once context is at/above
+`0.85`, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`, which
+permits one proactive `context(action="rebuild")` when a fresh context is worth
+the cost. That action is the one active **full reconstruction**: first re-read
+and recompose every canonical prompt source, then record/apply new or pending
+summaries, then request provider replay with the new prompt/history. Bare
+`input={}` remains valid with zero pending summaries; it still reconstructs and
+replays, though it provides no history compaction. Applied summaries flip to
+`status: done`. The rebuild action's own tool result, including its `context`
+snapshot plus
 `token_usage.session.context_tokens` and `token_usage.session.context_usage`,
 reports the provider round that requested the rebuild.
 Post-rebuild context usage does not exist yet; it first becomes observable on the
@@ -203,7 +206,7 @@ summaries to apply, so summarize more or molt rather than relying on it for
 compaction. Do not loop rebuild/summarize. Reference manuals explain why this
 boundary exists; this resident section states what to do.
 
-Both a-priori (`summary=true`) and a-posteriori (`system(action="summarize")`)
+Both a-priori (`summary=true`) and a-posteriori (`context(action="summarize")`)
 summary are mini molts for tool results; molt is the stronger
 whole-conversation boundary: if you have already decided to molt, do not pay a
 separate summarize call merely to prepare, and if summarize/reconstruction

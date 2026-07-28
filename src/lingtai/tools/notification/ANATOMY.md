@@ -89,7 +89,8 @@ are unchanged.
   while defaulting the channel to `system`
   (`src/lingtai/tools/notification/__init__.py:242-279`).
 - `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
-  to email, system, psyche, and soul (`src/lingtai/tools/registry.py:45-53`).
+  to email, system, context, pad, lingtai, and soul
+  (`src/lingtai/tools/registry.py:48-69`).
 
 ## Connections
 
@@ -112,7 +113,7 @@ are unchanged.
   shared `tools/_manual.py::load_installed_manual` loader
   (`src/lingtai/agent.py:311-372`).
 - `base_agent.tools._dispatch_tool()` injects `_tc_id` into every intrinsic's
-  args; only psyche's molt consumes it, so `handle()` strips it before the
+  args; only `context.molt` consumes it, so `handle()` strips it before the
   closed envelope is validated (`src/lingtai/kernel/base_agent/tools.py:28-35`).
 - `kernel/tool_result_summary.py::_LTP_V2_MIGRATED_FAMILIES` lists
   `notification`, so the advertised root `summarize` boolean is actually
@@ -168,7 +169,7 @@ are unchanged.
   the `injection_seq` freshness field stays outside the envelope and never
   reaches the tool, since the pair is spliced onto the wire, not dispatched.
 - Large tool results are ranked and compacted through
-  `system(action="summarize")`. Notification dismissal retains only the legacy
+  `context(action="summarize")`. Notification dismissal retains only the legacy
   reminder escape hatch described by the manual.
 - Changes to notification read/dismiss semantics must also check
   `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md`; changes to Port behavior

@@ -96,8 +96,8 @@ A null `reason` counts as omitted, so it does not satisfy this requirement.
 
 New large tool results are not notification events. The kernel ranks formal
 results under `_meta.agent_meta.agent_state.current_tool_result_chars`; read
-`../../../system-manual/reference/summarize-manual/SKILL.md` for the canonical digest,
-`system(action='summarize')`, recovery, and summarize-versus-molt procedure. Do
+`../../../context-manual/reference/summarize-manual/SKILL.md` for the canonical digest,
+`context(action='summarize')`, recovery, and summarize-versus-molt procedure. Do
 not duplicate that workflow here.
 
 A persisted or pre-molt `source='large_tool_result'` system event may still

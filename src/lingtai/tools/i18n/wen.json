@@ -5,15 +5,15 @@
   "soul.consultation_cue_insights": "退一步而观上方之对话——彼即汝近来之文脉、汝之日记、汝之所为。同一己也，唯后一步耳。勿总括，亦勿进谏。但思之。当下之己，近而不能见者何？所未问之问何在？所弃之绪何在？其所栖之框之外者何？凡有所牵，从之而往——半成之觉，正其所求。",
   "soul.consultation_cue_past": "此乃汝未来之自己之日记——彼于汝那次凝蜕之后所思所行。\n\n--- 未来之我之日记 ---\n{diary}\n--- 日记终 ---",
   "soul.appendix_note": "心流咨询。下列诸声皆出自往昔之己（每凝蜕之际所摄）与对当前对话之退步审视。往昔之己已发其声，汝可参其言，然抉择终在己心。又须知：若某声之中有 `Wanted to: tool(args)` 之行，乃往昔或退步之我所欲召之器——彼调未行，乃献于汝之议也。其所以然之理，常在邻文或参数之间。当作建言观之，非已成之事。下次咨询之时，此调用结果对即被替换。",
-  "psyche.context_forget_summary": "[系统] 凝蜕毕。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。欲寻更多前事，查 logs/events.jsonl——其文浩繁，宜 grep、tail、按类筛之，勿整取。",
-  "psyche.context_forget_summary_aed": "[系统] 灵识连 {attempts} 次失联，上下文已清。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
-  "psyche.context_forget_summary_signal": "[系统] 上下文由 {source} 清之。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
+  "context.context_forget_summary": "[系统] 凝蜕毕。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。欲寻更多前事，查 logs/events.jsonl——其文浩繁，宜 grep、tail、按类筛之，勿整取。",
+  "context.context_forget_summary_aed": "[系统] 灵识连 {attempts} 次失联，上下文已清。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
+  "context.context_forget_summary_signal": "[系统] 上下文由 {source} 清之。工作记忆已空。近时对话之条已存于上下文中——先阅之以复位。另查 system/pad.md 览工作手记，以 knowledge 目录查典籍条目，再察邮匣中所领之任，由此续之。",
   "email.unread_digest": "[邮] 未阅之书凡 {count} 封，新者发于 {recency}。\n\n{entries}\n{more}",
   "email.unread_digest.entry": "  {n}. 自 {name} ({address}) —— {subject}\n     编号：{id}\n     发于：{sent_at}\n     {preview}",
   "email.unread_digest.more": "（仅显前 {shown} 封，共 {total}）",
   "email.unread_digest.no_subject": "（无题）",
   "soul.dismiss_description": "销心流之告。action='dismiss' 时用。",
   "avatar.parent_prompt": "[系统] 汝乃 {parent_name} 之他我，其址为 {parent_address}。请记此事于汝 psyche memory 之中，以志本源。若功成、遇难解之事、或需复命之时，以飞鸽达汝父代，址如上所示。",
-  "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 read 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。知识乃汝私藏；若无可取者，勿妄载。",
-  "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 psyche({object:'pad', action:'append', files:[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。"
+  "knowledge.preamble": "下列诸卷，汝跨凝蜕之私藏长记也。欲忆昔之所习、所断、所悟者，以 read 取其 location 所指之 KNOWLEDGE.md，循而依之。每卷之匣或附副件（script、素材、原始之日志）——KNOWLEDGE.md 自有所引。常用之卷可以 pad(action='append', input={'files':[location]}) 固于 pad，跨轮常存。知识乃汝私藏；若无可取者，勿妄载。",
+  "skills.preamble": "下列诸技，各司其事。凡所遇事与技之描合者，以 read 取其 location 所指之 SKILL.md，循而行之。每技之匣，或含副件（script、template、data），SKILL.md 自有所引。常用之技，可以 pad(action='append', input={'files':[location]}) 固于 pad，跨轮常存。若无可取者，勿妄载。"
 }

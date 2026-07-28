@@ -549,23 +549,23 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "editable/source/dev" in runtime_update_body
         assert "receiving explicit confirmation" in runtime_update_body
 
-        psyche_md = (
+        context_manual_md = (
             workdir
             / ".library"
             / "intrinsic"
             / "capabilities"
-            / "psyche-manual"
+            / "context-manual"
             / "SKILL.md"
         )
-        assert psyche_md.is_file()
-        psyche_body = psyche_md.read_text(encoding="utf-8")
-        assert "name: psyche-manual" in psyche_body
-        assert "## Asset catalog" in psyche_body
-        assert "assets/molt-template.md" in psyche_body
-        assert "9-section summary scaffold" in psyche_body
-        assert "9. **Context Status**" not in psyche_body
+        assert context_manual_md.is_file()
+        context_manual_body = context_manual_md.read_text(encoding="utf-8")
+        assert "name: context-manual" in context_manual_body
+        assert "## Asset catalog" in context_manual_body
+        assert "assets/molt-template.md" in context_manual_body
+        assert "9-section summary scaffold" in context_manual_body
+        assert "9. **Context Status**" not in context_manual_body
 
-        molt_template_asset = psyche_md.parent / "assets" / "molt-template.md"
+        molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
         assert molt_template_asset.is_file()
         molt_template_body = molt_template_asset.read_text(encoding="utf-8")
         assert "# Consequential Molt Summary Template" in molt_template_body
@@ -1319,10 +1319,10 @@ def test_skills_manual_documents_external_skill_intake_default():
         assert phrase in manual
 
 
-def test_psyche_manual_routes_skill_sharing_through_custom_by_default():
+def test_context_manual_routes_skill_sharing_through_custom_by_default():
     manual = (
         Path(__file__).resolve().parents[1]
-        / "src/lingtai/intrinsic_skills/psyche-manual/SKILL.md"
+        / "src/lingtai/intrinsic_skills/context-manual/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "peers install it into their own `.library/custom/<name>/`" in manual
     assert "explicit opt-in local-network shared root" in manual

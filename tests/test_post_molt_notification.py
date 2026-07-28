@@ -31,7 +31,7 @@ from tests._molt_helpers import write_session_journal as _write_session_journal
 # ---------------------------------------------------------------------------
 
 
-def _make_agent_with_psyche(tmp_path):
+def _make_agent_with_context(tmp_path):
     from lingtai.agent import Agent
 
     svc = MagicMock()
@@ -40,7 +40,7 @@ def _make_agent_with_psyche(tmp_path):
     svc.model = "gemini-test"
     return Agent(
         service=svc, agent_name="test", working_dir=tmp_path / "test",
-        capabilities=["psyche"],
+        capabilities=["context"],
     )
 
 
@@ -79,7 +79,7 @@ def _build_molt_call_entry(mock_interface, tc_id, summary, reasoning=None):
     args = {"object": "context", "action": "molt", "summary": summary}
     if reasoning is not None:
         args["_reasoning"] = reasoning
-    tc_block = ToolCallBlock(id=tc_id, name="psyche", args=args)
+    tc_block = ToolCallBlock(id=tc_id, name="context", args=args)
     mock_entry = MagicMock()
     mock_entry.role = "assistant"
     mock_entry.content = [tc_block]
@@ -100,7 +100,7 @@ def _read_post_molt(agent):
 class TestPostMoltNotificationAgentMolt:
     def test_agent_molt_publishes_post_molt_with_reasoning(self, tmp_path):
         """Agent molt → post-molt notification carries the agent's reasoning."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -113,7 +113,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "finish the foo feature",
                 "_reasoning": "context full; want to resume foo cleanly",
@@ -150,7 +150,7 @@ class TestPostMoltNotificationAgentMolt:
 
     def test_agent_molt_without_reasoning_falls_back_to_summary(self, tmp_path):
         """Without `_reasoning`, the reminder falls back to the summary head."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -161,7 +161,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "first line: keep going on the parser bug\nsecond line",
                 "_tc_id": tc_id,
@@ -184,7 +184,7 @@ class TestPostMoltNotificationAgentMolt:
     def test_agent_molt_accepts_plain_reasoning_key(self, tmp_path):
         """ToolExecutor injects `_reasoning`, but accept `reasoning` too
         so direct callers (tests, internal call sites) work consistently."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -195,7 +195,7 @@ class TestPostMoltNotificationAgentMolt:
             )
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "continue work",
                 "reasoning": "plain-key reasoning",
@@ -218,12 +218,12 @@ class TestPostMoltNotificationAgentMolt:
 
 class TestPostMoltNotificationSystemForget:
     def test_context_forget_publishes_post_molt(self, tmp_path):
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             _setup_mock_chat(agent)
 
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 
@@ -242,11 +242,11 @@ class TestPostMoltNotificationSystemForget:
             agent.stop()
 
     def test_context_forget_aed_source_propagates(self, tmp_path):
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="aed", attempts=2)
             assert result.get("status") == "ok"
 
@@ -274,7 +274,7 @@ class TestPostMoltContinuationSignal:
     """
 
     def test_agent_molt_carries_continuation_fields(self, tmp_path):
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -286,7 +286,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -311,7 +311,7 @@ class TestPostMoltContinuationSignal:
             agent.stop()
 
     def test_instructions_spell_out_reconstruct_then_ack(self, tmp_path):
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -319,7 +319,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary="keep going")
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": "keep going", "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -358,7 +358,7 @@ class TestPostMoltContinuationSignal:
     def test_no_next_action_field_even_with_marker_summary(self, tmp_path):
         """A summary that looks like it has a 'next action:' marker must NOT
         produce a next_action field — heuristic extraction is removed."""
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             mock_interface = _setup_mock_chat(agent)
@@ -367,7 +367,7 @@ class TestPostMoltContinuationSignal:
             _build_molt_call_entry(mock_interface, tc_id, summary=summary)
 
             journal_path = _write_session_journal(agent)
-            from lingtai.tools.psyche._molt import _context_molt
+            from lingtai.tools.context._molt import _context_molt
             result = _context_molt(agent, {
                 "summary": summary, "_tc_id": tc_id,
                 "session_journal_path": journal_path,
@@ -381,11 +381,11 @@ class TestPostMoltContinuationSignal:
             agent.stop()
 
     def test_system_forget_also_carries_continuation_fields(self, tmp_path):
-        agent = _make_agent_with_psyche(tmp_path)
+        agent = _make_agent_with_context(tmp_path)
         agent.start()
         try:
             _setup_mock_chat(agent)
-            from lingtai.tools.psyche._molt import context_forget
+            from lingtai.tools.context._molt import context_forget
             result = context_forget(agent, source="warning_ladder")
             assert result.get("status") == "ok"
 

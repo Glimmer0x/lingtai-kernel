@@ -761,7 +761,7 @@ def test_refresh_preset_omitting_mcp_keeps_channel_reply_surface(tmp_path, monke
     agent._setup_from_init()
 
     assert "email" in agent._intrinsics
-    assert "psyche" in agent._intrinsics
+    assert "context" in agent._intrinsics
     assert "mcp" in agent._tool_handlers
     assert "telegram" in agent._tool_handlers
     assert "telegram" in getattr(agent, "_mcp_init_specs", {})

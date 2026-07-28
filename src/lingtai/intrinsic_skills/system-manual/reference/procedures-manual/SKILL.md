@@ -83,12 +83,14 @@ boundary, keep working: pending summarized history is not a failure, and
 force a rebuild.
 
 `reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
-`context.rebuild` stamp and the one proactive
-`system(action="summarize", input={"rebuild": true})` call it permits, the 1.0
-once-per-episode forced rebuild, the `reconstruction.warning`, the persistent
-overflow `Molt IMMEDIATELY` line, and the task-boundary molt threshold. Do not
-loop rebuild/summarize. If summarize or a rebuild still cannot bring context
-below `0.75 * context_window`, tend durable stores and molt deliberately.
+`context.rebuild` stamp and the one proactive `context(action="rebuild")` call
+it permits, the 1.0 once-per-episode forced provider replay, the
+`reconstruction.warning`, the persistent overflow `Molt IMMEDIATELY` line, and
+the task-boundary molt threshold. The public rebuild is the one active full
+reconstruction: canonical prompt sources first, pending/new summaries second,
+provider replay last; bare `{}` remains valid with zero pending. Do not loop
+rebuild/summarize. If summarize or a rebuild still cannot bring context below
+`0.75 * context_window`, tend durable stores and molt deliberately.
 
 ## 2. Action and responsiveness
 
@@ -228,14 +230,14 @@ lifecycle.
 
 ## 6. Molt and durable stores
 
-**The molt procedure lives in `psyche-manual`, not here.** It owns durable-store
+**The molt procedure lives in `context-manual`, not here.** It owns durable-store
 tending, the session-journal / molt-history record, the successor summary, and
 the consequential-handoff templates. Read it before molting — while context is
 still cheap, not at the last moment.
 
 The invariant in this procedures reference is routing: do not reconstruct molt
 mechanics here. For the checklist, templates, and summary rules, go to
-`psyche-manual`.
+`context-manual`.
 
 ## 7. Skill routing
 

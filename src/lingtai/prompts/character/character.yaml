@@ -31,7 +31,7 @@ related_files:
     why: >
       The owning prompt-source anatomy: it records character as the self-authored,
       injected identity. Read it before confusing character with mechanical identity.
-  - path: src/lingtai/tools/psyche/_lingtai.py
+  - path: src/lingtai/tools/lingtai/_lingtai.py
     why: >
       Owns the concrete character-section injection rule: it reads system/lingtai.md and
       writes the `character` section (deleting it when the file is empty/missing). Crawl
@@ -49,6 +49,6 @@ related_files:
       character is self-authored self and covenant is the operator contract; keep them
       together so self-authored identity is not mistaken for constitutional authority.
 maintenance:
-  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete injection rules (here psyche/_lingtai.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
+  - related_files is a progressive-disclosure crawl graph, not a dependency dump: peer section YAMLs for boundary/overlap risk plus the canonical builder/navigation files that own the concrete injection rules (here tools/lingtai/_lingtai.py). Each link explains what rule or boundary its target owns; do not list tests merely because they validate behavior.
   - character is externally/self-authored, not a kernel body; do not add one. The body relation lives in injection_contract.content_source, so do not point related_files at a concrete prompt `.md` body. `.md` links are reserved for the owning ANATOMY and canonical manual/reference docs that own deeper rules, never a prompt body or a test.
   - Keep the character (self-authored) vs identity (mechanical) vs pad (current work) boundary explicit.
