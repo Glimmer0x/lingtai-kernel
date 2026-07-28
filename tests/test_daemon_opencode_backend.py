@@ -125,17 +125,15 @@ class _RecordingPort:
 
 
 def test_schema_enum_includes_opencode():
-    from lingtai.tools.daemon import get_schema
-    schema = get_schema("en")
-    backend = schema["properties"]["backend"]
+    from tests._daemon_helpers import daemon_action_input_schema
+    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
     assert "opencode" in backend["enum"]
     assert "opencode" in backend["description"]
 
 
 def test_schema_backend_options_description_mentions_opencode():
-    from lingtai.tools.daemon import get_schema
-    schema = get_schema("en")
-    bo = schema["properties"]["tasks"]["items"]["properties"]["backend_options"]
+    from tests._daemon_helpers import daemon_emanate_task_schema
+    bo = daemon_emanate_task_schema("en")["properties"]["backend_options"]
     assert "opencode" in bo["description"]
     # The discovery hint should now point at opencode's own --help too.
     assert "opencode run --help" in bo["description"]

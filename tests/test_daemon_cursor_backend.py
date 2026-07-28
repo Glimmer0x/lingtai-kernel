@@ -85,19 +85,17 @@ def _source_cursor_stream(*events):
 
 
 def test_schema_enum_includes_cursor():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_action_input_schema
 
-    schema = get_schema("en")
-    backend = schema["properties"]["backend"]
+    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
     assert "cursor" in backend["enum"]
     assert "cursor" in backend["description"]
 
 
 def test_schema_backend_options_description_mentions_cursor():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_emanate_task_schema
 
-    schema = get_schema("en")
-    bo = schema["properties"]["tasks"]["items"]["properties"]["backend_options"]
+    bo = daemon_emanate_task_schema("en")["properties"]["backend_options"]
     assert "cursor" in bo["description"]
     assert "agent --help" in bo["description"]
 

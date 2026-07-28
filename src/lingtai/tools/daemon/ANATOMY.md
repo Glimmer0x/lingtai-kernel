@@ -3,7 +3,10 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/system_prompt.py
+  - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/llm/base.py
@@ -24,6 +27,7 @@ related_files:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/mcp_servers/daemon_common/server.py
   - tests/test_daemon.py
+  - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py
   - tests/test_daemon_run_dir.py
@@ -172,7 +176,14 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 
 ## Public API
 
-The `daemon` tool exposes five actions:
+`daemon` is one model-facing tool carrying the LTP v2 action-separated envelope
+(`action`, `input`, required `reasoning`, optional `summarize`) composed by
+`_tool_family.py` from six internal `ChildTool`s. The children consume no extra
+model tool slot. Each action's own strict `input` fields are listed in
+`CONTRACT.md` §Tool Surface; `list`/`check`/`manual` are read-only and
+`emanate`/`ask`/`reclaim` are the side-effectful three.
+
+The `daemon` tool exposes six actions:
 
 | Action     | Description |
 |------------|-------------|
@@ -182,6 +193,7 @@ The `daemon` tool exposes five actions:
 | `check`    | Read-only progress tail: `daemon.json` state + last N events from `events.jsonl` + a compact `artifacts` block (the run's artifact manifest — relative path/size/mtime/role per important file, plus run-level state/result_path/error_path). On in-memory registry miss (e.g. after refresh/molt) falls back to the durable `daemons/*/` run dirs, resolving by full `run_id` (exact) or short `handle` (most-recent, with ambiguity flagged) |
 | `list`     | Progressive-disclosure index: active registry + historical run dirs; lazily rebuilds missing/invalid/stale-version `daemon.json` and returns prompt/result previews with search filters |
 | `reclaim`  | Cancel all running emanations, shut down CLI process groups/thread pools through the same runtime-shutdown helper used by agent stop, reset ID counter |
+| `manual`   | Return the installed `daemon-manual` skill via the shared reserved `tool_family.manual.build_manual_child(agent, "daemon")` child: canonical `content[0].text` body + `structuredContent.manual_path`, returned verbatim with no double wrap. Reaches no `DaemonManager` method, so it performs no daemon operation |
 
 Every LingTai worker also receives the intrinsic `compact` tool. Its `action`
 is required: explicit `action="manual"` is read-only, explicit `action="run"`
@@ -196,7 +208,7 @@ axis is not inherited.
 ```
 daemon/__init__.py
   ├── DaemonManager.__init__        — stores agent ref, config ceilings, emanation registry
-  ├── handle()                      — top-level dispatcher (emanate/list/ask/check/reclaim)
+  ├── handle()                      — internal legacy flat dispatcher (emanate/list/ask/check/reclaim/manual); NOT the registered model-facing handler since the ToolFamily migration
   ├── _daemon_intrinsic_surface()   — exposes explicitly requested `email` plus the automatic LingTai `compact` schema
   ├── _build_tool_surface()         — auto-includes `compact`, filters other requested tools against blacklist, expands groups, and merges preset/MCP/email surfaces; preset emanations also keep the NARROW parent host floor (`_parent_host_tool_floor()`: shell + file primitives only) so saved presets that omit core caps don't make requested host tools unknown — optional/provider parent tools (vision/web_search) are NOT borrowed and stay unknown unless the preset supplies them
   ├── _instantiate_preset_capabilities() — sets up preset tool surface in a sandbox
@@ -327,4 +339,4 @@ intentional omission of the parent notification axis.
   exposes its run-local raw-result locator to the worker.
 - **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
 - **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
-- **Kernel hooks:** `setup()` is called during capability initialization; `DaemonManager.handle()` is registered as the `daemon` tool handler.
+- **Kernel hooks:** `setup()` is called during capability initialization; `DaemonFamilyDispatcher.handle()` (`daemon/_tool_family.py`) is registered as the `daemon` tool handler, and translates one envelope call into `DaemonManager.handle()`'s unchanged flat shape. `daemon` is on `kernel/tool_result_summary.py`'s `_LTP_V2_MIGRATED_FAMILIES` allowlist, so the canonical root `summarize` control it advertises is actually honored.

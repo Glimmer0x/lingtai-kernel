@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/daemon/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -331,13 +332,29 @@ child `input` must declare every key its handler accepts, so declaring it
 surfaces existing behavior rather than adding a capability. `system` owns no
 settings file at either level and its manual says so.
 
+`daemon` (`emanate | list | ask | check | reclaim | manual`) is the twelfth
+family migrated to this contract, and the one with the largest retained engine.
+Its final model-facing root is exactly `action`, `input`, `reasoning`, and
+`summarize`, and each action's arguments live only in that action's own strict
+`input`: `tasks`/`backend`/`max_turns`/`timeout` belong to `emanate`,
+`contains`/`status`/`include_done` to `list`, `message` to `ask`, `truncate` to
+`check`, while `reclaim` and `manual` take the canonical strict-empty `input`
+(`id` is shared by `ask`/`check` and `last` by `list`/`check`, each declared in
+both branches). It follows `shell`'s division: a dedicated
+`daemon/_tool_family.py` owns the public schema and a `DaemonFamilyDispatcher`
+that translates the envelope into `DaemonManager`'s unchanged legacy flat call
+shape, so the emanation engine, backend routing, detached supervisor,
+completion signaling, cancellation, timeouts, and terminal notifications are
+untouched by the migration. Its pre-migration flat `summary` boolean is
+replaced by the canonical root `summarize`, joining the allowlist below in the
+same change. See `src/lingtai/tools/daemon/CONTRACT.md`.
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, and
-`system`), so
+`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
+and `daemon`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the

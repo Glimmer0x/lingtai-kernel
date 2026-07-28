@@ -461,9 +461,9 @@ def test_connect_task_mcp_registrations_builds_surface_and_closes(tmp_path, monk
 
 def test_daemon_schema_exposes_prompt_and_removes_system_prompt():
     """Task items expose LingTai first-user prompt and reject the old field."""
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_emanate_task_schema
 
-    task_props = get_schema("en")["properties"]["tasks"]["items"]["properties"]
+    task_props = daemon_emanate_task_schema("en")["properties"]
     assert "prompt" in task_props
     assert task_props["prompt"]["type"] == "string"
     assert "system_prompt" not in task_props
@@ -477,9 +477,9 @@ def test_daemon_schema_exposes_prompt_and_removes_system_prompt():
 
 
 def test_daemon_schema_context_token_limit_description_matches_contract():
-    from lingtai.tools.daemon import get_schema
+    from tests._daemon_helpers import daemon_emanate_task_schema
 
-    desc = get_schema("en")["properties"]["tasks"]["items"]["properties"][
+    desc = daemon_emanate_task_schema("en")["properties"][
         "context_token_limit"
     ]["description"].lower()
 

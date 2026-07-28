@@ -7,8 +7,8 @@ description: >
   routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-qwen-code/SKILL.md
@@ -70,7 +70,7 @@ parent stdio MCP registrations) and injects it via the
 `QWEN_CODE_SYSTEM_SETTINGS_PATH` environment variable — overriding settings
 paths silently breaks completion enforcement.
 
-Plan flags at emanate time: `daemon(action='ask')` is intentionally
+Plan flags at emanate time: `daemon(action='ask', input={'id': ..., 'message': ...})` is intentionally
 unsupported for this backend (no stable headless resume contract), so there
 is no later chance to adjust a running session. Output parsing is verbatim
 text — Qwen Code headless mode has no machine-readable event stream here, so

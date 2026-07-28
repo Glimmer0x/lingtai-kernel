@@ -6,8 +6,8 @@ description: >
   (model selection, output/tooling switches): it routes you to the installed
   CLI's live help via shell and shows how to translate that help into the
   generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-cursor-agent/SKILL.md
@@ -69,7 +69,7 @@ rules. Still, do not re-set harness-owned surfaces: `-p` (non-interactive
 print mode), `--force` (allows file modifications in print mode),
 `--output-format stream-json` (one JSON event per stdout line — the daemon's
 progress/result parser and the session-id capture depend on it), and
-`--resume` (owned by `daemon(action='ask')` follow-ups, which replay the
+`--resume` (owned by `daemon(action='ask', input={'id': ..., 'message': ...})` follow-ups, which replay the
 captured session id).
 
 Session and completion behavior, source-verified: the first stream event

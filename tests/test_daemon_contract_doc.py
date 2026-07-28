@@ -45,7 +45,8 @@ def test_daemon_contract_frontmatter_lists_related_files_and_triggers():
     meta = _frontmatter(DOC)
     assert meta["name"] == "daemon-contract"
     assert meta["status"] == "active"
-    assert meta["contract_version"] == 7
+    # Bumped to 8 by the ToolFamily migration (LTP v2 envelope tool surface).
+    assert meta["contract_version"] == 8
     related = set(meta["related_files"])
     triggers = set(meta["review_triggers"])
     for rel in REQUIRED_RELATED:

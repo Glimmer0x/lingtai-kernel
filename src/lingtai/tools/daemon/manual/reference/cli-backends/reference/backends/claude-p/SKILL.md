@@ -7,8 +7,8 @@ description: >
   restrictions): it routes you to the installed CLI's live help via shell and
   shows how to translate that help into the generic `backend_options`
   mechanism. It is not a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-07-27T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 - src/lingtai/tools/bash/manual/reference/bash-claude-code/SKILL.md
@@ -75,7 +75,7 @@ Related run-scoped behavior you should not fight through flags:
   not use it because claude-p terminal success requires the injected
   `daemon_common.finish(status="done")`. For read-only runs, keep MCP enabled
   and combine a read-only brief with the live-help `--allowedTools` surface.
-- Resume: `daemon(action="ask")` runs `claude --resume <claude_session_id>
+- Resume: `daemon(action="ask", input={"id": ..., "message": ...})` runs `claude --resume <claude_session_id>
   --print ...` against the session id persisted to `daemon.json.claude_session_id`;
   `backend_options` are not re-passed on ask — emanate-time flags persist for
   the session's life.
