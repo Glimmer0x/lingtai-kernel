@@ -121,11 +121,11 @@ def test_skills_capability_remains_registered_and_configurable(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_the_skills_manual_is_reachable_through_substrate(tmp_path):
+def test_the_skills_manual_is_reachable_through_psyche(tmp_path):
     """The manual body the retired ``skills.manual`` returned still loads."""
     agent, _ = _mk_agent(tmp_path)
     try:
-        result = agent._intrinsics["substrate"](
+        result = agent._intrinsics["psyche"](
             {"action": "skills", "input": {}, "reasoning": "load skills guidance"}
         )
         assert result["status"] == "ok"
@@ -700,13 +700,13 @@ def test_reconcile_result_omits_the_manual_body(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_manual_body_is_returned_by_substrate(tmp_path):
+def test_manual_body_is_returned_by_psyche(tmp_path):
     agent, workdir = _mk_agent(tmp_path)
     try:
         expected = (
             workdir / ".library" / "intrinsic" / "capabilities" / "skills" / "SKILL.md"
         ).read_text(encoding="utf-8")
-        result = agent._intrinsics["substrate"](
+        result = agent._intrinsics["psyche"](
             {"action": "skills", "input": {}, "reasoning": "test"}
         )
         assert result["manual"] == expected
@@ -796,7 +796,7 @@ def test_reconcile_result_keys_and_health_are_exactly_preserved(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_substrate_skills_manual_has_no_catalog_side_effect(tmp_path, monkeypatch):
+def test_psyche_skills_manual_has_no_catalog_side_effect(tmp_path, monkeypatch):
     """Loading the manual must not rescan or reinject the catalog."""
     from lingtai.tools import skills as skills_tool
 
@@ -811,7 +811,7 @@ def test_substrate_skills_manual_has_no_catalog_side_effect(tmp_path, monkeypatc
             raise AssertionError("manual rescanned the catalog")
 
         monkeypatch.setattr(skills_tool, "_reconcile", _boom)
-        manual_result = agent._intrinsics["substrate"](
+        manual_result = agent._intrinsics["psyche"](
             {"action": "skills", "input": {}, "reasoning": "read manual"}
         )
         assert manual_result["status"] == "ok"
@@ -841,7 +841,7 @@ def test_manual_degrades_with_exact_loader_message(tmp_path):
         assert manual_path.is_file(), "precondition: initializer installed manual"
         manual_path.unlink()
 
-        assert agent._intrinsics["substrate"](
+        assert agent._intrinsics["psyche"](
             {"action": "skills", "input": {}, "reasoning": "read manual"}
         ) == {
             "status": "degraded",
@@ -864,7 +864,7 @@ def test_no_skills_root_reaches_either_provider_wire(tmp_path):
     try:
         names = [s.name for s in _build_tool_schemas(agent)]
         assert "skills" not in names
-        assert names.count("substrate") == 1
+        assert names.count("psyche") == 1
     finally:
         agent.stop(timeout=1.0)
 
@@ -873,8 +873,8 @@ def test_skills_is_no_longer_an_ltp_v2_summarize_family():
     """The root `summarize` control follows the surviving public root."""
     from lingtai.kernel.tool_result_summary import summary_requested
 
-    assert summary_requested({"summarize": True}, tool_name="substrate") is True
-    assert summary_requested({"summarize": False}, tool_name="substrate") is False
+    assert summary_requested({"summarize": True}, tool_name="psyche") is True
+    assert summary_requested({"summarize": False}, tool_name="psyche") is False
     # The retired root is not recognized, exactly like any unmigrated name.
     assert summary_requested({"summarize": True}, tool_name="skills") is False
     assert summary_requested({"summarize": True}, tool_name="bash") is False
@@ -1146,8 +1146,8 @@ def test_skills_manual_documents_external_skill_intake_default():
         "## External skill intake (default flow)",
         "<agent>/.library/custom/<skill-name>/",
         "run the bundled validator",
-        "call `system({\"action\": \"refresh\"})`",
-        "the skill is only a file on disk",
+        'context(action="rebuild", input={}, reasoning="rescan skills catalog")',
+        "the skill is\n   only a file on disk",
         "Each receiving agent clones/copies it into",
         "Do not assume `.library_shared` is loaded by default",
         "add `../.library_shared` to each participating",

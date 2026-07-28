@@ -8,7 +8,7 @@ related_files:
   - src/lingtai/tools/pad/__init__.py
   - src/lingtai/tools/pad/_pad.py
   - src/lingtai/tools/CONTRACT.md
-  - src/lingtai/tools/substrate/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md

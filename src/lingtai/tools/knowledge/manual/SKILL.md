@@ -24,7 +24,7 @@ Knowledge is an agent's private long-term memory. It is for facts, decisions, ob
 The private-memory capability is named `knowledge`. It registers **no** public
 tool. It owns the private catalog composer that scans `<agent>/knowledge/` and
 injects the catalog into your `knowledge` prompt section; the only model-facing
-surface is the read-only signpost `substrate(action="knowledge", ...)`, which
+surface is the read-only signpost `psyche(action="knowledge", ...)`, which
 returns this manual and nothing else.
 
 ## Knowledge vs skills
@@ -92,7 +92,7 @@ The catalog is rescanned for you: setup/refresh and every full `context.rebuild`
 Knowledge has one public call, and it just returns this manual:
 
 ```text
-substrate(action="knowledge", input={}, reasoning="load knowledge guidance")
+psyche(action="knowledge", input={}, reasoning="load knowledge guidance")
 ```
 
 Every call carries exactly four root fields — `action`, `input`, `reasoning`
@@ -125,8 +125,8 @@ part of `input`.
 
 ### Settings
 
-There is no Knowledge settings surface: no `settings/substrate.json` and no
-`settings/substrate.knowledge.json`. Nothing here reads settings.
+There is no Knowledge settings surface: no `settings/psyche.json` and no
+`settings/psyche.knowledge.json`. Nothing here reads settings.
 
 ## Nesting and sub-knowledge
 

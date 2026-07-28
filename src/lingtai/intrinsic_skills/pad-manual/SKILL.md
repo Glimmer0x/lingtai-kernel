@@ -8,11 +8,11 @@ related_files:
 - src/lingtai/tools/pad/__init__.py
 - src/lingtai/tools/pad/_pad.py
 - src/lingtai/tools/pad/CONTRACT.md
-- src/lingtai/tools/substrate/CONTRACT.md
-- src/lingtai/intrinsic_skills/substrate-manual/SKILL.md
+- src/lingtai/tools/psyche/CONTRACT.md
+- src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  Keep the manual-only public route through substrate, generic file ownership of both durable sources, the no-hot-load rule, delayed activation, and the context-manual route synchronized with code. Pad exposes no mutating action.
+  Keep the manual-only public route through psyche, generic file ownership of both durable sources, the no-hot-load rule, delayed activation, and the context-manual route synchronized with code. Pad exposes no mutating action.
 ---
 
 # Pad Manual
@@ -23,7 +23,7 @@ read-only references in `system/pad_append.json`.
 ## Public call
 
 ```text
-substrate(action="pad", input={}, reasoning="load Pad guidance", summarize=false)
+psyche(action="pad", input={}, reasoning="load Pad guidance", summarize=false)
 ```
 
 That is the **only** public Pad call, and it just returns this manual. Pad has no

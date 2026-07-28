@@ -2,7 +2,7 @@
 
 This package registers **no** model-facing tool. The former public ``lingtai``
 root was removed as a clean break: the one public root for this domain is now
-``substrate``, whose read-only ``substrate(action='lingtai')`` returns
+``psyche``, whose read-only ``psyche(action='lingtai')`` returns
 ``lingtai-manual``. There is no alias or compatibility wrapper for the old root.
 
 ``_lingtai_load`` remains the private canonical composer of the protected

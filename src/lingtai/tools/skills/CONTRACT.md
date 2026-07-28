@@ -7,7 +7,7 @@ related_files:
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/_catalog.py
   - src/lingtai/tools/CONTRACT.md
-  - src/lingtai/tools/substrate/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/kernel/tool_result_summary.py
@@ -207,11 +207,11 @@ Do not change any of the following; documented for reviewers only.
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
 | No public `skills` tool is registered | `tests/test_skills.py::test_skills_registers_no_public_tool` | Inspect the built tool schemas for a `skills` root | Retired root silently returns |
-| The manual loads only via `substrate` | `tests/test_substrate_family.py::test_each_action_returns_its_intended_manual` | Call `substrate(action="skills", input={}, reasoning="x")` | Domain manual unreachable |
-| Loading the manual never mutates the catalogue | `tests/test_skills.py::test_substrate_skills_manual_has_no_catalog_side_effect` | Add a skill on disk, load the manual, inspect the `skills` prompt section | Signpost silently reconciles; hidden side effect |
+| The manual loads only via `psyche` | `tests/test_psyche_family.py::test_each_action_returns_its_intended_manual` | Call `psyche(action="skills", input={}, reasoning="x")` | Domain manual unreachable |
+| Loading the manual never mutates the catalogue | `tests/test_skills.py::test_psyche_skills_manual_has_no_catalog_side_effect` | Add a skill on disk, load the manual, inspect the `skills` prompt section | Signpost silently reconciles; hidden side effect |
 | Catalog reaches the prompt | `tests/test_skills.py::test_catalog_injected_into_skills_section` | Boot with a custom skill, inspect `skills` prompt section | Skills invisible to the model |
 | Body stays out of prompt | `tests/test_catalog_helpers.py::test_build_catalog_yaml_golden` | Author a long-body skill, inspect prompt | Prompt bloat |
-| Missing manual is degraded not fatal | `tests/test_skills.py::test_manual_degrades_with_exact_loader_message` | Remove the intrinsic manual, load it via `substrate` | Boot failure vs. graceful degrade |
+| Missing manual is degraded not fatal | `tests/test_skills.py::test_manual_degrades_with_exact_loader_message` | Remove the intrinsic manual, load it via `psyche` | Boot failure vs. graceful degrade |
 | Legacy names do not register | `tests/test_skills.py::test_former_library_config_does_not_register_library_tool` | Boot an old `library` manifest, inspect tools | Half-applied rename confuses model |
 
 Run before merging:

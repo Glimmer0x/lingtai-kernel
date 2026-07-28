@@ -18,8 +18,8 @@ Knowledge is structurally isomorphic to skills but physically separate:
 
 Tool surface: **none**. This capability registers no model-facing tool. The
 former public ``knowledge`` root and its ``info`` action were removed as a clean
-break — the one public root for this domain is now ``substrate``, whose
-read-only ``substrate(action='knowledge')`` returns this package's manual. There
+break — the one public root for this domain is now ``psyche``, whose
+read-only ``psyche(action='knowledge')`` returns this package's manual. There
 is no alias or compatibility wrapper for the old root or for ``knowledge.info``.
 
 What remains is this capability's private lifecycle ownership, unchanged:
@@ -302,7 +302,7 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
     only from here (setup/refresh), catalog composition runs from here and from
     the one full-context reconstruction path, and neither is reachable from a
     model-facing action. The public surface for this domain is the read-only
-    ``substrate(action='knowledge')`` manual loader.
+    ``psyche(action='knowledge')`` manual loader.
 
     Unknown kwargs (e.g. the historical ``knowledge_limit``) are accepted and
     ignored — the file-backed catalog has no fixed-size limit.

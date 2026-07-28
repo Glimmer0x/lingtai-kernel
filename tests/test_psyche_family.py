@@ -1,4 +1,4 @@
-"""Focused LTP v2 evidence for the one public ``substrate`` root.
+"""Focused LTP v2 evidence for the one public ``psyche`` root.
 
 Covers the exact public inventory, the strict-empty input on every child,
 pre-I/O rejection, that each action returns its own intended manual, that no
@@ -13,7 +13,7 @@ import importlib
 import pytest
 
 from lingtai.agent import Agent
-from lingtai.tools import substrate as substrate_tool
+from lingtai.tools import psyche as psyche_tool
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
 
@@ -25,7 +25,7 @@ EXPECTED_MANUAL_DIR = {
     "lingtai": "lingtai-manual",
     "knowledge": "knowledge",
     "skills": "skills",
-    "manual": "substrate-manual",
+    "manual": "psyche-manual",
 }
 
 
@@ -40,7 +40,7 @@ def _call(agent, action, action_input=None, **root):
     args = {"action": action, "input": {} if action_input is None else action_input}
     args.setdefault("reasoning", "why")
     args.update(root)
-    return agent._intrinsics["substrate"](args)
+    return agent._intrinsics["psyche"](args)
 
 
 def _fs_digest(root):
@@ -56,12 +56,12 @@ def _fs_digest(root):
 # ---------------------------------------------------------------------------
 
 def test_exact_public_action_inventory():
-    assert substrate_tool.ACTION_ORDER == tuple(EXPECTED_ACTIONS)
-    assert substrate_tool.get_schema()["properties"]["action"]["enum"] == EXPECTED_ACTIONS
+    assert psyche_tool.ACTION_ORDER == tuple(EXPECTED_ACTIONS)
+    assert psyche_tool.get_schema()["properties"]["action"]["enum"] == EXPECTED_ACTIONS
 
 
 def test_root_is_the_closed_strict_ltp_v2_envelope():
-    schema = substrate_tool.get_schema()
+    schema = psyche_tool.get_schema()
     assert schema["type"] == "object"
     assert sorted(schema["properties"]) == ["action", "input", "reasoning", "summarize"]
     assert schema["required"] == ["action", "input", "reasoning"]
@@ -69,7 +69,7 @@ def test_root_is_the_closed_strict_ltp_v2_envelope():
 
 
 def test_every_child_input_is_the_canonical_strict_empty_object():
-    schema = substrate_tool.get_schema()
+    schema = psyche_tool.get_schema()
     branches = schema["properties"]["input"]["oneOf"]
     assert [b["title"] for b in branches] == [f"{a} input" for a in EXPECTED_ACTIONS]
     for branch in branches:
@@ -79,7 +79,7 @@ def test_every_child_input_is_the_canonical_strict_empty_object():
 
 
 def test_root_allof_correlates_each_action_const_with_its_input_schema():
-    conditions = substrate_tool.get_schema()["allOf"]
+    conditions = psyche_tool.get_schema()["allOf"]
     assert len(conditions) == len(EXPECTED_ACTIONS)
     for action, cond in zip(EXPECTED_ACTIONS, conditions):
         assert cond["if"]["properties"]["action"]["const"] == action
@@ -90,42 +90,42 @@ def test_root_allof_correlates_each_action_const_with_its_input_schema():
 def test_registered_exactly_once_as_an_intrinsic(tmp_path):
     from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
 
-    assert INTRINSICS["substrate"]["module"] is substrate_tool
-    assert "substrate" not in BUILTIN_TOOLS
+    assert INTRINSICS["psyche"]["module"] is psyche_tool
+    assert "psyche" not in BUILTIN_TOOLS
 
     agent = _agent(tmp_path)
     try:
         schema_names = [s.name for s in agent._build_tool_schemas()]
-        assert schema_names.count("substrate") == 1
+        assert schema_names.count("psyche") == 1
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_substrate_family_reaches_both_provider_wires(tmp_path):
+def test_psyche_family_reaches_both_provider_wires(tmp_path):
     """The composed schema survives Chat and Responses adapter scrubbing."""
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
-    schema = substrate_tool.get_schema()
+    schema = psyche_tool.get_schema()
     scrubbed = _scrub_responses_schema(schema)
     assert scrubbed["properties"]["action"]["enum"] == EXPECTED_ACTIONS
     assert scrubbed["additionalProperties"] is False
 
 
-def test_substrate_is_a_migrated_ltp_v2_family_for_summarize():
+def test_psyche_is_a_migrated_ltp_v2_family_for_summarize():
     from lingtai.kernel.tool_result_summary import (
         _LTP_V2_MIGRATED_FAMILIES,
         summary_requested,
     )
 
-    assert "substrate" in _LTP_V2_MIGRATED_FAMILIES
-    assert summary_requested({"summarize": True}, "substrate") is True
-    assert summary_requested({"summarize": False}, "substrate") is False
+    assert "psyche" in _LTP_V2_MIGRATED_FAMILIES
+    assert summary_requested({"summarize": True}, "psyche") is True
+    assert summary_requested({"summarize": False}, "psyche") is False
 
 
-def test_substrate_is_blacklisted_for_emanations():
+def test_psyche_is_blacklisted_for_emanations():
     from lingtai.tools.daemon import EMANATION_BLACKLIST
 
-    assert "substrate" in EMANATION_BLACKLIST
+    assert "psyche" in EMANATION_BLACKLIST
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +174,13 @@ def test_router_manual_is_a_routing_table_naming_all_four_domains(tmp_path):
 # Returned-body accuracy (live-Agent lesson, head f575ec6a)
 # ---------------------------------------------------------------------------
 #
-# A live agent called substrate(action='knowledge'|'skills') and got manuals
+# A live agent called psyche(action='knowledge'|'skills') and got manuals
 # that still taught retired public roots, a retired two-action surface, and
 # pre-#1073/#1078 call shapes. Schema-level tests cannot catch that: the wire is
 # correct while the *returned text* is wrong. These pin the returned bodies.
 
 #: Substrings that must never reappear in a returned manual body, with the
-#: reason each one is wrong. Keyed by the substrate action that returns it.
+#: reason each one is wrong. Keyed by the psyche action that returns it.
 STALE_BODY_CLAIMS = {
     "knowledge": [
         # A. the retired public root, claimed in the present tense
@@ -205,13 +205,13 @@ STALE_BODY_CLAIMS = {
 #: Substrings that must be present, proving the corrected current route.
 REQUIRED_BODY_ROUTES = {
     "knowledge": [
-        'substrate(action="knowledge"',
+        'psyche(action="knowledge"',
         'file(action="write"',
         'file(action="read"',
         'context(action="rebuild"',
     ],
     "skills": [
-        'substrate(action="skills"',
+        'psyche(action="skills"',
         'context(action="rebuild"',
         'shell(action="run"',
         'file(action="read"',
@@ -347,13 +347,13 @@ def test_missing_manual_degrades_with_the_exact_loader_message(tmp_path):
     try:
         installed = (
             agent._working_dir / ".library" / "intrinsic" / "capabilities"
-            / "substrate-manual" / "SKILL.md"
+            / "psyche-manual" / "SKILL.md"
         )
         installed.unlink()
         result = _call(agent, "manual")
         assert result["status"] == "degraded"
         assert result["manual"] == ""
-        assert "substrate-manual manual missing" in result["error"]
+        assert "psyche-manual manual missing" in result["error"]
     finally:
         agent.stop(timeout=1.0)
 
@@ -380,14 +380,14 @@ def test_no_action_mutates_disk_or_prompt(tmp_path):
 
 
 def test_manual_actions_never_scan_a_catalog(tmp_path, monkeypatch):
-    """No substrate action may reach a catalog scan or the legacy migration."""
+    """No psyche action may reach a catalog scan or the legacy migration."""
     from lingtai.tools import knowledge as knowledge_tool
     from lingtai.tools import skills as skills_tool
 
     agent = _agent(tmp_path)
     try:
         def _boom(*_a, **_k):  # pragma: no cover - must never run
-            raise AssertionError("a substrate manual action scanned a catalog")
+            raise AssertionError("a psyche manual action scanned a catalog")
 
         monkeypatch.setattr(knowledge_tool, "_compose_catalog", _boom)
         monkeypatch.setattr(knowledge_tool, "_reconcile", _boom)
@@ -411,7 +411,7 @@ def test_unknown_or_retired_action_is_rejected(tmp_path, action):
     agent = _agent(tmp_path)
     try:
         result = _call(agent, action)
-        assert "Unknown substrate action" in result["error"]
+        assert "Unknown psyche action" in result["error"]
         assert "pad, lingtai, knowledge, skills, manual" in result["error"]
     finally:
         agent.stop(timeout=1.0)
@@ -429,7 +429,7 @@ def test_any_input_key_is_rejected_before_the_manual_is_read(tmp_path, action, m
         monkeypatch.setattr(manual_loader, "load_installed_manual", _boom)
         result = _call(agent, action, {"files": ["x"]})
         assert result["error_code"] == "INVALID_ARGUMENT"
-        assert result["message"] == "unsupported substrate input field"
+        assert result["message"] == "unsupported psyche input field"
     finally:
         agent.stop(timeout=1.0)
 
@@ -450,7 +450,7 @@ def test_unknown_root_field_is_rejected(tmp_path):
     try:
         result = _call(agent, "manual", parameters={"x": 1})
         assert result["error_code"] == "INVALID_ARGUMENT"
-        assert result["message"] == "unsupported substrate argument"
+        assert result["message"] == "unsupported psyche argument"
     finally:
         agent.stop(timeout=1.0)
 
@@ -617,5 +617,96 @@ def test_successful_rebuild_still_publishes_exactly_once(tmp_path):
         assert "I AM" in read("character")
         assert read("skills")
         assert "knowledge" in agent._prompt_manager._sections
+    finally:
+        agent.stop(timeout=1.0)
+
+
+# ---------------------------------------------------------------------------
+# g6 — public `psyche` final naming (Telegram 1568/1570)
+# ---------------------------------------------------------------------------
+#
+# The human contract is the equation `pad + lingtai + knowledge + skills =
+# psyche`. Two things must hold at once and are easy to conflate: the ROOT name
+# is reused, and the OLD family's ACTIONS are still gone. Root reuse is not
+# action compatibility.
+
+#: The OLD psyche family's actions. None may be reachable on the current root.
+RETIRED_PSYCHE_ACTIONS = [
+    "lingtai_update", "lingtai_load", "pad_edit", "pad_load", "pad_append",
+    "context_molt", "name_set", "name_nickname", "molt", "summarize", "rebuild",
+]
+
+
+def test_public_root_is_psyche_and_substrate_is_absent(tmp_path):
+    from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
+
+    assert "psyche" in INTRINSICS
+    assert "substrate" not in INTRINSICS
+    assert "substrate" not in BUILTIN_TOOLS
+    with pytest.raises(ImportError):
+        importlib.import_module("lingtai.tools.substrate")
+
+    agent = _agent(tmp_path)
+    try:
+        names = [s.name for s in agent._build_tool_schemas()]
+        assert names.count("psyche") == 1
+        assert "substrate" not in names
+        assert "substrate" not in agent._intrinsics
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("retired", RETIRED_PSYCHE_ACTIONS)
+def test_old_psyche_actions_are_rejected_on_the_new_root(tmp_path, retired):
+    """Root reuse grants the dissolved family's actions nothing."""
+    agent = _agent(tmp_path)
+    try:
+        assert retired not in psyche_tool.ACTION_ORDER
+        assert retired not in psyche_tool.get_schema()["properties"]["action"]["enum"]
+        result = _call(agent, retired)
+        assert "Unknown psyche action" in result["error"]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_no_returned_manual_teaches_a_public_substrate_root(tmp_path):
+    """The retired public `substrate` root must not survive in any body."""
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        for action in EXPECTED_ACTIONS:
+            body = _call(agent, action)["manual"]
+            assert "substrate(action=" not in body, (
+                f"{action} manual teaches the retired substrate(action=...) root"
+            )
+            assert "settings/substrate." not in body
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_substrate_prompt_section_is_untouched_by_the_rename(tmp_path):
+    """The kernel-owned `substrate` prompt SECTION is a different concept.
+
+    It keeps its name, its packaged source, its on-disk mirror, and its place in
+    the composed prompt. Renaming the tool family must not have moved it.
+    """
+    agent = _agent(tmp_path)
+    try:
+        # Still a kernel-owned section in the canonical render order, between
+        # `tools` and `procedures`.
+        order = agent._prompt_manager._DEFAULT_ORDER
+        assert "substrate" in order
+        assert order.index("tools") < order.index("substrate") < order.index("procedures")
+        # One full reconstruction composes it from the packaged source and
+        # mirrors it to disk, exactly as before the family rename.
+        agent._reconstruct_context()
+        body = agent._prompt_manager.read_section("substrate")
+        assert body and body.strip()
+        mirror = agent._working_dir / "system" / "substrate.md"
+        assert mirror.is_file() and mirror.read_text(encoding="utf-8").strip()
+        assert body in agent._build_system_prompt()
+
+        # A second rebuild recomposes and publishes it byte-identically.
+        agent._reconstruct_context()
+        assert agent._prompt_manager.read_section("substrate") == body
     finally:
         agent.stop(timeout=1.0)

@@ -10,6 +10,6 @@ related_files:
 - src/lingtai/tools/lingtai/glossary-zh.md
 - src/lingtai/tools/lingtai/glossary-wen.md
 maintenance: |
-  English glossary for the `lingtai` tool package (lingtai.tools.lingtai); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when LingTai's private domain ownership or its routing through `substrate(action='lingtai')` changes. LingTai registers no public tool root.
+  English glossary for the `lingtai` tool package (lingtai.tools.lingtai); the English body must stay empty per tool_glossary.py's language contract — update only the identity/schema fields here, and update the zh/wen bodies in lockstep when LingTai's private domain ownership or its routing through `psyche(action='lingtai')` changes. LingTai registers no public tool root.
   Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
 ---

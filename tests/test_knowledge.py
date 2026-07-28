@@ -154,31 +154,31 @@ def test_info_picks_up_authored_entry(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_retired_knowledge_actions_are_rejected_on_the_substrate_root(tmp_path):
+def test_retired_knowledge_actions_are_rejected_on_the_psyche_root(tmp_path):
     """Every former knowledge action is unknown, with no compatibility path."""
     agent, _ = _mk_agent(tmp_path)
     try:
         for action in (
             "submit", "view", "consolidate", "delete", "filter", "export", "info",
         ):
-            result = agent._intrinsics["substrate"](
+            result = agent._intrinsics["psyche"](
                 {"action": action, "input": {}, "reasoning": "probe a removed action"}
             )
-            assert "Unknown substrate action" in result["error"], action
+            assert "Unknown psyche action" in result["error"], action
         # Unhashable actions render the same typed failure, never a TypeError.
         for bad in ([], {}, None):
-            assert "Unknown substrate action" in agent._intrinsics["substrate"](
+            assert "Unknown psyche action" in agent._intrinsics["psyche"](
                 {"action": bad, "input": {}, "reasoning": "unhashable action"}
             )["error"]
-        assert "Unknown substrate action" in agent._intrinsics["substrate"]({})["error"]
+        assert "Unknown psyche action" in agent._intrinsics["psyche"]({})["error"]
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_knowledge_manual_is_one_substrate_action():
-    from lingtai.tools import substrate as substrate_tool
+def test_knowledge_manual_is_one_psyche_action():
+    from lingtai.tools import psyche as psyche_tool
 
-    actions = substrate_tool.get_schema()["properties"]["action"]["enum"]
+    actions = psyche_tool.get_schema()["properties"]["action"]["enum"]
     assert "knowledge" in actions
     assert "info" not in actions
 

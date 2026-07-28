@@ -95,16 +95,16 @@ The `skills` section of your system prompt is a YAML list. Each skill is one
 `SKILL.md`) and a `description:` block scalar. To read a skill's body, `read` the
 file at its `location`.
 
-Skills is one action of the `substrate` LTP v2 family. That root is closed and
+Skills is one action of the `psyche` LTP v2 family. That root is closed and
 exactly `action`, `input`, `reasoning`, `summarize`. `action`, its nested `input`
 object, and **root `reasoning`** are required; root `summarize` is an optional
-boolean, absent or false by default. Every substrate action takes the **empty**
+boolean, absent or false by default. Every psyche action takes the **empty**
 input object — there is no field to pass — and no *input branch* admits
 `reasoning`, `_reasoning`, or `summarize`: those are root envelope fields and are
 never nested inside `input`.
 
 ```text
-substrate(action="skills", input={}, reasoning="load skills guidance")
+psyche(action="skills", input={}, reasoning="load skills guidance")
 ```
 
 This call returns this SKILL.md body. It is the only public Skills call, and it
@@ -135,7 +135,7 @@ regardless of `summarize`.
 ### Settings
 
 There is no skills settings file at all — neither a family-level
-`settings/substrate.json` nor an action-level `settings/substrate.skills.json`.
+`settings/psyche.json` nor an action-level `settings/psyche.skills.json`.
 Nothing is read from either address, and creating one has no effect. The
 catalogue's only configuration input is `manifest.capabilities.skills.paths`
 in `init.json`, described above.

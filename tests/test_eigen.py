@@ -263,11 +263,11 @@ def test_eigen_unknown_action(tmp_path):
     agent.stop(timeout=1.0)
 
 
-def test_eigen_is_gone_and_substrate_is_the_durable_domain_root(tmp_path):
-    """`eigen` is gone; `context` and `substrate` are the intrinsics now.
+def test_eigen_is_gone_and_psyche_is_the_durable_domain_root(tmp_path):
+    """`eigen` is gone; `context` and `psyche` are the intrinsics now.
 
     The four former domain roots (`pad`, `lingtai`, `knowledge`, `skills`) were
-    retired into the one `substrate` root with no compatibility alias.
+    retired into the one `psyche` root with no compatibility alias.
     """
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
@@ -276,7 +276,7 @@ def test_eigen_is_gone_and_substrate_is_the_durable_domain_root(tmp_path):
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
     assert "context" in agent._intrinsics
-    assert "substrate" in agent._intrinsics
+    assert "psyche" in agent._intrinsics
     assert "pad" not in agent._intrinsics
     assert "lingtai" not in agent._intrinsics
     assert "eigen" not in agent._intrinsics

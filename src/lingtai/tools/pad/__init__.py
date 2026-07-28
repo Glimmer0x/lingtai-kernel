@@ -2,7 +2,7 @@
 
 This package registers **no** model-facing tool. The former public ``pad`` root
 and its ``append`` action were removed as a clean break: the one public root for
-this domain is now ``substrate``, whose read-only ``substrate(action='pad')``
+this domain is now ``psyche``, whose read-only ``psyche(action='pad')``
 returns ``pad-manual``. There is no alias or compatibility wrapper for the old
 root or for ``pad.append``.
 

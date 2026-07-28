@@ -9,7 +9,7 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/skills/CONTRACT.md
-  - src/lingtai/tools/substrate/ANATOMY.md
+  - src/lingtai/tools/psyche/ANATOMY.md
   - tests/test_skills.py
   - tests/test_validate_skill.py
   - src/lingtai/tools/skills/glossary-en.md
@@ -28,23 +28,23 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Components
 
-- `skills/__init__.py` — the capability implementation. It registers **no** model-facing tool: the former public `skills` root and its `info` action were retired into the read-only `substrate(action='skills')` manual loader. Path helpers `_resolve_path` (`__init__.py:58-72`) and `_scan` (`__init__.py:75-76`), the catalog composer `_reconcile` (`__init__.py:83-171`), and the capability lifecycle entry `setup` (`__init__.py:178-196`).
-- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles. This is the body `substrate(action='skills')` returns.
+- `skills/__init__.py` — the capability implementation. It registers **no** model-facing tool: the former public `skills` root and its `info` action were retired into the read-only `psyche(action='skills')` manual loader. Path helpers `_resolve_path` (`__init__.py:58-72`) and `_scan` (`__init__.py:75-76`), the catalog composer `_reconcile` (`__init__.py:83-171`), and the capability lifecycle entry `setup` (`__init__.py:178-196`).
+- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles. This is the body `psyche(action='skills')` returns.
 
 ## Connections
 
 - `lingtai.tools.registry` maps canonical `skills` here as a *capability* (`BUILTIN_TOOLS`/`CORE_DEFAULTS`); it is not an intrinsic and registers no tool. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
 - `Agent._install_intrinsic_manuals()` copies every capability `manual/` bundle into `.library/intrinsic/capabilities/<name>/`, then re-runs `skills._reconcile()` for first-turn catalog freshness when `skills` is loaded (`src/lingtai/agent.py:490-501`).
 - `Agent._reload_prompt_sections` re-runs `_reconcile(..., publish=False)` so a full `context.rebuild` (and passive refresh/molt reconstruction) recomposes this catalog with every other canonical section before one final prompt publication (`src/lingtai/agent.py:1821-1848`).
-- [`../substrate/ANATOMY.md`](../substrate/ANATOMY.md) owns the one public root; it loads this package's `manual/SKILL.md` and holds no reference to the catalog or its composer.
+- [`../psyche/ANATOMY.md`](../psyche/ANATOMY.md) owns the one public root; it loads this package's `manual/SKILL.md` and holds no reference to the catalog or its composer.
 - The daemon capability blacklists `skills` so emanations do not borrow it from the host tool floor (`../daemon/__init__.py:435`).
-- The generic [`../tool_family/ANATOMY.md`](../tool_family/ANATOMY.md) owns the reusable schema-composition/dispatch infrastructure. This package no longer builds a `ToolFamily`; only `substrate` does.
+- The generic [`../tool_family/ANATOMY.md`](../tool_family/ANATOMY.md) owns the reusable schema-composition/dispatch infrastructure. This package no longer builds a `ToolFamily`; only `psyche` does.
 
 ## Public API
 
 None. This package exposes no model-facing tool, schema, or dispatch entry
-point. Its public surface is the read-only `substrate(action='skills')` manual
-loader, owned by [`../substrate/CONTRACT.md`](../substrate/CONTRACT.md).
+point. Its public surface is the read-only `psyche(action='skills')` manual
+loader, owned by [`../psyche/CONTRACT.md`](../psyche/CONTRACT.md).
 
 `setup(agent, paths=...)` is the capability lifecycle entry point: it reconciles
 the catalog and injects the `skills` prompt section. `_reconcile` is the private
@@ -60,5 +60,5 @@ composer shared by that setup/refresh path and by full-context reconstruction.
 ## Notes
 
 - The `.library/` directory name and `.library_shared/` convention are intentionally preserved in this rename-only change; they are storage compatibility names, not the user-facing capability name.
-- There is no `skills` tool call any more: use `substrate({"action":"skills","input":{},"reasoning":"..."})` for the manual, and let setup/refresh or `context.rebuild` reconcile the catalog. Old `library({"action":"info"})` is likewise not registered.
+- There is no `skills` tool call any more: use `psyche(action="skills", input={}, reasoning="load the Skills manual")` for the manual, and let setup/refresh or `context.rebuild` reconcile the catalog. The retired `library` root is likewise not registered.
 - LingTai-maintained `SKILL.md` files carry `last_changed_at` in frontmatter, initialized from git history for metadata-only backfills and updated on substantive skill edits.

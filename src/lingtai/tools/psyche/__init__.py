@@ -1,12 +1,13 @@
-"""Substrate intrinsic — the one public root for the four durable domains.
+"""Psyche intrinsic — the one public root for the four durable domains.
 
-``substrate`` is a mandatory, model-visible LTP v2 family whose entire public
-inventory is manual loading. Its exact action set is
+``psyche`` is a mandatory, model-visible LTP v2 family whose entire public
+inventory is manual loading. The name states the human contract exactly:
+``pad + lingtai + knowledge + skills = psyche``. Its exact action set is
 ``pad | lingtai | knowledge | skills | manual``:
 
 - ``pad``, ``lingtai``, ``knowledge``, and ``skills`` each return that domain's
   own installed manual;
-- ``manual`` returns the substrate routing-table manual, which explains the four
+- ``manual`` returns the psyche routing-table manual, which explains the four
   durable domains, which action loads which manual, and the generic
   mutation/rebuild model shared by all of them.
 
@@ -19,6 +20,19 @@ This root replaces the four former public roots ``pad``, ``lingtai``,
 ``knowledge``, and ``skills``. That was a clean break: those roots, the
 ``pad.append`` action, and the ``skills.info`` / ``knowledge.info`` actions have
 no alias, wrapper, or compatibility path and now fail as unknown tools/actions.
+
+The name ``psyche`` was previously used by a different, long-dissolved family
+whose actions were ``lingtai_update``, ``pad_edit``, ``context_molt``,
+``name_set``, and similar. **Reusing the root name grants those actions
+nothing.** They were dissolved into ``context`` (molt/summarize/rebuild) and
+``system`` (name actions) and are not aliases here: every one of those spellings
+fails as an unknown action before any I/O.
+
+One name is deliberately reused rather than rejected: ``manual`` is a current,
+accepted action, so a ``manual`` call succeeds — but it returns only the new
+durable-self routing table (``psyche-manual``), never the dissolved family's
+manual or body. Accepting that one name is not compatibility with any other old
+action. Root reuse is not action compatibility.
 The capabilities themselves did not disappear — they moved entirely to private
 lifecycle ownership:
 
@@ -32,11 +46,12 @@ lifecycle ownership:
 - everything durable becomes prompt-visible through one explicit
   ``context.rebuild`` or passive refresh/molt reconstruction.
 
-The word ``substrate`` is also the name of a kernel-owned *prompt section*
-(``lingtai/prompts/substrate/substrate.md`` → ``system/substrate.md``). The two
-are unrelated and live in disjoint namespaces: that one is a resident prompt
-layer describing the agent's architecture to itself, this one is a public tool
-root. Nothing keys them together.
+The kernel-owned ``substrate`` *prompt section*
+(``lingtai/prompts/substrate/substrate.md`` → ``system/substrate.md``) is a
+separate, unchanged concept: a resident prompt layer describing the agent's
+architecture to itself. This family was briefly named ``substrate`` too; that
+public root is gone, while the prompt section keeps its name, content,
+ownership, and render order untouched.
 """
 from __future__ import annotations
 
@@ -75,9 +90,9 @@ DOMAIN_MANUALS: tuple[tuple[str, str], ...] = (
 #: advertised enum and dispatch keys cannot drift.
 ACTION_ORDER: tuple[str, ...] = tuple(name for name, _ in DOMAIN_MANUALS) + ("manual",)
 
-#: The substrate routing-table manual: its own installed skill bundle, loaded by
+#: The psyche routing-table manual: its own installed skill bundle, loaded by
 #: the reserved ``manual`` child exactly like every domain child loads its own.
-_ROUTER_MANUAL = "substrate-manual"
+_ROUTER_MANUAL = "psyche-manual"
 
 _DROPPED_ENVELOPE_KEYS = ("_tc_id",)
 
@@ -108,10 +123,10 @@ def _build_children(agent) -> list[ChildTool]:
     return children + [build_manual_child(agent, _ROUTER_MANUAL)]
 
 
-_FAMILY = ToolFamily("substrate", _build_children(None))
+_FAMILY = ToolFamily("psyche", _build_children(None))
 
 _ACTION_ENUM_DESCRIPTION = (
-    "Required manual to load from your substrate. Every action takes an empty "
+    "Required manual to load from your psyche. Every action takes an empty "
     "input object and is strictly read-only — none of them writes a file, "
     "reloads the prompt, or rescans a catalog.\n"
     "pad: return pad-manual (the sketchboard body at system/pad.md and its "
@@ -121,7 +136,7 @@ _ACTION_ENUM_DESCRIPTION = (
     "knowledge/<name>/KNOWLEDGE.md).\n"
     "skills: return the skills manual (your catalog under .library/ plus any "
     "configured skills paths).\n"
-    "manual: return the substrate routing table — which action loads which "
+    "manual: return the psyche routing table — which action loads which "
     "domain manual, and the shared mutation/rebuild model.\n"
     "To CHANGE any durable source, use file.write for a full rewrite or "
     "file.edit for exact replacement, then apply it with one explicit "
@@ -131,12 +146,13 @@ _ACTION_ENUM_DESCRIPTION = (
 
 def get_description(lang: str = "en") -> str:
     return (
-        "SIGNPOST ONLY: your substrate's four durable domains — pad, lingtai "
-        "(灵台), knowledge, and skills. Every action returns a manual and "
-        "nothing else: it never authors, edits, pins, installs, rescans, or "
-        "loads anything. substrate(action='pad'|'lingtai'|'knowledge'|'skills', "
+        "SIGNPOST ONLY: your psyche is your four durable domains — pad, "
+        "lingtai (灵台), knowledge, and skills. Every action returns a manual "
+        "and nothing else: it never authors, edits, pins, installs, rescans, "
+        "or loads anything. "
+        "psyche(action='pad'|'lingtai'|'knowledge'|'skills', "
         "input={}, reasoning='why') returns that domain's manual; "
-        "substrate(action='manual', input={}, reasoning='why') returns the "
+        "psyche(action='manual', input={}, reasoning='why') returns the "
         "routing table that says which one you want and how the domains relate. "
         "Durable content is changed with file.write (full rewrite) or file.edit "
         "(exact replacement) on the domain's own source, and becomes visible "
@@ -156,9 +172,9 @@ def get_schema(lang: str = "en") -> dict:
 
 
 def _adapt_manual_result(mcp_result: dict) -> dict:
-    """Flatten one dispatched child's canonical result to substrate's shape.
+    """Flatten one dispatched child's canonical result to psyche's shape.
 
-    Every substrate child is a manual loader, so this one adapter serves all
+    Every psyche child is a manual loader, so this one adapter serves all
     five — there is no per-action presentation branch. It runs strictly after
     dispatch, in this Host layer, never inside a registered child, per the
     no-double-wrap rule (``../CONTRACT.md`` "Dispatch and actions").
@@ -174,7 +190,7 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
 
 
 def handle(agent, args: dict) -> dict:
-    """Validate the strict LTP v2 envelope and dispatch one substrate action.
+    """Validate the strict LTP v2 envelope and dispatch one psyche action.
 
     ``ToolFamily.handle`` is the always-authoritative, fail-closed boundary: an
     unknown or missing action, and any ``input`` key at all (every child's input
@@ -185,13 +201,13 @@ def handle(agent, args: dict) -> dict:
         raw.pop(key, None)
 
     action = raw.get("action")
-    result = ToolFamily("substrate", _build_children(agent)).handle(raw)
+    result = ToolFamily("psyche", _build_children(agent)).handle(raw)
     if "content" in result:
         return _adapt_manual_result(result)
     if result.get("error_code") == "ACTION_REQUIRED":
         return {
             "error": (
-                f"Unknown substrate action: {action if action is not None else ''}. "
+                f"Unknown psyche action: {action if action is not None else ''}. "
                 f"Must be one of: {', '.join(ACTION_ORDER)}."
             )
         }

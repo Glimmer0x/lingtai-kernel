@@ -1,9 +1,9 @@
-"""Knowledge catalog behavior parity after the substrate migration.
+"""Knowledge catalog behavior parity after the psyche migration.
 
 The ``knowledge`` public root and its ``info`` action are gone: the one public
-root is ``substrate``, whose read-only ``substrate(action='knowledge')`` returns
+root is ``psyche``, whose read-only ``psyche(action='knowledge')`` returns
 the knowledge manual. Envelope, schema, and dispatch evidence for that root
-lives in ``tests/test_substrate_family.py``.
+lives in ``tests/test_psyche_family.py``.
 
 What this file pins is the part that did NOT move — the private catalog
 lifecycle. Reconciliation still re-scans and reconciles the catalog and reports
@@ -41,7 +41,7 @@ def _write_entry(folder: Path, name: str, desc: str = "test entry", body: str = 
 def _manual(agent, **root):
     args = {"action": "knowledge", "input": {}, "reasoning": "load knowledge guidance"}
     args.update(root)
-    return agent._intrinsics["substrate"](args)
+    return agent._intrinsics["psyche"](args)
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ def test_setup_lifecycle_is_what_runs_the_legacy_migration(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The manual, now reached through substrate
+# The manual, now reached through psyche
 # ---------------------------------------------------------------------------
 
 def test_manual_returns_body_and_path_without_rescanning(tmp_path, monkeypatch):
@@ -212,9 +212,9 @@ def test_manual_missing_is_degraded_and_still_no_rescan(tmp_path, monkeypatch):
 
 def test_no_authoring_search_or_edit_capability_survives():
     """No public action creates, edits, searches, or loads knowledge entries."""
-    from lingtai.tools import substrate as substrate_tool
+    from lingtai.tools import psyche as psyche_tool
 
-    schema = substrate_tool.get_schema()
+    schema = psyche_tool.get_schema()
     actions = set(schema["properties"]["action"]["enum"])
     forbidden = {
         "create", "write", "edit", "update", "delete", "search", "query",

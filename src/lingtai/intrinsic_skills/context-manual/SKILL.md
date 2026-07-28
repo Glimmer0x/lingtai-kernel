@@ -52,15 +52,15 @@ For `lingtai` and `knowledge`, tending happens *once* per task, at the end — n
 
 Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-All four durable stores are taught by manuals loaded through the one `substrate` root; generic mutation belongs to `file`:
+All four durable stores are taught by manuals loaded through the one `psyche` root (pad + lingtai + knowledge + skills = psyche); generic mutation belongs to `file`:
 
-- **`lingtai`** — `substrate(action="lingtai", input={}, reasoning="load identity guidance")` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
-- **`pad`** — `substrate(action="pad", input={}, reasoning="load Pad guidance")` explains the Pad body and the pinned-reference list. Mutate `system/pad.md` and `system/pad_append.json` with `file.write`/`file.edit`; both take effect only after reconstruction.
+- **`lingtai`** — `psyche(action="lingtai", input={}, reasoning="load identity guidance")` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
+- **`pad`** — `psyche(action="pad", input={}, reasoning="load Pad guidance")` explains the Pad body and the pinned-reference list. Mutate `system/pad.md` and `system/pad_append.json` with `file.write`/`file.edit`; both take effect only after reconstruction.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `substrate(action="lingtai", input={}, reasoning="...")` for forced/self-evolve behavior.
-- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; edit `system/pad_append.json` the same way for the durable pinned-reference list. See `substrate(action="pad", input={}, reasoning="...")`.
+- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `psyche(action="lingtai", input={}, reasoning="...")` for forced/self-evolve behavior.
+- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; edit `system/pad_append.json` the same way for the durable pinned-reference list. See `psyche(action="pad", input={}, reasoning="...")`.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for long-term private context using `file.write`/`file.edit`.
 - **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `context(action="rebuild", input={}, reasoning="rescan skills catalog")` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
@@ -108,11 +108,11 @@ Updating the parent index at each session is part of the practice — append one
 
 ## 5. Tending the Pad
 
-**Pad has its own manual — read `substrate(action="pad", input={}, reasoning="load Pad guidance")` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, how the `system/pad_append.json` pinned list works, and how to archive a completed pad.
+**Pad has its own manual — read `psyche(action="pad", input={}, reasoning="load Pad guidance")` for the full practice.** It owns what belongs in the pad and what does not, the tending rhythm, how the `system/pad_append.json` pinned list works, and how to archive a completed pad.
 
 What matters here is only the molt-relevant fact: pad is one of the four durable stores, it survives the molt and is reloaded into the fresh session's system prompt, so it must be accurate **before** you molt. A stale pad is the fastest way to make the next you lose the thread.
 
-Your 灵台 is likewise taught by a manual — call `substrate(action="lingtai", input={}, reasoning="load identity guidance")` for identity modes and file/rebuild guidance.
+Your 灵台 is likewise taught by a manual — call `psyche(action="lingtai", input={}, reasoning="load identity guidance")` for identity modes and file/rebuild guidance.
 
 ## 6. Step 2 — Write the Summary and Molt
 
@@ -142,7 +142,7 @@ control. They never mean the same thing, and no action takes `summarize` as
 input.
 
 `context` owns only your context. Your name is `system(action='name_set')` /
-`system(action='name_nickname')`. Your four durable stores share one read-only root: `substrate(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={}, reasoning="...")` returns the matching manual and nothing else. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
+`system(action='name_nickname')`. Your four durable stores share one read-only root: `psyche(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={}, reasoning="...")` returns the matching manual and nothing else. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel

@@ -46,31 +46,37 @@ if TYPE_CHECKING:
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
 from . import email, system, context, soul, notification  # noqa: E402  (lingtai.tools.<pkg>)
-# ``substrate`` is the single model-visible root for the four durable domains
-# (Pad, 灵台, Knowledge, Skills). It replaced the four former public roots
-# ``pad``, ``lingtai``, ``knowledge``, and ``skills`` as a clean break: those
-# tool names are unknown and fail loudly, and there is no alias for any of them
-# or for the retired ``pad.append`` / ``skills.info`` / ``knowledge.info``
-# actions.
+# ``psyche`` is the single model-visible root for the four durable domains:
+# ``pad + lingtai + knowledge + skills = psyche``. It replaced the four former
+# public roots as a clean break: those tool names are unknown and fail loudly,
+# and there is no alias for any of them or for the retired ``pad.append`` /
+# ``skills.info`` / ``knowledge.info`` actions.
+#
+# The root name was previously used by a different family (``lingtai_update``,
+# ``pad_edit``, ``context_molt``, ``name_set``, ...). Reusing the name grants
+# none of those actions: they were dissolved into ``context`` and ``system``
+# and are not aliases here. The current family's only actions are five
+# strict-empty manual loaders. Root reuse is not action compatibility.
 #
 # The four domain packages still exist — but as PRIVATE owners only.
 # ``pad``/``lingtai`` keep their canonical prompt composers and no longer define
-# ``boot()``; ``substrate.boot`` invokes those composers instead, since the
+# ``boot()``; ``psyche.boot`` invokes those composers instead, since the
 # kernel's boot loop only reaches registered intrinsics.
 # ``knowledge``/``skills`` keep their capability ``setup()``, catalog
 # composition, configured paths, and one-time legacy migration. None of them
 # registers a public tool, and none is imported at this seam any more.
 #
 # ``context`` is the department that owns the agent's context (molt, summarize,
-# rebuild). It replaces ``psyche``, whose remaining name actions moved to
-# ``system``; there is no ``psyche`` intrinsic and no alias for one.
-from . import substrate  # noqa: E402  (lingtai.tools.substrate)
+# rebuild). It absorbed the OLD ``psyche`` family's lifecycle actions, whose
+# remaining name actions moved to ``system``; no old ``psyche`` action is
+# reachable on the current root of that name.
+from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
     "email": {"module": email},
     "system": {"module": system},
     "context": {"module": context},
-    "substrate": {"module": substrate},
+    "psyche": {"module": psyche},
     "soul": {"module": soul},
     "notification": {"module": notification},
 }

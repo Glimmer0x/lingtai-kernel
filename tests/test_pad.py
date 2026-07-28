@@ -1,7 +1,7 @@
 """Pad durable-source and pinned-reference composition tests.
 
 Pad has no public tool root any more: the former ``pad`` root and its ``append``
-action were retired into the read-only ``substrate(action='pad')`` manual
+action were retired into the read-only ``psyche(action='pad')`` manual
 loader. What is tested here is what remains — the durable ``system/pad.md``
 source, the pinned ``system/pad_append.json`` reference list, and the private
 ``_pad_load`` composer. Generic body mutation is covered by the file family.
@@ -51,17 +51,16 @@ def test_pad_exposes_no_public_root_or_append_action():
 
     assert "pad" not in INTRINSICS
     assert "pad" not in BUILTIN_TOOLS
-    assert "psyche" not in INTRINSICS
     # No schema, no dispatch, no retired handler survives.
     for attribute in ("get_schema", "get_description", "handle", "ACTION_ORDER"):
         assert not hasattr(pad_tool, attribute)
-    assert "substrate" in INTRINSICS
+    assert "psyche" in INTRINSICS
 
 
-def test_context_and_substrate_are_wired(tmp_path):
+def test_context_and_psyche_are_wired(tmp_path):
     agent = _agent(tmp_path)
     try:
-        assert {"context", "substrate"} <= set(agent._intrinsics)
+        assert {"context", "psyche"} <= set(agent._intrinsics)
         assert "pad" not in agent._intrinsics
         assert "lingtai" not in agent._intrinsics
     finally:

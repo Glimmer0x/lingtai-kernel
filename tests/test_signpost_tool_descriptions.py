@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from lingtai.tools.mcp import get_description as mcp_description
 from lingtai.tools.mcp import get_schema as mcp_schema
-from lingtai.tools.substrate import get_description as substrate_description
+from lingtai.tools.psyche import get_description as psyche_description
 
 
-def test_substrate_description_is_an_explicit_signpost() -> None:
-    desc = substrate_description()
+def test_psyche_description_is_an_explicit_signpost() -> None:
+    desc = psyche_description()
     assert desc.startswith("SIGNPOST ONLY:")
     # The four durable domains it routes to, named in the model-facing text.
     for domain in ("pad", "lingtai", "knowledge", "skills"):

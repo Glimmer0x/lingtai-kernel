@@ -8,7 +8,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
 from lingtai.tools import context as context_tool
-from lingtai.tools import substrate as substrate_tool
+from lingtai.tools import psyche as psyche_tool
 from lingtai.tools.system.summarize import (
     SUMMARY_STATUS_DONE,
     SUMMARY_STATUS_PENDING,
@@ -31,8 +31,8 @@ def _actions(module) -> list[str]:
 
 def test_public_action_sets_are_the_locked_inventories():
     # The four durable domains now share one read-only root.
-    assert _actions(substrate_tool) == ["pad", "lingtai", "knowledge", "skills", "manual"]
-    assert substrate_tool.ACTION_ORDER == (
+    assert _actions(psyche_tool) == ["pad", "lingtai", "knowledge", "skills", "manual"]
+    assert psyche_tool.ACTION_ORDER == (
         "pad", "lingtai", "knowledge", "skills", "manual",
     )
     assert _actions(context_tool) == ["molt", "summarize", "rebuild", "manual"]
@@ -43,11 +43,11 @@ def test_retired_actions_are_rejected_without_aliases(tmp_path):
     try:
         for root, action in (
             # Retired domain-mutation actions, now unknown on the one root.
-            ("substrate", "update"),
-            ("substrate", "load"),
-            ("substrate", "edit"),
-            ("substrate", "append"),
-            ("substrate", "info"),
+            ("psyche", "update"),
+            ("psyche", "load"),
+            ("psyche", "edit"),
+            ("psyche", "append"),
+            ("psyche", "info"),
             ("context", "load"),
         ):
             result = agent._intrinsics[root]({"action": action, "input": {}})
@@ -58,8 +58,8 @@ def test_retired_actions_are_rejected_without_aliases(tmp_path):
 
 
 def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
-    """The 灵台 signpost survives as ``substrate(action='lingtai')``."""
-    schema = substrate_tool.get_schema("en")
+    """The 灵台 signpost survives as ``psyche(action='lingtai')``."""
+    schema = psyche_tool.get_schema("en")
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
@@ -78,11 +78,11 @@ def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
 
     agent = _agent(tmp_path)
     try:
-        result = agent._intrinsics["substrate"](
+        result = agent._intrinsics["psyche"](
             {"action": "lingtai", "input": {}, "reasoning": "inspect", "summarize": False}
         )
         assert result["status"] in {"ok", "degraded"}
-        bad = agent._intrinsics["substrate"](
+        bad = agent._intrinsics["psyche"](
             {"action": "lingtai", "input": {"content": "not allowed"}}
         )
         assert bad["status"] == "failed"

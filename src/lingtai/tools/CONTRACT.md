@@ -29,7 +29,7 @@ related_files:
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
-  - src/lingtai/tools/substrate/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -404,8 +404,9 @@ envelope.
 **Current state (the paragraph above is migration history).** That family no
 longer exists, and neither do the `pad`/`lingtai`/`knowledge`/`skills` public
 roots that briefly succeeded it. The four durable domains are now taught by one
-read-only root, `substrate` (`pad | lingtai | knowledge | skills | manual`,
-`src/lingtai/tools/substrate/CONTRACT.md`): every action returns that domain's
+read-only root, `psyche` (`pad | lingtai | knowledge | skills | manual`,
+`src/lingtai/tools/psyche/CONTRACT.md`, the equation
+`pad + lingtai + knowledge + skills = psyche`): every action returns that domain's
 manual and mutates nothing. Those four packages remain as private lifecycle
 owners — Pad/LingTai composers and the Skills/Knowledge catalogs plus the
 Knowledge legacy migration — and register no tool. Generic durable mutation

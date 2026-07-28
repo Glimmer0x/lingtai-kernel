@@ -1,8 +1,8 @@
-"""Pad/LingTai internal composition after the substrate migration.
+"""Pad/LingTai internal composition after the psyche migration.
 
 The public two-root split this file originally pinned is gone: ``pad`` and
 ``lingtai`` are no longer model-facing roots, and the one public root is
-``substrate`` (see ``tests/test_substrate_family.py`` for the public inventory,
+``psyche`` (see ``tests/test_psyche_family.py`` for the public inventory,
 schema, dispatch, and retirement evidence). What remains here is the part that
 did NOT move — the two packages' private canonical composers, their durable
 sources, and the one post-molt reconstruction hook that recomposes both.
@@ -57,15 +57,15 @@ def test_allowlist_blacklist_and_glossary_boundaries():
     from lingtai.tools.glossary_validator import validate_package
 
     # The public boundary follows the surviving public root.
-    assert "substrate" in _LTP_V2_MIGRATED_FAMILIES
-    assert "substrate" in EMANATION_BLACKLIST
+    assert "psyche" in _LTP_V2_MIGRATED_FAMILIES
+    assert "psyche" in EMANATION_BLACKLIST
     assert "context" in _LTP_V2_MIGRATED_FAMILIES
     assert "context" in EMANATION_BLACKLIST
     # Retired roots are not recognized anywhere as public families.
     for retired in ("pad", "lingtai"):
         assert retired not in _LTP_V2_MIGRATED_FAMILIES
     # Glossary ownership follows the shipped package, which still exists.
-    for package in ("pad", "lingtai", "substrate"):
+    for package in ("pad", "lingtai", "psyche"):
         assert validate_package(package) == []
 
 
@@ -107,7 +107,7 @@ def test_one_post_molt_hook_reconstructs_both_internal_sections(tmp_path):
 
 
 def test_boot_runs_both_composers_without_a_public_root(tmp_path):
-    """``substrate.boot`` carries the composition the retired roots used to."""
+    """``psyche.boot`` carries the composition the retired roots used to."""
     agent = _agent(tmp_path, pad="seeded pad")
     try:
         assert agent._prompt_manager.read_section("pad") == "seeded pad"

@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Every shipped tool package owning a top-level CONTRACT.md. ``file`` is the
 # sole owner of the file surface: the five pre-migration per-operation packages
 # (read/write/edit/glob/grep), their contracts, and their glossaries were
-# deleted into it. ``substrate`` is the one public root for the four durable
+# deleted into it. ``psyche`` is the one public root for the four durable
 # domains; ``pad``, ``lingtai``, ``knowledge``, and ``skills`` remain shipped
 # packages that own their contracts and glossaries as PRIVATE domain owners
 # after their public roots were retired, and ``context`` is what remained of
@@ -52,7 +52,7 @@ _BUILTIN_TOOLS = [
     "pad",
     "skills",
     "soul",
-    "substrate",
+    "psyche",
     "system",
     "vision",
     "web_search",

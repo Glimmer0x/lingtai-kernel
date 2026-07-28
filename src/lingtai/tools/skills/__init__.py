@@ -21,8 +21,8 @@ initializer's job.
 
 Tool surface: **none**. This capability registers no model-facing tool. The
 former public ``skills`` root and its ``info`` action were removed as a clean
-break — the one public root for this domain is now ``substrate``, whose
-read-only ``substrate(action='skills')`` returns this package's manual. There is
+break — the one public root for this domain is now ``psyche``, whose
+read-only ``psyche(action='skills')`` returns this package's manual. There is
 no alias or compatibility wrapper for the old root or for ``skills.info``.
 
 What remains is this capability's private lifecycle ownership, unchanged:
@@ -191,6 +191,6 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
     It registers **no** tool. Catalog reconciliation is private lifecycle: it
     runs here at setup/refresh and from the one full-context reconstruction
     path, never from a model-facing action. The public surface for this domain
-    is the read-only ``substrate(action='skills')`` manual loader.
+    is the read-only ``psyche(action='skills')`` manual loader.
     """
     _reconcile(agent, list(paths) if paths else [])

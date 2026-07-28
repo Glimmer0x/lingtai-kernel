@@ -1,42 +1,48 @@
 ---
-name: substrate-manual
+name: psyche-manual
 description: >
-  Routing table for the `substrate` tool — the one public root for your four
-  durable domains (pad, 灵台, knowledge, skills). Read this to learn which action
-  loads which manual, and the one mutation/rebuild model all four share.
+  Routing table for the `psyche` tool — the one public root for your four
+  durable domains: pad + lingtai + knowledge + skills = psyche. Read this to
+  learn which action loads which manual, and the one mutation/rebuild model all
+  four share.
 related_files:
-- src/lingtai/tools/substrate/CONTRACT.md
-- src/lingtai/tools/substrate/ANATOMY.md
+- src/lingtai/tools/psyche/CONTRACT.md
+- src/lingtai/tools/psyche/ANATOMY.md
 - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
 - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
 - src/lingtai/tools/knowledge/manual/SKILL.md
 - src/lingtai/tools/skills/manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  This is the substrate family's own manual, loaded by
-  `substrate(action='manual', input={}, reasoning='...')`.
+  This is the psyche family's own manual, loaded by
+  `psyche(action='manual', input={}, reasoning='...')`.
   It is a routing table by design: keep it short and keep the depth in the four
   domain manuals it points to. Update it together with
-  src/lingtai/tools/substrate/{CONTRACT,ANATOMY}.md whenever the public action
+  src/lingtai/tools/psyche/{CONTRACT,ANATOMY}.md whenever the public action
   inventory, a domain's durable source, or the rebuild model changes.
 ---
 
-# Substrate
+# Psyche
 
-Your **substrate** is what survives a molt: the four durable domains that are
-re-read and recomposed into every fresh system prompt. `substrate` is the one
-public root that teaches them. It is a signpost family — every action returns a
-manual and changes nothing.
+Your **psyche** is what survives a molt: the four durable domains that are
+re-read and recomposed into every fresh system prompt.
+
+> pad + lingtai + knowledge + skills = psyche
+
+`psyche` is the one public root that teaches them. It is a signpost family —
+every action returns a manual and changes nothing. It owns no lifecycle action:
+molt, summarize, and rebuild belong to `context`, and your name belongs to
+`system`.
 
 ## Routing table
 
 | Call | Returns | Durable source it teaches |
 |---|---|---|
-| `substrate(action="pad", input={}, reasoning="load Pad guidance")` | `pad-manual` | `system/pad.md` + pinned references in `system/pad_append.json` |
-| `substrate(action="lingtai", input={}, reasoning="load identity guidance")` | `lingtai-manual` | `system/lingtai.md` (your 灵台 / character) |
-| `substrate(action="knowledge", input={}, reasoning="load knowledge guidance")` | the knowledge manual | `knowledge/<name>/KNOWLEDGE.md` entries |
-| `substrate(action="skills", input={}, reasoning="load skills guidance")` | the skills manual | `.library/{intrinsic,custom}/` plus configured skills paths |
-| `substrate(action="manual", input={}, reasoning="load the routing table")` | this routing table | — |
+| `psyche(action="pad", input={}, reasoning="load Pad guidance")` | `pad-manual` | `system/pad.md` + pinned references in `system/pad_append.json` |
+| `psyche(action="lingtai", input={}, reasoning="load identity guidance")` | `lingtai-manual` | `system/lingtai.md` (your 灵台 / character) |
+| `psyche(action="knowledge", input={}, reasoning="load knowledge guidance")` | the knowledge manual | `knowledge/<name>/KNOWLEDGE.md` entries |
+| `psyche(action="skills", input={}, reasoning="load skills guidance")` | the skills manual | `.library/{intrinsic,custom}/` plus configured skills paths |
+| `psyche(action="manual", input={}, reasoning="load the routing table")` | this routing table | — |
 
 Every action takes a strict empty `input`, and root `reasoning` is required on
 every call. Any key inside `input` is rejected before the manual is even read, so
@@ -44,7 +50,7 @@ there is nothing to pass and nothing to smuggle.
 
 ## The one mutation model
 
-`substrate` has **no** mutating action. That is deliberate, not an omission:
+`psyche` has **no** mutating action. That is deliberate, not an omission:
 durable content is ordinary text, so it is changed by the ordinary text tools.
 
 1. **Write** the durable source with `file.write` (create or full overwrite) or
@@ -82,12 +88,12 @@ restate it.
 
 ## `summarize`
 
-**Short-result.** Every substrate action returns one manual body. `summarize` is
+**Short-result.** Every psyche action returns one manual body. `summarize` is
 available at root but normally unnecessary here, and a summarized manual loses
 the exact procedure and constraints you called it for — leave it `false`.
 
 ## Settings
 
-`substrate` owns no settings file at either level: there is no
-`settings/substrate.json` and no `settings/substrate.<action>.json`. Nothing to
+`psyche` owns no settings file at either level: there is no
+`settings/psyche.json` and no `settings/psyche.<action>.json`. Nothing to
 configure, and an unrecognized file there is not read by this family.

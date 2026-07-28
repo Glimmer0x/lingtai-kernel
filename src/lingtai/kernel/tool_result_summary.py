@@ -158,11 +158,12 @@ _LTP_V2_MIGRATED_FAMILIES = frozenset(
         "web", "mcp", "file", "vision", "avatar", "soul",
         "shell", "notification", "system", "daemon", "email",
         "context",
-        # One public root for the four durable domains. It replaced the former
-        # ``pad``/``lingtai``/``knowledge``/``skills`` roots, which are gone
-        # from this allowlist because they are gone from the tool surface —
+        # One public root for the four durable domains
+        # (``pad + lingtai + knowledge + skills = psyche``). It replaced the
+        # former ``pad``/``lingtai``/``knowledge``/``skills`` roots, which are
+        # gone from this allowlist because they are gone from the tool surface —
         # there is no alias to keep recognized here.
-        "substrate",
+        "psyche",
     }
 )
 

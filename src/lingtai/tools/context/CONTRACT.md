@@ -12,7 +12,7 @@ related_files:
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
-  - src/lingtai/tools/substrate/CONTRACT.md
+  - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
@@ -39,10 +39,16 @@ maintenance: |
 - `rebuild` — the **one active full context reconstruction operation**;
 - `manual` — return `context-manual` without a lifecycle operation.
 
-There is no `psyche` root or compatibility alias. Name changes remain
-`system.name_set | system.name_nickname`. Pad body and LingTai identity mutation
-belong to `file.write | file.edit`; `pad` exposes `append | manual`, and
-`lingtai` exposes `manual` only.
+No OLD `psyche` action is reachable anywhere, and none is aliased here. A public
+root named `psyche` does exist again — it is the manual-only family for the four
+durable domains (`pad + lingtai + knowledge + skills = psyche`,
+`src/lingtai/tools/psyche/CONTRACT.md`) — but it carries only five strict-empty
+manual loaders. `psyche.context_molt`, `psyche.pad_edit`, `psyche.lingtai_update`,
+`psyche.name_set`, and every other old spelling fail as unknown actions: root
+reuse is not action compatibility. The lifecycle actions live here; name changes
+remain `system.name_set | system.name_nickname`. Pad body and LingTai identity
+mutation belong to `file.write | file.edit`; neither domain exposes a public
+mutating action.
 
 ## LTP v2 port
 

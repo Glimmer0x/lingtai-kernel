@@ -16,5 +16,5 @@ maintenance: |
 
 **名相对照**
 
-- `skills`：诸技之目域；无公开之根。其文以 `substrate(action='skills', input={}, reasoning='...')` 召之，唯还其文，不扫其目，不注于提示。
+- `skills`：诸技之目域；无公开之根。其文以 `psyche(action='skills', input={}, reasoning='...')` 召之，唯还其文，不扫其目，不注于提示。
 - 技以 `file.write`/`file.edit` 书于 `.library/custom/<名>/SKILL.md`，继以 `context.rebuild` 重扫其目；旧 `skills.info` 已废，无所别名。

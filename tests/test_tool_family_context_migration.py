@@ -105,23 +105,42 @@ def test_context_is_registered_exactly_once_as_an_intrinsic():
     assert INTRINSICS["context"]["module"] is context_tool
     # Not also a capability, and no second model-facing root or alias.
     assert "context" not in BUILTIN_TOOLS
-    # ``substrate`` is a separate intrinsic — never a second context root and
+    # ``psyche`` is a separate intrinsic — never a second context root and
     # never a context alias. The former ``pad``/``lingtai`` roots it replaced
     # are not intrinsics at all any more.
-    assert INTRINSICS["substrate"]["module"] is not context_tool
+    assert INTRINSICS["psyche"]["module"] is not context_tool
     assert "pad" not in INTRINSICS
     assert "lingtai" not in INTRINSICS
 
 
-def test_no_psyche_root_survives_anywhere():
-    """The dissolved family leaves no registry entry, module, or alias."""
+def test_no_old_psyche_action_survives_anywhere():
+    """The dissolved family leaves no action, alias, or context spelling.
+
+    A public root named ``psyche`` exists again — the manual-only family for the
+    four durable domains — but it grants the old family's actions nothing. Root
+    reuse is not action compatibility, so this pins the ACTIONS, not the name.
+    """
+    from lingtai.tools import psyche as psyche_tool
     from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
 
-    assert "psyche" not in INTRINSICS
-    assert "psyche" not in BUILTIN_TOOLS
+    assert "psyche" not in BUILTIN_TOOLS  # an intrinsic, never a capability
     assert "anima" not in BUILTIN_TOOLS
-    with pytest.raises(ImportError):
-        __import__("lingtai.tools.psyche")
+
+    # The current root's entire inventory is the five manual loaders.
+    assert psyche_tool.ACTION_ORDER == ("pad", "lingtai", "knowledge", "skills", "manual")
+    for retired in (
+        "lingtai_update", "lingtai_load", "pad_edit", "pad_load", "pad_append",
+        "context_molt", "name_set", "name_nickname",
+    ):
+        assert retired not in psyche_tool.ACTION_ORDER
+        assert retired not in _actions_of(psyche_tool)
+        # ...and they did not leak onto `context` either.
+        assert retired not in get_schema("en")["properties"]["action"]["enum"]
+    assert INTRINSICS["psyche"]["module"] is psyche_tool
+
+
+def _actions_of(module):
+    return module.get_schema()["properties"]["action"]["enum"]
 
 
 def test_the_root_is_the_closed_ltp_v2_envelope():
@@ -672,8 +691,13 @@ def test_context_is_on_the_ltp_v2_summarize_allowlist():
     assert summary_requested({"summarize": False}, tool_name="context") is False
     # `summary` is context's own molt domain field, never this control.
     assert summary_requested({"summary": "a briefing"}, tool_name="context") is False
-    # The dissolved family is not on the allowlist.
-    assert summary_requested({"summarize": True}, tool_name="psyche") is False
+    # Distinguish the two things the name ``psyche`` now refers to. The
+    # DISSOLVED family's action inventory is gone (pinned in
+    # ``test_no_old_psyche_action_survives_anywhere``). The INSTALLED family of
+    # that name — the manual-only durable-domain root — is a real migrated LTP
+    # v2 family, so its root ``summarize`` IS recognized here. Recognizing the
+    # control says nothing about the old actions.
+    assert summary_requested({"summarize": True}, tool_name="psyche") is True
 
 
 def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_path):
@@ -692,7 +716,13 @@ def test_one_context_root_survives_both_wires_with_action_input_correlation(tmp_
         schemas = _build_tool_schemas(live)
         context_schemas = [s for s in schemas if s.name == "context"]
         assert len(context_schemas) == 1, "exactly one public context root"
-        assert not [s for s in schemas if s.name == "psyche"], "no psyche root"
+        # A ``psyche`` root exists again — the manual-only durable-domain family
+        # — but it is a separate root, never a second context root or alias.
+        psyche_schemas = [s for s in schemas if s.name == "psyche"]
+        assert len(psyche_schemas) == 1
+        assert psyche_schemas[0].parameters["properties"]["action"]["enum"] == [
+            "pad", "lingtai", "knowledge", "skills", "manual",
+        ]
 
         chat = _build_tools(context_schemas)[0]["function"]["parameters"]
         responses = _build_responses_tools(context_schemas)[0]["parameters"]
