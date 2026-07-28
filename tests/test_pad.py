@@ -1,7 +1,10 @@
-"""Pad durable-source and append-list tests.
+"""Pad durable-source and pinned-reference composition tests.
 
-Generic body mutation is covered by the file family. Pad's public ownership is
-limited to append-list persistence plus its manual signpost.
+Pad has no public tool root any more: the former ``pad`` root and its ``append``
+action were retired into the read-only ``substrate(action='pad')`` manual
+loader. What is tested here is what remains — the durable ``system/pad.md``
+source, the pinned ``system/pad_append.json`` reference list, and the private
+``_pad_load`` composer. Generic body mutation is covered by the file family.
 """
 from __future__ import annotations
 
@@ -42,19 +45,25 @@ def _agent(tmp_path, name="test", **kwargs):
     )
 
 
-def test_registered_pad_inventory_is_append_and_manual_only():
-    from lingtai.tools.registry import INTRINSICS
+def test_pad_exposes_no_public_root_or_append_action():
+    from lingtai.tools.registry import BUILTIN_TOOLS, INTRINSICS
+    from lingtai.tools import pad as pad_tool
 
-    module = INTRINSICS["pad"]["module"]
-    assert module.get_schema()["properties"]["action"]["enum"] == ["append", "manual"]
-    assert module.ACTION_ORDER == ("append", "manual")
+    assert "pad" not in INTRINSICS
+    assert "pad" not in BUILTIN_TOOLS
     assert "psyche" not in INTRINSICS
+    # No schema, no dispatch, no retired handler survives.
+    for attribute in ("get_schema", "get_description", "handle", "ACTION_ORDER"):
+        assert not hasattr(pad_tool, attribute)
+    assert "substrate" in INTRINSICS
 
 
-def test_context_pad_and_lingtai_are_wired(tmp_path):
+def test_context_and_substrate_are_wired(tmp_path):
     agent = _agent(tmp_path)
     try:
-        assert {"context", "pad", "lingtai"} <= set(agent._intrinsics)
+        assert {"context", "substrate"} <= set(agent._intrinsics)
+        assert "pad" not in agent._intrinsics
+        assert "lingtai" not in agent._intrinsics
     finally:
         agent.stop(timeout=1.0)
 
@@ -79,69 +88,39 @@ def test_pad_constructor_arg_seeds_disk_and_prompt(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_pad_append_query_does_not_create_or_load_a_list(tmp_path):
-    agent = _agent(tmp_path)
-    try:
-        agent._prompt_manager.write_section("pad", "CURRENT")
-        result = agent._intrinsics["pad"]({"action": "append", "input": {"files": None}})
-        assert result["status"] == "ok"
-        assert result["files"] == []
-        assert result["prompt_reload"] is False
-        assert agent._prompt_manager.read_section("pad") == "CURRENT"
-        assert not (agent.working_dir / "system" / "pad_append.json").exists()
-    finally:
-        agent.stop(timeout=1.0)
+def test_pinned_reference_list_still_composes_into_the_pad_section(tmp_path):
+    """Retiring ``pad.append`` removed a writer, not the durable list itself."""
+    from lingtai.tools.pad import _pad_load
 
-
-def test_pad_append_set_and_clear_only_persist(tmp_path):
-    agent = _agent(tmp_path)
+    agent = _agent(tmp_path, pad="BODY")
     try:
         ref = agent.working_dir / "ref.md"
-        ref.write_text("reference", encoding="utf-8")
-        agent._prompt_manager.write_section("pad", "CURRENT")
-
-        result = agent._intrinsics["pad"]({
-            "action": "append", "input": {"files": ["ref.md"]},
-        })
-        assert result["action"] == "set"
-        assert result["prompt_reload"] is False
-        assert "context.rebuild" in result["takes_effect"]
+        ref.write_text("reference body", encoding="utf-8")
+        # The durable source is ordinary text the agent edits with file.write.
         append_path = agent.working_dir / "system" / "pad_append.json"
-        assert json.loads(append_path.read_text()) == ["ref.md"]
-        assert agent._prompt_manager.read_section("pad") == "CURRENT"
+        append_path.write_text(json.dumps(["ref.md"]), encoding="utf-8")
 
-        result = agent._intrinsics["pad"]({"action": "append", "input": {"files": []}})
-        assert result["action"] == "cleared"
-        assert json.loads(append_path.read_text()) == []
-        assert agent._prompt_manager.read_section("pad") == "CURRENT"
+        _pad_load(agent, {})
+
+        composed = agent._prompt_manager.read_section("pad")
+        assert "BODY" in composed
+        assert "Reference (read-only)" in composed
+        assert "reference body" in composed
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_pad_append_rejects_missing_or_binary_files(tmp_path):
-    agent = _agent(tmp_path)
-    try:
-        result = agent._intrinsics["pad"]({
-            "action": "append", "input": {"files": ["missing.md"]},
-        })
-        assert "missing.md" in result["error"]
-        binary = agent.working_dir / "binary.dat"
-        binary.write_bytes(b"a\x00b")
-        result = agent._intrinsics["pad"]({
-            "action": "append", "input": {"files": ["binary.dat"]},
-        })
-        assert "Binary files" in result["error"]
-    finally:
-        agent.stop(timeout=1.0)
+def test_pad_load_reports_missing_pinned_references_without_failing(tmp_path):
+    from lingtai.tools.pad import _pad_load
 
-
-def test_retired_pad_edit_and_load_fail_without_mutation(tmp_path):
-    agent = _agent(tmp_path, pad="keep")
+    agent = _agent(tmp_path, pad="BODY")
     try:
-        for action in ("edit", "load"):
-            result = agent._intrinsics["pad"]({"action": action, "input": {}})
-            assert "Unknown pad action" in result["error"]
-        assert (agent.working_dir / "system" / "pad.md").read_text() == "keep"
+        (agent.working_dir / "system" / "pad_append.json").write_text(
+            json.dumps(["gone.md"]), encoding="utf-8"
+        )
+        result = _pad_load(agent, {})
+        assert result["append_not_found"] == ["gone.md"]
+        assert result["status"] == "ok"
     finally:
         agent.stop(timeout=1.0)
 

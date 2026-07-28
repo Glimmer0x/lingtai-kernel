@@ -425,11 +425,13 @@ EMANATION_BLACKLIST = {
     # provider context. This is the same boundary the former ``psyche`` root
     # carried; it follows the capability, not the old name.
     "context",
-    # Also split out of the former ``psyche`` into their own model-visible
-    # roots; they carry exactly the identity/prompt-mutation authority that
-    # root was blacklisted for, so the boundary follows them too.
-    "pad",
-    "lingtai",
+    # The one public root for the four durable domains (Pad, 灵台, Knowledge,
+    # Skills). It replaced the four former model-visible roots, which carried
+    # exactly the identity/prompt authority ``psyche`` was blacklisted for, so
+    # the boundary follows the capability onto its successor. ``knowledge`` and
+    # ``skills`` are retained below as *capability* names: they register no tool
+    # but must still be excluded from the borrowable host-tool floor.
+    "substrate",
     "skills",
     "knowledge",
 }

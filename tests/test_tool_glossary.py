@@ -453,9 +453,12 @@ _ALL_PACKAGES = sorted(
     | {path.rsplit(".", 1)[-1] for path in BUILTIN_TOOLS.values()}
     | set(INTRINSICS)
 )
-# 16 before ``pad`` and ``lingtai`` were split out of ``psyche`` into their own
-# glossary-owning intrinsic packages.
-assert len(_ALL_PACKAGES) == 18, _ALL_PACKAGES
+# 18 before ``substrate`` became the one public root for the four durable
+# domains. Glossary ownership follows the package resource, not the public tool
+# surface, so ``pad``/``lingtai``/``knowledge``/``skills`` still own glossaries
+# as private domain packages while ``substrate`` adds the nineteenth.
+assert len(_ALL_PACKAGES) == 19, _ALL_PACKAGES
+assert "substrate" in _ALL_PACKAGES
 # The five pre-migration file packages were deleted into ``file``; their
 # glossaries must not come back.
 assert "file" in _ALL_PACKAGES

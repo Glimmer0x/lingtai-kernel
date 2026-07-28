@@ -65,10 +65,12 @@ def test_intrinsics_enabled_by_default(tmp_path):
     # File I/O is now a capability, not intrinsic
     assert "read" not in agent._intrinsics
     assert "write" not in agent._intrinsics
-    # pad and lingtai are model-visible roots split out of the former psyche.
-    assert "pad" in agent._intrinsics
-    assert "lingtai" in agent._intrinsics
-    assert len(agent._intrinsics) == 7  # email, system, context, pad, lingtai, soul, notification
+    # ``substrate`` is the one model-visible root for the four durable domains;
+    # the former ``pad``/``lingtai`` roots were retired into it with no alias.
+    assert "substrate" in agent._intrinsics
+    assert "pad" not in agent._intrinsics
+    assert "lingtai" not in agent._intrinsics
+    assert len(agent._intrinsics) == 6  # email, system, context, substrate, soul, notification
 
 
 # ---------------------------------------------------------------------------

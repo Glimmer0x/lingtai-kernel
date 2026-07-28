@@ -105,10 +105,12 @@ def test_context_is_registered_exactly_once_as_an_intrinsic():
     assert INTRINSICS["context"]["module"] is context_tool
     # Not also a capability, and no second model-facing root or alias.
     assert "context" not in BUILTIN_TOOLS
-    # ``pad``/``lingtai`` are separate intrinsics — never a second context root
-    # and never a context alias.
-    assert INTRINSICS["pad"]["module"] is not context_tool
-    assert INTRINSICS["lingtai"]["module"] is not context_tool
+    # ``substrate`` is a separate intrinsic — never a second context root and
+    # never a context alias. The former ``pad``/``lingtai`` roots it replaced
+    # are not intrinsics at all any more.
+    assert INTRINSICS["substrate"]["module"] is not context_tool
+    assert "pad" not in INTRINSICS
+    assert "lingtai" not in INTRINSICS
 
 
 def test_no_psyche_root_survives_anywhere():

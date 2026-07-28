@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/lingtai/__init__.py
   - src/lingtai/tools/lingtai/_lingtai.py
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/substrate/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md

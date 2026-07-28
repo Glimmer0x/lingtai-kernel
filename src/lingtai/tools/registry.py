@@ -46,24 +46,31 @@ if TYPE_CHECKING:
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
 from . import email, system, context, soul, notification  # noqa: E402  (lingtai.tools.<pkg>)
-# ``pad`` and ``lingtai`` are model-visible concepts parallel to ``knowledge``
-# and ``skills``, split out of the former ``psyche`` into their own roots.
-# ``lingtai`` here is ``lingtai.tools.lingtai`` — the tool family, not the
-# top-level package; it is aliased on import so the two names cannot be
-# confused at a callsite.
+# ``substrate`` is the single model-visible root for the four durable domains
+# (Pad, 灵台, Knowledge, Skills). It replaced the four former public roots
+# ``pad``, ``lingtai``, ``knowledge``, and ``skills`` as a clean break: those
+# tool names are unknown and fail loudly, and there is no alias for any of them
+# or for the retired ``pad.append`` / ``skills.info`` / ``knowledge.info``
+# actions.
+#
+# The four domain packages still exist and are still imported — but as PRIVATE
+# owners only. ``pad``/``lingtai`` keep ``boot()`` and their canonical prompt
+# composers; ``knowledge``/``skills`` keep their capability ``setup()``, catalog
+# composition, configured paths, and one-time legacy migration. None of them
+# registers a public tool. ``lingtai`` here would be ``lingtai.tools.lingtai``,
+# the domain package rather than the top-level package; it is no longer imported
+# at this seam at all, since it exposes no intrinsic.
 #
 # ``context`` is the department that owns the agent's context (molt, summarize,
 # rebuild). It replaces ``psyche``, whose remaining name actions moved to
 # ``system``; there is no ``psyche`` intrinsic and no alias for one.
-from . import pad  # noqa: E402  (lingtai.tools.pad)
-from . import lingtai as lingtai_tool  # noqa: E402  (lingtai.tools.lingtai)
+from . import substrate  # noqa: E402  (lingtai.tools.substrate)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
     "email": {"module": email},
     "system": {"module": system},
     "context": {"module": context},
-    "pad": {"module": pad},
-    "lingtai": {"module": lingtai_tool},
+    "substrate": {"module": substrate},
     "soul": {"module": soul},
     "notification": {"module": notification},
 }

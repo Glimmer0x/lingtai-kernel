@@ -8,8 +8,7 @@ import pytest
 from lingtai.agent import Agent
 from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
 from lingtai.tools import context as context_tool
-from lingtai.tools import lingtai as lingtai_tool
-from lingtai.tools import pad as pad_tool
+from lingtai.tools import substrate as substrate_tool
 from lingtai.tools.system.summarize import (
     SUMMARY_STATUS_DONE,
     SUMMARY_STATUS_PENDING,
@@ -31,10 +30,11 @@ def _actions(module) -> list[str]:
 
 
 def test_public_action_sets_are_the_locked_inventories():
-    assert _actions(lingtai_tool) == ["manual"]
-    assert lingtai_tool.ACTION_ORDER == ("manual",)
-    assert _actions(pad_tool) == ["append", "manual"]
-    assert pad_tool.ACTION_ORDER == ("append", "manual")
+    # The four durable domains now share one read-only root.
+    assert _actions(substrate_tool) == ["pad", "lingtai", "knowledge", "skills", "manual"]
+    assert substrate_tool.ACTION_ORDER == (
+        "pad", "lingtai", "knowledge", "skills", "manual",
+    )
     assert _actions(context_tool) == ["molt", "summarize", "rebuild", "manual"]
 
 
@@ -42,10 +42,12 @@ def test_retired_actions_are_rejected_without_aliases(tmp_path):
     agent = _agent(tmp_path)
     try:
         for root, action in (
-            ("lingtai", "update"),
-            ("lingtai", "load"),
-            ("pad", "edit"),
-            ("pad", "load"),
+            # Retired domain-mutation actions, now unknown on the one root.
+            ("substrate", "update"),
+            ("substrate", "load"),
+            ("substrate", "edit"),
+            ("substrate", "append"),
+            ("substrate", "info"),
             ("context", "load"),
         ):
             result = agent._intrinsics[root]({"action": action, "input": {}})
@@ -56,13 +58,18 @@ def test_retired_actions_are_rejected_without_aliases(tmp_path):
 
 
 def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
-    schema = lingtai_tool.get_schema("en")
+    """The 灵台 signpost survives as ``substrate(action='lingtai')``."""
+    schema = substrate_tool.get_schema("en")
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["required"] == ["action", "input", "reasoning"]
     assert schema["additionalProperties"] is False
-    assert schema["properties"]["action"]["enum"] == ["manual"]
-    branch = schema["allOf"][0]["then"]["properties"]["input"]
-    assert branch == {
+    assert "lingtai" in schema["properties"]["action"]["enum"]
+    lingtai_branch = next(
+        cond["then"]["properties"]["input"]
+        for cond in schema["allOf"]
+        if cond["if"]["properties"]["action"]["const"] == "lingtai"
+    )
+    assert lingtai_branch == {
         "type": "object",
         "properties": {},
         "required": [],
@@ -71,12 +78,12 @@ def test_manual_only_lingtai_has_a_strict_ltp_v2_envelope(tmp_path):
 
     agent = _agent(tmp_path)
     try:
-        result = agent._intrinsics["lingtai"](
-            {"action": "manual", "input": {}, "reasoning": "inspect", "summarize": False}
+        result = agent._intrinsics["substrate"](
+            {"action": "lingtai", "input": {}, "reasoning": "inspect", "summarize": False}
         )
         assert result["status"] in {"ok", "degraded"}
-        bad = agent._intrinsics["lingtai"](
-            {"action": "manual", "input": {"content": "not allowed"}}
+        bad = agent._intrinsics["substrate"](
+            {"action": "lingtai", "input": {"content": "not allowed"}}
         )
         assert bad["status"] == "failed"
         assert bad["error_code"] == "INVALID_ARGUMENT"
@@ -117,25 +124,28 @@ def test_file_write_and_edit_change_disk_but_never_hot_load_prompt(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_pad_append_persists_and_validates_without_hot_loading(tmp_path):
+def test_durable_pinned_reference_edit_does_not_hot_load_but_rebuild_composes(tmp_path):
+    """``pad.append`` is gone; the durable list is edited as ordinary text."""
     agent = _agent(tmp_path)
     try:
         agent._prompt_manager.write_section("pad", "CURRENT-PROMPT")
         ref = agent._working_dir / "reference.txt"
         ref.write_text("NEW-PINNED-REFERENCE", encoding="utf-8")
 
-        result = agent._intrinsics["pad"]({
-            "action": "append",
-            "input": {"files": ["reference.txt"]},
-            "reasoning": "pin durable reference",
-        })
-        assert result["status"] == "ok"
-        assert result["prompt_reload"] is False
-        assert result["takes_effect"] == "context.rebuild or passive refresh/molt reconstruction"
-        assert json.loads(
-            (agent._working_dir / "system" / "pad_append.json").read_text(encoding="utf-8")
-        ) == ["reference.txt"]
+        # Writing the durable source directly must NOT hot-load the prompt.
+        system = agent._working_dir / "system"
+        system.mkdir(exist_ok=True)
+        (system / "pad.md").write_text("PAD-BODY", encoding="utf-8")
+        (system / "pad_append.json").write_text(
+            json.dumps(["reference.txt"]), encoding="utf-8"
+        )
         assert agent._prompt_manager.read_section("pad") == "CURRENT-PROMPT"
+
+        # One explicit rebuild composes body plus the pinned reference.
+        agent._reconstruct_context()
+        composed = agent._prompt_manager.read_section("pad")
+        assert "PAD-BODY" in composed
+        assert "NEW-PINNED-REFERENCE" in composed
     finally:
         agent.stop(timeout=1.0)
 

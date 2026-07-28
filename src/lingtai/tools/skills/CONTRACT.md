@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/_catalog.py
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/substrate/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/kernel/tool_result_summary.py

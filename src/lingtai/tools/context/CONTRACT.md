@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/substrate/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md

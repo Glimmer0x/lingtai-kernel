@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/skills/CONTRACT.md
+  - src/lingtai/tools/substrate/ANATOMY.md
   - tests/test_skills.py
   - tests/test_validate_skill.py
   - src/lingtai/tools/skills/glossary-en.md
@@ -27,45 +28,37 @@ Skills capability — per-agent skill catalog and skill-manual surface. This is 
 
 ## Components
 
-- `skills/__init__.py` — the capability implementation. The canonical strict-empty child input factory `_strict_empty_input` (`__init__.py:54-55`), `_reconcile` (`__init__.py:87-171`), `_skills_info` (`__init__.py:174-179`), the Host-owned `_adapt_manual_result` flattener (`__init__.py:182-204`), `get_description` (`__init__.py:207-208`), the single canonical child-registry builder `_build_family` and its import-time schema-only instance `_SCHEMA_FAMILY` (`__init__.py:211-246`), `get_schema` (`__init__.py:249-252`), `setup` with its `handle_skills` wrapper (`__init__.py:255-292`), and path/scanner helpers (`__init__.py:62-80`).
-- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles.
+- `skills/__init__.py` — the capability implementation. It registers **no** model-facing tool: the former public `skills` root and its `info` action were retired into the read-only `substrate(action='skills')` manual loader. Path helpers `_resolve_path` (`__init__.py:58-72`) and `_scan` (`__init__.py:75-76`), the catalog composer `_reconcile` (`__init__.py:83-171`), and the capability lifecycle entry `setup` (`__init__.py:178-196`).
+- `skills/manual/` — `skills-manual` skill documentation, template assets, and validator script. The validator can optionally require `last_changed_at` for LingTai-maintained skill bundles. This is the body `substrate(action='skills')` returns.
 
 ## Connections
 
-- `lingtai.tools.registry` maps canonical `skills` here. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
-- `Agent._install_intrinsic_manuals()` copies every capability `manual/` bundle into `.library/intrinsic/capabilities/<name>/`, then re-runs `skills._reconcile()` for first-turn catalog freshness when `skills` is loaded (`src/lingtai/agent.py:256`).
-- The daemon capability blacklists `skills` so emanations do not recursively receive the skill catalog tool (`../daemon/__init__.py:34`).
-- The generic [`../tool_family/ANATOMY.md`](../tool_family/ANATOMY.md) owns the reusable schema-composition/dispatch infrastructure this package builds its `ToolFamily` instances from, and the reserved `manual` child builder (`tool_family/manual.py`). It has no knowledge of the skill catalogue.
-- `lingtai.kernel.tool_result_summary` lists `skills` in `_LTP_V2_MIGRATED_FAMILIES`, so this family's root `summarize` boolean is recognized as the canonical a-priori summary control (`src/lingtai/kernel/tool_result_summary.py:155`).
+- `lingtai.tools.registry` maps canonical `skills` here as a *capability* (`BUILTIN_TOOLS`/`CORE_DEFAULTS`); it is not an intrinsic and registers no tool. Former skill-catalog `library.paths` compatibility is removed in the clean rename.
+- `Agent._install_intrinsic_manuals()` copies every capability `manual/` bundle into `.library/intrinsic/capabilities/<name>/`, then re-runs `skills._reconcile()` for first-turn catalog freshness when `skills` is loaded (`src/lingtai/agent.py:490-501`).
+- `Agent._reload_prompt_sections` re-runs `_reconcile(..., publish=False)` so a full `context.rebuild` (and passive refresh/molt reconstruction) recomposes this catalog with every other canonical section before one final prompt publication (`src/lingtai/agent.py:1821-1848`).
+- [`../substrate/ANATOMY.md`](../substrate/ANATOMY.md) owns the one public root; it loads this package's `manual/SKILL.md` and holds no reference to the catalog or its composer.
+- The daemon capability blacklists `skills` so emanations do not borrow it from the host tool floor (`../daemon/__init__.py:435`).
+- The generic [`../tool_family/ANATOMY.md`](../tool_family/ANATOMY.md) owns the reusable schema-composition/dispatch infrastructure. This package no longer builds a `ToolFamily`; only `substrate` does.
 
 ## Public API
 
-`skills` is a migrated LTP v2 family: one model-facing root, closed to exactly
-`action`, `input`, `reasoning`, and `summarize`, with `required: [action,
-input, reasoning]`. The public tool name and both public action values are
-unchanged by the migration; each action value equals its child/dispatch key.
-Both children take the canonical strict-empty `input` object.
+None. This package exposes no model-facing tool, schema, or dispatch entry
+point. Its public surface is the read-only `substrate(action='skills')` manual
+loader, owned by [`../substrate/CONTRACT.md`](../substrate/CONTRACT.md).
 
-| Action | Input | Description |
-|---|---|---|
-| `info` | `{}` (strict-empty) | Refresh/reconcile the skills catalog and return runtime health (catalog size, paths report, problems) without manual bodies |
-| `manual` | `{}` (strict-empty) | Return the skills manual body plus the library manual body on demand, without any catalogue mutation |
-
-`handle_skills` delegates envelope validation and dispatch to the agent-bound
-`ToolFamily`, then flattens only the reserved `manual` child's canonical
-`content`/`structuredContent` result back to this capability's public
-`skills_manual`/`library_manual`/`manual_path` shape — strictly after dispatch,
-never inside a registered child, and never wrapping either child's result.
+`setup(agent, paths=...)` is the capability lifecycle entry point: it reconciles
+the catalog and injects the `skills` prompt section. `_reconcile` is the private
+composer shared by that setup/refresh path and by full-context reconstruction.
 
 ## State
 
-- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:112-115`).
-- Config path source is canonical `manifest.capabilities.skills.paths` (`src/lingtai/init_schema.py:403-421`).
-- Prompt state is the `skills` section, written only by `_reconcile` — reached by `setup` and the `info` child, never by `manual` (`__init__.py:150-155`).
-- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:157-183`).
+- Skill storage remains `<agent>/.library/` for compatibility: `intrinsic/` is CLI-managed and `custom/` is agent-authored (`__init__.py:95-98`).
+- Config path source is canonical `manifest.capabilities.skills.paths` (`src/lingtai/init_schema.py:442-446`).
+- Prompt state is the `skills` section, written only by `_reconcile` — reached by `setup` and by full-context reconstruction, never by a model-facing action (`__init__.py:133-142`).
+- Health check expects `.library/intrinsic/capabilities/skills/SKILL.md` and reports `skills_manual`, with `library_manual` retained as a response compatibility key (`__init__.py:145-167`).
 
 ## Notes
 
 - The `.library/` directory name and `.library_shared/` convention are intentionally preserved in this rename-only change; they are storage compatibility names, not the user-facing capability name.
-- New callers should use `skills({"action":"info","input":{},"reasoning":"..."})`; old `library({"action":"info"})` is not registered because private durable memory is now `knowledge` and `library` is not registered.
+- There is no `skills` tool call any more: use `substrate({"action":"skills","input":{},"reasoning":"..."})` for the manual, and let setup/refresh or `context.rebuild` reconcile the catalog. Old `library({"action":"info"})` is likewise not registered.
 - LingTai-maintained `SKILL.md` files carry `last_changed_at` in frontmatter, initialized from git history for metadata-only backfills and updated on substantive skill edits.
