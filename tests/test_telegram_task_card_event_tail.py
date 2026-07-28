@@ -222,7 +222,7 @@ def test_restart_rehydrates_latest_n_from_tail_without_checkpoint_file(tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def test_provider_groups_count_calls_and_exclude_private_fields(tmp_path):
+def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
@@ -231,11 +231,11 @@ def test_provider_groups_count_calls_and_exclude_private_fields(tmp_path):
     events = [
         {"type": "diary", "api_call_id": "api-1", "text": "text one"},
         {"type": "tool_call", "api_call_id": "api-1", "tool_name": "bash",
-         "tool_args": {"action": "ACTION_SECRET_ONE", "_reasoning": "safe one"}},
+         "tool_args": {"action": "run", "_reasoning": "safe one"}},
         {"type": "assistant_text", "api_call_id": "api-1", "text": "ALIAS_SECRET"},
         {"type": "diary", "api_call_id": "api-2", "text": visible},
         {"type": "tool_call", "api_call_id": "api-2", "tool_name": "read",
-         "tool_args": {"action": "ACTION_SECRET_TWO", "command": "ARG_SECRET",
+         "tool_args": {"action": "read", "command": "ARG_SECRET",
                        "_reasoning": "safe two"}},
         {"type": "thinking", "api_call_id": "api-2", "text": "THINKING_SECRET"},
         {"type": "tool_result", "api_call_id": "api-2", "result": "RESULT_SECRET"},
@@ -245,18 +245,17 @@ def test_provider_groups_count_calls_and_exclude_private_fields(tmp_path):
     rendered = [call for call in acct.calls if call[0] == "edit_message"][-1][3]
     divider = manager._TASK_CARD_API_CALL_DIVIDER
     assert rendered.count(divider) == 2
-    assert all(value in rendered for value in ("text one", "• bash:", "text two", "• read:"))
+    assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
-        "ACTION_SECRET_ONE", "ACTION_SECRET_TWO", "ARG_SECRET", "ALIAS_SECRET",
-        "THINKING_SECRET", "RESULT_SECRET",
+        "ARG_SECRET", "ALIAS_SECRET", "THINKING_SECRET", "RESULT_SECRET",
     ))
 
     service.normal_rows = 1
     manager._broadcast_task_card_event_window()
     latest = acct.calls[-1][3]
-    assert latest.count(divider) == 1 and "text two" in latest and "• read:" in latest
-    assert "text one" not in latest and "• bash:" not in latest
+    assert latest.count(divider) == 1 and "text two" in latest and "• read.read:" in latest
+    assert "text one" not in latest and "• bash.run:" not in latest
 
 
 def test_non_whitelisted_event_types_are_skipped(tmp_path):
@@ -439,9 +438,9 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "reasoning", "started_at"}
+    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at"}
     assert row["tool"] == "bash"
-    assert "tool_action" not in row
+    assert row["tool_action"] == "run"
     assert row["reasoning"] == "safe text"
 
     manager._poll_event_tail()
@@ -450,6 +449,36 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     assert "sk-should-never-appear" not in rendered
     assert "/very/secret/path" not in rendered
     assert "--token=abc123" not in rendered
+
+
+def test_tool_call_action_is_rendered_as_tool_action():
+    event = json.loads(_tool_call_line(tool_name="knowledge", action="info"))
+    row = TelegramManager._project_tool_call_row(event)
+
+    assert row["tool_action"] == "info"
+    rendered = TelegramManager._format_task_card_text("", "", "", rows=[row])
+    assert "• knowledge.info: doing a thing" in rendered
+
+
+def test_tool_call_without_action_preserves_tool_label():
+    event = json.loads(_tool_call_line(tool_name="edit"))
+    del event["tool_args"]["action"]
+    row = TelegramManager._project_tool_call_row(event)
+
+    assert "tool_action" not in row
+    rendered = TelegramManager._format_task_card_text("", "", "", rows=[row])
+    assert "• edit: doing a thing" in rendered
+
+
+def test_empty_none_and_non_string_actions_do_not_add_suffix():
+    for action in ("", None, 0, False, []):
+        event = json.loads(_tool_call_line(tool_name="system"))
+        event["tool_args"]["action"] = action
+        row = TelegramManager._project_tool_call_row(event)
+
+        assert "tool_action" not in row
+        rendered = TelegramManager._format_task_card_text("", "", "", rows=[row])
+        assert "• system: doing a thing" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +573,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
     rendered = edits[-1][3]
-    assert "• bash: event-log row" in rendered
+    assert "• bash.run: event-log row" in rendered
     assert f" · {expected_stamp}" in rendered
     assert "session · cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx · 171.2k/272.0k · 63%" in rendered

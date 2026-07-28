@@ -2257,6 +2257,9 @@ class TelegramManager:
             # The ellipsis itself must stay inside the cap, not extend past it.
             reasoning = reasoning[:cap - 1] + "…"
         row = {"tool": tool_name, "reasoning": reasoning}
+        action = tool_args.get("action")
+        if isinstance(action, str) and action:
+            row["tool_action"] = action
         started_at = TelegramManager._format_task_card_row_timestamp(event.get("ts"))
         if started_at:
             row["started_at"] = started_at
