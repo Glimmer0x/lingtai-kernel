@@ -15,4 +15,4 @@ maintenance: |
 ---
 **术语对照**
 
-- `lingtai`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `lingtai`：灵台身份指南入口；唯一公开 action `manual` 返回指南，不修改文件或提示词。

@@ -1,21 +1,20 @@
-"""Tests for psyche intrinsic — agent pad management (edit/load).
+"""Pad durable-source and append-list tests.
 
-Migrated from memory intrinsic tests. Tests the pad object within psyche.
+Generic body mutation is covered by the file family. Pad's public ownership is
+limited to append-list persistence plus its manual signpost.
 """
 from __future__ import annotations
-from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
+import json
 from unittest.mock import MagicMock
 
-import pytest
-
-from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.kernel.base_agent import BaseAgent
-from tests._workdir_lease_helpers import make_test_lease
-from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
+from tests._agent_presence_helpers import make_test_presence_store
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
-from tests._agent_presence_helpers import make_test_presence_store
+from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_revision_port
+from tests._workdir_lease_helpers import make_test_lease
 
 
 def make_mock_service():
@@ -26,311 +25,130 @@ def make_mock_service():
     return svc
 
 
-# ---------------------------------------------------------------------------
-# Schema tests
-# ---------------------------------------------------------------------------
-
-
-def test_intrinsics_include_context_pad_and_lingtai():
-    """``pad`` is its own intrinsic root since the pad/lingtai split.
-
-    Before the split ``pad`` was deliberately absent — the three pad
-    operations were leaves of the former ``psyche``. Now it is a model-visible
-    root parallel to ``knowledge`` and ``skills``, and no other family
-    advertises them.
-    """
-    assert "context" in ALL_INTRINSICS
-    assert "psyche" not in ALL_INTRINSICS
-    assert "pad" in ALL_INTRINSICS
-    assert "lingtai" in ALL_INTRINSICS
-
-    mod = ALL_INTRINSICS["pad"]["module"]
-    schema = mod.get_schema()
-    # The registered schema is the ToolFamily-composed LTP v2 envelope: the
-    # `allOf` action/input correlation replaced the former deliberately-flat
-    # shape (#114), and the `(object, action)` matrix is now one action enum.
-    assert "allOf" in schema
-    assert "object" not in schema["properties"]
-    actions = schema["properties"]["action"]["enum"]
-    assert actions == ["edit", "load", "append", "manual"]
-    assert mod.ACTION_ORDER == tuple(actions)
-
-    context_actions = ALL_INTRINSICS["context"]["module"].get_schema()["properties"]["action"]["enum"]
-    assert not any(action.startswith("pad_") for action in context_actions)
-
-
-def test_context_and_pad_wired_in_agent(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    assert "context" in agent._intrinsics
-    assert "pad" in agent._intrinsics
-    assert "lingtai" in agent._intrinsics
-    agent.stop(timeout=1.0)
-
-
-# ---------------------------------------------------------------------------
-# Constructor args (covenant / pad file paths)
-# ---------------------------------------------------------------------------
-
-
-def test_covenant_constructor_arg_writes_to_system(tmp_path):
-    """covenant= constructor arg should write to system/covenant.md."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        covenant="You are a helpful agent", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    covenant_file = agent.working_dir / "system" / "covenant.md"
-    assert covenant_file.is_file()
-    assert covenant_file.read_text() == "You are a helpful agent"
-    agent.stop(timeout=1.0)
-
-
-def test_pad_constructor_arg_writes_to_system(tmp_path):
-    """pad= constructor arg should write to system/pad.md."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        pad="initial pad", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    pad_file = agent.working_dir / "system" / "pad.md"
-    assert pad_file.is_file()
-    assert pad_file.read_text() == "initial pad"
-    agent.stop(timeout=1.0)
-
-
-def test_covenant_is_protected_section(tmp_path):
-    """Covenant should be a protected prompt section."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        covenant="researcher", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    sections = agent._prompt_manager.list_sections()
-    covenant_section = [s for s in sections if s["name"] == "covenant"]
-    assert len(covenant_section) == 1
-    assert covenant_section[0]["protected"] is True
-    agent.stop(timeout=1.0)
-
-
-def test_existing_system_files_not_overwritten(tmp_path):
-    """If system/pad.md already exists, constructor arg should not overwrite it."""
-    # First create an agent so its working dir (with agent_id) exists
-    agent1 = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t1",
-        pad="existing content", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t1"),
-    )
-    working_dir = agent1.working_dir
-    agent1.stop(timeout=1.0)
-    # Verify the pad file was written by the first agent
-    assert (working_dir / "system" / "pad.md").read_text() == "existing content"
-    # Now a new agent (different agent_id) won't share that dir.
-    # The semantic of this test is that pad= doesn't overwrite existing pad.md.
-    # We verify this by checking the first agent wrote it correctly.
-    agent2 = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "t2",
-        pad="constructor ltm", workdir_lease=make_test_lease(),
-        snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "t2"),
-    )
-    # New agent has its own dir, so pad=constructor ltm is written fresh
-    assert (agent2.working_dir / "system" / "pad.md").read_text() == "constructor ltm"
-    agent2.stop(timeout=1.0)
-
-
-# ---------------------------------------------------------------------------
-# Handler tests (edit / load via psyche)
-# ---------------------------------------------------------------------------
-
-
-def test_pad_edit(tmp_path):
-    """Edit should write content to disk without injecting into prompt."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "hello world", "files": None}})
-    assert result["status"] == "ok"
-    assert result["size_bytes"] == len("hello world".encode())
-    pad_file = agent.working_dir / "system" / "pad.md"
-    assert pad_file.read_text() == "hello world"
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_then_load(tmp_path):
-    """Edit + load workflow: edit writes to disk, load injects into prompt."""
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.start()
-    try:
-        # edit writes content and auto-loads into prompt manager
-        result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "important fact", "files": None}})
-        assert result["status"] == "ok"
-
-        # Verify file was written
-        pad_file = agent.working_dir / "system" / "pad.md"
-        assert pad_file.read_text() == "important fact"
-
-        # Prompt manager should have the content (auto-loaded by edit)
-        section = agent._prompt_manager.read_section("pad")
-        assert "important fact" in section
-
-        # Second load call should not detect new changes (file unchanged)
-        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert result["status"] == "ok"
-        # changed=False because file was already committed by edit's internal load
-    finally:
-        agent.stop()
-
-
-def test_pad_load(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.start()
-    try:
-        pad_file = agent.working_dir / "system" / "pad.md"
-        pad_file.write_text("# Pad\n\nimportant fact\n")
-        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert result["status"] == "ok"
-        section = agent._prompt_manager.read_section("pad")
-        assert "important fact" in section
-    finally:
-        agent.stop()
-
-
-def test_pad_load_empty_removes_section(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.start()
-    try:
-        agent._intrinsics["pad"]({"action": "edit", "input": {"content": "some content", "files": None}})
-        agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert agent._prompt_manager.read_section("pad") is not None
-        agent._intrinsics["pad"]({"action": "edit", "input": {"content": "", "files": None}})
-        agent._intrinsics["pad"]({"action": "load", "input": {}})
-        section = agent._prompt_manager.read_section("pad")
-        assert section is None or section.strip() == ""
-    finally:
-        agent.stop()
-
-
-def test_pad_load_no_change_no_commit(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.start()
-    try:
-        agent._intrinsics["pad"]({"action": "load", "input": {}})
-        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert result["status"] == "ok"
-    finally:
-        agent.stop()
-
-
-def test_pad_unknown_action(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    result = agent._intrinsics["context"]({"object": "pad", "action": "diff"})
-    assert "error" in result
-    agent.stop(timeout=1.0)
-
-
-def test_pad_creates_files_if_missing(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), snapshot_port=make_test_snapshot_port(), agent_presence=make_test_presence_store(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.start()
-    try:
-        missing_system = tmp_path / "missing-system"
-        missing_system.mkdir()
-        agent._working_dir = missing_system
-        agent._notification_store = notification_store_for(missing_system)
-        result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "test", "files": None}})
-        assert result["status"] == "ok"
-        assert (agent.working_dir / "system" / "pad.md").is_file()
-    finally:
-        agent.stop()
-
-
-# ---------------------------------------------------------------------------
-# `pad(action='edit')` file embedding
-#
-# Moved here from the former psyche/context suite when `pad` became its own
-# root: these are pad-owned invariants and had no owner-suite coverage. The
-# `[file-N]` embedding contract (and its missing-file refusal) is asserted
-# nowhere else.
-# ---------------------------------------------------------------------------
-
-
-def _pad_agent(tmp_path):
+def _agent(tmp_path, name="test", **kwargs):
+    workdir = tmp_path / name
     return BaseAgent(
-        intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test",
-        working_dir=tmp_path / "test", workdir_lease=make_test_lease(),
+        intrinsics=_TEST_INTRINSICS,
+        service=make_mock_service(),
+        agent_name=name,
+        working_dir=workdir,
+        workdir_lease=make_test_lease(),
         snapshot_port=make_test_snapshot_port(),
+        source_revision_port=make_test_source_revision_port(),
         agent_presence=make_test_presence_store(),
         lifecycle_clock=make_test_lifecycle_clock(),
-        source_revision_port=make_test_source_revision_port(),
-        notification_store=notification_store_for(tmp_path / "test"),
+        notification_store=notification_store_for(workdir),
+        **kwargs,
     )
 
 
-def test_pad_edit_embeds_named_files_alongside_content(tmp_path):
-    agent = _pad_agent(tmp_path)
-    try:
-        (agent.working_dir / "export1.txt").write_text("knowledge from export 1")
-        (agent.working_dir / "export2.txt").write_text("knowledge from export 2")
+def test_registered_pad_inventory_is_append_and_manual_only():
+    from lingtai.tools.registry import INTRINSICS
 
-        result = agent._intrinsics["pad"]({
-            "action": "edit",
-            "input": {
-                "content": "My working notes.",
-                "files": ["export1.txt", "export2.txt"],
-            },
-        })
-        assert result["status"] == "ok"
-        md = (agent.working_dir / "system" / "pad.md").read_text()
-        assert "My working notes." in md
-        # Each file is embedded under its own ordinal marker, in argument order.
-        assert "[file-1]" in md
-        assert "knowledge from export 1" in md
-        assert "[file-2]" in md
-        assert "knowledge from export 2" in md
+    module = INTRINSICS["pad"]["module"]
+    assert module.get_schema()["properties"]["action"]["enum"] == ["append", "manual"]
+    assert module.ACTION_ORDER == ("append", "manual")
+    assert "psyche" not in INTRINSICS
+
+
+def test_context_pad_and_lingtai_are_wired(tmp_path):
+    agent = _agent(tmp_path)
+    try:
+        assert {"context", "pad", "lingtai"} <= set(agent._intrinsics)
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_pad_edit_accepts_files_with_no_content(tmp_path):
-    """`content: null` + files is a real call, not the refused bare call."""
-    agent = _pad_agent(tmp_path)
+def test_covenant_constructor_arg_writes_protected_section(tmp_path):
+    agent = _agent(tmp_path, covenant="You are a helpful agent")
     try:
-        (agent.working_dir / "data.txt").write_text("file data")
-        result = agent._intrinsics["pad"]({
-            "action": "edit",
-            "input": {"content": None, "files": ["data.txt"]},
-        })
-        assert result["status"] == "ok"
-        md = (agent.working_dir / "system" / "pad.md").read_text()
-        assert "[file-1]" in md
-        assert "file data" in md
+        path = agent.working_dir / "system" / "covenant.md"
+        assert path.read_text() == "You are a helpful agent"
+        section = next(s for s in agent._prompt_manager.list_sections() if s["name"] == "covenant")
+        assert section["protected"] is True
     finally:
         agent.stop(timeout=1.0)
 
 
-def test_pad_edit_missing_file_errors_and_names_the_path(tmp_path):
-    agent = _pad_agent(tmp_path)
+def test_pad_constructor_arg_seeds_disk_and_prompt(tmp_path):
+    agent = _agent(tmp_path, pad="initial pad")
+    try:
+        assert (agent.working_dir / "system" / "pad.md").read_text() == "initial pad"
+        assert agent._prompt_manager.read_section("pad") == "initial pad"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_pad_append_query_does_not_create_or_load_a_list(tmp_path):
+    agent = _agent(tmp_path)
+    try:
+        agent._prompt_manager.write_section("pad", "CURRENT")
+        result = agent._intrinsics["pad"]({"action": "append", "input": {"files": None}})
+        assert result["status"] == "ok"
+        assert result["files"] == []
+        assert result["prompt_reload"] is False
+        assert agent._prompt_manager.read_section("pad") == "CURRENT"
+        assert not (agent.working_dir / "system" / "pad_append.json").exists()
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_pad_append_set_and_clear_only_persist(tmp_path):
+    agent = _agent(tmp_path)
+    try:
+        ref = agent.working_dir / "ref.md"
+        ref.write_text("reference", encoding="utf-8")
+        agent._prompt_manager.write_section("pad", "CURRENT")
+
+        result = agent._intrinsics["pad"]({
+            "action": "append", "input": {"files": ["ref.md"]},
+        })
+        assert result["action"] == "set"
+        assert result["prompt_reload"] is False
+        assert "context.rebuild" in result["takes_effect"]
+        append_path = agent.working_dir / "system" / "pad_append.json"
+        assert json.loads(append_path.read_text()) == ["ref.md"]
+        assert agent._prompt_manager.read_section("pad") == "CURRENT"
+
+        result = agent._intrinsics["pad"]({"action": "append", "input": {"files": []}})
+        assert result["action"] == "cleared"
+        assert json.loads(append_path.read_text()) == []
+        assert agent._prompt_manager.read_section("pad") == "CURRENT"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_pad_append_rejects_missing_or_binary_files(tmp_path):
+    agent = _agent(tmp_path)
     try:
         result = agent._intrinsics["pad"]({
-            "action": "edit",
-            "input": {"content": "notes", "files": ["nonexistent.txt"]},
+            "action": "append", "input": {"files": ["missing.md"]},
         })
-        assert "error" in result
-        assert "nonexistent.txt" in result["error"]
+        assert "missing.md" in result["error"]
+        binary = agent.working_dir / "binary.dat"
+        binary.write_bytes(b"a\x00b")
+        result = agent._intrinsics["pad"]({
+            "action": "append", "input": {"files": ["binary.dat"]},
+        })
+        assert "Binary files" in result["error"]
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_retired_pad_edit_and_load_fail_without_mutation(tmp_path):
+    agent = _agent(tmp_path, pad="keep")
+    try:
+        for action in ("edit", "load"):
+            result = agent._intrinsics["pad"]({"action": action, "input": {}})
+            assert "Unknown pad action" in result["error"]
+        assert (agent.working_dir / "system" / "pad.md").read_text() == "keep"
     finally:
         agent.stop(timeout=1.0)
 
 
 def test_stop_does_not_overwrite_pad_md(tmp_path):
-    """Pad is disk-authoritative — stop() must not clobber existing pad.md.
-
-    Moved here from the former psyche/context suite: this is a pad-file
-    invariant, and the `pad` family owns it now.
-    """
-    agent = _pad_agent(tmp_path)
-    pad_file = agent.working_dir / "system" / "pad.md"
-    pad_file.parent.mkdir(exist_ok=True)
-    pad_file.write_text("previous session pad")
+    agent = _agent(tmp_path)
+    path = agent.working_dir / "system" / "pad.md"
+    path.write_text("previous session pad")
     agent.stop()
-    assert pad_file.read_text() == "previous session pad"
+    assert path.read_text() == "previous session pad"

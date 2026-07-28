@@ -162,18 +162,21 @@ Both summary modes are non-canonical: the raw original is preserved in durable
 logs and recoverable by `tool_call_id`. A priori avoids ever spending context on
 the raw; a posteriori reclaims context after the fact.
 
-**Forced context rebuild boundary:** summarize has two mechanisms. It records a
-compact replacement in runtime history marked `status: pending`, but it does not
-by itself rebuild the active provider-side context. Below the full-context
-boundary, pending summarized history may remain at the provider layer while the
-session keeps appending; from the agent's perspective, the old raw block may
-still be in the current continuation. Do not call `refresh` just to apply
-summarize. Once context is at/above `0.85`, the runtime stamps
-`_meta.agent_meta.agent_state.context.rebuild`, which permits a proactive manual rebuild with
-`context(action="rebuild")` — either with new items (record then apply) or with
-no items (apply already-pending summaries) — when the fresh
-context is worth the cost; applied summaries flip to `status: done`. The manual
-rebuild action's own tool result, including its `context` snapshot plus
+**Forced context rebuild boundary:** `context(action="summarize")` records a
+compact replacement in runtime history marked `status: pending`, but does not
+by itself rebuild the active provider context. Below the full-context boundary,
+pending summarized history may remain at the provider layer while the session
+keeps appending; the old raw block may still be in the current continuation. Do
+not call lifecycle refresh merely to apply summarize. Once context is at/above
+`0.85`, the runtime stamps `_meta.agent_meta.agent_state.context.rebuild`, which
+permits one proactive `context(action="rebuild")` when a fresh context is worth
+the cost. That action is the one active **full reconstruction**: first re-read
+and recompose every canonical prompt source, then record/apply new or pending
+summaries, then request provider replay with the new prompt/history. Bare
+`input={}` remains valid with zero pending summaries; it still reconstructs and
+replays, though it provides no history compaction. Applied summaries flip to
+`status: done`. The rebuild action's own tool result, including its `context`
+snapshot plus
 `token_usage.session.context_tokens` and `token_usage.session.context_usage`,
 reports the provider round that requested the rebuild.
 Post-rebuild context usage does not exist yet; it first becomes observable on the

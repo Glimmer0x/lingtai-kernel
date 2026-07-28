@@ -15,4 +15,5 @@ maintenance: |
 ---
 **术语对照**
 
-- `context`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `context`：上下文生命周期；调用名保持 canonical English。
+- `rebuild`：先重组全部规范系统提示词来源，再应用摘要，最后请求 provider 重放。

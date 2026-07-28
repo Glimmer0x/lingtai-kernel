@@ -29,8 +29,9 @@ Two ownership moves happened when the ``psyche`` family was dissolved:
   documented in ``system-manual``, unchanged and out of scope here).
 * The public ``summarize`` action LEFT for ``context``. Context hygiene is now
   ``context(action='summarize')`` (record-only) and
-  ``context(action='rebuild')`` (apply), where the explicit action replaced the
-  old ``rebuild`` boolean. ``system`` exposes no ``summarize`` action and no
+  ``context(action='rebuild')`` (full prompt reconstruction, summary application,
+  then provider replay), where the explicit action replaced the old internal
+  mode discriminator. ``system`` exposes no ``summarize`` action and no
   compatibility alias; ``summarize.py`` remains here only as the private
   engine those actions call.
 

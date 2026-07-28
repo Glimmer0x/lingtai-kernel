@@ -1,7 +1,7 @@
 """Agent-authored context summarization — the private engine.
 
 Public ownership is ``context(action='summarize')`` (record-only) and
-``context(action='rebuild')`` (apply); this module is the shared engine both
+``context(action='rebuild')`` (whose context-owned wrapper first performs full prompt reconstruction); this module is the private summary/history engine both
 dispatch into, plus the forced-rebuild helpers the kernel imports.
 
 Replaces the context-visible content of prior main-agent tool-result blocks

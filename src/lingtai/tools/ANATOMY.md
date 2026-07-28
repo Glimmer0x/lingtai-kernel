@@ -104,10 +104,17 @@ capability names and lazy adapters.
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
   replaces the former `psyche` root, which no longer exists at any
   model-visible or registry level: the two name actions moved to `system` and
-  the public `system` summarize action moved in, split into the explicit
-  record-only `summarize` and applying `rebuild`. Like `soul`/`notification` it
-  builds its dispatching family per call, and it is the one family that
-  *consumes* the kernel-injected `_tc_id` rather than merely dropping it.
+  the public `system` summarize action moved in. `summarize` records only;
+  `rebuild` is the sole active full reconstruction: canonical prompt composition,
+  summary application, then provider replay. Refresh/molt invoke the same
+  internal contract passively. Like `soul`/`notification` it builds its family
+  per call and alone consumes kernel `_tc_id`.
+- `pad/` — mandatory `append | manual` family. `append` validates/persists pinned
+  references without hot-loading; private `_pad_load` participates only in the
+  Agent's canonical reconstruction path (`src/lingtai/tools/pad/ANATOMY.md`).
+- `lingtai/` — mandatory manual-only identity signpost. Private
+  `_lingtai_load` composes character during canonical reconstruction; generic
+  durable mutation is owned by `file` (`src/lingtai/tools/lingtai/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
 

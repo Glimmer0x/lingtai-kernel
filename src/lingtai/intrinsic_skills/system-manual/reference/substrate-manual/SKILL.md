@@ -106,13 +106,13 @@ email instead of stacking CPR attempts. Internal email does not queue recipient
 delivery across this gap; `email-manual` owns the detailed delivery and bounce
 contract.
 
-Refresh is also the **emergency** context-reconstruction path: reach for it when
-context is broken or stale, or when an immediate provider-side rebuild is urgently
-needed. It is not part of the normal summarize flow — summarize records compact
-history now, offers an explicit proactive rebuild path at 0.85 via
-`context(action="rebuild")`, and otherwise the runtime forces a
-rebuild at the 1.0 full-context hard boundary (see `summarize` below), so
-do not refresh just to "apply" a summarize.
+Refresh is also a passive full-context reconstruction path with its own broader
+lifecycle effects: reach for it when runtime context/configuration is broken or
+stale, not merely to apply a summary. Normal active reconstruction belongs only
+to `context(action="rebuild")`: it recomposes every canonical prompt source,
+then applies pending/new summaries, then requests provider replay; bare `{}` is
+valid with zero pending. At the 1.0 hard boundary the runtime still forces its
+once-per-episode provider replay (see `summarize` below).
 
 ### `presets`
 

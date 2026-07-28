@@ -15,4 +15,5 @@ maintenance: |
 ---
 **名相对照**
 
-- `pad`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `pad`：志板所钉参照之簿；召名仍用 canonical English。
+- `append`：验而存所钉之目，不即更今提示；`manual`：示其法。

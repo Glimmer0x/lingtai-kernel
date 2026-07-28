@@ -1,8 +1,4 @@
-"""Core self-management tests — the `pad` and `context` intrinsics.
-
-These predate the psyche split/dissolution; the cases are grouped here by the
-behavior they exercise, and each now names its current owning family.
-"""
+"""Core context lifecycle tests. Pad mutation/load moved to file/context ownership evidence."""
 from __future__ import annotations
 from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 
@@ -18,90 +14,6 @@ from tests._snapshot_helpers import make_test_snapshot_port, make_test_source_re
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
 from tests._notification_store_helpers import notification_store_for
 from tests._agent_presence_helpers import make_test_presence_store
-
-
-# ---------------------------------------------------------------------------
-# Pad edit
-# ---------------------------------------------------------------------------
-
-
-def test_pad_edit(tmp_path):
-    """pad(action='edit') writes to system/pad.md."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "hello world", "files": None}})
-    assert result["status"] == "ok"
-    pad_path = agent._working_dir / "system" / "pad.md"
-    assert pad_path.read_text() == "hello world"
-    agent.stop(timeout=1.0)
-
-
-def test_pad_edit_empty_clears(tmp_path):
-    """pad(action='edit') with explicit content='' clears the pad file."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    # First write something
-    agent._intrinsics["pad"]({"action": "edit", "input": {"content": "data", "files": None}})
-    # Then clear it (must pass content="" — empty args alone is rejected)
-    result = agent._intrinsics["pad"]({"action": "edit", "input": {"content": "", "files": None}})
-    assert result["status"] == "ok"
-    pad_path = agent._working_dir / "system" / "pad.md"
-    assert pad_path.read_text() == ""
-    agent.stop(timeout=1.0)
-
-
-# ---------------------------------------------------------------------------
-# Pad load
-# ---------------------------------------------------------------------------
-
-
-def test_pad_load(tmp_path):
-    """pad(action='load') injects into system prompt."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    agent.start()
-    try:
-        # Write pad file first
-        system_dir = agent._working_dir / "system"
-        system_dir.mkdir(exist_ok=True)
-        (system_dir / "pad.md").write_text("loaded content")
-
-        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert result["status"] == "ok"
-        section = agent._prompt_manager.read_section("pad")
-        assert "loaded content" in section
-    finally:
-        agent.stop()
-
-
-def test_pad_load_empty(tmp_path):
-    """pad(action='load') with empty file deletes section."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    agent.start()
-    try:
-        result = agent._intrinsics["pad"]({"action": "load", "input": {}})
-        assert result["status"] == "ok"
-        section = agent._prompt_manager.read_section("pad")
-        assert section is None or section.strip() == ""
-    finally:
-        agent.stop()
 
 
 # ---------------------------------------------------------------------------

@@ -2,8 +2,8 @@
 name: context-manual
 description: |
   Router and operational guide for the context tool — molt, tool-result summarize/rebuild, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to compact or rebuild your provider context; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls and keep_last. Routes consequential molt handoffs to assets/molt-template.md and summarize/rebuild procedure to reference/summarize-manual, keeping routine guidance compact.
-version: 1.1.0
-last_changed_at: 2026-07-27T04:30:00-07:00
+version: 2.0.0
+last_changed_at: 2026-07-28T00:00:00-07:00
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
@@ -23,7 +23,13 @@ Your name is not a context operation: use `system(action='name_set')` / `system(
 
 | Reference | When to load |
 |---|---|
-| `reference/summarize-manual/SKILL.md` | Compacting bulky tool results with `context(action='summarize')`, applying them with `context(action='rebuild')`, recovery by `tool_call_id`, and summarize-versus-molt tradeoffs |
+| `reference/summarize-manual/SKILL.md` | Compacting bulky tool results with `context(action='summarize')`, applying them during a full `context(action='rebuild')`, recovery by `tool_call_id`, and summarize-versus-molt tradeoffs |
+
+## Full context rebuild
+
+`context(action="rebuild", input={}, reasoning="...")` is the **one active full reconstruction operation**. Every call first re-reads and recomposes all canonical system-prompt sources (configured and durable identity, base prompt, covenant, packaged layers, rules, Pad body and pinned references, brief, comment, tools/runtime guidance), then applies already-pending summaries, then asks the provider to replay the new prompt/history. Bare `{}` is valid and still reconstructs/replays when zero summaries are pending. With `items`, prompt composition still happens first; the new summaries are then recorded/applied before provider replay.
+
+Generic durable mutations do not hot-load: use `file.write` for full-file create/overwrite and `file.edit` for exact replacement, then call `context.rebuild` when changes must apply now. `pad.append` likewise validates/persists its pinned list without changing the current prompt. Passive refresh and molt invoke the same internal reconstruction contract while retaining their distinct lifecycle effects. Do not loop rebuild.
 
 ## Asset catalog
 
@@ -46,16 +52,16 @@ For `lingtai` and `knowledge`, tending happens *once* per task, at the end — n
 
 Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-Two of the four stores are their own tools with their own manuals, and this manual does not restate them:
+Two stores have dedicated signpost manuals; generic mutation still belongs to `file`:
 
-- **`lingtai`** — the two identity modes (self-evolve vs forced), the full-rewrite rule, and the tending rhythm live in `lingtai-manual`.
-- **`pad`** — what belongs in the pad, the tending rhythm, `append` pinning, and archiving live in `pad-manual`.
+- **`lingtai`** — `lingtai(action='manual', input={})` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
+- **`pad`** — `pad-manual` explains the Pad body and `pad.append` pinning. Mutate `system/pad.md` with `file.write`/`file.edit`; append and file mutations take effect only after reconstruction.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
-- **lingtai** — `lingtai(action='update', input={'content': <full identity>}, reasoning='...')`. Each update is a full rewrite, so include your whole identity, not just the delta. Carry forward who you have become. See `lingtai-manual`.
-- **pad** — your living index of what you're working on. `pad(action='edit', input={'content': <body>, 'files': null}, reasoning='...')` to reflect your current goal and the references that point at where the substance lives. See `pad-manual`.
-- **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for any long-term private context worth keeping. The filesystem is the API — use `write`/`edit` directly.
+- **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `lingtai(action='manual', input={})` for forced/self-evolve behavior.
+- **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; use `pad(action='append')` only for the durable pinned-reference list. See `pad-manual`.
+- **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for long-term private context using `file.write`/`file.edit`.
 - **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `system(action='refresh', input={'reason': 'rescan skills catalog', 'preset': null, 'revert_preset': null}, reasoning='...')` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
 
@@ -106,7 +112,7 @@ Updating the parent index at each session is part of the practice — append one
 
 What matters here is only the molt-relevant fact: pad is one of the four durable stores, it survives the molt and is reloaded into the fresh session's system prompt, so it must be accurate **before** you molt. A stale pad is the fastest way to make the next you lose the thread.
 
-Your 灵台 is likewise its own tool — see `lingtai-manual` for the identity modes and the full-rewrite rule.
+Your 灵台 is likewise a manual-only signpost — call `lingtai(action='manual', input={})` for identity modes and file/rebuild guidance.
 
 ## 6. Step 2 — Write the Summary and Molt
 
@@ -136,9 +142,7 @@ control. They never mean the same thing, and no action takes `summarize` as
 input.
 
 `context` owns only your context. Your name is `system(action='name_set')` /
-`system(action='name_nickname')`. Your 灵台 and your pad are separate tools with
-the same envelope — `lingtai(action='update'|'load')` and
-`pad(action='edit'|'load'|'append')` — each with its own manual.
+`system(action='name_nickname')`. Your 灵台 and Pad have separate strict roots: `lingtai(action='manual')` is a signpost, while `pad(action='append'|'manual')` owns pinned references. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
 
 **Required pre-molt order (enforced by the kernel):** write the session journal
 sub-entry first (§4) → pass its path as `session_journal_path` → the kernel
@@ -202,7 +206,7 @@ Before you call `context(action="molt", ...)`, always verify at minimum:
 
 Context pressure is agent state, not a dismissible notification. Tool results surface a natural-language reminder under `_meta.agent_meta.agent_state.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 85%). It rides on the current `agent_meta` snapshot (carried on the designated final result of each batch; restamped there while active) so the reminder persists. The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
-When this reminder appears, batch already-digested noisy history into one `context(action='summarize')` pass rather than summarizing a small piece at a time, then apply it with `context(action='rebuild')` — the summarize cadence, rebuild semantics, and recovery target are owned by this manual's own `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/rebuild pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
+When this reminder appears, batch already-digested noisy history into one `context(action='summarize')` pass rather than summarizing a small piece at a time, then run one `context(action='rebuild')` to recompose all canonical prompt sources, apply summaries, and request provider replay — the summarize cadence, rebuild semantics, and recovery target are owned by this manual's own `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/rebuild pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
 
 ### Cache-miss budget
 
@@ -212,7 +216,7 @@ Once the since-last-molt cache-miss total reaches or exceeds the budget, tool re
 
 ## 8. Post-Wipe Recovery
 
-If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. Your character and pad were reloaded, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:
+If you wake up after a *system-performed* molt (triggered by karma, `.clear`, or operator — NOT by context-pressure reminders), the post-molt notification points at a system-authored summary in `system/summaries/`. All canonical prompt sources (including character and Pad) were reconstructed, and recent conversation may be gone except for any entries the system explicitly kept. To reconstruct:
 
 1. Read the `summary_path` from the post-molt notification
 2. `email(check)` — see what arrived while you were down

@@ -83,12 +83,14 @@ boundary, keep working: pending summarized history is not a failure, and
 force a rebuild.
 
 `reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
-`context.rebuild` stamp and the one proactive
-`context(action="rebuild")` call it permits, the 1.0
-once-per-episode forced rebuild, the `reconstruction.warning`, the persistent
-overflow `Molt IMMEDIATELY` line, and the task-boundary molt threshold. Do not
-loop rebuild/summarize. If summarize or a rebuild still cannot bring context
-below `0.75 * context_window`, tend durable stores and molt deliberately.
+`context.rebuild` stamp and the one proactive `context(action="rebuild")` call
+it permits, the 1.0 once-per-episode forced provider replay, the
+`reconstruction.warning`, the persistent overflow `Molt IMMEDIATELY` line, and
+the task-boundary molt threshold. The public rebuild is the one active full
+reconstruction: canonical prompt sources first, pending/new summaries second,
+provider replay last; bare `{}` remains valid with zero pending. Do not loop
+rebuild/summarize. If summarize or a rebuild still cannot bring context below
+`0.75 * context_window`, tend durable stores and molt deliberately.
 
 ## 2. Action and responsiveness
 

@@ -236,6 +236,11 @@ class Agent(BaseAgent):
             # Store combo name before super().__init__ (not forwarded to BaseAgent)
             self._combo_name = combo_name
             super().__init__(*args, **kwargs)
+            # One canonical full-context reconstruction hook serves both passive
+            # molt and the public active context.rebuild operation. Intrinsic
+            # Pad/LingTai boots do initial composition only; they never register
+            # competing section-specific post-molt loaders.
+            self._post_molt_hooks = [self._reconstruct_context]
             # Compose the preset-loader hook so daemon/system tools resolve
             # presets through the wrapper implementation instead of importing
             # Core load_preset or constructing a migration workspace adapter.
@@ -1562,22 +1567,6 @@ class Agent(BaseAgent):
         else:
             self._summarize_notification_threshold = 3000
 
-        # Reload all prompt sections (covenant, character, principle,
-        # procedures, brief, rules, pad, comment) from init.json and disk.
-        self._reload_prompt_sections(data)
-
-        # Re-boot the two prompt-section owners so their post-molt hooks are
-        # re-registered on the cleared hook list. Each `boot` also reloads its
-        # own section — both `boot` and `_reload_prompt_sections` route through
-        # the same canonical composers (`_lingtai_load`, `_pad_load`), so they
-        # produce identical content and the result is independent of which runs
-        # last. `psyche` no longer participates: pad and lingtai split into
-        # their own families and took this boot work with them.
-        from lingtai.tools import lingtai as _lingtai_tool
-        from lingtai.tools import pad as _pad
-        _lingtai_tool.boot(self)
-        _pad.boot(self)
-
         # Re-boot email so a fresh EmailManager + scheduler thread are wired.
         # ``email.boot`` stops the previous manager's scheduler before
         # starting a new one — without that, the prior daemon thread keeps
@@ -1639,11 +1628,10 @@ class Agent(BaseAgent):
         # from the bundles shipped with each enabled capability.
         self._install_intrinsic_manuals()
 
-        # Register system prompt reload as post-molt hook — molt should
-        # reconstruct the system prompt the same way refresh does.
-        if not hasattr(self, "_post_molt_hooks"):
-            self._post_molt_hooks = []
-        self._post_molt_hooks.append(self._reload_prompt_sections)
+        # Molt passively invokes the exact same full reconstruction contract as
+        # refresh and active context.rebuild — one hook, no section-specific
+        # Pad/LingTai aliases or ordering dependency.
+        self._post_molt_hooks = [self._reconstruct_context]
 
         # Reload MCP
         self._load_mcp_from_workdir()
@@ -1653,6 +1641,12 @@ class Agent(BaseAgent):
 
         # Re-write manifest and identity
         self._update_identity()
+
+        # Publish the one final reconstructed prompt only after every capability,
+        # manual, MCP route, and mechanical identity source is wired. The session
+        # replay below must observe this same complete builder state, and the
+        # system/system.md mirror must be byte-identical to it.
+        self._reconstruct_context(data)
 
         # Re-seal
         self._sealed = True
@@ -1667,17 +1661,33 @@ class Agent(BaseAgent):
             tools=list(self._tool_handlers.keys()),
         )
 
-    def _reload_prompt_sections(self, data: dict | None = None) -> None:
-        """Re-read all prompt sections from init.json and disk.
+    def _reconstruct_context(self, data: dict | None = None) -> None:
+        """Recompose every canonical prompt source, then publish the final prompt.
 
-        Called by _setup_from_init() on refresh (with pre-resolved data) and
-        as a post-molt hook (no args — re-reads init.json from scratch).
-        Ensures the system prompt after molt is identical to after refresh.
+        This is the one internal reconstruction contract used by active
+        ``context.rebuild`` and the passive refresh/molt scenarios. ``data`` is
+        the already-resolved init mapping during refresh; active rebuild and molt
+        omit it so configured and durable sources are re-read from scratch. The
+        final flush is deliberately last, ensuring provider replay observes the
+        fully composed prompt rather than an intermediate Pad/LingTai section.
         """
+        self._reload_prompt_sections(data)
+        self._token_decomp_dirty = True
+        self._flush_system_prompt()
+
+    def _reload_prompt_sections(self, data: dict | None = None) -> None:
+        """Authoritative composer for every configured/durable prompt section."""
         if data is None:
             data = self._read_init()
+            # Directly constructed/testing agents may legitimately have no
+            # init.json, but an existing unreadable/invalid file is a failed
+            # configured source and must fail loud. Treating both as `{}` would
+            # silently delete config-only sections (for example comment) even
+            # though the init reader promised KEEP_PREVIOUS_EFFECTIVE.
             if data is None:
-                return
+                if (self._working_dir / "init.json").is_file():
+                    raise RuntimeError("init.json exists but could not be read")
+                data = {}
             # Resolve active *_file fields (covenant_file, base_prompt_file,
             # lingtai_file, comment_file). Retired prompt-override `_file` fields
             # are legacy-known and not resolved — see _setup_from_init.
@@ -1724,6 +1734,8 @@ class Agent(BaseAgent):
             covenant = covenant_file.read_text(encoding="utf-8")
         if covenant:
             self._prompt_manager.write_section("covenant", covenant, protected=True)
+        else:
+            self._prompt_manager.delete_section("covenant")
 
         # --- Character (configured or self-authored identity — system/lingtai.md alone) ---
         # `lingtai` is the configured 灵台 / character value: a value supplied inline or
@@ -1743,7 +1755,7 @@ class Agent(BaseAgent):
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering.
         from lingtai.tools.lingtai import _lingtai_load
-        _lingtai_load(self, {})
+        _lingtai_load(self, {}, publish=False)
 
         # --- Substrate (kernel-owned, cross-app stable; #39) ---
         # The substrate section sits right after `## tools` and describes
@@ -1804,7 +1816,7 @@ class Agent(BaseAgent):
         # pad.md alone — otherwise the post-molt hook ordering silently drops
         # the pinned append references. `_pad_load` composes both.
         from lingtai.tools.pad import _pad_load
-        _pad_load(self, {})
+        _pad_load(self, {}, publish=False)
 
         # --- Principle (kernel-owned top-level progressive-disclosure contract) ---
         # The principle section is LingTai-owned, not operator-owned: init.json

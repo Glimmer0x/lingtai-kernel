@@ -401,16 +401,19 @@ threads it to the one action that needs it, instead of widening the shared
 envelope.
 
 **Current state (the paragraph above is migration history).** That family no
-longer exists. `pad` and `lingtai` split out into their own roots, and the rest
-was dissolved: the context molt became `context` (`molt | summarize | rebuild |
-manual`, `src/lingtai/tools/context/CONTRACT.md`), which also absorbed the
-public `system` summarize action and split it into the explicit record-only
-`summarize` and applying `rebuild`; the two name actions moved to `system`
-(`src/lingtai/tools/system/CONTRACT.md`). There is no `psyche` root, module, or
-alias at any model-visible or registry level, and no `system(action=
-'summarize')`. `context` is the family that consumes `_tc_id`, and it is the
-one family carrying both an action named `summarize` and the unrelated root
-`summarize` control — no `context` child declares a `summarize` field.
+longer exists. `pad` now exposes exactly `append | manual`; `lingtai` is a
+`manual`-only signpost. Their former mutation/load actions have no aliases:
+generic durable mutation belongs to `file.write`/`file.edit`, which never
+hot-load prompt state, and `pad.append` likewise only validates/persists. The
+context lifecycle is `context` (`molt | summarize | rebuild | manual`,
+`src/lingtai/tools/context/CONTRACT.md`): `summarize` records only, while
+`rebuild` is the one active operation that first recomposes every canonical
+prompt source, then applies pending/new summaries, then requests provider
+replay; bare `{}` remains valid with zero pending summaries. Refresh and molt
+invoke that same internal reconstruction contract as passive scenarios. Name
+actions moved to `system`. There is no `psyche` root/module/alias and no public
+`system(action='summarize')`. `context` alone consumes `_tc_id`; its action
+named `summarize` remains unrelated to the root boolean control.
 
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every

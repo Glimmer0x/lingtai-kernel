@@ -9,74 +9,86 @@ related_files:
   - src/lingtai/tools/pad/ANATOMY.md
   - src/lingtai/tools/lingtai/ANATOMY.md
   - src/lingtai/tools/system/ANATOMY.md
-  - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/_snapshots.py
-  - src/lingtai/tools/context/glossary-en.md
-  - src/lingtai/tools/context/glossary-zh.md
-  - src/lingtai/tools/context/glossary-wen.md
+  - src/lingtai/agent.py
+  - src/lingtai/kernel/base_agent/prompt.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
+  Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
+  Contract and connected anatomies. Update this graph with schema, lifecycle,
+  composition-path, summary-engine, or state-ownership changes.
 ---
-# intrinsics/context
+# tools/context
 
-The context department. Provides the agent with tools to manage its conversation context: `molt` (the core shed-and-reload machinery that enables cross-session persistence), `summarize` (record compact replacements for prior tool results), and `rebuild` (apply pending summaries to the active provider context). This package replaces the former `psyche` root: the true-name/nickname handlers moved to [`../system/ANATOMY.md`](../system/ANATOMY.md), and the public summarize/rebuild ownership moved *in* from there. The identity (灵台) and the working notes (pad) were split earlier into [`../lingtai/ANATOMY.md`](../lingtai/ANATOMY.md) and [`../pad/ANATOMY.md`](../pad/ANATOMY.md); this package retains the molt that reloads their prompt sections afterwards.
-
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues.
+Context lifecycle family with exact public actions
+`molt | summarize | rebuild | manual`. `rebuild` is the sole active full
+reconstruction operation; refresh and molt invoke the same internal contract as
+passive lifecycle scenarios.
 
 ## Components
 
-- `__init__.py` — Package surface and the LTP v2 family composition. Re-exports the sub-module API. Contains:
-  - The canonical child `input` schemas, one per action (`__init__.py:83-173`): `_MOLT_INPUT_SCHEMA` (`:83`), the shared `_ITEM_SCHEMA` (`:110`) reused by both hygiene actions, `_SUMMARIZE_INPUT_SCHEMA` (`:143`, `items` REQUIRED and non-nullable), and `_REBUILD_INPUT_SCHEMA` (`:172`, `items` genuinely OPTIONAL — absent from `required`, not the usual "required but nullable" — so a bare `input={}` is the ordinary no-new-items rebuild and is schema-valid; an explicit null is still accepted). Each is a strict, closed object declared exactly once.
-  - `_summarize_action` / `_rebuild_action` (`__init__.py:175-199`) — the two thin public wrappers over the shared private engine (`..system.summarize._summarize`, imported at `__init__.py:71`). Each pins the engine's `rebuild` discriminator (`False` / `True`) so the public action, not a boolean, decides record-vs-apply and `summarize` can never silently rebuild.
-  - `_CHILD_SPECS` / `ACTION_ORDER` (`__init__.py:211-218`) — the single registry of (name, schema, handler) plus the derived public action order (`molt`, `summarize`, `rebuild`, then the reserved `manual`). Because the model-facing schema and the dispatch allow-list are generated from this one source, a child can never be schema-advertised but dispatch-rejected.
-  - `_MANUAL_SKILL_NAME` (`__init__.py:222`) — the installed skill directory the reserved `manual` child reads (`context-manual`), which is the loader name rather than the family name.
-  - `_MOLT_ENVELOPE_KEYS` / `_strip_nulls` / `_build_children` (`__init__.py:233-284`) — the out-of-band envelope metadata this family threads to `molt`, the null→absent normalizer (which is also what makes `rebuild`'s nullable `items` behave as absent), and the builder that binds all four children (the reserved `manual` from `build_manual_child` appended last).
-  - `_FAMILY` (`__init__.py:287`) — the module-level schema-only `ToolFamily`; constructing it at import time is also the registry's duplicate/reserved-name collision check.
-  - `get_description` / `get_schema` (`__init__.py:316-336`) — tool registration; `get_schema` returns the `ToolFamily`-composed closed envelope (root `action`/`input`/`reasoning`/`summarize` plus the `allOf` action/input correlation) with this family's own `_ACTION_ENUM_DESCRIPTION` (`:298`) substituted for the generic composer's placeholder. Both texts route the model to `lingtai(...)` and `pad(...)` for the split-out concepts, and to `system(action='name_set'|'name_nickname')` for the agent's name.
-  - `_adapt_manual_result` (`__init__.py:339-357`) — Host-owned, post-dispatch flattening of the reserved `manual` child's canonical result back to this family's pinned flat shape.
-  - `handle()` (`__init__.py:360-400`) — the family root: lifts `_tc_id`/`reasoning`/`_initiator` out of the closed root, builds the agent-bound `ToolFamily` per call, and normalizes the generic unknown-action envelope to this family's own error.
-  - No `boot()` — the only boot-time work was loading the pad and identity and registering their post-molt reload; both moved to `lingtai.tools.pad.boot` and `lingtai.tools.lingtai.boot`, which the same generic intrinsic boot loop runs. This family's actions have no boot-time state to establish.
+- `__init__.py`
+  - strict per-action schemas, including genuinely optional `rebuild.items` so
+    bare `{}` is schema-valid;
+  - `_summarize_action` pins record-only engine mode;
+  - `_rebuild_action` calls `agent._reconstruct_context` before invoking the
+    private summary engine, handles reconstruction failures as result dicts, and
+    marks successful engine results `prompt_reconstructed: true`;
+  - `_CHILD_SPECS`, `_build_children`, `_FAMILY`, `get_schema`, `handle` provide
+    single-registry schema/dispatch and isolate `_tc_id` to molt;
+  - manual adaptation resolves `context-manual` once after dispatch.
+- `../system/summarize.py` — private history-summary engine. It records pending
+  marker replacements, marks the applied set done, persists history, and only
+  then calls `chat.request_history_rebuild`. It is not a public `system` action.
+- `_molt.py` — agent and system molt implementations, replay selection,
+  archive/wipe, post-molt hook invocation before fresh-session creation, and
+  post-molt notification publishing.
+- `_session_journal.py` — fail-closed journal-path/frontmatter gate.
+- `_snapshots.py` — atomic pre-molt snapshots and retrospective persistence.
+- `agent.py`
+  - `_reload_prompt_sections` is the authoritative all-source composer and
+    reuses private `_lingtai_load`/`_pad_load`;
+  - `_reconstruct_context` wraps that composer and performs the final full
+    prompt flush;
+  - `_setup_from_init` routes refresh through this method and registers exactly
+    this method as the one post-molt hook.
+- `kernel/base_agent/prompt.py::_flush_system_prompt` calls the virtual
+  `agent._build_system_prompt`, preserving Agent-owned `base_prompt` and tool
+  composition in the published/provider-visible prompt.
 
-- `_session_journal.py` — Session-journal gate for agent-initiated molt (issue #350).
-  - `validate_session_journal_path()` — pure, fail-closed validator. Given the agent workdir and the agent-supplied `session_journal_path`, returns `(ok, error, resolved_relpath)`. Checks, in order: path present/non-empty → resolves INSIDE the workdir (no traversal/absolute escape) → lives at the canonical `knowledge/session-journal/<entry>/KNOWLEDGE.md` sub-entry (rejects the parent index `knowledge/session-journal/KNOWLEDGE.md` and scratch dirs / non-`KNOWLEDGE.md` filenames) → exists, non-empty, UTF-8 → valid YAML frontmatter with `name` + `description` → carries a session-journal marker (`type: session-journal` or `session_journal: true`). Every failure returns an actionable recovery message; on success the resolved path is normalized to a workdir-relative posix path for recording in molt metadata.
+## Ordering and connections
 
-- `_snapshots.py` — Snapshot and summary persistence for the molt machinery.
-  - `SNAPSHOT_SCHEMA_VERSION` (`_snapshots.py:16`) — schema version tag for snapshots.
-  - `_write_molt_summary()` (`_snapshots.py`) — persist agent/system-authored molt summary to `system/summaries/` as YAML-frontmatter markdown. Accepts optional `session_journal_path`; when present it is recorded as a `session_journal_path:` frontmatter line so audits can pair a molt with the journal that backed it.
-  - `_write_molt_snapshot()` (`_snapshots.py`) — serialize pre-molt `ChatInterface` to `history/snapshots/` as a discrete JSON file for past-self consultation.
+Active rebuild flow:
 
-- `_molt.py` — Context molt core and system-initiated molt. It owns **no** name handlers: `_name_set`/`_name_nickname` moved to `../system/name.py` (`name.py:20`, `name.py:32`) when the former `psyche` family was dissolved, because naming is runtime identity state that `system` owns. See [`../system/ANATOMY.md`](../system/ANATOMY.md).
-  - `_context_molt()` (`_molt.py:147`) — agent-initiated molt: validates summary, **session journal (issue #350)**, & keep_tool_calls, snapshots, archives history, wipes wire session, replays the molt's own ToolCallBlock + kept pairs into the fresh interface. The core of the context lifecycle. The session-journal gate runs FIRST (after the summary check, before any state mutation) and is **unconditional**: every molt that reaches this function is dispatched from a model-issued context tool call, so it always calls `validate_session_journal_path` on `args["session_journal_path"]` and refuses the molt with the validator's recovery message if invalid — no snapshot, no archive, no `molt_count` increment. The gate does **not** consult `args["_initiator"]`: that is a model-provided arg, not trusted kernel state, so a model passing `_initiator: "system"` cannot bypass the gate (issue #350). True system-forced molts never re-enter this function — they go through `context_forget`. The accepted relative path is threaded into `_write_molt_summary` (frontmatter), `_publish_post_molt` (notification `data`), and the result dict (`session_journal_path`). Resets wire-level tracking (`_notification_block_id` plus any legacy `_pending_notification_*` attributes) and `_notification_fp` but preserves `.notification/` files — notifications are system state, not conversation memory. Still calls `agent._tc_inbox.drain()` defensively for pre-redesign items that survived a restart. After the wipe completes, calls `_publish_post_molt` to drop a `.notification/post-molt.json` reminder so the fresh agent reads what it was doing and how to dismiss.
-  - `SYSTEM_FORCED_MOLT_REASONING` (`_molt.py:32-35`) — the Host-authored root `reasoning` stamped onto the synthesized forced-molt call, so that model-visible history carries the same LTP v2 envelope the schema advertises.
-  - `context_forget()` (`_molt.py:529`) — system-initiated forced molt: synthesizes a complete ToolCallBlock+ToolResultBlock pair in the current public envelope (`name: "context"`, `action: "molt"`, summary inside `input`, provenance `_initiator`/`_source` outside it), wipes context, replays them into the fresh interface, and persists the system-authored summary. Called by `base_agent/lifecycle.py` when an external `.clear` signal arrives; tests also exercise `source="warning_ladder"` and `source="aed"` directly. Same notification tracking reset as `_context_molt` (wire-level only; `.notification/` files survive). Also publishes a `post-molt` notification (`initiator: "system"`, `source` propagated) so the fresh agent has the same recall hook agent-initiated molts get.
-  - `_publish_post_molt()` (`_molt.py`) — internal helper. Writes `.notification/post-molt.json` via `publish_notification` (channel `post-molt`, icon 🌱, priority high). Payload carries `molt_id`, `molt_at`, `source_agent`, `initiator`, `source`, `molt_count`, `reminder`, `ack_options` (`["continue", "defer", "obsolete"]`), `reasoning` (agent molts only), `summary_path`, `session_journal_path` (agent molts; the validated journal path, else null), and `tokens_before/after`. The kernel does **not** excerpt or parse the summary — there is no `next_action` field (PR #190 removed the heuristic); the agent reconstructs context itself. Instructions tell the agent to reconstruct from pad / `summary_path` (latest summary) / recent human-channel messages, decide (never auto-execute stored text), then explicitly choose continue/defer/obsolete and dismiss via `notification(action='dismiss_channel', input={'channel': 'post-molt', 'force': null, 'reason': '<choice>: ...'}, reasoning='...')` (a non-null reason is required). The channel is intentionally separate from the legacy pressure `molt` channel; context-pressure reminders are no longer published as dismissible notifications — they live under `_meta.agent_meta.agent_state.context.molt` via `meta_block.build_molt_context`. `base_agent.turn._check_molt_pressure` now only clears any stale legacy `molt` notification, so it can never sweep this reminder.
+```text
+context.handle
+  -> _rebuild_action
+  -> Agent._reconstruct_context
+     -> Agent._reload_prompt_sections
+        -> private LingTai/Pad composers + every other canonical source
+     -> virtual full prompt build/flush to disk and live interface
+  -> private summary engine (new and/or pending summaries)
+  -> chat.request_history_rebuild (provider replay)
+```
 
-## Connections
+Bare rebuild follows the same flow even when there are no pending markers.
+Refresh supplies already-resolved init data and later rebuilds its session with
+preserved history. Molt invokes the one registered `_reconstruct_context` hook
+before `ensure_session`. Pad/LingTai boot functions only perform initial
+composition; they do not register hooks.
 
-- **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`). This package defines no `boot()`; the generic intrinsic-boot loop in `src/lingtai/kernel/base_agent/__init__.py:788-796` simply finds none and skips it, while running `pad.boot` and `lingtai.boot` for the split-out families.
-- **Inbound (cross-module):** `context_forget` is resolved via `_intrinsic_hook("context", "context_forget")` and called by `src/lingtai/kernel/base_agent/lifecycle.py:470-472` for the `.clear` signal.
-- **Inbound (kernel detector):** `base_agent.turn._is_context_molt_call` matches exactly `name="context"` + `action="molt"` to defer post-molt notification stamping for the molt's own result batch. It is a read path over the live batch, not a second accepted call shape.
-- **Outbound (private engine):** `summarize`/`rebuild` call `..system.summarize._summarize`. The engine, `SUMMARIZE_MARKER`, and `mark_pending_summaries_done` stay under `system` — the kernel's forced-rebuild path imports them from there — so this is a one-way internal dependency, never a model-visible `system` action. See [`../system/ANATOMY.md`](../system/ANATOMY.md).
-- **Inbound (cross-module):** `_write_molt_snapshot` is imported by `src/lingtai/tools/soul/consultation.py` for snapshot loading via `_load_snapshot_interface`.
-- **Outbound:** Depends on `..i18n` (translations) and `..llm.interface` (`ToolCallBlock`, `ToolResultBlock`).
-- **Data flow:** State owned here lives in the filesystem under `system/summaries/` and `history/` (`chat_history.jsonl`, `chat_history_archive.jsonl`, `snapshots/`). `system/pad.md`, `system/pad_append.json`, and `system/lingtai.md` are no longer owned by this package — they belong to [`../pad/ANATOMY.md`](../pad/ANATOMY.md) and [`../lingtai/ANATOMY.md`](../lingtai/ANATOMY.md), whose post-molt hooks reload their prompt sections after a shed. `system/covenant.md` is owned by `Agent._reload_prompt_sections` (→ `covenant` section), not this package. The molt path preserves `.notification/` files and resets only the agent's in-memory notification-tracking attributes so the fresh session re-reads the files cleanly.
+## State and invariants
 
-## Key invariants
+Context-owned persistent paths are `system/summaries/`, `history/snapshots/`,
+`history/chat_history.jsonl`, `history/chat_history_archive.jsonl`, and the
+post-molt notification. Pad and LingTai files are durable sources owned by their
+families/file mutation, but the context reconstruction path composes them along
+with base prompt, covenant, packaged layers, rules, brief, comment, guidance,
+and current tool/meta sections.
 
-- `_context_molt` is the only path that archives `chat_history.jsonl`, increments `molt_count`, and replays the molt's own ToolCallBlock. `context_forget` is the only path that synthesizes both the call and result entries.
-- The `keep_tool_calls` list is validated BEFORE any state mutation — if any id is unmatched, the molt is refused and `molt_count` is not incremented.
-- **Session-journal gate (issue #350):** every molt routed through `_context_molt` REQUIRES a valid `session_journal_path` — the gate is unconditional and does **not** consult `args["_initiator"]` (a model-provided arg is not trusted kernel state, so `_initiator: "system"` cannot bypass it). It is validated by `_session_journal.validate_session_journal_path` FIRST — after the summary check, before snapshot/archive/wipe/`molt_count` — so a missing or invalid journal fails closed with no partial shed. The only molt that skips the gate is the true system-forced path, `context_forget`, which synthesizes its own call/result pair end-to-end and never re-enters `_context_molt` (there is no agent turn to author a journal). The marker contract is fixed: `type: session-journal` or `session_journal: true` in the entry's YAML frontmatter; the canonical location is `knowledge/session-journal/<entry>/KNOWLEDGE.md` (sub-entry, not the parent index). The session-journal entry template (`src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md`) carries the `type: session-journal` marker to satisfy this gate.
-- `context_forget` always adds `_initiator: "system"` to the ToolCallBlock args so the agent can distinguish system-initiated from agent-initiated molts.
-- The post-molt prompt reload is no longer this family's: `lingtai.tools.pad.boot` and `lingtai.tools.lingtai.boot` each register their own post-molt hook that reloads their own section via the canonical composers `_pad_load`/`_lingtai_load`. Those hooks still run BEFORE the fresh session is created during molt. On `Agent`, `_reload_prompt_sections` is *also* registered as a post-molt hook and routes through the same composers — so every hook produces byte-identical `character`/`pad` content and the post-molt result stays independent of hook order (the fix for the "lingtai folded into covenant, dropped after molt" race survives the split intact).
-- `handle()` dispatches through the generic `ToolFamily` built from the one `_CHILD_SPECS` registry, so schema and dispatch cannot drift and every envelope/cross-branch rejection happens before any handler I/O. `context` is the one migrated family that *consumes* the kernel-injected `_tc_id` (rather than merely dropping it, as `soul`/`notification`/`system`/`email` do): it is stripped from the closed root and threaded to `molt` alone, without widening the shared `_ROOT_FIELDS`.
-- The public action enum is exactly `molt`, `summarize`, `rebuild`, `manual`. Every earlier spelling is an unknown action, not a compatibility alias: the `psyche` root itself, `psyche(action='context_molt')`, a bare `context_molt` action on this root, the two name actions (now `system`), and the five removed `pad_*`/`lingtai_*` leaves.
-- `summarize` records only and `rebuild` is the only action that applies pending summaries — the public action, not a `rebuild` boolean, is the discriminator. No child declares a `summarize` property, so the optional **root** `summarize` boolean (the cross-cutting a-priori presentation control) is never domain input for the action that shares its name.
-- The post-molt notification channel name is the literal string `post-molt`. Context-pressure reminders moved out of the notification system to `_meta.agent_meta.agent_state.context.molt` (`meta_block.build_molt_context`); `base_agent.turn._check_molt_pressure` now only clears any stale legacy `molt` notification and never publishes pressure, so it cannot sweep this reminder. Agents dismiss the reminder with `notification(action='dismiss_channel', input={'channel': 'post-molt', 'force': null, 'reason': '<continue|defer|obsolete>: ...'}, reasoning='...')` after explicitly deciding how to handle the continuation.
+`summarize` never reconstructs. `rebuild` always composes before history
+mutation and provider request. `molt` retains refusal-before-shed and its distinct
+archive/count/replay effects. No retired root or action is an alias.

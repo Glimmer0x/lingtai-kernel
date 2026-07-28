@@ -60,17 +60,19 @@ facts, evidence, paths, IDs, validation, risks, and next steps for future-you.
 Batch already-digested results when practical, and keep noisy/bulky work out of
 main context by using daemons before it lands here.
 
-**Forced context rebuild boundary.** Treat summarize as a two-step mechanism:
-summary bookkeeping now (recorded `status: pending`), provider-context rebuild
-later. A successful summarize records the compacted replacement in runtime
-history, but it does not by itself rebuild the active provider-side context.
-Below the full-context boundary, pending summarized history is normal; keep
-working, do not assume the old raw block has left the current continuation, and
-do not use `refresh` to force it. Once context is at/above `0.85`, the runtime
-stamps `_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is worth
-the cost, make one proactive tactical `context(action="rebuild")` call (with
-new items to record and apply, or with no items to apply already-pending
-summaries); applied summaries flip to `status: done`. At context
+**Forced context rebuild boundary.** `context(action="summarize")` records a
+compact replacement in runtime history (`status: pending`) but does not rebuild
+the active provider context. Below the full-context boundary, pending summaries
+are normal; keep working, do not assume the raw block has left the current
+continuation, and do not use lifecycle refresh merely to apply it. Once context
+is at/above `0.85`, the runtime stamps
+`_meta.agent_meta.agent_state.context.rebuild`; if a fresh provider context is
+worth the cost, make one proactive tactical `context(action="rebuild")` call.
+This is the one active **full reconstruction**: it first re-reads and recomposes
+all canonical prompt sources, then records/applies new or pending summaries,
+then requests provider replay with the new prompt/history. Bare `input={}` is
+valid even with zero pending summaries (it still reconstructs/replays, but does
+not compact history); applied summaries flip to `status: done`. At context
 usage `1.0` (the full-context hard boundary) the runtime **forces** a rebuild on
 the next request **regardless of whether pending summaries exist**, but only
 **once per continuous full-context episode** (it does not re-force while context

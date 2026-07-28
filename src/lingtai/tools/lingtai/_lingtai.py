@@ -1,29 +1,17 @@
-"""Lingtai (identity/character) management — update and load.
+"""Private LingTai composer for canonical full-context reconstruction.
 
-`_lingtai_load` is the single canonical writer of the `character` prompt
-section, composed from `system/lingtai.md` alone. It does not touch the
-`covenant` section (operator contract) — that is owned solely by
-`Agent._reload_prompt_sections`.
+``_lingtai_load`` is the single canonical writer of the ``character`` prompt
+section, composed from ``system/lingtai.md`` alone. Durable mutation is owned by
+the generic file family; this module has no public mutator.
 """
 from __future__ import annotations
 
 
-def _lingtai_update(agent, args: dict) -> dict:
-    """Write content to system/lingtai.md and auto-load into system prompt."""
-    content = args.get("content", "")
-    system_dir = agent._working_dir / "system"
-    system_dir.mkdir(exist_ok=True)
-    lingtai_path = system_dir / "lingtai.md"
-    lingtai_path.write_text(content)
+def _lingtai_load(agent, _args: dict, *, publish: bool = True) -> dict:
+    """Compose system/lingtai.md into the protected `character` prompt section.
 
-    agent._log("psyche_lingtai_update", length=len(content))
-
-    _lingtai_load(agent, {})
-    return {"status": "ok", "path": str(lingtai_path)}
-
-
-def _lingtai_load(agent, _args: dict) -> dict:
-    """Load system/lingtai.md into the protected `character` prompt section.
+    ``publish=False`` is used only by the canonical full-context reconstruction
+    path so every section is composed before one final prompt publication.
 
     This is the single canonical writer of `character` — the agent's
     self-authored identity (灵台). It is deliberately distinct from the
@@ -44,7 +32,8 @@ def _lingtai_load(agent, _args: dict) -> dict:
     else:
         agent._prompt_manager.delete_section("character")
     agent._token_decomp_dirty = True
-    agent._flush_system_prompt()
+    if publish:
+        agent._flush_system_prompt()
 
     agent._log("psyche_lingtai_load", size_bytes=len(character.encode("utf-8")))
 

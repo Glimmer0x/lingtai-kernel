@@ -150,8 +150,8 @@ child. Agent initialization copies the bundled first-level
 
 `handle()` strips the kernel-injected `_tc_id` before envelope validation.
 `base_agent.tools._dispatch_tool` adds that field to every intrinsic's args as
-pre-existing kernel plumbing; it is not a public root field and only psyche's
-molt consumes it.
+pre-existing kernel plumbing; it is not a public root field and only
+`context.molt` consumes it.
 
 The kernel's IDLE/ASLEEP notification-sync pair is deliberately
 byte-shape-identical to a voluntary `check`, so its synthesized call args carry

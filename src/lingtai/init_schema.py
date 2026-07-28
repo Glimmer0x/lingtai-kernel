@@ -216,8 +216,8 @@ def validate_init(data: dict) -> list[str]:
     # a nonempty resolved value (inline or from `lingtai_file`) is a forced
     # identity value written to system/lingtai.md during each reconstruction;
     # an absent or empty value selects self-evolve mode and leaves that file
-    # untouched. In both cases psyche._lingtai_load renders the file as the
-    # `character` prompt section. The field was renamed from `prompt` /
+    # untouched. In both cases the internal LingTai composer renders the file as
+    # the `character` prompt section during canonical context reconstruction. The field was renamed from `prompt` /
     # `prompt_file`; there is still NO legacy alias — a stale `prompt` remains an
     # unknown-field warning rather than being reintroduced.
     #

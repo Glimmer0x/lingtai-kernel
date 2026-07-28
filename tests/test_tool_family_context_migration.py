@@ -349,12 +349,9 @@ def test_read_only_actions_mutate_no_durable_state(tmp_path):
     agent = _agent(tmp_path)
     agent.start()
     try:
-        agent._intrinsics["pad"](
-            {"action": "edit", "input": {"content": "keep me", "files": None}}
-        )
-        agent._intrinsics["lingtai"](
-            {"action": "update", "input": {"content": "identity"}}
-        )
+        system = agent._working_dir / "system"
+        (system / "pad.md").write_text("keep me", encoding="utf-8")
+        (system / "lingtai.md").write_text("identity", encoding="utf-8")
         before_molt = agent._molt_count
 
         _call(agent, {"action": "manual", "input": {}})
@@ -738,6 +735,9 @@ class _SummarizeStubAgent:
 
     def _log(self, event, **fields):
         self.events.append((event, fields))
+
+    def _reconstruct_context(self):
+        self.events.append(("context_reconstructed", {}))
 
 
 def _summarize_call(agent, args: dict) -> dict:

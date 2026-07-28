@@ -15,4 +15,4 @@ maintenance: |
 ---
 **名相对照**
 
-- `lingtai`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `lingtai`：灵台之指南门；惟公 action `manual` 示法，不易文件与提示。

@@ -6,7 +6,7 @@ object::
 
     molt      -> shed the conversation, keep the durable stores
     summarize -> record compact replacements in runtime history (record-only)
-    rebuild   -> apply pending summaries to the active provider context
+    rebuild   -> recompose the full prompt, apply summaries, replay provider context
     manual    -> return the installed context-manual skill
 
 This package replaces the former ``psyche`` family, which mixed two unrelated
@@ -36,8 +36,9 @@ are unrelated:
 
 The root boolean is stripped by the generic dispatcher and is never domain
 input; no child here declares a ``summarize`` property. ``context.summarize``
-records and never rebuilds; ``context.rebuild`` is the only action that applies
-pending summaries to the provider context. The public action — not a boolean —
+records and never rebuilds; ``context.rebuild`` is the only active operation
+that first recomposes every canonical prompt source, then applies pending/new
+summaries, then requests provider replay. The public action — not a boolean —
 is the discriminator.
 
 Per-action behavior, inputs, and result/error shapes live in ``CONTRACT.md``;
@@ -120,6 +121,7 @@ _ITEM_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["tool_call_id", "summary"],
+    "additionalProperties": False,
 }
 
 _SUMMARIZE_ITEMS_DESCRIPTION = (
@@ -134,12 +136,13 @@ _SUMMARIZE_ITEMS_DESCRIPTION = (
 )
 
 _REBUILD_ITEMS_DESCRIPTION = (
-    "Optional — omit it entirely for the ordinary call. "
-    "context(action='rebuild', input={}) applies the summaries already pending "
-    "from earlier context(action='summarize') calls and rebuilds the provider "
-    "context; an explicit null means the same thing. Pass items to record those "
-    "summaries AND apply them in this same call. Same item shape as "
-    "context(action='summarize')."
+    "Optional — omit it entirely for the ordinary call. Every rebuild first "
+    "re-reads and recomposes ALL canonical system-prompt sections from durable "
+    "and configured sources, then applies summaries, then requests provider "
+    "replay with the new prompt/history. context(action='rebuild', input={}) is "
+    "valid even with zero pending summaries; an explicit null means the same. "
+    "Pass items to record those summaries after prompt composition and apply "
+    "them in the same call. Same item shape as context(action='summarize')."
 )
 
 _SUMMARIZE_INPUT_SCHEMA: dict[str, Any] = {
@@ -199,15 +202,41 @@ def _summarize_action(agent, args: dict) -> dict:
 
 
 def _rebuild_action(agent, args: dict) -> dict:
-    """``context(action='rebuild')`` — apply pending summaries; optionally record first.
+    """Perform the one active full context reconstruction operation.
 
-    With no ``items`` this is the engine's pure-rebuild path (threshold /
-    no-chat-session / error behavior preserved). With ``items`` it is the
-    engine's one-call record-then-apply path. Both are the same engine call
-    the former ``system(action='summarize', rebuild=true)`` made; only the
-    public discriminator moved from a boolean into the action name.
+    Ordering is contractual: first re-read/recompose every canonical prompt
+    source through Agent's shared refresh/molt path, then let the summary engine
+    record/apply pending or newly supplied summaries, then request provider
+    history replay. A bare input remains meaningful with zero pending summaries.
     """
-    return _summarize_engine(agent, {**args, "rebuild": True})
+    reconstruct = getattr(agent, "_reconstruct_context", None)
+    if not callable(reconstruct):
+        return {
+            "status": "error",
+            "reason": "context_reconstruction_unavailable",
+            "message": "This agent does not provide the canonical context reconstruction hook.",
+        }
+    try:
+        reconstruct()
+    except Exception as exc:
+        try:
+            agent._log("context_reconstruction_failed", error=type(exc).__name__)
+        except Exception:
+            pass
+        return {
+            "status": "error",
+            "reason": "context_reconstruction_failed",
+            "message": f"Canonical prompt reconstruction failed: {type(exc).__name__}.",
+        }
+
+    result = _summarize_engine(agent, {**args, "rebuild": True})
+    if isinstance(result, dict):
+        result["prompt_reconstructed"] = True
+        result["prompt_reconstruction"] = (
+            "All canonical prompt sources were re-read and recomposed before "
+            "summary processing."
+        )
+    return result
 
 
 # The one canonical child registry: name, canonical input schema, and the
@@ -319,10 +348,10 @@ _ACTION_ENUM_DESCRIPTION = (
     'summarize: record your own compact replacements for prior tool results in '
     'runtime history. RECORD ONLY — it does not rebuild, so the active '
     'provider context may still carry the old raw results.\n'
-    'rebuild: apply the pending summaries to the active provider context. With '
-    'no `items` it applies what is already pending; with `items` it records '
-    'those and applies them in the same call. Prefer one tactical rebuild when '
-    'context is high (>=0.85); do not loop rebuild.\n'
+    'rebuild: re-read and recompose ALL canonical prompt sources, then apply '
+    'pending/new summaries, then replay provider context with the new prompt and '
+    'history. Bare input is valid even with zero pending summaries. Prefer one '
+    'tactical rebuild; do not loop rebuild.\n'
     'manual: return the installed context-manual skill without performing any '
     'context operation.\n'
     'Your name is not here: use system(action=\'name_set\'|\'name_nickname\').'
@@ -330,7 +359,7 @@ _ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Your context: shed it, compact it, rebuild it. One tool, four actions, each with its own strict input object: context(action=..., input={...}, reasoning=\'why\'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: apply pending summaries to the active provider context (with no items it applies what is already pending; with items it records and applies in one call). manual: return the installed context-manual skill. Your name lives on system(action=\'name_set\'|\'name_nickname\'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away.'
+    return 'Your context: shed it, compact it, rebuild it. One tool, four actions, each with its own strict input object: context(action=..., input={...}, reasoning=\'why\'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: re-read and recompose every canonical prompt source, then apply pending/new summaries, then replay provider context with the new prompt/history; bare input is valid even with zero pending summaries. manual: return the installed context-manual skill. Your name lives on system(action=\'name_set\'|\'name_nickname\'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away.'
 
 
 def get_schema(lang: str = "en") -> dict:

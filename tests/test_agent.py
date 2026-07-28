@@ -530,23 +530,6 @@ def test_agent_creates_lock_file(tmp_path):
     assert (agent.working_dir / ".agent.lock").is_file()
 
 
-def test_agent_pad_persists_via_edit(tmp_path):
-    """Pad is disk-authoritative — pad(action='edit') writes pad.md immediately."""
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="alice", working_dir=tmp_path / "test", pad="initial",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    agent._intrinsics["pad"]({"action": "edit", "input": {"content": "updated knowledge", "files": None}})
-    pad_file = agent.working_dir / "system" / "pad.md"
-    assert pad_file.is_file()
-    assert pad_file.read_text() == "updated knowledge"
-    agent.stop()
-    # Survives stop()
-    assert pad_file.read_text() == "updated knowledge"
-
-
 def test_agent_name_stored(tmp_path):
     """agent_name is stored but no longer validated for path safety."""
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="any name 日本語", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))

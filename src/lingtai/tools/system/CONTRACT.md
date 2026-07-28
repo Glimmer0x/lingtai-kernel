@@ -22,7 +22,7 @@ maintenance: |
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
   contract_version 3 is the breaking public-ownership change: the public
-  summarize action left for context (which split it into summarize/rebuild)
+  summarize action left for context (which split it into record-only summarize and full reconstruction rebuild)
   and the two name actions arrived here from the dissolved psyche family.
   summarize.py stays here as a private engine only — keep the context Contract
   link current, since that family owns the public actions driving it.
@@ -35,7 +35,7 @@ self-sleep, karma-gated control of *other* agents, preset listing, and the
 agent's true name/nickname. It does **not** own any notification verb — those
 live on the standalone `notification` tool — and it no longer owns any public
 context-hygiene action: molt, tool-result summarization, and the
-provider-context rebuild all belong to `context`
+full prompt reconstruction, summary application, and provider replay all belong to `context`
 (`src/lingtai/tools/context/CONTRACT.md`). The implementation lives in
 `src/lingtai/tools/system/`; the code is the source of truth.
 
@@ -77,7 +77,7 @@ it advertises is actually honored.
   (`src/lingtai/tools/notification/CONTRACT.md`). `system` exposes no `notification`/
   `dismiss` alias; those actions are rejected as unknown.
 - Context lifecycle and hygiene: molt, tool-result summarization, and the
-  provider-context rebuild all belong to `context`
+  full prompt reconstruction, summary application, and provider replay all belong to `context`
   (`src/lingtai/tools/context/CONTRACT.md`) — `context(action='molt')`,
   `context(action='summarize')`, `context(action='rebuild')`. `system` owns
   none of them and exposes no `summarize` action or alias; `summarize.py`

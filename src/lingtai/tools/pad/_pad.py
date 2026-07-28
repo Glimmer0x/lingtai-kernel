@@ -1,4 +1,4 @@
-"""Pad (working notes) management — edit, load, and append-file pinning."""
+"""Private Pad composition and public append-list persistence."""
 from __future__ import annotations
 
 import json
@@ -78,52 +78,12 @@ def _is_text_file(path: Path, sample_size: int = 8192) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _pad_edit(agent, args: dict) -> dict:
-    """Write content + optional file imports to pad.md and reload prompt.
+def _pad_load(agent, args: dict, *, publish: bool = True) -> dict:
+    """Compose system/pad.md plus pinned references into the prompt.
 
-    To clear the pad explicitly, pass content="" (i.e. include the key).
-    Calling edit with no content key and no files is rejected — that's
-    almost always an LLM mistake.
+    ``publish=False`` is used only by canonical full-context reconstruction so
+    every section is composed before one final prompt publication.
     """
-    if "content" not in args and not args.get("files"):
-        return {"error": "Provide content (use empty string to clear), files, or both."}
-
-    content = args.get("content", "")
-    files = args.get("files") or []
-
-    parts = [content] if content else []
-
-    not_found: list[str] = []
-    for i, fpath in enumerate(files, start=1):
-        if os.path.isabs(fpath):
-            resolved = Path(fpath)
-        else:
-            resolved = agent._working_dir / fpath
-        if not resolved.is_file():
-            not_found.append(fpath)
-            continue
-        file_content = resolved.read_text(encoding='utf-8')
-        parts.append(f"[file-{i}]\n{file_content}")
-
-    if not_found:
-        return {"error": f"Files not found: {', '.join(not_found)}"}
-
-    combined = "\n\n".join(parts)
-
-    system_dir = agent._working_dir / "system"
-    system_dir.mkdir(exist_ok=True)
-    pad_path = system_dir / "pad.md"
-    pad_path.write_text(combined)
-
-    agent._log("psyche_pad_edit", length=len(combined), files=len(files))
-
-    _pad_load(agent, {})
-
-    return {"status": "ok", "path": str(pad_path), "size_bytes": len(combined.encode("utf-8"))}
-
-
-def _pad_load(agent, args: dict) -> dict:
-    """Load system/pad.md + appended reference files into the prompt."""
     system_dir = agent._working_dir / "system"
     system_dir.mkdir(exist_ok=True)
     pad_path = system_dir / "pad.md"
@@ -153,7 +113,8 @@ def _pad_load(agent, args: dict) -> dict:
         append_meta["append_count"] = len(append_files)
 
     agent._token_decomp_dirty = True
-    agent._flush_system_prompt()
+    if publish:
+        agent._flush_system_prompt()
 
     agent._log("psyche_pad_load", size_bytes=size_bytes)
 
@@ -170,15 +131,22 @@ def _pad_load(agent, args: dict) -> dict:
 def _pad_append(agent, args: dict) -> dict:
     """Set the list of files pinned as read-only pad reference.
 
-    Pass files=[] to clear. Persisted to system/pad_append.json.
-    Automatically reloads pad after updating the list. Only text files
-    are accepted.
+    Pass files=[] to clear. Persisted to system/pad_append.json. This action
+    never reloads or mutates the current prompt; the list is composed only by
+    explicit context.rebuild or passive refresh/molt reconstruction. Only text
+    files are accepted.
     """
     files = args.get("files")
     if files is None:
         # No files param — return current list
         current = _load_append_list(agent)
-        return {"status": "ok", "files": current, "count": len(current)}
+        return {
+            "status": "ok",
+            "files": current,
+            "count": len(current),
+            "prompt_reload": False,
+            "takes_effect": "context.rebuild or passive refresh/molt reconstruction",
+        }
 
     not_found: list[str] = []
     not_text: list[str] = []
@@ -205,7 +173,13 @@ def _pad_append(agent, args: dict) -> dict:
             }
 
     _save_append_list(agent, files)
-    _pad_load(agent, {})
 
     action = "cleared" if not files else "set"
-    return {"status": "ok", "action": action, "files": files, "count": len(files)}
+    return {
+        "status": "ok",
+        "action": action,
+        "files": files,
+        "count": len(files),
+        "prompt_reload": False,
+        "takes_effect": "context.rebuild or passive refresh/molt reconstruction",
+    }

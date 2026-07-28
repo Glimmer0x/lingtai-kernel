@@ -15,4 +15,5 @@ maintenance: |
 ---
 **名相对照**
 
-- `context`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `context`：上下文生灭之部；召名仍用 canonical English。
+- `rebuild`：先重成诸正典系统提示之源，次施摘要，后请 provider 重演。

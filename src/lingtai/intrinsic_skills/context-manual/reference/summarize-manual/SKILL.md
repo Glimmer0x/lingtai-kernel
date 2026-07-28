@@ -210,10 +210,12 @@ Summarize has two decoupled effects:
 1. **Runtime-history replacement now.** The prior tool-result block in local
    history is replaced with your agent-authored summary, stamped `status: pending`,
    and matching large-result reminders may clear.
-2. **Provider-side rebuild later.** The current provider continuation may still
-   contain the old raw block until the runtime rebuilds the provider prefix around
-   compacted history. When that happens (a manual `context(action="rebuild")` or the 1.0 hard
-   forced rebuild), the applied markers flip to `status: done`.
+2. **Full reconstruction later.** The current provider continuation may still
+   contain the old raw block. A manual `context(action="rebuild")` first re-reads
+   and recomposes every canonical system-prompt source, then applies pending/new
+   summaries (markers flip to `status: done`), then requests provider replay with
+   the new prompt/history. The 1.0 hard forced path is passive but uses the same
+   full prompt reconstruction contract before fresh replay.
 
 The dynamic pending totals in the result comment scan only `status: pending`
 markers — already-applied (`done`) markers and legacy markers without a status
@@ -231,10 +233,10 @@ summarize would discard cache benefit.
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
   is worth the cost, make one proactive tactical
-  `context(action="rebuild", input={})` call. `rebuild` **with** new
-  items records those summaries and then applies the pending set; `rebuild`
-  **with no items** is a pure rebuild that applies the already-pending summaries.
-  Do not loop rebuild/summarize calls.
+  `context(action="rebuild", input={})` call. Every call recomposes all canonical
+  prompt sources first. With new items it then records/applies them; with no items
+  it applies the already-pending set, or simply replays the newly composed prompt
+  when none are pending. Bare `{}` is valid. Do not loop rebuild/summarize calls.
 - **At 1.0 of the context window (the full-context HARD boundary):** the runtime
   **forces** a provider-context rebuild / fresh replay on the next request
   **regardless of whether pending summaries exist**, but only **once per

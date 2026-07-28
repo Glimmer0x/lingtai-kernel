@@ -15,4 +15,5 @@ maintenance: |
 ---
 **术语对照**
 
-- `pad`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `pad`：提示板固定引用清单；调用名保持 canonical English。
+- `append`：校验并持久化固定引用，但不热加载当前提示词；`manual`：返回操作指南。
