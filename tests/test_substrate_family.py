@@ -170,6 +170,168 @@ def test_router_manual_is_a_routing_table_naming_all_four_domains(tmp_path):
         agent.stop(timeout=1.0)
 
 
+# ---------------------------------------------------------------------------
+# Returned-body accuracy (live-Agent lesson, head f575ec6a)
+# ---------------------------------------------------------------------------
+#
+# A live agent called substrate(action='knowledge'|'skills') and got manuals
+# that still taught retired public roots, a retired two-action surface, and
+# pre-#1073/#1078 call shapes. Schema-level tests cannot catch that: the wire is
+# correct while the *returned text* is wrong. These pin the returned bodies.
+
+#: Substrings that must never reappear in a returned manual body, with the
+#: reason each one is wrong. Keyed by the substrate action that returns it.
+STALE_BODY_CLAIMS = {
+    "knowledge": [
+        # A. the retired public root, claimed in the present tense
+        ("registers exactly one", "claims knowledge still registers a public tool"),
+        ("tool, also named `knowledge`", "names a retired public knowledge root"),
+        # A. remnants of the retired info|manual two-action surface
+        ("both actions", "assumes the retired two-action surface"),
+        ("settings/knowledge.", "names a retired per-domain settings address"),
+    ],
+    "skills": [
+        # B. pre-current call shapes that would fail if a model copied them
+        ("system({", "teaches the pre-LTP-v2 flat system call shape"),
+        ("shell({", "teaches the pre-LTP-v2 flat shell call shape"),
+        # B. an intrinsic bundle that no longer exists
+        ("psyche/", "names the dissolved psyche intrinsic"),
+        # B. refresh-only apply path, superseded by active context.rebuild
+        ("ends with a refresh.", "teaches refresh as the only apply path"),
+        ("settings/skills.json", "names a retired per-domain settings address"),
+    ],
+}
+
+#: Substrings that must be present, proving the corrected current route.
+REQUIRED_BODY_ROUTES = {
+    "knowledge": [
+        'substrate(action="knowledge"',
+        'file(action="write"',
+        'file(action="read"',
+        'context(action="rebuild"',
+    ],
+    "skills": [
+        'substrate(action="skills"',
+        'context(action="rebuild"',
+        'shell(action="run"',
+        'file(action="read"',
+        # The config-owner path keeps the exact refresh envelope.
+        'system(action="refresh"',
+        '"revert_preset": null',
+    ],
+}
+
+
+#: Every ``file`` child's exact required input fields, read from the live schema
+#: rather than hardcoded, so a schema change breaks this test instead of silently
+#: letting an undispatchable snippet ship.
+def _file_required_fields():
+    from lingtai.tools.file import get_schema
+
+    branches = get_schema()["properties"]["input"]["oneOf"]
+    return {b["title"].split()[0]: list(b.get("required", [])) for b in branches}
+
+
+def _file_snippets(body):
+    """Yield ``(action, snippet)`` for every inline ``file(action="...")`` call.
+
+    A snippet runs to the closing ``reasoning="..."`` so a call wrapped across
+    source lines is still captured whole.
+    """
+    import re
+
+    for match in re.finditer(
+        r'file\(action="(\w+)",\s*(.*?)reasoning=', body, flags=re.S
+    ):
+        yield match.group(1), match.group(0)
+
+
+@pytest.mark.parametrize("action", ["knowledge", "skills"])
+def test_returned_manual_file_calls_are_dispatchable(tmp_path, action):
+    """Every displayed ``file(...)`` call carries that child's full strict input.
+
+    The `file` children declare every field as required — including the nullable
+    `offset`/`limit`/`max_chars` on `read` — so an abbreviated snippet a model
+    copies verbatim is rejected before dispatch. A manual that ships one is
+    teaching a call that cannot work.
+    """
+    required = _file_required_fields()
+
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        body = _call(agent, action)["manual"]
+        snippets = list(_file_snippets(body))
+        assert snippets, f"{action} manual shows no file(...) call to check"
+
+        for file_action, snippet in snippets:
+            assert file_action in required, (
+                f"{action} manual shows unknown file action {file_action!r}"
+            )
+            for field in required[file_action]:
+                assert f'"{field}"' in snippet, (
+                    f"{action} manual's file(action={file_action!r}) snippet omits "
+                    f"required input field {field!r}: {snippet.strip()!r}"
+                )
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("action", ["knowledge", "skills"])
+def test_returned_manual_has_no_abbreviated_file_calls(tmp_path, action):
+    """Reject the ``file(action="grep", ...)`` elision that hid missing fields."""
+    import re
+
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        body = _call(agent, action)["manual"]
+        elided = re.findall(r'file\(action="\w+",\s*\.\.\.', body)
+        assert not elided, (
+            f"{action} manual abbreviates a file call instead of showing its "
+            f"full strict input: {elided}"
+        )
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("action", sorted(STALE_BODY_CLAIMS))
+def test_returned_manual_body_has_no_stale_claims(tmp_path, action):
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        body = _call(agent, action)["manual"]
+        for needle, why in STALE_BODY_CLAIMS[action]:
+            assert needle not in body, f"{action} manual {why}: {needle!r}"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize("action", sorted(REQUIRED_BODY_ROUTES))
+def test_returned_manual_body_teaches_the_current_routes(tmp_path, action):
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        body = _call(agent, action)["manual"]
+        for needle in REQUIRED_BODY_ROUTES[action]:
+            assert needle in body, f"{action} manual lost the current route {needle!r}"
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_no_returned_manual_teaches_a_retired_public_root(tmp_path):
+    """No body may show a retired root as an executable call."""
+    agent = _agent(tmp_path, capabilities={"knowledge": {}, "skills": {}})
+    try:
+        for action in EXPECTED_ACTIONS:
+            body = _call(agent, action)["manual"]
+            for retired in ("pad", "lingtai", "knowledge", "skills"):
+                assert f"{retired}(action=" not in body, (
+                    f"{action} manual teaches the retired {retired}(action=...) root"
+                )
+            assert "pad.append" not in body
+            assert "knowledge.info" not in body
+            assert "skills.info" not in body
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_manual_result_has_no_double_wrap(tmp_path):
     agent = _agent(tmp_path)
     try:

@@ -25,10 +25,15 @@ what is inside it. The capability scans `.library/` plus any extra paths declare
 in `init.json`, builds a YAML catalog, and injects it into your system prompt.
 
 **The one rule behind everything below:** a skill exists for you only after it is
-(1) installed into a scanned skill root and (2) picked up by
-`system({"action": "refresh"})`. A shared URL, a temporary clone, or a file you
-just wrote is not yet in the catalog. Every write/install step in this manual
-ends with a refresh.
+(1) installed into an already-scanned skill root and (2) picked up by a catalog
+rescan. A shared URL, a temporary clone, or a file you just wrote is not yet in
+the catalog.
+
+The active rescan is one
+`context(action="rebuild", input={}, reasoning="rescan skills catalog")`; passive
+refresh and molt reconstruction rescan too. Every write/install step in this
+manual ends with that rebuild. Changing which *roots* are scanned is a different,
+config-owner case — see "Adding a skills path" below.
 
 ## On-disk layout
 
@@ -47,22 +52,41 @@ Your skill catalog lives at `<agent>/.library/`:
 - `intrinsic/` — **CLI-managed.** Wiped and rewritten from kernel-shipped manual
   bundles on every refresh. Do not edit; your edits will be erased.
   `capabilities/<cap>/` holds each loaded capability's manual (`skills/`,
-  `email/`, `psyche/`); `addons/<addon>/` holds each loaded addon's
+  `email/`, `context/`); `addons/<addon>/` holds each loaded addon's
   (`imap/`, `telegram/`, `feishu/`).
 - `custom/` — **your territory.** Authored skills live here; the CLI never
   touches this directory.
 
+### Adding a skills path
+
 Additional roots come from `init.json` at `manifest.capabilities.skills.paths` —
-typically `~/.lingtai-tui/utilities/`, plus any project-specific roots. To add
-one: `edit` that list (absolute, or relative to your working dir; `~/` expansion
-honored), then refresh. `init.json` is the ground truth — there is no runtime
-state, so whatever is in `paths` at setup time is the exact set scanned.
+typically `~/.lingtai-tui/utilities/`, plus any project-specific roots.
+`init.json` is the ground truth: there is no runtime state, so whatever is in
+`paths` at setup time is the exact set scanned.
+
+Changing that list is **configuration**, not authoring, and it is the one case a
+plain rebuild cannot apply — a rebuild rescans the roots already configured, it
+does not re-read `init.json` capability config. Edit the list with
+`file(action="edit", input={"file_path": "init.json", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="...")`
+and then re-run capability setup with the exact refresh envelope:
+
+```text
+system(action="refresh",
+       input={"reason": "pick up new skills paths", "preset": null, "revert_preset": null},
+       reasoning="apply changed skills configuration")
+```
+
+Editing `init.json` is a config-owner action: confirm you are authorized to
+change this agent's configuration before doing it.
 
 `../.library_shared/` is an **opt-in** local-network sharing root, not a default.
 For ordinary sharing, install into each receiving agent's `custom/` instead.
 
 If the skills capability is not loaded, the files still exist on disk — you just
-get no catalog in your prompt. Reach the manuals with `read`, `grep`, `ls`.
+get no catalog in your prompt. Reach the manuals with
+`file(action="read", input={"file_path": "...", "offset": null, "limit": null, "max_chars": null}, reasoning="...")`,
+`file(action="grep", input={"pattern": "...", "path": ".library", "glob": null, "max_matches": null}, reasoning="...")`,
+or `file(action="glob", input={"pattern": "**/SKILL.md", "path": ".library"}, reasoning="...")`.
 
 ## The catalog, and checking its health
 
@@ -118,7 +142,16 @@ in `init.json`, described above.
 
 To pin a skill's body into your pad so it survives a molt and rides in the cached
 system-prompt prefix, add its `location` to the JSON array in
-`system/pad_append.json` with `file(action="write", ...)`, then apply it with one
+`system/pad_append.json`:
+
+```text
+file(action="write",
+     input={"file_path": "system/pad_append.json",
+            "content": "[\"<location>\"]"},
+     reasoning="pin a skill as durable reference")
+```
+
+then apply it with one
 `context(action="rebuild", input={}, reasoning="apply pinned references")`.
 
 Pinning is cheap per-token over a session; repeated `read`s of the same file are
@@ -136,11 +169,14 @@ temporary clone as loaded. The default flow is local-first:
 2. **Validate before trusting it** — run the bundled validator (below) against
    the installed folder and inspect `SKILL.md` frontmatter plus any referenced
    `scripts/`, `assets/`, or `references/`.
-3. **Refresh** — call `system({"action": "refresh"})`. Until refresh succeeds
-   the skill is only a file on disk.
-4. **Load it by catalog entry** — `read` the cataloged `location:` and follow any
-   nested references. Record the commit or source URL in your task notes when it
-   matters.
+3. **Rescan the catalog** — call
+   `context(action="rebuild", input={}, reasoning="rescan skills catalog")`.
+   Until that rebuild (or a passive refresh/molt reconstruction) the skill is
+   only a file on disk.
+4. **Load it by catalog entry** — `file(action="read", input={"file_path":
+   "<location>", "offset": null, "limit": null, "max_chars": null}, reasoning="...")`
+   on the cataloged `location:`, and follow any nested references. Record the
+   commit or source URL in your task notes when it matters.
 
 Use a temporary/quarantine clone only to pre-inspect an untrusted source; move or
 re-clone a reviewed copy into `.library/custom/<skill-name>/` before relying on
@@ -149,8 +185,9 @@ describes** — normal human authorization boundaries still apply.
 
 **Sharing works the same way in reverse.** Send peers the source URL (or artifact
 path) plus this recipe. Each receiving agent clones/copies it into its own
-`.library/custom/<name>/`, validates it, then refreshes itself. That keeps
-ownership, updates, and rollback local to the agent actually using the skill.
+`.library/custom/<name>/`, validates it, then rebuilds its own context. That
+keeps ownership, updates, and rollback local to the agent actually using the
+skill.
 A network may instead maintain `.library_shared/<name>/`; add `../.library_shared` to each participating
 agent's `manifest.capabilities.skills.paths`. Do not assume `.library_shared` is loaded by default:
 it is an explicit opt-in with a shared stewardship burden, never the default
@@ -159,7 +196,10 @@ distribution path.
 ## Authoring a new skill
 
 Create `<agent>/.library/custom/<skill-name>/SKILL.md` starting with YAML
-frontmatter, then refresh:
+frontmatter — use
+`file(action="write", input={"file_path": ".library/custom/<skill-name>/SKILL.md", "content": "..."}, reasoning="...")`
+— then rescan with one
+`context(action="rebuild", input={}, reasoning="rescan skills catalog")`:
 
 ```
 ---
@@ -196,8 +236,11 @@ load-bearing — the catalog still finds skills without them.
 **Check for name collisions first.** Two skills sharing a `name` collide in the
 catalog:
 
-```
-shell({"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null"})
+```text
+shell(action="run",
+      input={"command": "grep -rh '^name:' .library/ ~/.lingtai-tui/utilities/ 2>/dev/null",
+             "timeout": null, "working_dir": null, "async": null, "reminder": null},
+      reasoning="check for skill name collisions")
 ```
 
 On a hit: rename, or adapt the existing skill instead of forking a second one.
@@ -437,7 +480,7 @@ a standalone resource:
 Do NOT `git init` inside `.library/custom/` directly — it is a subtree of your
 agent working directory and you would entangle two repos. Always copy out first.
 Once published, other agents install it with `git clone` into their
-`.library/custom/` and refresh.
+`.library/custom/` and rebuild their context.
 
 ## Cleanup / Footprint
 

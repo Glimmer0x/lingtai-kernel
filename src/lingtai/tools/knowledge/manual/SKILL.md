@@ -21,8 +21,11 @@ maintenance: |
 
 Knowledge is an agent's private long-term memory. It is for facts, decisions, observations, local paths, mail context, and operational lessons that are useful to this agent but are not necessarily portable to every other agent.
 
-The private-memory capability is named `knowledge`, and it registers exactly one
-tool, also named `knowledge`.
+The private-memory capability is named `knowledge`. It registers **no** public
+tool. It owns the private catalog composer that scans `<agent>/knowledge/` and
+injects the catalog into your `knowledge` prompt section; the only model-facing
+surface is the read-only signpost `substrate(action="knowledge", ...)`, which
+returns this manual and nothing else.
 
 ## Knowledge vs skills
 
@@ -34,9 +37,9 @@ with different audiences:
 
 | Term / path | Meaning |
 |---|---|
-| `knowledge` tool / capability | Private per-agent durable memory catalog. |
+| `knowledge` capability | Private per-agent durable memory catalog (no public tool). |
 | `<agent>/knowledge/<name>/KNOWLEDGE.md` | One private knowledge entry. |
-| `skills` tool / capability | Catalog of reusable portable procedures. |
+| `skills` capability | Catalog of reusable portable procedures (no public tool). |
 | `.library/intrinsic`, `.library/custom`, `.library_shared` | Skill shelves holding `SKILL.md` files — never private `knowledge` entries. |
 
 Knowledge is **private, local, and non-portable** by default: it may reference
@@ -97,22 +100,33 @@ Every call carries exactly four root fields — `action`, `input`, `reasoning`
 
 It takes a strict-empty `input`: there is no argument to pass, and any field you
 put inside `input` is rejected before the action runs. This is a signpost — it
-never creates, edits, searches, rescans, or loads entries. Author and
-revise entries by writing `knowledge/<name>/KNOWLEDGE.md` with `write`/`edit`,
-and load bodies with `read`.
+never creates, edits, searches, rescans, or loads entries.
+
+Mutation and loading belong to the generic `file` family:
+
+- author or fully rewrite an entry with
+  `file(action="write", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "content": "..."}, reasoning="...")`;
+- make a bounded exact change with
+  `file(action="edit", input={"file_path": "knowledge/<name>/KNOWLEDGE.md", "old_string": "...", "new_string": "...", "replace_all": null}, reasoning="...")`;
+- load a body on demand with
+  `file(action="read", input={"file_path": "<location>", "offset": null,
+  "limit": null, "max_chars": null}, reasoning="...")`.
+
+Writing an entry does not hot-load the catalog. Apply it with one
+`context(action="rebuild", input={}, reasoning="...")`, or let passive
+refresh/molt reconstruction apply it.
 
 ### `summarize`
 
-`knowledge` is a **short-result** family: both actions return small results, so
-root `summarize` is available but normally unnecessary — leave it false. Keep it
-false for `manual` in particular, so exact procedure and constraints are not
-summarized away. `summarize` is a root field; it is never part of `input`.
+Loading this manual follows the **short-result** profile: root `summarize` is
+available but normally unnecessary — leave it false, so exact procedure and
+constraints are not summarized away. `summarize` is a root field; it is never
+part of `input`.
 
 ### Settings
 
-`knowledge` supports no settings surface: there is no `settings/knowledge.json`
-and no `settings/knowledge.<action>.json`; nothing in this family reads
-settings.
+There is no Knowledge settings surface: no `settings/substrate.json` and no
+`settings/substrate.knowledge.json`. Nothing here reads settings.
 
 ## Nesting and sub-knowledge
 
