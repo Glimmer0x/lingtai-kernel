@@ -8,7 +8,7 @@ description: >-
   is, why it implements progressive disclosure, when to summarize urgently versus
   during idle cleanup, how to write good summaries, how to recover the original
   tool result by tool_call_id, and how summarize differs from molt.
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: "2026-07-27T17:02:00-07:00"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/tools/system/summarize.py
@@ -228,7 +228,7 @@ summarize would discard cache benefit.
   rebuild — recording summaries never triggers a provider-context rebuild on its
   own. If making already-recorded summaries active in the provider context earlier
   is worth the cost, make one proactive tactical
-  `system(action="summarize", rebuild=true)` call. `rebuild=true` **with** new
+  `system(action="summarize", input={"rebuild": true})` call. `rebuild=true` **with** new
   items records those summaries and then applies the pending set; `rebuild=true`
   **with no items** is a pure rebuild that applies the already-pending summaries.
   Do not loop rebuild/summarize calls.
@@ -242,7 +242,7 @@ summarize would discard cache benefit.
   future crossing can force exactly once again. Both automatic paths — the
   pre-request boundary check and the immediate post-`summarize` release — share
   this one latch, so they cannot double-fire. (Explicit
-  `system(action="summarize", rebuild=true)` is independent and always available.)
+  `system(action="summarize", input={"rebuild": true})` is independent and always available.)
   If pending summaries exist,
   they are applied and their markers marked done. `summarize` is the only
   historical tool-result body replacement a rebuild applies; the fresh replay

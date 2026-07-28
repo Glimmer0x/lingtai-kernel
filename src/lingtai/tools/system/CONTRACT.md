@@ -1,14 +1,23 @@
 ---
 name: system-contract
 tool: system
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - tests/test_tool_family_system_migration.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. If behavior and this
-  contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits.
+  Keep related_files as repo-relative paths to real files, including the
+  paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
+  the system-manual this capability is taught by, and the migration evidence
+  suite. If behavior and this contract disagree, the code is the source of
+  truth — fix the contract in the same change and bump contract_version on
+  breaking contract edits.
 ---
 
 # System capability contract
@@ -18,6 +27,21 @@ swaps, self-sleep, karma-gated control of *other* agents, and agent-authored
 context summarization. It does **not** own any notification verb — those live on
 the standalone `notification` tool. The implementation lives in
 `src/lingtai/tools/system/`; the code is the source of truth.
+
+`system` is an **LTP v2 family** (`src/lingtai/tools/CONTRACT.md`): its final
+model-facing root is exactly `action`, `input`, `reasoning`, and `summarize`
+with `additionalProperties: false`, and each action's arguments live only in
+that action's own strict `input` object — so `address` belongs to the six
+address verbs, `preset`/`revert_preset` only to `refresh`, and `items`/`rebuild`
+only to `summarize`. It is the third migrated *intrinsic* (after `soul` and
+`notification`) and therefore composes its dispatching family per call rather
+than owning a per-Agent manager, and drops the kernel-injected `_tc_id` at its
+own Host boundary. The migration changed the argument shape only: the public
+tool name, all eleven action values, every privilege gate, receipt, and error
+are unchanged, and the children consume no additional model tool slots.
+`system` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
+(`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
+it advertises is actually honored.
 
 ## Routing Card
 
@@ -47,8 +71,13 @@ storage; summarize semantics -> §Anchored claims.
 
 ## Tool surface
 
-Schema (`src/lingtai/tools/system/schema.py`) requires `action` from a fixed enum.
-Dispatch is the `handle()` table in `src/lingtai/tools/system/__init__.py`.
+Per-action `input` schemas are the data in `src/lingtai/tools/system/schema.py`
+(`ACTION_ORDER`, `INPUT_SCHEMAS`); the model-facing family schema is composed
+from them by `get_schema()` in `src/lingtai/tools/system/__init__.py`, and
+dispatch is the generic `ToolFamily.handle()` that same module delegates to.
+Every call takes `action` + `input` + `reasoning`; the "inputs" columns below
+name properties of the selected action's own `input` object, never root
+siblings.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
@@ -63,10 +92,43 @@ Dispatch is the `handle()` table in `src/lingtai/tools/system/__init__.py`.
 | `presets` | — | — | `{status: "ok", active, available: [...]}` | `{status: "error", message}` on unreadable init.json |
 | `summarize` | `items` (list of `{tool_call_id, summary}`) *or* `rebuild=true` | `rebuild` (bool) | `{status: "ok"/"partial", mode: "summarize"/"rebuild", summarized, failed, items, context, ...}` | `{status: "error", reason: "missing_items"/"runtime_threshold_change_not_supported"/"no_chat_session"}`; per-item errors (`not_found`, `already_summarized`, `missing_tool_call_id`, `missing_summary`) |
 
+`manual` takes the canonical strict-empty `input` and returns the flat
+`{status, manual, manual_path}` shape (plus `error` when the installed manual is
+missing). The reserved child is registered unwrapped, so `ToolFamily.handle()`
+returns its canonical `content`/`structuredContent` result verbatim and
+`_adapt_manual_result` flattens it strictly *after* dispatch — no double wrap.
+
 Unknown/absent `action` returns `{status: "error", message: "Unknown system
-action: ..."}`. Notification verbs (`check`, `dismiss_channel`,
-`dismiss_event`, `dismiss_ref`) and the legacy `notification`/`dismiss` aliases
-are **not** in the enum and dispatch to the unknown-action error.
+action: ..."}`, preserved verbatim from before the migration by normalizing the
+generic dispatcher's `ACTION_REQUIRED` envelope failure. An unhashable `action`
+(e.g. `[]` from invalid JSON) renders the same stable error rather than raising.
+Notification verbs (`check`, `dismiss_channel`, `dismiss_event`, `dismiss_ref`)
+and the legacy `notification`/`dismiss` aliases are **not** in the enum and
+dispatch to the unknown-action error.
+
+Envelope enforcement is two-layered. The composed schema correlates `action`
+with `input` via a root `allOf`/`if`/`then` per action, and dispatch is the
+always-authoritative, fail-closed second layer: it validates `action` before
+child lookup, type-checks and strips root `summarize`, rejects unknown root
+fields, and rejects `input` keys outside the selected action's own declared
+schema **before** any handler runs. That last rule is the safety-relevant one
+for this family — a cross-action smuggle such as `action='sleep',
+input={'address': ...}` fails with no signal file written to any target.
+Children receive only their own validated `input`: never `action`, `reasoning`,
+`_reasoning`, `summarize`, or `_tc_id`.
+
+Two fields deserve explicit mention because they are not a straight carry-over
+of the pre-migration *schema*:
+
+- `sleep.force` was always read by `karma._sleep` (the kernel#112 escape hatch)
+  but was never advertised. A strict child `input` must declare every key its
+  handler accepts, so it is now declared. This surfaces existing behavior; it
+  grants no new capability.
+- `notification_threshold_chars` remains absent at both envelope levels — the
+  threshold is config-only (`manifest.summarize_notification_threshold` +
+  refresh). `_summarize`'s loud `runtime_threshold_change_not_supported`
+  refusal is retained as the inner layer for direct in-process callers that
+  bypass the envelope.
 
 The karma gate (`_check_karma_gate`) requires `admin.karma=True` for the
 five control verbs and `admin.karma AND admin.nirvana` for `nirvana`; it also
@@ -120,6 +182,12 @@ content with a `lingtai_agent_summarized_result` marker), persists via
 | Runtime threshold mutation via `summarize` is rejected | `src/lingtai/tools/system/summarize.py:_summarize` | `tests/test_system_summarize.py::test_summarize_runtime_threshold_change_rejected` |
 | Notification/dismiss actions are dropped from the `system` schema | `src/lingtai/tools/system/schema.py` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss`, `tests/test_notification_tool.py::test_system_rejects_dismiss_action` |
 | Karma signal files clear a target channel path end-to-end | `src/lingtai/tools/system/karma.py` | `tests/test_system_dismiss.py` |
+| The model-facing root is the closed LTP v2 envelope with eleven unchanged actions | `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_tool_family_system_migration.py::test_root_envelope_is_exactly_the_four_ltp_v2_fields`, `::test_public_tool_name_and_action_inventory_are_unchanged` |
+| Each action's arguments live only in its own strict `input` | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_action_input_fields_match_what_the_handler_reads` |
+| A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
+| Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |
+| `manual` is the reserved family-owned child, returned without double wrap | `src/lingtai/tools/system/__init__.py:_adapt_manual_result` | `tests/test_tool_family_system_migration.py::test_manual_child_is_registered_unwrapped`, `::test_manual_returns_the_pinned_flat_public_shape` |
+| `system` is on the kernel `summarize` allowlist | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_system_migration.py::test_system_is_on_the_kernel_summarize_allowlist` |
 
 ## Verification matrix
 
@@ -130,11 +198,13 @@ content with a `lingtai_agent_summarized_result` marker), persists via
 | `summarize` preserves the original in events.jsonl | `tests/test_system_summarize.py::test_summarize_replaces_block_content` | Summarize a result, grep events.jsonl by tool_call_id | Loss of original tool output |
 | `summarize` rebuild flips pending markers done | `tests/test_system_summarize.py::test_rebuild_true_with_items_records_marks_done_then_rebuilds` | Summarize then rebuild; inspect marker status | Pending compaction never applied |
 | No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Duplicate notification surfaces diverge |
+| Cross-action input cannot reach a lifecycle handler | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` | Call `sleep` with an `address` in `input` | A weaker action smuggles a privileged target |
+| `nirvana`'s blast radius is exactly one directory | `tests/test_tool_family_system_migration.py::test_nirvana_destroys_only_the_disposable_target` | Inspect siblings after a disposable-target nirvana | Irreversible over-deletion |
 
 Run before merging system changes:
 
 ```bash
-python -m pytest tests/test_system.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py -q
+python -m pytest tests/test_system.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py tests/test_karma.py tests/test_tool_family_system_migration.py tests/test_intrinsic_manual_actions.py -q
 ```
 
 ## Schema and glossary ownership

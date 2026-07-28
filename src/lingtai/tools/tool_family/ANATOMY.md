@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/system/ANATOMY.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
@@ -179,6 +180,19 @@ rejects every `input` key for either action. Its
 the capability's public `skills_manual`/`library_manual`/`manual_path` shape
 and, unlike `web`, keeps this package's canonical envelope-failure result
 verbatim — it has no family-specific diagnostic block to stamp on.
+
+`system/__init__.py` ([`../system/ANATOMY.md`](../system/ANATOMY.md)) is the
+eleventh consumer and the third *intrinsic* one, reusing `soul`'s module-level
+division verbatim: a schema-only family built at import (which is also the
+registry's collision check) behind `get_schema()`, an agent-bound family per
+`handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
+registered directly with a post-dispatch flattening adapter, `_tc_id` dropped
+at its own Host boundary, and the generic `ACTION_REQUIRED` failure normalized
+to its own pinned unknown-action string. At eleven children it is this
+package's largest consumer, and the one where the allowed-key rejection does
+the most safety work — `system`'s privilege classes are per action, so an
+`input` key outside the selected child's schema is refused before any
+lifecycle handler runs.
 
 ## Composition
 

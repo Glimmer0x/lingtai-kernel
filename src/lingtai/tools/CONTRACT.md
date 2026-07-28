@@ -22,6 +22,7 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/system/CONTRACT.md
   - tests/test_browser_capability.py
   - tests/test_wire_tool_description.py
 maintenance: |
@@ -310,12 +311,33 @@ only in that action's own strict `input` (so `channel` belongs to
 `dismiss_ref`), and it is the second migrated *intrinsic* — it therefore
 composes its dispatching family per call rather than owning a per-Agent
 manager (see `src/lingtai/tools/notification/CONTRACT.md`).
+`system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
+nirvana | presets | summarize | manual`) is the eleventh, and the third
+migrated *intrinsic*: its final model-facing root is likewise exactly `action`,
+`input`, `reasoning`, and `summarize`, and each action's arguments live only in
+that action's own strict `input` — so `address` belongs to the six address
+verbs, `preset`/`revert_preset` only to `refresh`, and `items`/`rebuild` only to
+`summarize` (see `src/lingtai/tools/system/CONTRACT.md`). Two facts are worth
+naming here because they are envelope consequences rather than local details.
+First, the family's three privilege classes (self, karma, karma+nirvana) are
+*per action*, so the closed per-action `input` is load-bearing for safety, not
+just for tidiness: `address` is undeclared on `sleep`, which means the
+always-authoritative dispatch layer rejects a smuggled target before any signal
+file is written — the same "a family must not hide a stronger child action
+behind a weaker family posture" rule `avatar` established, applied to
+rejection rather than gating. Second, `sleep.force` was live and read by the
+handler before this migration but never advertised in the flat schema; a strict
+child `input` must declare every key its handler accepts, so declaring it
+surfaces existing behavior rather than adding a capability. `system` owns no
+settings file at either level and its manual says so.
+
 The legacy a-priori result-summarization flag under the literal key `summary`
 (`src/lingtai/kernel/tool_result_summary.py:172`) remains honored for every
 still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
-`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, and `notification`), so
+`file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, and
+`system`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the

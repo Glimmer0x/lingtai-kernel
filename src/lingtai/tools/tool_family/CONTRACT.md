@@ -19,9 +19,11 @@ related_files:
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/system/CONTRACT.md
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_family_manual_contract.py
+  - tests/test_tool_family_system_migration.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep
   related_files complete and repo-relative, including the paired ANATOMY.md,
@@ -242,6 +244,22 @@ dispatched manual result (`"content" in result`) to that capability's public
 having no family-specific diagnostic block to stamp on; both of its children
 declare the canonical strict-empty `input_schema`, so `handle()`'s
 allowed-key check rejects every `input` key on either action.
+
+`system/__init__.py` (`../system/CONTRACT.md`) is the seventh production
+Adapter/consumer named here, and the third that is an intrinsic. It follows
+`soul`'s module-level composition shape exactly — a module-level schema-only
+`ToolFamily` behind `get_schema()` whose import-time construction is the
+registry's duplicate/reserved-name collision check, an agent-bound family built
+per `handle(agent, args)` call, `build_manual_child(agent, "system-manual")`
+registered directly and unwrapped with a post-dispatch `_adapt_manual_result`
+flattening to the family's pinned flat `status`/`manual`/`manual_path` shape,
+the kernel-injected `_tc_id` dropped at its own Host boundary, and the generic
+`ACTION_REQUIRED` failure normalized back to its pinned unknown-action string.
+It is this package's largest consumer at eleven children, and the one where the
+allowed-key check carries the most weight: `system`'s privilege classes are
+per action, so rejecting an `input` key outside the selected child's own schema
+is what stops a smuggled `address` on a non-karma action from reaching a
+lifecycle handler at all.
 
 Every other built-in family remains fully independent of this package until
 its own scoped migration.
