@@ -4,8 +4,9 @@ These two handlers moved here verbatim from the former ``psyche`` family
 (``psyche(action='name_set'|'name_nickname')``) when ``psyche`` was dissolved:
 ``context`` took the context lifecycle, and identity naming — which is runtime
 state, like every other ``system`` action — came here. The action names,
-argument (``content``), success payloads, and error strings are exactly what
-they were; only the owning public root changed.
+argument (``content``), success payloads, and core identity behavior are
+unchanged. This model-facing handler adapts the kernel Port's method-oriented
+duplicate-name recovery hint to the public ``system.name_nickname`` action.
 
 These are NOT init-file editing and NOT the physical agent address/workdir
 rename. ``agent.set_name``/``set_nickname`` update live in-memory identity,
@@ -25,7 +26,12 @@ def _name_set(agent, args: dict) -> dict:
     try:
         agent.set_name(name)
     except RuntimeError as e:
-        return {"error": str(e)}
+        message = str(e).replace(
+            "Use set_nickname() instead.",
+            "Use system(action='name_nickname', input={'content': '<nickname>'}, "
+            "reasoning='...') instead.",
+        )
+        return {"error": message}
     return {"status": "ok", "name": name}
 
 

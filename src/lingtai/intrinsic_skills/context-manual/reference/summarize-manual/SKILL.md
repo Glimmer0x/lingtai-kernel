@@ -179,12 +179,15 @@ Summarize prior completed tool results only:
 ```json
 {
   "action": "summarize",
-  "items": [
-    {
-      "tool_call_id": "call_abc123",
-      "summary": "What future-you needs: conclusion, evidence, anchors, validation, risks, next steps."
-    }
-  ]
+  "input": {
+    "items": [
+      {
+        "tool_call_id": "call_abc123",
+        "summary": "What future-you needs: conclusion, evidence, anchors, validation, risks, next steps."
+      }
+    ]
+  },
+  "reasoning": "Compact the completed result while preserving its evidence and next steps."
 }
 ```
 
@@ -321,7 +324,7 @@ Neither summary mode is a molt. Both a-priori (`summary=true`) and a-posteriori
 results. Neither updates pad, character, knowledge, skills, or the
 session-journal, and neither sheds the conversation.
 
-Molt is a psyche operation. It preserves durable stores, writes the session
+Molt is a context operation. It preserves durable stores, writes the session
 journal and molt briefing, and starts a fresh conversation context. Before
 molting, read `context-manual` and follow its required checklist.
 

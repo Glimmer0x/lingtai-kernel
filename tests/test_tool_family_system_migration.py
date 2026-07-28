@@ -262,10 +262,12 @@ def test_name_actions_preserve_identity_semantics(tmp_path: Path) -> None:
         assert system_tool.handle(
             agent, {"action": "name_set", "input": {"content": "悟空"}}
         )["name"] == "悟空"
-        # Set-once: a second true name is refused.
-        assert "error" in system_tool.handle(
+        # Set-once: a second true name is refused with the public recovery action.
+        second_name = system_tool.handle(
             agent, {"action": "name_set", "input": {"content": "八戒"}}
         )
+        assert "system(action='name_nickname'" in second_name["error"]
+        assert "set_nickname()" not in second_name["error"]
         # Empty is refused rather than clearing the true name.
         assert "error" in system_tool.handle(
             agent, {"action": "name_set", "input": {"content": ""}}
