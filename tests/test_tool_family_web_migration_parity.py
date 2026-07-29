@@ -1,5 +1,5 @@
 """``web``'s migration onto the generic ToolFamily infra changes nothing the
-model or a caller can observe, except three documented, authorized
+model or a caller can observe, except four documented, authorized
 differences:
 
 1. the ``anyOf`` -> ``oneOf`` combinator swap for the ``input`` discriminated
@@ -21,7 +21,12 @@ differences:
    ``then`` schema without error on the current route). The public root's
    four fields (``action``, ``input``, ``reasoning``, ``summarize``) and their
    requiredness are unchanged; ``allOf`` constrains them without adding a
-   fifth field or duplicating ``action`` inside ``input``.
+   fifth field or duplicating ``action`` inside ``input``;
+4. the aggregate ``input`` node now explicitly declares the common
+   ``type: object`` constraint already required by all three action branches.
+   This is redundant for a complete JSON Schema validator and changes no valid
+   instance, but keeps the object contract visible to model/provider consumers
+   that inspect only the immediate node.
 
 This module snapshots the true pre-migration schema shape (as it existed at
 this worktree's exact clean base, commit
@@ -156,6 +161,14 @@ def test_generated_schema_is_field_equivalent_to_pre_migration_schema_except_aut
     # against the true pre-migration fixture (which never had ``allOf``).
     assert "allOf" in normalized
     del normalized["allOf"]
+
+    # The direct ``input.type`` is the fourth authorized difference. Every
+    # historical branch already required an object, so assert the redundant
+    # common constraint, then strip it only for the exact historical snapshot
+    # comparison.
+    normalized["properties"]["input"] = dict(normalized["properties"]["input"])
+    assert normalized["properties"]["input"]["type"] == "object"
+    del normalized["properties"]["input"]["type"]
 
     assert normalized == pre
 

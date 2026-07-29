@@ -59,7 +59,9 @@ def test_generic_family_schema_survives_chat_and_responses_wires():
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert wire["properties"]["reasoning"]["type"] == "string"
-        branches = wire["properties"]["input"][combinator]
+        input_schema = wire["properties"]["input"]
+        assert input_schema["type"] == "object"
+        branches = input_schema[combinator]
         assert [b["title"] for b in branches] == ["spin input", "manual input"]
         for branch in branches:
             assert branch["additionalProperties"] is False
@@ -105,6 +107,8 @@ def test_real_agent_startup_builds_web_family_schema_on_both_wires(tmp_path):
         assert set(responses["properties"]) == {"action", "input", "reasoning", "summarize"}
         assert chat["required"] == ["action", "input", "reasoning"]
         assert responses["required"] == ["action", "input", "reasoning"]
+        assert chat["properties"]["input"]["type"] == "object"
+        assert responses["properties"]["input"]["type"] == "object"
         assert len(chat["properties"]["input"]["oneOf"]) == 3
         assert len(responses["properties"]["input"]["anyOf"]) == 3
     finally:

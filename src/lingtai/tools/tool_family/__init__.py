@@ -212,6 +212,7 @@ class ToolFamily:
                     "description": f"Required operation within the {self.name} family.",
                 },
                 "input": {
+                    "type": "object",
                     "description": (
                         "Strict action-specific input; the selected action is "
                         "validated again at dispatch."

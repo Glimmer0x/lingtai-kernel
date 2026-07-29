@@ -95,6 +95,7 @@ def test_schema_composes_action_input_reasoning_summarize_root():
     assert schema["additionalProperties"] is False
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["properties"]["action"]["enum"] == ["spin", "manual"]
+    assert schema["properties"]["input"]["type"] == "object"
     assert schema["properties"]["reasoning"]["type"] == "string"
     assert schema["properties"]["summarize"]["type"] == "boolean"
     branches = schema["properties"]["input"]["oneOf"]
