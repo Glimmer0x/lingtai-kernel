@@ -6,11 +6,13 @@ description: |
   check/search filters, the compound id (account:emailId) for read, send (needs
   user credentials), plain vs HTML bodies, accounts/add_user basics, and the
   external-email side-effect caveats. Pulled on demand via action='manual'; you
-  do not need to call it before every send.
-version: 1.0.0
-last_changed_at: "2026-07-19T00:00:00Z"
+  do not need to call it before every send. Calls use the strict LTP-v2
+  action/input/reasoning/summarize envelope.
+version: 1.1.0
+last_changed_at: "2026-07-29T00:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/cloud_mail/manager.py
+- src/lingtai/mcp_servers/cloud_mail/_family.py
 - src/lingtai/mcp_servers/cloud_mail/server.py
 - src/lingtai/mcp_servers/cloud_mail/client.py
 maintenance: |
@@ -26,6 +28,33 @@ Setup, config file/schema, credential and auth model, and watermark state are
 owned by the `mcp-manual` skill (`reference/curated-addons.md`, §Cloud Mail
 setup). Read it before editing config; do not guess field names.
 
+## HOW TO CALL IT — the envelope
+
+`cloud_mail` is a single strict LTP-v2 tool family. Every call takes a closed
+root `{action, input, reasoning, summarize?}` — `action`, `input`, and
+`reasoning` are required; `summarize` is optional and never nested under
+`input`. `input` is the strict argument object **for the selected action
+only**; a key from another action's branch is rejected before anything is
+read or sent. Actions are exactly `check`, `search`, `read`, `send`,
+`accounts`, `add_user`, `manual`. Do not use a flat/legacy shape, `_reasoning`,
+aliases, or a generic dispatcher.
+
+```python
+cloud_mail(action="check", input={"limit": 10}, reasoning="check for new mail")
+cloud_mail(action="read", input={"id": "cloudmail:1234"}, reasoning="read the request")
+cloud_mail(action="send", input={"address": "user@example.com", "message": "done"},
+           reasoning="report completion")
+```
+
+**`summarize` guidance for this family.** `check`, `search`, and `read` are
+**bulky-result** actions — mailbox listings and full email bodies can be long,
+so `summarize=true` is reasonable when you only need the gist. Leave it false
+when you need exact email ids, addresses, or verbatim body text, because you
+will act on those literally. `send`, `accounts`, and `add_user` are
+**short-result**: their receipts are small and meant to be read exactly, so
+leave `summarize` false. Call `manual` itself with `summarize=false` so
+procedure and constraints are not summarized away.
+
 ## EMAIL IDS
 
 - `read` fetches the full content of one email by compound id
@@ -34,8 +63,8 @@ setup). Read it before editing config; do not guess field names.
 
 ## READING: check / search
 
-- `check`: list recent inbound emails (optional `limit`/`n`, plus the same
-  filters as search).
+- `check`: list recent inbound emails (optional `limit`, plus the same filters
+  as search).
 - `search`: filter the public email list by `to_email`, `send_email`,
   `send_name`, `subject`, `content`, `time_sort` (`asc`/`desc`), and paginate
   with `num`/`size`. Filters are LIKE matches.
