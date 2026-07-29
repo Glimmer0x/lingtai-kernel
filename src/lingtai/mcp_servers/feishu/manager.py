@@ -25,6 +25,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from uuid import uuid4
 
 from .. import _skill
+from . import _family
 from lingtai.kernel._frontmatter import strip_frontmatter
 
 if TYPE_CHECKING:
@@ -243,114 +244,6 @@ def _transcribe_voice(audio_path: str, model_name: str = "base") -> dict:
         log.warning("Voice transcription failed: %s", e)
         return {"error": str(e)}
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": [
-                "send", "check", "read", "reply", "search",
-                "delete", "edit",
-                "contacts", "add_contact", "remove_contact",
-                "accounts", "manual",
-            ],
-            "description": (
-                "send: send a text message to a user or chat "
-                "(receive_id, receive_id_type, text; optional account, placeholder). "
-                "If placeholder is true, sends text as a placeholder message "
-                "immediately and returns its compound message_id so the agent "
-                "can call edit later with the final result. "
-                "check: list recent conversations with unread counts "
-                "(optional account). "
-                "read: read messages from a specific chat "
-                "(chat_id; optional limit, account). "
-                "reply: reply to a specific message "
-                "(message_id from read results, text). "
-                "search: search inbox messages by regex "
-                "(query; optional account, chat_id). "
-                "delete: delete a bot message (message_id). "
-                "edit: edit a bot message (message_id, text). "
-                "contacts: list saved contacts (optional account). "
-                "add_contact: save a contact "
-                "(open_id, alias; optional name, chat_id). "
-                "remove_contact: remove a contact (alias or open_id). "
-                "accounts: list configured app accounts. "
-                + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
-            ),
-        },
-        "account": {
-            "type": "string",
-            "description": (
-                "App account alias (optional — defaults to first configured account)"
-            ),
-        },
-        "receive_id": {
-            "type": "string",
-            "description": (
-                "Recipient ID — open_id, user_id, email, or chat_id "
-                "depending on receive_id_type"
-            ),
-        },
-        "receive_id_type": {
-            "type": "string",
-            "enum": ["open_id", "user_id", "email", "chat_id", "union_id"],
-            "description": (
-                "Type of receive_id. Use 'open_id' for individual users "
-                "(format: ou_xxx), 'chat_id' for group chats (format: oc_xxx). "
-                "Defaults to 'open_id'."
-            ),
-        },
-        "chat_id": {
-            "type": "string",
-            "description": "Feishu chat ID (oc_xxx for groups, or open_id for p2p)",
-        },
-        "text": {
-            "type": "string",
-            "description": "Message text content",
-        },
-        "message_id": {
-            "type": "string",
-            "description": (
-                "Compound message ID returned by read/check: "
-                "{alias}:{chat_id}:{feishu_message_id}"
-            ),
-        },
-        "limit": {
-            "type": "integer",
-            "description": "Max messages to return (for read, default 10)",
-            "default": 10,
-        },
-        "query": {
-            "type": "string",
-            "description": "Search query (regex pattern)",
-        },
-        "open_id": {
-            "type": "string",
-            "description": "Feishu open_id for a user (ou_xxx)",
-        },
-        "alias": {
-            "type": "string",
-            "description": "Human-friendly contact alias",
-        },
-        "name": {
-            "type": "string",
-            "description": "Display name for a contact",
-        },
-        "placeholder": {
-            "type": "boolean",
-            "description": (
-                "send only — send 'text' as a placeholder message immediately "
-                "and return its compound message_id so the agent can call "
-                "edit later with the final result. "
-                "Use for long-running responses (>5s) to avoid the perception "
-                "of silence."
-            ),
-            "default": False,
-        },
-    },
-    "required": ["action"],
-}
-
 DESCRIPTION = (
     "Feishu (Lark) bot client — interact with Feishu users and group chats. "
     "MCP OWNERSHIP: this MCP belongs to the orchestrator (admin). If you are "
@@ -373,6 +266,10 @@ DESCRIPTION = (
     "'done' emoji reaction (THUMBSUP) after response is sent, "
     "and placeholder messages for long-running tasks."
 )
+
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+SCHEMA = _family.FEISHU_SCHEMA
 
 
 class FeishuManager:
@@ -435,6 +332,13 @@ class FeishuManager:
     # ------------------------------------------------------------------
 
     def handle(self, args: dict) -> dict:
+        # Keep the standalone manager surface in parity with the public family
+        # while retaining the flat internal boundary used by the family's own
+        # child dispatch and existing manager tests. Family validation occurs
+        # before any manager action I/O; child dispatch re-enters here with a
+        # flat action mapping exactly once.
+        if isinstance(args, dict) and {"input", "reasoning"}.issubset(args):
+            return _family.handle_feishu(self, args)
         action = args.get("action")
         try:
             if action == "send":
