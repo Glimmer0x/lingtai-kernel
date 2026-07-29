@@ -42,9 +42,11 @@ SQL queries as the primary data access layer.
   delete facts.
 - **Prefer the CLI.** Use `lingtai-agent log ...` instead of opening the DB for
   writes yourself.
-- **Queries are read-only.** `log query` accepts read-only `SELECT`, CTE (`WITH ... SELECT`), and
-  `EXPLAIN` statements and opens the sidecar through the kernel read-only
-  inspection path.
+- **Queries are read-only with respect to SQLite database contents.** `log query` accepts read-only
+  `SELECT`, CTE (`WITH ... SELECT`), and `EXPLAIN` statements and opens the sidecar through the
+  kernel read-only inspection path. `query` and `doctor` preserve the main database mtime; ordinary
+  live-safe SQLite `mode=ro` may create or update SQLite read-support `-wal`/`-shm` sidecar files as
+  needed.
 - **Rebuild is offline.** `log rebuild` requires the agent working-directory lock;
   if the agent is running, stop/sleep/lull/suspend it first as appropriate.
 - **Runtime SQLite is best effort.** New top-level `logs/events.jsonl` and
@@ -52,9 +54,8 @@ SQL queries as the primary data access layer.
   succeeds. Chat history, archive, and daemon JSONL sources are indexed into a
   target agent sidecar by explicit offline rebuild so normal turns and daemon
   runs do not pay recursive scan or live-rewrite costs.
-- **Live queries are snapshots.** Runtime writes use SQLite WAL mode. The query
-  path is intentionally non-mutating, so for a complete historical snapshot stop
-  the agent and run `log rebuild` before querying.
+- **Live queries are snapshots.** Runtime writes use SQLite WAL mode. For a complete historical
+  snapshot, stop the agent and run `log rebuild` before querying.
 - **Never paste secrets.** Logs and chat history can contain URLs, tokens,
   prompts, and user data. Redact before sharing.
 
@@ -932,8 +933,9 @@ Beyond the safety contract above:
 
 ### event_summary.py
 
-A standalone Python script that summarizes a LingTai `log.sqlite` file. It is
-read-only, safe (no network requests, no side effects), and requires no secrets.
+A standalone Python script that summarizes a LingTai `log.sqlite` file. It reads
+database contents without modifying them, makes no network requests, and requires
+no secrets. SQLite may create or update read-support `-wal`/`-shm` sidecars.
 
 ```bash
 # Summarize all events in the sidecar

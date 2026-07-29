@@ -417,7 +417,7 @@ class TestSQLiteEventIndex:
         assert result["status"] == "missing"
         assert not (logs / "log.sqlite").exists()
 
-    def test_doctor_existing_sqlite_does_not_create_wal_or_mutate_mtime(self, tmp_path):
+    def test_doctor_existing_sqlite_does_not_mutate_mtime(self, tmp_path):
         logs = tmp_path / "logs"
         logs.mkdir()
         (logs / "events.jsonl").write_text(json.dumps({"type": "alpha", "ts": 1}) + "\n", encoding="utf-8")
@@ -430,8 +430,6 @@ class TestSQLiteEventIndex:
         result = doctor_sqlite_event_index(tmp_path)
         assert result["status"] == "ok"
         assert sqlite_file.stat().st_mtime_ns == before_mtime
-        assert not (logs / "log.sqlite-wal").exists()
-        assert not (logs / "log.sqlite-shm").exists()
 
 
     def test_read_only_query_sees_live_wal_rows(self, tmp_path):
@@ -447,6 +445,30 @@ class TestSQLiteEventIndex:
             assert doctor["event_count"] == 1
         finally:
             index.close()
+
+    def test_read_only_reader_sees_later_keep_open_false_writer_commit(self, tmp_path):
+        sqlite_file = tmp_path / "logs" / "log.sqlite"
+        writer = SQLiteEventIndex(sqlite_file, keep_open=False)
+        writer.log_event({"type": "before", "ts": 1})
+        writer.close()
+
+        assert not sqlite_file.with_name("log.sqlite-wal").exists()
+        assert not sqlite_file.with_name("log.sqlite-shm").exists()
+
+        reader = SQLiteEventIndex(sqlite_file, ensure=False)
+        try:
+            assert reader.query("SELECT type FROM events ORDER BY ts") == [{"type": "before"}]
+
+            later_writer = SQLiteEventIndex(sqlite_file, keep_open=False)
+            later_writer.log_event({"type": "after", "ts": 2})
+            later_writer.close()
+
+            assert reader.query("SELECT type FROM events ORDER BY ts") == [
+                {"type": "before"},
+                {"type": "after"},
+            ]
+        finally:
+            reader.close()
 
     def test_query_accepts_read_only_cte_and_explain(self, tmp_path):
         index = SQLiteEventIndex(tmp_path / "logs" / "log.sqlite")
