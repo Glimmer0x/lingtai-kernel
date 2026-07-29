@@ -159,6 +159,12 @@ _SCHEMA_FAMILY = _schema_only_family()
 
 def wechat_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
+    # check/contacts/accounts/manual all publish an empty-object branch, so a
+    # oneOf discovery list makes {} match more than one branch and native
+    # JSON-Schema validators reject a valid zero-input call. The root allOf
+    # discriminator still correlates each action to its exact closed branch;
+    # use anyOf for the discovery list, mirroring telegram_schema().
+    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "send: send a message to a WeChat user "
         "(user_id, text; optional media_path for file/image/voice/video). "

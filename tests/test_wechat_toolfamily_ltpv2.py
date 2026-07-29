@@ -429,3 +429,198 @@ def test_openai_responses_scrub_preserves_family_root_and_action_branches():
     assert wire["properties"]["input"]["anyOf"] or wire["properties"]["input"]["oneOf"]
     assert len(wire["allOf"]) == len(WECHAT_ACTIONS)
     assert wire["additionalProperties"] is False
+
+
+# ---------------------------------------------------------------------------
+# B3 regression: check/contacts/accounts/manual all publish an empty-object
+# input branch, so a oneOf discovery list makes {} match more than one
+# branch — the same "instance is valid under each of ..." collision the
+# telegram schema documents. The published discovery list must be anyOf, not
+# oneOf, even though the root allOf/if/then still discriminates by action.
+# ---------------------------------------------------------------------------
+
+def test_input_discovery_branch_is_anyof_not_oneof():
+    assert "oneOf" not in WECHAT_SCHEMA["properties"]["input"]
+    assert "anyOf" in WECHAT_SCHEMA["properties"]["input"]
+
+
+def test_zero_input_action_schema_is_decisive_not_ambiguous():
+    """{} legitimately satisfies all four empty-object branches at once
+    (check/contacts/accounts/manual). Under oneOf that is an ambiguous
+    "matches more than one schema" rejection; under anyOf it is a clean,
+    decisive accept — exactly what a real MCP client validating against the
+    published discovery schema needs for a zero-input action to be usable."""
+    branches = WECHAT_SCHEMA["properties"]["input"]["anyOf"]
+    empty_branches = [b for b in branches if b.get("properties") == {}]
+    assert {b["title"] for b in empty_branches} == {
+        "check input", "contacts input", "accounts input", "manual input",
+    }
+    matches = sum(1 for b in empty_branches if _basic_validate({}, b))
+    assert matches == len(empty_branches) == 4
+
+
+# ---------------------------------------------------------------------------
+# B1 regression: the public server must route every call through
+# handle_wechat (family validation), never call manager.handle directly.
+# A retired flat send (pre-LTPv2 shape) and a partial envelope (input
+# present, reasoning missing) must both be rejected before any manager I/O;
+# a proper strict envelope must still route through to the manager exactly
+# once. Driven through the real in-memory MCP transport (mcp.Client +
+# build_server), mirroring test_telegram_terra_repairs.py's _call_tool —
+# no network I/O.
+# ---------------------------------------------------------------------------
+
+def test_server_routes_through_family_validation_not_manager_handle_directly(tmp_path):
+    import anyio
+    import mcp.types as types
+    from mcp import Client
+
+    from lingtai.mcp_servers.wechat.server import build_server
+
+    class _FakeManager:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def handle(self, args: dict) -> dict:
+            self.calls.append(dict(args))
+            return {"status": "ok", "action": args.get("action")}
+
+    manager = _FakeManager()
+    server = build_server(manager)
+
+    def _payload(result):
+        block = result.content[0]
+        assert isinstance(block, types.TextContent)
+        import json as _json
+        return _json.loads(block.text)
+
+    async def _call(arguments: dict):
+        async with Client(server) as client:
+            return await client.call_tool("wechat", arguments)
+
+    # Retired flat send envelope (no "input"/"reasoning") — must never reach
+    # manager.handle, which would otherwise perform a real send.
+    retired_flat = {"action": "send", "user_id": "wxid_x", "text": "hi"}
+    result = anyio.run(_call, retired_flat)
+    payload = _payload(result)
+    assert payload["status"] == "failed"
+    assert manager.calls == []
+
+    # Partial envelope: "input" present but "reasoning" missing — must be
+    # rejected by family validation, not silently accepted by manager.handle.
+    partial = {"action": "send", "input": {"user_id": "wxid_x", "text": "hi"}}
+    result = anyio.run(_call, partial)
+    payload = _payload(result)
+    assert payload["status"] == "failed"
+    assert manager.calls == []
+
+    # Proper strict envelope: must still route through to the manager once.
+    strict = {
+        "action": "send",
+        "input": {"user_id": "wxid_x", "text": "hi"},
+        "reasoning": "transport regression test",
+    }
+    result = anyio.run(_call, strict)
+    payload = _payload(result)
+    assert payload == {"status": "ok", "action": "send"}
+    assert manager.calls == [{"action": "send", "user_id": "wxid_x", "text": "hi"}]
+
+
+def test_server_manager_none_branch_routes_through_handle_wechat_first(tmp_path):
+    """The manager-None branch must call handle_wechat(None, arguments) first
+    (mirroring the telegram server) and only fall back to the static
+    startup-error dict when that returns falsy — never skip family
+    validation just because the manager failed to start."""
+    import anyio
+    import mcp.types as types
+    from mcp import Client
+
+    from lingtai.mcp_servers.wechat.server import build_server
+
+    server = build_server(
+        None, startup_error="boom", startup_error_type="RuntimeError",
+    )
+
+    def _payload(result):
+        block = result.content[0]
+        assert isinstance(block, types.TextContent)
+        import json as _json
+        return _json.loads(block.text)
+
+    async def _call(arguments: dict):
+        async with Client(server) as client:
+            return await client.call_tool("wechat", arguments)
+
+    # Malformed envelope (missing reasoning) must be rejected as a schema
+    # failure, not swallowed into the generic "manager not initialized"
+    # startup-error fallback.
+    result = anyio.run(_call, {"action": "send", "input": {"user_id": "x", "text": "hi"}})
+    payload = _payload(result)
+    assert payload["status"] == "failed"
+    assert payload.get("error_code") == "INVALID_ARGUMENT"
+    assert "startup_error_type" not in payload
+
+    # A well-formed envelope with no manager falls back to the startup-error
+    # payload (handle_wechat(None, ...) routes to child handlers that return
+    # {} when manager is None, which is falsy).
+    result = anyio.run(_call, {
+        "action": "accounts", "input": {}, "reasoning": "probe",
+    })
+    payload = _payload(result)
+    assert payload["status"] == "error"
+    assert payload["startup_error_type"] == "RuntimeError"
+    assert payload["startup_error"] == "boom"
+
+
+def test_server_legacy_status_probe_survives_family_validation_when_manager_none(tmp_path):
+    """Regression: {"action": "status"} is a legacy pre-LTP-v2 startup
+    diagnostic probe, not a real wechat action ("status" is not in
+    WECHAT_ACTIONS). Routing manager-None calls through handle_wechat first
+    made this probe collide with action validation (ACTION_REQUIRED), which
+    is truthy and so silently ate the startup_error_type/startup_error
+    contract callers rely on for concrete remediation (e.g. PollerLockBusy).
+    The probe must reach the startup-error payload directly, before family
+    validation — while a genuinely malformed or retired-shape call for a
+    real action must still be rejected by family validation first."""
+    import anyio
+    import mcp.types as types
+    from mcp import Client
+
+    from lingtai.mcp_servers.wechat.server import build_server
+
+    server = build_server(
+        None, startup_error="poller lock busy", startup_error_type="PollerLockBusy",
+    )
+
+    def _payload(result):
+        block = result.content[0]
+        assert isinstance(block, types.TextContent)
+        import json as _json
+        return _json.loads(block.text)
+
+    async def _call(arguments: dict):
+        async with Client(server) as client:
+            return await client.call_tool("wechat", arguments)
+
+    # The legacy startup probe: concrete startup detail must survive.
+    result = anyio.run(_call, {"action": "status"})
+    payload = _payload(result)
+    assert payload["status"] == "error"
+    assert payload["startup_error_type"] == "PollerLockBusy"
+    assert payload["startup_error"] == "poller lock busy"
+
+    # A retired flat send for a real action must still be family-validated
+    # and rejected — the status-probe carve-out must not widen into a
+    # general bypass for manager-None calls.
+    result = anyio.run(_call, {"action": "send", "user_id": "wxid_x", "text": "hi"})
+    payload = _payload(result)
+    assert payload["status"] == "failed"
+    assert "startup_error_type" not in payload
+
+    # An unknown action that merely resembles the probe is still rejected by
+    # family validation, not silently answered with startup detail.
+    result = anyio.run(_call, {"action": "not_a_real_action", "input": {}, "reasoning": "x"})
+    payload = _payload(result)
+    assert payload["status"] == "failed"
+    assert payload.get("error_code") == "ACTION_REQUIRED"
+    assert "startup_error_type" not in payload

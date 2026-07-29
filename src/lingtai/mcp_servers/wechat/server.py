@@ -52,6 +52,7 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from . import api
+from ._family import handle_wechat
 from .licc import push_inbox_event
 from .manager import WechatManager, SCHEMA, DESCRIPTION
 
@@ -885,12 +886,13 @@ def build_server(
         if params.name != "wechat":
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
-        if manager is None:
+
+        def _startup_error_result() -> dict[str, Any]:
             # Surface the actual startup exception type + message so the
             # agent/operator sees concrete remediation (e.g. PollerLockBusy
             # with ps/kill hints) instead of just "check stderr". stderr is
             # not always visible at the moment a tool call returns.
-            result = {
+            return {
                 "status": "error",
                 "error": (
                     "WeChat manager not initialized — server boot failed. "
@@ -901,15 +903,28 @@ def build_server(
                 "startup_error_type": startup_error_type,
                 "startup_error": startup_error,
             }
-        else:
-            try:
-                result = await asyncio.to_thread(manager.handle, arguments)
-            except Exception as e:
-                result = {
-                    "status": "error",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                }
+
+        try:
+            if manager is None and arguments.get("action") == "status":
+                # Legacy pre-LTP-v2 startup-diagnostic probe: "status" was
+                # never a real wechat action, so it can only ever reach here
+                # (no manager means no I/O risk either way). Answer directly,
+                # before family validation, so this diagnostic contract
+                # survives independently of it — handle_wechat would reject
+                # "status" as an unknown action and mask the startup detail.
+                result = _startup_error_result()
+            elif manager is None:
+                result = handle_wechat(None, arguments)
+                if not result:
+                    result = _startup_error_result()
+            else:
+                result = await asyncio.to_thread(handle_wechat, manager, arguments)
+        except Exception as e:
+            result = {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
         return _tool_result(result)
 
     server: Server = Server(
