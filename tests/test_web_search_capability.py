@@ -56,7 +56,7 @@ def test_web_manager_uses_search_service():
     result = mgr.handle({"action": "search", "input": {"query": "test"}})
     assert result["status"] == "ok"
     assert result["results"][0]["title"] == "Result"
-    mock_svc.search.assert_called_once_with("test")
+    mock_svc.search.assert_called_once_with("test", max_results=None)
 
 
 def test_web_service_exception():

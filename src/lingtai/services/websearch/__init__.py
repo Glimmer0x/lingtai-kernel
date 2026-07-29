@@ -54,12 +54,15 @@ class SearchService(ABC):
     """
 
     @abstractmethod
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+    def search(self, query: str, max_results: int | None = 5) -> list[SearchResult]:
         """Search the web and return results.
 
         Args:
             query: Search query string.
-            max_results: Maximum number of results to return.
+            max_results: Maximum number of results to request from the
+                provider, or ``None`` for no LingTai-imposed count cap (the
+                provider's own native finite result count still applies,
+                where the provider has one).
 
         Returns:
             List of search results.

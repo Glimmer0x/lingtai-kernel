@@ -6,16 +6,25 @@ internal adapters, while the tested browser Core/Port stays in
 """
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
-from itertools import islice
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
-from .settings import SettingsSnapshot, current_setting, read_settings, valid_engine_name
+from ._spill import spill_if_over_threshold
+from .settings import (
+    OutputSettingsSnapshot,
+    SettingsSnapshot,
+    current_setting,
+    read_output_settings,
+    read_settings,
+    valid_engine_name,
+)
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -143,7 +152,7 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
             "type": ["integer", "null"],
             "minimum": 1,
             "maximum": 100000,
-            "description": "Maximum returned characters, or null for the default 12000.",
+            "description": "Per-call override of the inline-vs-artifact delivery threshold; null uses the shared settings/web.json setting (default 50000). The complete document is always delivered, inline or as an artifact.",
         },
     },
     "required": ["url", "link_ref", "cursor", "extract", "max_chars"],
@@ -276,7 +285,19 @@ class WebManager:
             return "credential_missing"
         return "unavailable"
 
-    def _diagnostics(self, snapshot: SettingsSnapshot) -> dict[str, Any]:
+    @staticmethod
+    def _output_setting_block(snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
+        block: dict[str, Any] = {
+            "value": snapshot.max_chars,
+            "source": snapshot.source,
+            "settings_revision": snapshot.revision,
+            "settings_hash": snapshot.digest,
+        }
+        if snapshot.error:
+            block["settings_error"] = snapshot.error
+        return block
+
+    def _diagnostics(self, snapshot: SettingsSnapshot, output_snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
         statuses = {
             name: (
                 "initialization_failed"
@@ -289,6 +310,7 @@ class WebManager:
         if self._legacy_fallback_from:
             block["legacy_fallback_from"] = self._legacy_fallback_from[:64]
             block["legacy_fallback"] = "operator-config-only"
+        block["output_max_chars"] = self._output_setting_block(output_snapshot)
         return block
 
     def _default_engine_now(self) -> str | None:
@@ -312,18 +334,34 @@ class WebManager:
             return None
         return self._default_engine
 
-    def _resolve(self) -> tuple[str | None, SettingsSnapshot, dict[str, Any]]:
+    def _resolve_output_settings(self) -> OutputSettingsSnapshot:
+        # Shared by search and browse: both actions consume the same
+        # family-owned settings/web.json snapshot for the same call. Manual
+        # must never call this — it stays zero-settings-I/O.
+        return read_output_settings(self._agent)
+
+    def _resolve(self) -> tuple[str | None, SettingsSnapshot, OutputSettingsSnapshot, dict[str, Any]]:
         snapshot = read_settings(
             self._agent, self._specs, self._default_engine_now(), self._default_source
         )
-        return snapshot.engine, snapshot, self._diagnostics(snapshot)
+        output_snapshot = self._resolve_output_settings()
+        return snapshot.engine, snapshot, output_snapshot, self._diagnostics(snapshot, output_snapshot)
 
     def _no_settings_diagnostic(self) -> dict[str, Any]:
-        # Only ``search`` owns and reads settings/web.search.json. Every other
-        # action (and any pre-dispatch validation failure) reports a truthful
-        # synthetic snapshot without ever touching that file.
+        # Zero-settings-I/O diagnostic: used by manual (which never reads
+        # either settings file) and by every envelope-level/pre-dispatch
+        # failure path (invalid argument, unknown action) that never reaches
+        # a real action handler. Neither settings/web.search.json nor
+        # settings/web.json is read to build this block.
         snapshot = SettingsSnapshot(None, "not_applicable", "not_read", None)
-        return self._diagnostics(snapshot)
+        output_snapshot = OutputSettingsSnapshot(None, "not_applicable", "not_read", None)
+        return self._diagnostics(snapshot, output_snapshot)
+
+    def _browse_diagnostic(self, output_snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
+        # Browse never reads settings/web.search.json (engine selection is a
+        # search-only concern) but does read the shared settings/web.json.
+        snapshot = SettingsSnapshot(None, "not_applicable", "not_read", None)
+        return self._diagnostics(snapshot, output_snapshot)
 
     def _failure(self, action: str, snapshot: SettingsSnapshot | None, diagnostic: dict[str, Any], code: str, message: str, **extra: Any) -> dict[str, Any]:
         result = {"status": "failed", "action": action, "error_code": code, "message": message, "current_setting": diagnostic}
@@ -363,13 +401,19 @@ class WebManager:
         return (str(getattr(item, "title", "")), str(getattr(item, "url", "")), str(getattr(item, "snippet", "")))
 
     def _run_service(self, service: Any, query: str) -> list[dict[str, str]]:
-        raw_results = service.search(query)
+        # ``max_results=None`` and no local slicing/per-field truncation: the
+        # locked complete-output contract forbids any LingTai-imposed
+        # result-count cap or character slice on provider-returned text.
+        # ``SearchService.search`` is contracted to return a finite list
+        # (services/websearch/__init__.py), so no local iteration ceiling is
+        # needed here either — provider/service deadlines and fail-loud
+        # cancellation are the only operational bound.
+        raw_results = service.search(query, max_results=None)
         if raw_results is None:
             raw_results = []
         results: list[dict[str, str]] = []
-        for item in islice(iter(raw_results), 20):
+        for item in raw_results:
             title, url, snippet = self._result_fields(item)
-            title, url, snippet = title[:512], url[:2048], snippet[:2000]
             if not url:
                 # No official source URL for this item (e.g. a provider's
                 # bounded synthesized-narrative fallback result with no
@@ -398,7 +442,9 @@ class WebManager:
         except Exception as exc:
             return [], type(exc).__name__[:64]
 
-    def _openai_duckduckgo_fallback(self, query: str, openai_failure_class: str, diagnostic: dict[str, Any]) -> dict[str, Any]:
+    def _openai_duckduckgo_fallback(
+        self, query: str, openai_failure_class: str, output_snapshot: OutputSettingsSnapshot, diagnostic: dict[str, Any]
+    ) -> dict[str, Any]:
         ddg_results, ddg_failure_class = self._duckduckgo_fallback(query)
         if ddg_failure_class is not None:
             return {
@@ -408,18 +454,30 @@ class WebManager:
                 "openai_failure_class": openai_failure_class, "duckduckgo_failure_class": ddg_failure_class,
             }
         comment = f"# OpenAI web search failed ({openai_failure_class}); DuckDuckGo was used as the fallback."
-        return {
+        payload = {
             "status": "ok", "action": "search", "query": query[:2000],
             "comment": comment,
             "engine": "openai", "actual_engine": "duckduckgo",
             "openai_failure_class": openai_failure_class,
             "results": ddg_results, "count": len(ddg_results), "current_setting": diagnostic,
         }
+        return self._deliver_search(payload, output_snapshot)
 
-    def _search(self, args: dict[str, Any], snapshot: SettingsSnapshot, diagnostic: dict[str, Any]) -> dict[str, Any]:
+    def _search(
+        self,
+        args: dict[str, Any],
+        snapshot: SettingsSnapshot,
+        output_snapshot: OutputSettingsSnapshot,
+        diagnostic: dict[str, Any],
+    ) -> dict[str, Any]:
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
             return self._failure("search", snapshot, diagnostic, "INVALID_QUERY", "query must be a non-empty string")
+        if output_snapshot.error:
+            return self._failure(
+                "search", snapshot, diagnostic, "WEB_OUTPUT_SETTINGS_INVALID",
+                "settings/web.json is invalid; no search was performed",
+            )
         name = snapshot.engine
         if snapshot.error:
             return self._failure("search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", "settings/web.search.json is invalid; no search engine was selected")
@@ -456,15 +514,16 @@ class WebManager:
             # `_service_for` records a bounded internal failure marker. Rebuild
             # diagnostics so this same result does not contradict its error by
             # still advertising the engine as available.
-            diagnostic = self._diagnostics(snapshot)
+            diagnostic = self._diagnostics(snapshot, output_snapshot)
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine could not be initialized")
         try:
             results = self._run_service(service, query)
-            return {
+            payload = {
                 "status": "ok", "action": "search", "query": query[:2000],
                 "engine": name, "actual_engine": name, "results": results,
                 "count": len(results), "current_setting": diagnostic,
             }
+            return self._deliver_search(payload, output_snapshot)
         except Exception as exc:
             from lingtai.services.websearch import SearchProviderError
             from lingtai.services.websearch.openai import OpenAISearchError
@@ -478,7 +537,7 @@ class WebManager:
                 # defect, not a provider failure, and falls through to the
                 # generic SEARCH_FAILED return below — never silently
                 # retried against DuckDuckGo.
-                return self._openai_duckduckgo_fallback(query, exc.failure_class, diagnostic)
+                return self._openai_duckduckgo_fallback(query, exc.failure_class, output_snapshot, diagnostic)
             if isinstance(exc, SearchProviderError):
                 # A typed Anthropic/Gemini (or any other) provider failure —
                 # including Anthropic's official in-body HTTP-200
@@ -494,6 +553,51 @@ class WebManager:
             # A non-provider exception (a manager/programming defect) fails
             # the same way but carries no provider-specific failure class.
             return self._failure("search", snapshot, diagnostic, "SEARCH_FAILED", "the selected search engine failed")
+
+    def _deliver_search(self, payload: dict[str, Any], output_snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
+        assert output_snapshot.max_chars is not None  # guarded by the caller's output_snapshot.error check
+        results = payload["results"]
+        serialized = json.dumps(results, ensure_ascii=False, indent=2)
+        working_dir = Path(self._agent._working_dir)
+        artifact = spill_if_over_threshold(
+            content=serialized,
+            output_setting=output_snapshot,
+            working_dir=working_dir,
+            action="search",
+            content_scope="provider_response",
+            content_kind="search_results",
+            format="json",
+            extra={
+                "query": payload["query"],
+                "engine": payload["engine"],
+                "actual_engine": payload["actual_engine"],
+            },
+        )
+        if artifact is None:
+            payload["delivery"] = "inline"
+            payload["content_chars"] = len(serialized)
+            return payload
+        if artifact.get("status") == "failed":
+            failure = {
+                "status": "failed", "action": "search", "error_code": "ARTIFACT_WRITE_FAILED",
+                "message": artifact["message"], "current_setting": payload["current_setting"],
+                "query": payload["query"], "engine": payload["engine"],
+            }
+            return failure
+        spilled: dict[str, Any] = {
+            "status": "ok", "action": "search", "query": payload["query"],
+            "engine": payload["engine"], "actual_engine": payload["actual_engine"],
+            "count": payload["count"], "current_setting": payload["current_setting"],
+        }
+        for key in ("comment", "openai_failure_class"):
+            # The OpenAI->DuckDuckGo fallback promises a top-level comment
+            # and bounded openai_failure_class with no spill carve-out
+            # (CONTRACT.md, runtime-fallback section): informed substitution
+            # must survive the artifact envelope, not just the inline one.
+            if key in payload:
+                spilled[key] = payload[key]
+        spilled.update(artifact)
+        return spilled
 
     def manual(self, diagnostic: dict[str, Any]) -> dict[str, Any]:
         # This path never reads settings/web.search.json and performs no
@@ -535,18 +639,127 @@ class WebManager:
 
     def _dispatch_search(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
         dispatch_args = self._strip_nulls(action_input)
-        _, snapshot, diagnostic = self._resolve()
-        return self._search(dispatch_args, snapshot, diagnostic)
+        _, snapshot, output_snapshot, diagnostic = self._resolve()
+        return self._search(dispatch_args, snapshot, output_snapshot, diagnostic)
 
     def _dispatch_browse(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
         browse_args = self._strip_nulls(action_input)
+        output_snapshot = self._resolve_output_settings()
+        if output_snapshot.error:
+            diagnostic = self._browse_diagnostic(output_snapshot)
+            return self._failure(
+                "browse", None, diagnostic, "WEB_OUTPUT_SETTINGS_INVALID",
+                "settings/web.json is invalid; no browse was performed",
+            )
+        # A present ``max_chars`` is validated by ``BrowserEngine`` itself
+        # (its own 1..100000 range, via ``validate_max_chars``) before any
+        # call can succeed; if invalid, the call fails with
+        # ``INVALID_MAX_CHARS`` below and this override is never applied.
+        # Absent/None keeps the shared setting; present overrides the
+        # delivery threshold for this call only, per the locked contract.
+        call_override = browse_args.get("max_chars")
+        delivery_snapshot = (
+            output_snapshot if call_override is None
+            # The override value comes from this call's own validated input,
+            # not from settings/web.json, so it must not carry that file's
+            # revision/hash forward — those describe the *shared* setting
+            # state, which this call is deliberately not using.
+            else replace(
+                output_snapshot, max_chars=call_override, source="call_override",
+                revision="call_override", digest=None,
+            )
+        )
+        diagnostic = self._browse_diagnostic(delivery_snapshot)
         try:
             result = self._engine.handle(browse_args)
         except Exception:
             result = {"status": "failed", "error_code": "BROWSE_FAILED", "message": "browse failed safely"}
         result["action"] = "browse"
-        result["current_setting"] = self._no_settings_diagnostic()
+        result["current_setting"] = diagnostic
+        if result.get("status") == "ok":
+            result = self._deliver_browse(result, delivery_snapshot)
         return result
+
+    def _deliver_browse(self, result: dict[str, Any], output_snapshot: OutputSettingsSnapshot) -> dict[str, Any]:
+        assert output_snapshot.max_chars is not None  # guarded by the caller's output_snapshot.error check
+        snapshot = self._engine.snapshots.get(result["snapshot_id"])
+        if snapshot is None:
+            # The snapshot was evicted between the engine's fetch/continue
+            # success and this delivery decision (only possible under
+            # extreme concurrent pressure on the tiny max_snapshots LRU).
+            # The locked complete-output policy forbids ever returning a
+            # partial/first-page body, so falling back to the engine's own
+            # paginated result (which may carry partial=true/next_cursor)
+            # would silently violate it. Fail loud instead: this is a typed,
+            # explicit failure, not a degraded success.
+            return {
+                "status": "failed", "action": "browse",
+                "error_code": "BROWSE_SNAPSHOT_UNAVAILABLE",
+                "message": (
+                    "The fetched page snapshot was no longer available when "
+                    "building the complete delivery response; no partial or "
+                    "cached content was returned."
+                ),
+                "current_setting": result["current_setting"],
+                "request_id": result.get("request_id"), "snapshot_id": result.get("snapshot_id"),
+            }
+        complete_text = "".join(block.text for block in snapshot.blocks)
+        structured_blocks = [{"id": b.id, "kind": b.kind, "text": b.text} for b in snapshot.blocks]
+        # The threshold decision must be measured against the exact canonical
+        # serialization of what would actually be returned inline — the
+        # structured `blocks` array — not the compact joined-text artifact
+        # file representation. Many small blocks accumulate substantial JSON
+        # field/structure overhead per block, so the structured serialization
+        # can be many times larger than the plain joined text even though the
+        # file (written below, if spilled) stays the smaller plain-text form.
+        structured_chars = len(json.dumps(structured_blocks, ensure_ascii=False))
+        working_dir = Path(self._agent._working_dir)
+        artifact = spill_if_over_threshold(
+            content=complete_text,
+            decision_chars=structured_chars,
+            decision_basis="structured_blocks",
+            output_setting=output_snapshot,
+            working_dir=working_dir,
+            action="browse",
+            content_scope="fetched_static_document",
+            content_kind="page_text",
+            format="text",
+            extra={
+                "requested_url": result.get("requested_url"),
+                "final_url": result.get("final_url"),
+            },
+        )
+        if artifact is None:
+            # A fresh Browse success must never deliver only a prefix/first
+            # page: replace the engine's internally-paginated window with the
+            # complete block set and clear pagination fields, so "inline"
+            # always means the whole document, not whichever slice the
+            # per-call max_chars pagination window happened to produce.
+            result = dict(result)
+            result["blocks"] = structured_blocks
+            result["partial"] = False
+            result["next_cursor"] = None
+            result["returned_chars"] = len(complete_text)
+            result["delivery"] = "inline"
+            result["content_chars"] = structured_chars
+            return result
+        if artifact.get("status") == "failed":
+            return {
+                "status": "failed", "action": "browse", "error_code": "ARTIFACT_WRITE_FAILED",
+                "message": artifact["message"], "current_setting": result["current_setting"],
+                "request_id": result.get("request_id"), "snapshot_id": result.get("snapshot_id"),
+            }
+        # Cursor/pagination concepts stop applying once the complete document
+        # is available in one artifact: omit blocks/partial/next_cursor/
+        # returned_chars rather than mixing a spilled envelope with a
+        # continuable-but-partial inline shape.
+        spilled: dict[str, Any] = {
+            key: value
+            for key, value in result.items()
+            if key not in {"blocks", "partial", "next_cursor", "returned_chars"}
+        }
+        spilled.update(artifact)
+        return spilled
 
     def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
         # The generic ``ToolFamily`` dispatcher validates ``action``,

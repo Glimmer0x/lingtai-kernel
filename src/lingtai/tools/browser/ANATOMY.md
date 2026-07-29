@@ -44,7 +44,12 @@ public `web` manager. It is deliberately not registered independently.
 
 `web_search.WebManager` constructs one engine and dispatches browse calls to it.
 The engine calls only `BrowserPort`; the adapter is selected by the composition
-root. SearchService and settings selection remain sibling concerns.
+root. SearchService and settings selection remain sibling concerns. After a
+successful `handle()` call, `WebManager._deliver_browse` also reads the
+resulting snapshot back out of `self.snapshots` (by `snapshot_id`) to obtain
+the complete joined block text for the inline-vs-artifact delivery decision;
+this is a read-only lookup on the engine's own snapshot store, not a new
+Core/Port boundary.
 
 ## Composition
 

@@ -1,12 +1,13 @@
 ---
 name: web
-contract_version: 4
+contract_version: 6
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
+  - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
@@ -16,6 +17,8 @@ related_files:
   - src/lingtai/services/websearch/anthropic.py
   - src/lingtai/services/websearch/gemini.py
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/tool_result_artifacts.py
+  - src/lingtai/kernel/workdir.py
   - src/lingtai/tools/tool_family/CONTRACT.md
 maintenance: |
   Keep this unified web Contract and its Anatomy reciprocal. Keep the manual
@@ -41,13 +44,28 @@ using it changed no observable promise in this file.
 ## Behavior
 
 Search rereads the action-owned `settings/web.search.json` selector on every
-call; browse and manual read no settings file. Search returns bounded
-structured results and same-Agent `link_ref` handles. Browse consumes a URL or
-a search/browse reference through the same BrowserEngine state. Manual returns
-the installed web-manual without provider construction or network I/O. All
-success and failure envelopes include `action` and a bounded secret-free
-`current_setting` block. Explicit `engine` and irrelevant action fields fail
-loudly. `web`'s own schema (via `ToolFamily.build_schema()`) declares a
+call; browse and manual read no settings file at that path. Search and browse
+both also reread the shared family-owned `settings/web.json` output-delivery
+threshold on every call (`max_chars`, default 50000); manual reads neither
+settings file. Search returns the complete result set the selected provider
+returned for this call — no LingTai-imposed result-count cap and no
+per-field truncation of provider-returned text — with same-Agent `link_ref`
+handles on every URL-bearing result; a synthesized or otherwise URL-less
+result stays in the result set without a `link_ref`. Browse consumes a URL
+or a search/browse reference through the same BrowserEngine state and
+always delivers the complete extracted document for that fetch, never only
+a first page. At or below the effective `max_chars` threshold, both actions
+return the complete content inline. Above it, both atomically spill the
+complete content to a workdir-relative artifact file under the canonical
+`<agent-workdir>/tmp/tool-results/` directory (the same directory the
+generic preventive spill already owns) and return a compact envelope with
+no content preview — see "Output delivery" below. Manual returns the installed
+web-manual without provider construction or network I/O. All success and
+failure envelopes include `action` and a bounded secret-free
+`current_setting` block, which now also carries `output_max_chars` (the
+resolved shared-setting value, source, and — on error — a bounded diagnostic).
+Explicit `engine` and irrelevant action fields fail loudly. `web`'s own schema
+(via `ToolFamily.build_schema()`) declares a
 top-level, REQUIRED `reasoning` string property — Host InvocationContext/
 audit metadata — with the same description Agent schema composition also
 re-injects into every tool's `properties` uniformly (that central injection
@@ -221,18 +239,33 @@ above.
 - Settings v1 is the direct, action-owned strict schema
   `{"schema_version":1,"engine":"<admitted-name>"}`, read from
   `settings/web.search.json` (a direct child of `<agent-dir>/settings/`; no
-  nested `search` object). There is no family-owned `settings/web.json`, no
-  `settings/web.browse.json` or `settings/web.manual.json`, no cross-read of
-  any old or sibling settings path, and no compatibility fallback, overlay, or
-  merge. Only an operator-admitted engine name is permitted. Missing files use
-  the operator/built-in default; malformed, unknown, disallowed, unavailable,
-  or credential-missing selections fail search without substitution. Invalid
+  nested `search` object). There is no `settings/web.browse.json` or
+  `settings/web.manual.json`, no cross-read of any old or sibling settings
+  path, and no compatibility fallback, overlay, or merge between
+  `settings/web.search.json` and `settings/web.json` (below). Only an
+  operator-admitted engine name is permitted. Missing files use the
+  operator/built-in default; malformed, unknown, disallowed, unavailable, or
+  credential-missing selections fail search without substitution. Invalid
   settings use error code `WEB_SETTINGS_INVALID`; a selected or
   initialization-unavailable engine uses `SEARCH_ENGINE_UNAVAILABLE`; a
   selected Anthropic/Gemini engine on a non-canonical backend uses
   `PROVIDER_BACKEND_INELIGIBLE`. Browse and manual remain fully usable —
   including when `settings/web.search.json` is invalid — and never construct
   a search provider.
+- `settings/web.json` is a separate, family-owned strict schema
+  `{"schema_version":1,"max_chars":<integer 1..100000>}`, default
+  `max_chars` 50000, consumed identically by `search` and `browse` for the
+  same call's inline-vs-artifact delivery decision. Manual never reads it.
+  Missing file uses the default; a present malformed/unknown-field/
+  wrong-schema-version/non-integer/boolean/out-of-range value fails loud with
+  error code `WEB_OUTPUT_SETTINGS_INVALID` before any provider call or page
+  fetch — never clamped, coerced, or silently defaulted. Browse's existing
+  nullable per-call `input.max_chars` (unchanged 1..100000 range) may still
+  override the shared setting for that call only; it no longer selects a
+  pagination page size but the delivery threshold. Every search/browse
+  success and failure envelope's `current_setting.output_max_chars` echoes
+  the effective value, its source (`default` / `settings/web.json` /
+  `call_override`), and a bounded diagnostic on error.
 - Settings reads reject symlinks, non-regular files, unstable snapshots,
   oversize/wrong-UTF-8 data, unknown fields, duplicate fields, and wrong
   schema. A changed file is observed on the next call (hot-read, no caching).
@@ -241,11 +274,26 @@ above.
   changes apply on the next web call; use web(action='manual', input={},
   reasoning='load web guidance') for schema.`; secrets and absolute paths never
   appear.
-- Search results are bounded `{title,url,snippet,link_ref}` objects with count
-  and actual engine. References are same-Agent handles accepted by browse.
-  `link_ref` is `null` only for the one bounded citation-free narrative
-  result a canonical provider may legally return; every result with a real
-  `url` gets a real `link_ref`, never a fabricated one for an empty `url`.
+- Search results are `{title,url,snippet}` objects, plus `link_ref` on any
+  result carrying a usable HTTP(S) `url`; a synthesized or URL-less result is
+  preserved in the result set without `link_ref`. `link_ref` is `null` only
+  for the one bounded citation-free narrative result a canonical provider
+  may legally return; every result with a real `url` gets a real `link_ref`,
+  never a fabricated one for an empty `url`. `title`/`url`/`snippet` are the
+  exact finite strings the selected provider returned — no LingTai-imposed
+  per-field character slice and no LingTai-imposed result-count cap: `count`
+  reflects the true, uncapped number of results the selected provider
+  returned for that call. Provider adapters receive no LingTai count request
+  in this mode (`max_results=None`, or the provider's own request parameter
+  omitted where supported); a provider's own native finite result limit is
+  unchanged and reported as provider-native metadata, never as a global
+  completeness or total claim. `SearchService.search` is contracted to
+  return a finite list (the `SearchService` ABC docstring in
+  `services/websearch/__init__.py`, recorded in `services/websearch/ANATOMY.md`); there is no
+  LingTai-side iteration ceiling or partial-success shape defending against
+  an out-of-contract non-terminating iterable — provider/service call
+  deadlines and fail-loud cancellation are the only operational bound,
+  exactly as the provider boundary already requires.
 - Composing `web` with a retired provider (`minimax`, `zhipu`) via
   `provider=`, `default_engine=`, or `engines={}` raises
   `RetiredProviderError` at `setup()` time. Composing with a settings-only
@@ -258,7 +306,81 @@ above.
   injection) without that composition selecting either as the default.
 - Browse remains static public HTTP(S) only with its existing SSRF/DNS,
   extraction, provenance, cursor, snapshot, deadline, and typed-failure rules,
-  and stays provider/network independent of the search settings file.
+  and stays provider/network independent of the search settings file (though
+  it shares `settings/web.json` with search). A fresh Browse success always
+  delivers the complete extracted document for that fetch — never only a
+  first page — and never mints a `next_cursor`. An existing `cursor` input is
+  still accepted only as a compatibility locator for the cached snapshot; it
+  resolves without a refetch but returns the same complete-document delivery
+  policy, never another partial page. If the fetched/continued snapshot is no
+  longer resolvable when the delivery decision runs (only possible under
+  extreme concurrent pressure evicting the tiny process-local snapshot LRU
+  between the engine's success and this decision), Browse fails loud with
+  `error_code: "BROWSE_SNAPSHOT_UNAVAILABLE"` rather than falling back to the
+  engine's own internally-paginated page — a partial/first-page body with
+  `partial`/`next_cursor` would silently violate the complete-output policy
+  above, so no degraded "best effort" success is ever returned here.
+- Above the effective `output_max_chars` threshold, both `search` and
+  `browse` atomically write the exact complete canonical content (never a
+  truncated prefix) to a workdir-relative file under the canonical
+  `<agent-workdir>/tmp/tool-results/` directory and return a compact
+  artifact envelope in place of the inline body: `delivery: "artifact"`,
+  `artifact` (the namespaced marker `lingtai_web_output_artifact/v1`),
+  `content_scope` (`provider_response` for search, `fetched_static_document`
+  for browse), `content_kind`, `format`/`encoding`, `file_path`
+  (workdir-relative only, readable via the existing public `file.read`
+  tool), exact `content_chars` and `content_sha256` of the artifact file,
+  `output_setting_source`/`output_setting_revision`/`output_setting_hash`
+  (the shared setting state that produced this threshold), and an explicit
+  instruction that the artifact is the complete result with nothing
+  omitted. Search's `results` array and Browse's
+  `blocks`/`partial`/`next_cursor`/`returned_chars` are omitted entirely
+  when spilled — never a lossy subset alongside the artifact. Inline
+  (at-or-below-threshold) responses add `delivery: "inline"` and
+  `content_chars` but otherwise keep every existing successful field. An
+  artifact write failure returns `status: "failed"`, `error_code:
+  "ARTIFACT_WRITE_FAILED"` — never a silent fallback to a lossy inline
+  truncation.
+
+  The inline-vs-artifact threshold is measured against the exact canonical
+  serialization of the content that would actually be returned inline, not
+  merely against a compact file-representation proxy for it. For search
+  these are the same value (the rendered JSON result list is both the
+  decision content and the file content). For browse they can differ
+  substantially: the threshold is measured against the JSON serialization of
+  the complete structured `blocks` array (what is actually returned inline),
+  while the artifact file itself — if spilled — still holds the smaller
+  plain joined-text document. A page with many small blocks can have joined
+  text well under the default 50000-char threshold while its structured
+  `blocks` form is several times larger, large enough to cross the threshold
+  (and, left undetected, even the unrelated generic 200000-char preventive
+  ceiling) — this is measured explicitly rather than left to be silently
+  caught later by the generic mechanism's own lossy preview. When the
+  decision length differs from the file's own `content_chars`, the artifact
+  envelope adds `delivery_decision_chars` (the structured-serialization
+  length that triggered the spill) and `delivery_decision_basis`
+  (`"structured_blocks"` for browse) — `content_chars`/`content_sha256`
+  always describe the file actually written, never implying that the file
+  itself exceeded the threshold when the real trigger was the larger
+  structured form. An inline Browse response's own `content_chars` likewise
+  reflects the structured `blocks` serialization actually returned, not the
+  joined-text length.
+
+  The artifact writer shares the kernel's one atomic-write primitive
+  (`kernel/tool_result_artifacts.write_artifact_file`) and the kernel's one
+  canonical artifact directory (`WorkdirLayout.tool_results_dir`) with the
+  generic preventive spill (`spill_oversized_result`, still the unrelated,
+  unchanged 200000-char outer safety net) — there is exactly one atomic-write
+  code path and one artifact directory, not two parallel conventions. The web
+  artifact envelope is explicitly recognized by the kernel's
+  `is_spill_manifest` via its own namespaced `artifact` marker and required
+  structural fields (`file_path`, `content_chars`, `content_sha256`) — a
+  dedicated recognition branch independent of the generic manifest's
+  `status: "spilled"` shape, since a web artifact's own `status` is the
+  family's "ok"/"failed" value, never "spilled". This explicit recognition,
+  not envelope smallness, is what stops the generic preventive spill from
+  re-spilling an already-built web artifact, and holds even if the envelope
+  is padded past the generic 200000-char ceiling.
 
 ## Contract tests
 
@@ -312,6 +434,48 @@ level evidence proves the raw result is durably logged before any visible
 `summarize=true` replacement on both the sequential and a controlled-parallel
 path, and that search/browse `status: "failed"` results stay byte/content
 exact and unsummarized under `summarize=true`.
+
+Additional focused checks cover: `settings/web.json` missing/default (with a
+deterministic revision/hash for the default case)/valid-override/boundary/
+out-of-range/wrong-type/unknown-field states and its
+`WEB_OUTPUT_SETTINGS_INVALID` failure before any provider call or fetch;
+manual and the settings-isolation spy tests extended to assert
+`read_output_settings` is never called from manual; search with a large
+(hundreds-of-item) finite provider result set preserved completely with no
+count cap, no per-field truncation, and no adapter receiving a LingTai count
+parameter; a synthesized/URL-less result preserved in the result set without
+`link_ref`; inline and artifact delivery for both search and browse,
+including exact `content_chars`/`content_sha256` verified against the written
+file, the artifact's `output_setting_source`/`revision`/`hash` fields,
+Unicode character accounting, threshold boundary on both sides, atomic
+unique artifact filenames under the canonical `tmp/tool-results/` directory
+across rapid calls, no content preview when spilled, `ARTIFACT_WRITE_FAILED`
+on a simulated write failure, an end-to-end spill-then-`file.read` round
+trip, Browse's per-call `max_chars` override of the shared threshold, a
+legacy `cursor` locator returning the complete document under the same
+policy, and — directly, not by inference from envelope size — that the
+kernel's `is_spill_manifest` recognizes a web artifact envelope via its own
+explicit marker and that neither `spill_oversized_result` nor a full
+`ToolExecutor.execute()` pass re-spills an already-built web artifact result,
+even when the envelope is deliberately padded past the generic 200000-char
+preventive ceiling.
+
+A dedicated production-shaped regression (a page with thousands of small
+extracted blocks whose joined plain text stays under the default threshold
+while the structured `blocks` JSON that would actually be returned inline
+does not) proves the threshold decision is made against the structured
+serialization: the case spills to Web's own complete, no-preview artifact
+with truthful `delivery_decision_chars`/`delivery_decision_basis` fields and
+a `content_chars` describing only the written file, and a companion test
+proves the generic preventive spill never substitutes a lossy preview for
+it even though the structured decision length also exceeds the generic
+200000-char ceiling. A matching small-page control proves ordinary pages
+stay inline under both measurements, and an exact-boundary test pins the
+decision to the structured length precisely. A separate deterministic test
+evicts the fetched snapshot between the engine's success and the delivery
+decision and proves the result is `error_code: "BROWSE_SNAPSHOT_UNAVAILABLE"`
+with no `blocks`/`partial`/`next_cursor`/`delivery` field ever present —
+never a degraded first-page success.
 
 ## Maintenance
 

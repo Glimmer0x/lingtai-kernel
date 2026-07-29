@@ -28,7 +28,7 @@ class _Search:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def search(self, query: str):
+    def search(self, query: str, max_results: int | None = None):
         self.calls.append(query)
         return [type("Result", (), {"title": "title", "url": "https://example.test/r", "snippet": "snippet"})()]
 
@@ -222,21 +222,32 @@ def test_settings_changed_file_is_observed_on_next_call(tmp_path):
     assert third["current_setting"]["settings_revision"] == first_revision
 
 
-def test_no_old_family_owned_web_json_cross_read(tmp_path):
-    """A stale/legacy family-owned settings/web.json must never be consulted;
-    only the action-owned settings/web.search.json is read."""
+def test_web_search_json_is_a_separate_family_owned_file_from_engine_selector(tmp_path):
+    """settings/web.json (shared output threshold) and settings/web.search.json
+    (engine selector) are two distinct, non-overlapping settings files: an
+    engine-shaped payload under the wrong filename is genuinely invalid for
+    settings/web.json's own schema, and a valid settings/web.json does not
+    affect engine selection, which still reads only web.search.json."""
     agent = _Agent(tmp_path)
     manager = setup(agent, search_service=_Search(), browser_port=_Port())
     settings_dir = tmp_path / "settings"
     settings_dir.mkdir()
+    # An old-shape (engine-selector) payload under the new family-owned
+    # filename is malformed for settings/web.json's own {schema_version,
+    # max_chars} schema and must fail loud, not be silently reinterpreted.
     (settings_dir / "web.json").write_text(
         json.dumps({"schema_version": 1, "search": {"engine": "not-admitted"}})
     )
-    # The old-path file is present but must be ignored: no web.search.json
-    # exists, so this call takes the built-in/operator default, not the
-    # invalid selector recorded in the legacy family-owned file.
+    result = manager.handle({"action": "search", "input": {"query": "q"}})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "WEB_OUTPUT_SETTINGS_INVALID"
+
+    # A genuinely valid settings/web.json coexists with, and never overrides,
+    # the separate engine-selector file.
+    (settings_dir / "web.json").write_text(json.dumps({"schema_version": 1, "max_chars": 1234}))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["status"] == "ok"
+    assert result["current_setting"]["output_max_chars"]["value"] == 1234
     assert result["current_setting"]["source"] != "settings/web.json"
 
 
@@ -382,9 +393,9 @@ def test_summarize_is_stripped_before_dispatch_and_not_leaked_to_search(tmp_path
     captured_args = {}
     original_search = manager._search
 
-    def spy(args, snapshot, diagnostic):
+    def spy(args, snapshot, output_snapshot, diagnostic):
         captured_args.update(args)
-        return original_search(args, snapshot, diagnostic)
+        return original_search(args, snapshot, output_snapshot, diagnostic)
 
     manager._search = spy
     manager.handle({"action": "search", "input": {"query": "q2"}, "summarize": True})
@@ -425,21 +436,34 @@ def test_summarize_absent_is_default_false_and_unaffected(tmp_path):
     assert result["status"] == "ok"
 
 
-def test_search_caps_an_unbounded_provider_iterable(tmp_path):
-    class GeneratorSearch:
-        def search(self, query):
-            def results():
-                index = 0
-                while True:
-                    yield {"title": str(index), "url": f"https://example.test/{index}", "snippet": "s"}
-                    index += 1
-            return results()
+def test_search_has_no_result_count_cap_for_a_large_finite_provider_response(tmp_path):
+    """No LingTai-imposed top-N or content-size cap: a large finite result set
+    — well beyond both the historical 20-item cap and the 50_000-char inline
+    threshold — is preserved completely (delivered as an artifact, never
+    trimmed or marked partial). ``SearchService`` is contracted to return a
+    finite list; there is no operational iteration ceiling to test here
+    because none exists — an out-of-contract non-terminating iterable is
+    explicitly not defended against (see ``_search``'s own comment)."""
+    class LargeFiniteSearch:
+        def search(self, query, max_results=None):
+            assert max_results is None  # no-count-cap mode: the call site omits it
+            return [
+                {"title": f"Result {i}", "url": f"https://example.test/{i}", "snippet": "Lorem ipsum dolor sit amet."}
+                for i in range(500)
+            ]
 
-    manager = setup(_Agent(tmp_path), search_service=GeneratorSearch(), browser_port=_Port())
+    manager = setup(_Agent(tmp_path), search_service=LargeFiniteSearch(), browser_port=_Port())
     result = manager.handle({"action": "search", "input": {"query": "question"}})
     assert result["status"] == "ok"
-    assert result["count"] == 20
-    assert len(result["results"]) == 20
+    assert result["count"] == 500
+    assert "iteration_bounded" not in result
+    assert "partial" not in result
+    # 500 results at this size comfortably exceed the 50_000-char default
+    # threshold, so this is delivered as a complete artifact, not inline.
+    assert result["delivery"] == "artifact"
+    artifact_path = tmp_path / result["file_path"]
+    parsed = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert len(parsed) == 500
 
 
 class _CompressedPort:
