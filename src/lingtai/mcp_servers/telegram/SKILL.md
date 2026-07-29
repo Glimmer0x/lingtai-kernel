@@ -14,6 +14,8 @@ related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
 - src/lingtai/mcp_servers/telegram/server.py
+- src/lingtai/mcp_servers/telegram/_family.py
+- src/lingtai/mcp_servers/telegram/task_card/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
 maintenance: |
@@ -324,3 +326,22 @@ chat-history cardinality. Normative source:
   local-server configuration or support.
 - A duplicate identical send returns `{'status': 'blocked'}`; treat that as
   'already sent', not as a transient error to retry.
+
+## PUBLIC TOOL FAMILIES: strict LTP-v2
+
+Raw MCP discovery exposes exactly two public tools in stable order: `telegram`,
+then `task_card`. Each is an independent strict LTP-v2 family with the closed
+root `{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
+required) and a closed action-owned input branch. `telegram` actions are exactly
+`send`, `check`, `read`, `reply`, `search`, `delete`, `edit`, `contacts`,
+`add_contact`, `remove_contact`, `accounts`, and `manual`; `task_card` actions are
+exactly `start`, `inspect`, `retry`, `stop`, and `manual`. The family-owned
+`manual` actions are the discovery path for these packaged docs. Do not use the
+retired flat/legacy shape, `_reasoning`, aliases, or a generic dispatcher.
+
+The private `_lingtai_telegram_task_card` route is intentionally hidden from
+`list_tools` and is only the reverse programmable-slot transport. The automatic
+slot remains manager-owned and independent of the programmable controller; both
+compose into the same resident without one refreshing or clearing the other.
+For the Task Card renderer/count lifecycle, read
+[`task_card/SKILL.md`](task_card/SKILL.md).

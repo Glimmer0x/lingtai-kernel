@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-import pytest
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.mcp_servers.telegram.manager import TelegramManager, SCHEMA
 from tests._notification_store_helpers import notification_store_for
@@ -508,7 +507,7 @@ def test_literal_double_star_survives_update(tmp_path):
         "reasoning": "2**10 = 1024",
     })
     card_id = r["message_id"]
-    r2 = manager._handle_task_card_update({
+    manager._handle_task_card_update({
         "sub_action": "update",
         "card_message_id": card_id,
         "tool": "python",
@@ -718,8 +717,13 @@ def test_connect_mcp_http_maps_client_by_tool_name():
     agent.add_tool = MagicMock()  # prevent side effects
 
     mock_client = MagicMock(spec=HTTPMCPClient)
+    strict_schema = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     mock_client.list_tools.return_value = [
-        {"name": "telegram_send", "schema": {}, "description": "Send msg"},
+        {"name": "telegram_send", "schema": strict_schema, "description": "Send msg"},
         {"name": "telegram_read", "schema": {}, "description": "Read msgs"},
     ]
 
@@ -734,6 +738,8 @@ def test_connect_mcp_http_maps_client_by_tool_name():
         assert agent._mcp_clients_by_tool.get(name) is mock_client, (
             f"_mcp_clients_by_tool[{name!r}] must be the registered client"
         )
+    assert strict_schema["additionalProperties"] is False
+    assert agent.add_tool.call_args_list[0].kwargs["schema"] is strict_schema
 
 
 def test_connect_mcp_stdio_maps_client_by_tool_name():
@@ -752,8 +758,13 @@ def test_connect_mcp_stdio_maps_client_by_tool_name():
     agent.add_tool = MagicMock()
 
     mock_client = MagicMock(spec=MCPClient)
+    strict_schema = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
     mock_client.list_tools.return_value = [
-        {"name": "telegram_send", "schema": {}, "description": "Send msg"},
+        {"name": "telegram_send", "schema": strict_schema, "description": "Send msg"},
     ]
 
     with patch("lingtai.services.mcp.MCPClient", return_value=mock_client):
@@ -767,3 +778,5 @@ def test_connect_mcp_stdio_maps_client_by_tool_name():
         assert agent._mcp_clients_by_tool.get(name) is mock_client, (
             f"_mcp_clients_by_tool[{name!r}] must be the registered client"
         )
+    assert strict_schema["additionalProperties"] is False
+    assert agent.add_tool.call_args_list[0].kwargs["schema"] is strict_schema

@@ -111,7 +111,7 @@ lingtai = [
 ]
 "lingtai.mcp_servers.telegram" = ["notification_header.md", "SKILL.md", "reference/**/*", "assets/**/*"]
 # The Telegram-owned programmable Task Card unit is its own subpackage, so its
-# manual and architecture documents are NOT covered by the parent telegram glob
+# strict-family manual and architecture documents are NOT covered by the parent telegram glob
 # above (package-data globs do not recurse into subpackages). Ship the nested
 # SKILL.md plus its paired ANATOMY.md/CONTRACT.md explicitly, or the wheel
 # installs the code and silently drops those documents.

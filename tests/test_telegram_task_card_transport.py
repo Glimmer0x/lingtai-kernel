@@ -117,11 +117,11 @@ def test_private_tool_name_reaches_manager_and_creates_card(tmp_path):
     assert "📋 TASK CARD" in send_calls[0][2]
 
 
-def test_list_tools_exposes_only_public_telegram(tmp_path):
-    """The private tool name must be absent from ``list_tools``."""
+def test_list_tools_exposes_exact_public_families_in_order(tmp_path):
+    """Raw MCP exposes exactly Telegram then Task Card; reverse route is hidden."""
     manager, _ = _make_manager(tmp_path)
     names = [t.name for t in _list_tools_via_transport(manager)]
-    assert names == ["telegram"]
+    assert names == ["telegram", "task_card"]
     assert _PRIVATE_TASK_CARD_TOOL not in names
 
 
@@ -200,3 +200,52 @@ def test_unknown_tool_name_rejected(tmp_path):
 
     assert result.isError is True
     assert not any(c[0] == "send_message" for c in account.calls)
+
+
+def test_each_public_family_has_strict_root_and_action_owned_branches(tmp_path):
+    manager, _ = _make_manager(tmp_path)
+    tools = _list_tools_via_transport(manager)
+    assert [tool.name for tool in tools] == ["telegram", "task_card"]
+    for tool in tools:
+        schema = tool.inputSchema
+        assert schema["required"] == ["action", "input", "reasoning"]
+        assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+        assert schema["additionalProperties"] is False
+        assert len(schema["allOf"]) == len(schema["properties"]["action"]["enum"])
+        branches = schema["properties"]["input"].get(
+            "oneOf", schema["properties"]["input"].get("anyOf")
+        )
+        assert len(branches) == len(schema["properties"]["action"]["enum"])
+
+
+def test_raw_task_card_manual_is_family_owned_and_flat_root_is_rejected(tmp_path):
+    manager, account = _make_manager(tmp_path)
+    manual = _call_tool_via_transport(
+        manager,
+        "task_card",
+        {"action": "manual", "input": {}, "reasoning": "discover lifecycle"},
+    )
+    assert manual.isError is False
+    assert _payload(manual)["action"] == "manual"
+    assert not account.calls
+
+    # Missing strict envelope fields is rejected by the listed schema before any
+    # host-bound controller or manager operation.
+    flat = _call_tool_via_transport(manager, "task_card", {"action": "manual"})
+    assert flat.isError is True
+    assert not account.calls
+
+
+def test_raw_task_card_cross_branch_input_is_rejected_before_controller_io(tmp_path):
+    manager, account = _make_manager(tmp_path)
+    result = _call_tool_via_transport(
+        manager,
+        "task_card",
+        {
+            "action": "inspect",
+            "input": {"renderer_path": "watch.py"},
+            "reasoning": "cross branch probe",
+        },
+    )
+    assert result.isError is True
+    assert not account.calls

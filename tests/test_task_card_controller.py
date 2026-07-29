@@ -94,23 +94,21 @@ def controller(agent):
 # -- registration ----------------------------------------------------------
 
 
-def test_setup_registers_public_tool(agent):
+def test_setup_binds_handler_only(agent):
     mgr = setup(agent)
     assert isinstance(mgr, TaskCardController)
-    name, schema, handler, _desc, glossary = agent.added_tools[0]
+    name, schema, handler, description, glossary = agent.added_tools[0]
     assert name == "task_card"
-    assert glossary is None  # Telegram-owned tool: no lingtai.tools glossary package
-    assert schema["properties"]["action"]["enum"] == [
-        "start",
-        "inspect",
-        "retry",
-        "stop",
-    ]
+    assert schema is None
+    assert description == ""
+    assert glossary == "__unset__"
     assert callable(handler)
 
 
-def test_schema_requires_action():
-    assert get_schema()["required"] == ["action"]
+def test_schema_requires_strict_root_fields():
+    schema = get_schema()
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert schema["additionalProperties"] is False
 
 
 def test_description_routes_to_the_telegram_manual():
@@ -118,54 +116,110 @@ def test_description_routes_to_the_telegram_manual():
     Telegram manual and onward to the co-located Task Card manual."""
     desc = get_description()
     assert "manual" in desc.lower()
-    assert "telegram(action='manual')" in desc
-    assert "task_card/SKILL.md" in desc
+    assert "refresh-count fuse" in desc
     # It still advertises the concrete action surface.
-    for action in ("start", "inspect", "retry", "stop"):
+    for action in ("start", "inspect", "retry", "stop", "manual"):
         assert action in desc
 
 
-def test_wiring_registers_only_with_telegram_and_is_idempotent():
-    """The composition-root hook registers ``task_card`` exactly once, and only
-    when a Telegram reverse channel is present."""
-    from types import SimpleNamespace
-
+def test_wiring_fails_closed_without_same_client_raw_family():
+    """The retired Agent owner never recreates a missing or foreign schema."""
     from lingtai.agent import Agent
 
     class _Stub:
-        def __init__(self, telegram):
-            self._mcp_clients_by_tool = {"telegram": object()} if telegram else {}
+        def __init__(self, clients):
+            self._mcp_clients_by_tool = clients
             self._tool_handlers: dict = {}
             self._tool_schemas: list = []
             self.added: list = []
 
         def add_tool(self, name, **kwargs):
-            self.added.append(name)
-            self._tool_handlers[name] = kwargs["handler"]
-            self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
-            self._tool_schemas.append(
+            self.added.append((name, kwargs))
+
+    for clients in (
+        {},
+        {"telegram": object()},
+        {"telegram": object(), "task_card": object()},
+    ):
+        stub = _Stub(clients)
+        Agent._maybe_setup_task_card_controller(stub)
+        assert stub.added == []
+        assert not hasattr(stub, "_task_card_controller")
+
+
+def test_wiring_binds_handler_only_when_raw_mount_already_matches():
+    """When the generic MCP mount already registered ``task_card`` from the
+    SAME client as ``telegram``, with the exact family schema/description, the
+    composition root must swap only the handler — never re-register or replace
+    that raw schema object."""
+    from types import SimpleNamespace
+
+    from lingtai.agent import Agent
+    from lingtai.mcp_servers.telegram.manager import (
+        DESCRIPTION as telegram_description,
+        SCHEMA as telegram_schema,
+    )
+
+    same_client = object()
+
+    class _Stub:
+        def __init__(self):
+            self._mcp_clients_by_tool = {
+                "telegram": same_client, "task_card": same_client,
+            }
+            raw_schema = get_schema()
+            self._tool_handlers: dict = {"task_card": lambda args: {}}
+            self._tool_schemas: list = [
                 SimpleNamespace(
-                    name=name,
-                    description=kwargs["description"],
-                    parameters=kwargs["schema"],
-                    system_prompt=kwargs.get("system_prompt", ""),
-                    glossary_package=kwargs["glossary_package"],
+                    name="telegram",
+                    description=telegram_description,
+                    parameters=telegram_schema,
+                    system_prompt="",
+                    glossary_package=None,
+                ),
+                SimpleNamespace(
+                    name="task_card",
+                    description=get_description(),
+                    parameters=raw_schema,
+                    system_prompt="",
+                    glossary_package=None,
+                ),
+            ]
+            self.added: list = []
+
+        def add_tool(self, name, **kwargs):
+            self.added.append(name)
+            if "handler" in kwargs:
+                self._tool_handlers[name] = kwargs["handler"]
+            if "schema" in kwargs:
+                self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
+                self._tool_schemas.append(
+                    SimpleNamespace(
+                        name=name,
+                        description=kwargs.get("description", ""),
+                        parameters=kwargs["schema"],
+                        system_prompt=kwargs.get("system_prompt", ""),
+                        glossary_package=kwargs.get("glossary_package"),
+                    )
                 )
-            )
 
-    no_tg = _Stub(telegram=False)
-    Agent._maybe_setup_task_card_controller(no_tg)
-    assert no_tg.added == []
-    assert not hasattr(no_tg, "_task_card_controller")
+    stub = _Stub()
+    raw_schema_objects = tuple(stub._tool_schemas)
+    Agent._maybe_setup_task_card_controller(stub)
+    assert stub.added == ["task_card"]
+    # The exact same schema object survives — no re-registration/replacement.
+    assert tuple(stub._tool_schemas) == raw_schema_objects
+    assert all(
+        actual is expected
+        for actual, expected in zip(stub._tool_schemas, raw_schema_objects)
+    )
+    controller = stub._task_card_controller
+    assert getattr(stub._tool_handlers["task_card"], "__self__", None) is controller
 
-    tg = _Stub(telegram=True)
-    Agent._maybe_setup_task_card_controller(tg)
-    assert tg.added == ["task_card"]
-    assert hasattr(tg, "_task_card_controller")
-    assert getattr(tg._tool_handlers["task_card"], "__self__", None) is tg._task_card_controller
-    assert tg._tool_schemas[0].parameters == get_schema()
-    Agent._maybe_setup_task_card_controller(tg)  # idempotent
-    assert tg.added == ["task_card"]
+    # A refresh rebind is idempotent: same controller, no further add_tool call.
+    Agent._maybe_setup_task_card_controller(stub)
+    assert stub.added == ["task_card"]
+    assert stub._task_card_controller is controller
 
 
 # -- start: happy path + projection ---------------------------------------

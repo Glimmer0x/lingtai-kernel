@@ -12,8 +12,8 @@ implementation.
 
 Public surface (intentionally small):
 
-- ``setup(agent)`` — the composition-root hook that registers the ``task_card``
-  tool once a Telegram reverse channel exists.
+- ``setup(agent)`` — the composition-root helper that binds the host controller
+  handler after the raw Telegram MCP has registered the sole public family schema.
 - ``TaskCardController`` / ``TaskCardControllerError`` — the controller and its
   synchronous user-visible error.
 - ``get_schema`` / ``get_description`` — the tool schema and description.

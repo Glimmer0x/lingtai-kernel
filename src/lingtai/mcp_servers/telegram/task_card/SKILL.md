@@ -244,3 +244,26 @@ The paired [`CONTRACT.md`](CONTRACT.md) defines the stable interface and behavio
 promises; this manual defines how an Agent should design and operate a watcher
 without weakening those promises. The paired [`ANATOMY.md`](ANATOMY.md) maps the
 controller, resident, transport, and producer connections.
+
+## Public LTP-v2 invocation and refresh fuse
+
+The public tool is `task_card` (the Telegram command and preference remain
+spelled `taskcard`). Use the strict envelope with required `action`, `input`, and
+`reasoning`, plus optional root `summarize`; `input` is an action-owned closed
+object. Actions are exactly `start`, `inspect`, `retry`, `stop`, and `manual`.
+`manual` takes `{}` and is owned by this packaged manual. Do not send the retired
+flat shape, `_reasoning`, an alias, or Telegram action fields to this family.
+
+`start.input.max_refreshes` is optional and can only lower the agent-wide fuse.
+The configured value is read from `<workdir>/telegram/taskcard.json`; missing or
+invalid state defaults to 1000, and there is no null/unlimited form. Initial
+creation does not consume a refresh. Every later interval or `retry` attempt
+consumes one count whether rendering or Telegram projection succeeds or fails.
+Results expose `refreshes_used`, `max_refreshes`, `refreshes_remaining`, and
+`stop_reason`. On `stop_reason=max_refreshes`, the controller stops safely,
+clears only the programmable slot, and sends one content-safe normal-priority
+`task_card.limit` notice. Refresh/reinspect the underlying task state before
+starting a new watch, and start anew only if it is useful. Never place renderer
+output, paths, credentials, or provider errors in that notice. If finalization
+fails, retry `stop`/`retry`; the handle remains `stop_failed` and the interval
+loop cannot restart or hammer the backend.

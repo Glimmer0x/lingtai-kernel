@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
@@ -418,3 +419,56 @@ Follow the canonical maintenance block in frontmatter. Behavioral changes requir
 synchronized Port (`interface.py`), adapters, contract tests, and this contract;
 structural or composition changes also update the paired Anatomy and reciprocal
 parents.
+
+## Public LTP-v2 family and refresh fuse
+
+The Telegram MCP server is the sole public owner of the Task Card family. Raw
+`list_tools` returns exactly two entries, in stable order: `telegram`, then
+`task_card`; the private reverse transport `_lingtai_telegram_task_card` is
+accepted only for controller-to-manager projection and is never listed. The
+public `task_card` root is closed to exactly `{action, input, reasoning,
+summarize?}` with `action`, `input`, and `reasoning` required. Its independent,
+closed action-owned branches are exactly:
+
+| action | input |
+|---|---|
+| `start` | required `renderer_path`; optional `interval_s`, `timeout_s`, `max_refreshes` |
+| `inspect` | required `watch_id` |
+| `retry` | required `watch_id` |
+| `stop` | required `watch_id` |
+| `manual` | empty object |
+
+The `telegram` family owns its separate action table (`send`, `check`, `read`,
+`reply`, `search`, `delete`, `edit`, `contacts`, `add_contact`,
+`remove_contact`, `accounts`, `manual`). No flat/legacy dual schema, alias, old
+Agent Composition Root registration, generic dispatcher, or third public entry
+is supported. `taskcard` remains the Telegram command/preference spelling;
+`task_card` is the public tool name.
+
+The agent-wide `<workdir>/telegram/taskcard.json` preference contains a positive,
+non-boolean integer `max_refreshes`; missing or invalid values default to `1000`
+with a content-free warning, while valid sibling preferences remain intact.
+Writes are atomic and fsynced. The controller reads this value through its narrow
+injected host getter; it does not import `TelegramService`. A `start` request may
+provide a positive integer `input.max_refreshes` only to lower the configured
+ceiling (`min(requested, configured)`); null, boolean, zero, negative, and other
+values are rejected, and there is no unlimited value.
+
+The synchronous initial create is excluded from the count. Every later interval
+or manual-retry `_tick` attempt consumes one permit before renderer/backend work,
+including failures; once N attempts have consumed the ceiling, N+1 cannot begin.
+`start`, `inspect`, and `retry` responses expose `refreshes_used`,
+`max_refreshes`, `refreshes_remaining`, and `stop_reason` (and stop responses
+retain these fields). Exhaustion sets `stop_reason=max_refreshes`, prevents a
+new interval tick, clears only the programmable slot using the existing safe
+quiesce/finalize transaction, removes a successful handle, and leaves a
+retryable `stop_failed` handle if finalization fails. Automatic state is never
+cleared or refreshed by this path.
+
+Exhaustion emits one normal-priority, content-safe `task_card.limit` notification
+with idempotency key `task_card.limit:<watch_id>:<limit>`. It contains only
+`watch_id`, `state=stopped`, `reason=max_refreshes`, `used`, `max`, and optional
+`last_valid_frame_at`, and directs the Agent to refresh/reinspect underlying task
+state and start anew only if useful. Renderer output, paths, secrets, and
+provider details are prohibited. The notification and counter are count-based,
+not a wall-clock deadline.

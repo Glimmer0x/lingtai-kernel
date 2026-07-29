@@ -27,7 +27,9 @@ import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
+
+from . import _family
 
 if TYPE_CHECKING:
     from .interface import TelegramTaskCardAgent
@@ -55,47 +57,12 @@ _BACKEND_ERROR_CAP = 300
 # small margin) to be a truthful join rather than a premature timeout.
 _JOIN_TIMEOUT_S = _REVERSE_CALL_TIMEOUT_S + 1.0
 _MAX_LINES = 20  # bound so a runaway renderer cannot flood the card
+_DEFAULT_MAX_REFRESHES = 1000
 
 
 def get_schema() -> dict:
-    return {
-        "type": "object",
-        "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["start", "inspect", "retry", "stop"],
-                "description": (
-                    "start: validate + run a renderer file once, then watch it and "
-                    "project its output onto the resident Task Card; returns a "
-                    "watch_id. inspect: report status + last frame. retry: re-run a "
-                    "failed watch now. stop: end a watch and clear its programmable "
-                    "frame (renderer files are never deleted)."
-                ),
-            },
-            "renderer_path": {
-                "type": "string",
-                "description": (
-                    "start only. Python renderer file inside the agent working "
-                    "directory; its stdout MUST be exactly one Task Card JSON object "
-                    "with any of title (string), lines (array of strings), footer "
-                    "(string)."
-                ),
-            },
-            "interval_s": {
-                "type": "number",
-                "description": "start only. Seconds between runs (min 1).",
-            },
-            "timeout_s": {
-                "type": "number",
-                "description": "start only. Per-run renderer timeout.",
-            },
-            "watch_id": {
-                "type": "string",
-                "description": "inspect/retry/stop: the watch_id from start.",
-            },
-        },
-        "required": ["action"],
-    }
+    """Return the strict, family-owned LTP-v2 Task Card schema."""
+    return _family.TASK_CARD_SCHEMA
 
 
 def get_description() -> str:
@@ -104,11 +71,9 @@ def get_description() -> str:
         "file under your working directory that prints exactly one Task Card JSON "
         "object to stdout; the controller runs it on an interval and projects the "
         "output onto the resident Task Card's programmable channel, alongside the "
-        "automatic tool-activity channel. Actions: start, inspect, retry, stop. "
-        "Full manual (renderer contract, a safe runnable example, and a "
-        "start|inspect|retry|stop walkthrough): call telegram(action='manual') and "
-        "follow its 'Programmable Task Card' section to the co-located task_card "
-        "manual (task_card/SKILL.md)."
+        "automatic tool-activity channel. Actions: start, inspect, retry, stop, manual. "
+        "The family-owned manual returns the renderer contract, refresh-count fuse, "
+        "safe stop lifecycle, and a runnable example."
     )
 
 
@@ -136,10 +101,17 @@ class _Watch:
         "error_epoch",
         "stopping",
         "finalized",
+        "max_refreshes",
+        "refreshes_used",
+        "attempt_lock",
+        "finalize_lock",
+        "limit_notified",
+        "stop_reason",
     )
 
     def __init__(
-        self, watch_id, renderer_path, interval_s, timeout_s, account, chat_id
+        self, watch_id, renderer_path, interval_s, timeout_s, account, chat_id,
+        max_refreshes: int = _DEFAULT_MAX_REFRESHES,
     ) -> None:
         self.watch_id = watch_id
         self.renderer_path = renderer_path
@@ -147,6 +119,12 @@ class _Watch:
         self.timeout_s = timeout_s
         self.account = account
         self.chat_id = chat_id
+        self.max_refreshes = max_refreshes
+        self.refreshes_used = 0
+        self.attempt_lock = threading.Lock()
+        self.finalize_lock = threading.Lock()
+        self.limit_notified = False
+        self.stop_reason: str | None = None
         self.thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.lock = threading.RLock()
@@ -180,8 +158,17 @@ class _Watch:
 class TaskCardController:
     """Public controller for programmable Task Card watches (thin Core)."""
 
-    def __init__(self, agent: TelegramTaskCardAgent) -> None:
+    def __init__(
+        self,
+        agent: TelegramTaskCardAgent,
+        *,
+        max_refreshes_getter: Callable[[], int] | None = None,
+    ) -> None:
         self._agent = agent
+        self._max_refreshes_getter = (
+            max_refreshes_getter
+            or getattr(agent, "task_card_max_refreshes", None)
+        )
         self._watches: dict[str, _Watch] = {}
         self._lock = threading.RLock()
         self._counter = 0
@@ -209,6 +196,10 @@ class TaskCardController:
             return {"status": "error", "message": str(e)}
         return {"status": "error", "message": f"Unknown action: {action!r}"}
 
+    def handle_family(self, args: dict) -> dict:
+        """Validate the LTP envelope before entering the legacy controller."""
+        return _family.handle_task_card(self, args)
+
     # -- actions -----------------------------------------------------------
 
     def _start(self, args: dict) -> dict:
@@ -219,6 +210,14 @@ class TaskCardController:
         timeout_s = self._coerce_positive(
             args.get("timeout_s", _DEFAULT_TIMEOUT_S), "timeout_s", 0.1
         )
+        configured_max = self._configured_max_refreshes()
+        requested_max = args.get("max_refreshes")
+        if requested_max is not None:
+            if type(requested_max) is not int or requested_max <= 0:
+                raise TaskCardControllerError("max_refreshes must be a positive integer")
+            effective_max = min(requested_max, configured_max)
+        else:
+            effective_max = configured_max
         account, chat_id = self._resolve_route()
         # First frame is synchronous: renderer/JSON/schema failure is an immediate
         # tool error and NO watch handle is created.
@@ -227,7 +226,8 @@ class TaskCardController:
             self._counter += 1
             watch_id = f"tc_{self._counter}"
             watch = _Watch(
-                watch_id, renderer_path, interval_s, timeout_s, account, chat_id
+                watch_id, renderer_path, interval_s, timeout_s, account, chat_id,
+                effective_max,
             )
             self._watches[watch_id] = watch
         # Project the first valid frame.
@@ -264,6 +264,7 @@ class TaskCardController:
                     "resident_persist_failed": True,
                     "message_id": project_result.get("message_id"),
                     "error": persist_error,
+                    **self._refresh_fields(watch),
                 }
             # Any other first-frame failure (backend reject, or a malformed /
             # cross-route / indeterminate send with no adoptable id) discards the
@@ -277,15 +278,47 @@ class TaskCardController:
             watch.last_valid_frame = frame
             watch.last_valid_at = _utc_now_iso()
         self._spawn(watch)
-        return {"status": "ok", "watch_id": watch_id, "state": "watching"}
+        return {
+            "status": "ok", "watch_id": watch_id, "state": "watching",
+            **self._refresh_fields(watch),
+        }
+
+    def _configured_max_refreshes(self) -> int:
+        getter = self._max_refreshes_getter
+        try:
+            value = getter() if getter is not None else _DEFAULT_MAX_REFRESHES
+        except Exception:
+            value = _DEFAULT_MAX_REFRESHES
+        return (
+            value
+            if type(value) is int and 0 < value <= _DEFAULT_MAX_REFRESHES
+            else _DEFAULT_MAX_REFRESHES
+        )
+
+    @staticmethod
+    def _refresh_fields(watch: _Watch) -> dict[str, Any]:
+        with watch.lock:
+            used = watch.refreshes_used
+            maximum = watch.max_refreshes
+            reason = watch.stop_reason
+        return {
+            "refreshes_used": used,
+            "max_refreshes": maximum,
+            "refreshes_remaining": max(0, maximum - used),
+            "stop_reason": reason,
+        }
 
     def _inspect(self, watch: _Watch) -> dict:
         with watch.lock:
             # After a stop request the watch must never read back as ``watching``
             # (even while a ``stop_thread_alive`` handle still has a live watcher
             # thread); it exposes a truthful, retryable state instead.
-            if watch.stopping:
+            if watch.finalized and watch.stop_reason == "max_refreshes":
+                state = "stopped"
+            elif watch.stopping:
                 state = "stop_failed" if watch.error else "stopping"
+            elif watch.finalized:
+                state = "stopped"
             elif watch.error:
                 state = "error"
             else:
@@ -297,6 +330,7 @@ class TaskCardController:
                 "last_valid_frame": watch.last_valid_frame,
                 "last_valid_frame_at": watch.last_valid_at,
                 "error": watch.error,
+                **self._refresh_fields(watch),
             }
 
     def _stop(self, watch: _Watch) -> dict:
@@ -347,6 +381,7 @@ class TaskCardController:
                 "watch_id": watch.watch_id,
                 "state": "stop_failed",
                 "error": error,
+                **self._refresh_fields(watch),
             }
         # Quiescent. If the watcher thread already cleared the programmable slot
         # (compensating a late update), there is nothing more to send: just remove.
@@ -355,7 +390,10 @@ class TaskCardController:
         if already_cleared:
             with self._lock:
                 self._watches.pop(watch.watch_id, None)
-            return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
+            return {
+                "status": "ok", "watch_id": watch.watch_id, "state": "stopped",
+                **self._refresh_fields(watch),
+            }
         # Otherwise clear only the programmable channel now (the automatic channel
         # is untouched and renderer files are never deleted). Commit the watch
         # removal ONLY after the backend durably accepts the clear — the manager
@@ -380,12 +418,16 @@ class TaskCardController:
                 "watch_id": watch.watch_id,
                 "state": "stop_failed",
                 "error": error,
+                **self._refresh_fields(watch),
             }
         with watch.lock:
             watch.finalized = True
         with self._lock:
             self._watches.pop(watch.watch_id, None)
-        return {"status": "ok", "watch_id": watch.watch_id, "state": "stopped"}
+        return {
+            "status": "ok", "watch_id": watch.watch_id, "state": "stopped",
+            **self._refresh_fields(watch),
+        }
 
     # -- watcher loop ------------------------------------------------------
 
@@ -426,50 +468,125 @@ class TaskCardController:
         return bool(shutdown is not None and shutdown.is_set())
 
     def _tick(self, watch: _Watch) -> None:
-        """Run the renderer once and reconcile the watch's error/frame state.
+        """Consume one refresh attempt and reconcile its result.
 
-        Stop can straddle either blocking step. If it was requested while the
-        renderer ran, the tick is dropped before projecting (nothing was sent). If
-        it arrived while the ``update`` projection was in flight, the tick drops
-        its state mutation (no last-valid overwrite, no stop-error clear) and — for
-        an explicit stop — compensates by clearing the slot, since that update may
-        already have landed."""
-        try:
-            frame = self._run_renderer(watch.renderer_path, watch.timeout_s)
-        except TaskCardControllerError as e:
+        The attempt lock covers the whole renderer/backend attempt, so interval
+        and manual retry cannot overlap. The counter is incremented before any
+        renderer or backend work; the initial synchronous create never enters this
+        method and is therefore excluded.
+        """
+        with watch.attempt_lock:
+            with watch.lock:
+                if watch.stopping or watch.refreshes_used >= watch.max_refreshes:
+                    return
+                watch.refreshes_used += 1
+                exhausted = watch.refreshes_used >= watch.max_refreshes
+            try:
+                frame = self._run_renderer(watch.renderer_path, watch.timeout_s)
+            except TaskCardControllerError as e:
+                if self._stop_requested(watch):
+                    return
+                self._mark_error(
+                    watch, self._error_from_exc(e), emit_notification=not exhausted
+                )
+                if exhausted:
+                    self._exhaust(watch)
+                return
             if self._stop_requested(watch):
-                return  # stop observed: drop this late failure, keep stop state
-            self._mark_error(watch, self._error_from_exc(e))
-            return
-        if self._stop_requested(watch):
-            # Stop/shutdown observed BEFORE projecting: drop. Nothing was sent, so
-            # there is no late frame to compensate — the public stop clears the
-            # slot's prior frame once this (about-to-exit) thread is quiescent.
-            return
-        result = self._project(watch, "update", frame)
-        if self._stop_requested(watch):
-            # Stop/shutdown arrived DURING the update projection. Because the
-            # reverse call has no total-time bound (a stale-resource restart+retry
-            # can exceed the per-attempt timeout), the update may already have
-            # landed. Drop the tick's normal state mutation — no
-            # ``_mark_recovered``/``_mark_error``, hence no last-valid overwrite and
-            # no stop-error clear. For an EXPLICIT stop (not a shutdown, which keeps
-            # its intentional no-finalize policy) the live watcher thread
-            # compensates by clearing the slot so the late frame cannot linger.
-            if watch.stopping and not self._shutdown_requested():
-                self._compensate_stop_finalize(watch)
-            return
-        if result.get("status") == "error":
-            self._mark_error(
-                watch,
-                self._backend_failure(
-                    "backend_edit_failed",
-                    "task card backend rejected the frame",
+                return
+            result = self._project(watch, "update", frame)
+            if self._stop_requested(watch):
+                if watch.stopping and not self._shutdown_requested():
+                    self._compensate_stop_finalize(watch)
+                return
+            if result.get("status") == "error":
+                self._mark_error(
+                    watch,
+                    self._backend_failure(
+                        "backend_edit_failed",
+                        "task card backend rejected the frame",
+                        result,
+                    ),
+                    emit_notification=not exhausted,
+                )
+            else:
+                self._mark_recovered(watch, frame)
+            if exhausted and not watch.stopping:
+                self._exhaust(watch)
+
+    def _exhaust(self, watch: _Watch) -> None:
+        """Quiesce and finalize a watch exactly once at its hard ceiling."""
+        with watch.lock:
+            if watch.stop_reason == "max_refreshes" or watch.finalized:
+                return
+            watch.stop_reason = "max_refreshes"
+            watch.stopping = True
+        watch.stop_event.set()
+        self._emit_limit_event(watch)
+        # A watcher cannot join itself. A manual retry runs outside the watcher
+        # thread and can use the normal stop/join path; the interval thread uses
+        # the same finalize transaction directly and exits on its next loop test.
+        if threading.current_thread() is watch.thread:
+            self._finalize_exhaustion(watch)
+        else:
+            self._stop(watch)
+
+    def _finalize_exhaustion(self, watch: _Watch) -> None:
+        with watch.finalize_lock:
+            with watch.lock:
+                if watch.finalized:
+                    return
+            result = self._project(watch, "finalize", None)
+            if result.get("status") == "error":
+                error = self._backend_failure(
+                    "stop_finalize_failed",
+                    "task card max_refreshes finalization failed; retry stop",
                     result,
-                ),
+                )
+                with watch.lock:
+                    watch.error = error
+                return
+            with watch.lock:
+                watch.finalized = True
+            with self._lock:
+                self._watches.pop(watch.watch_id, None)
+
+    def _emit_limit_event(self, watch: _Watch) -> None:
+        with watch.lock:
+            if watch.limit_notified:
+                return
+            watch.limit_notified = True
+            used, maximum, last_valid_at = (
+                watch.refreshes_used, watch.max_refreshes, watch.last_valid_at
             )
+        enqueue = getattr(self._agent, "_enqueue_system_notification", None)
+        if not callable(enqueue):
             return
-        self._mark_recovered(watch, frame)
+        extra: dict[str, Any] = {
+            "watch_id": watch.watch_id,
+            "state": "stopped",
+            "reason": "max_refreshes",
+            "used": used,
+            "max": maximum,
+        }
+        if last_valid_at:
+            extra["last_valid_frame_at"] = last_valid_at
+        try:
+            enqueue(
+                source="task_card.limit",
+                ref_id=watch.watch_id,
+                body=(
+                    f"Task Card watch {watch.watch_id} reached its refresh limit. "
+                    "Refresh or reinspect the underlying task state, and start a new "
+                    "watch only if useful."
+                ),
+                idempotency_key=f"task_card.limit:{watch.watch_id}:{maximum}",
+                skip_if_idempotency_key_exists=True,
+                priority="normal",
+                extra=extra,
+            )
+        except Exception:
+            pass
 
     def _shutdown_requested(self) -> bool:
         """True once the agent's global shutdown was requested (no-finalize path)."""
@@ -515,7 +632,13 @@ class TaskCardController:
 
     # -- fail-loud / recovery transitions ----------------------------------
 
-    def _mark_error(self, watch: _Watch, error: dict) -> None:
+    def _mark_error(
+        self,
+        watch: _Watch,
+        error: dict,
+        *,
+        emit_notification: bool = True,
+    ) -> None:
         key = str(error.get("code"))
         with watch.lock:
             # A fresh failure episode (healthy→error) advances the epoch so its
@@ -527,8 +650,8 @@ class TaskCardController:
             watch.error_key = key
             epoch = watch.error_epoch
             last_valid_at = watch.last_valid_at
-        if already:
-            return  # dedupe identical repeated failure state within this episode
+        if already or not emit_notification:
+            return  # dedupe, or let the terminal limit wake be the sole notification
         self._emit_event(watch, error, last_valid_at, epoch=epoch, recovered=False)
 
     def _mark_recovered(self, watch: _Watch, frame: dict) -> None:
@@ -869,11 +992,7 @@ def setup(
     tool surface; in that case the Composition Root supplies it for re-registration.
     """
     mgr = controller if controller is not None else TaskCardController(agent)
-    agent.add_tool(
-        "task_card",
-        schema=get_schema(),
-        handler=mgr.handle,
-        description=get_description(),
-        glossary_package=None,
-    )
+    # The raw Telegram MCP server owns the sole public schema/description.
+    # Composition may bind only the host-local controller handler.
+    agent.add_tool("task_card", handler=mgr.handle_family)
     return mgr

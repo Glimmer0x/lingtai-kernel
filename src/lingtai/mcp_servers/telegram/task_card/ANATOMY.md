@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/interface.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/manager.py
@@ -202,3 +203,28 @@ the `/taskcard` delivery boolean) is owned by the Telegram adapter, not here
   one deduped, per-episode wake plus one recovery wake.
 - `_TASK_CARD_TOOL` here mirrors `lingtai.kernel.base_agent._TASK_CARD_TOOL` and
   `telegram/server.py:_PRIVATE_TASK_CARD_TOOL`; the three must stay in sync.
+
+## Public family boundary and refresh-count state
+
+`task_card/_family.py` is the independent public LTP-v2 family adapter. It owns
+only the strict closed envelope, action-owned input schemas, pre-I/O validation,
+and package-owned `manual`; `controller.py` owns the lifecycle behind that
+boundary. The raw Telegram server registers exactly `telegram`, then `task_card`,
+while `_lingtai_telegram_task_card` remains an unlisted private reverse route.
+The old generic Agent/`lingtai.tools` Task Card registration is not a second
+owner: `Agent._maybe_setup_task_card_controller` is only the host composition
+hook that binds the Telegram-owned controller when the reverse route exists.
+This is the future split boundary: Task Card enum/schema/handler/controller/watch
+lifecycle can move packages without changing Telegram's independent family or
+private transport contract.
+
+`TelegramService` persists the agent-wide positive non-bool `max_refreshes` fuse
+in `<workdir>/telegram/taskcard.json` with atomic/fsynced writes. The controller
+receives a narrow getter and applies `min(requested, configured)` for a positive
+per-start lower ceiling. Initial create is excluded; each later interval/manual
+retry `_tick` consumes one permit before renderer/backend execution, including
+failure. Exhaustion sets `stop_reason=max_refreshes`, quiesces through the normal
+programmable-only finalize path, and emits exactly one content-safe normal
+`task_card.limit` wake keyed by watch and limit. A failed finalize retains a
+retryable `stop_failed` handle; the automatic slot and renderer files are
+untouched. Counter fields are part of start/inspect/retry/stop results.
