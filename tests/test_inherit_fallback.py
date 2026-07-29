@@ -55,12 +55,25 @@ def test_vision_unknown_provider_registers_manual_only_route():
 
 
 def test_web_supported_provider_uses_it(monkeypatch):
-    """web with provider='gemini' (supported) uses gemini, no fallback."""
-    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    """web with provider='openai' (supported, ungated) uses openai, no fallback."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     from lingtai.tools.web_search import setup as ws_setup
     a = _stub_agent()
-    ws_setup(a, provider="gemini", api_key="sk-test")
+    ws_setup(a, provider="openai", api_key="sk-test")
     assert "web" in a._tool_handlers
+
+
+def test_web_gated_provider_raises_actionable_error(monkeypatch):
+    """web with provider='gemini' is explicit opt-in through settings only;
+    a direct provider= composition rejects it outright rather than silently
+    admitting or falling back (2026-07-28 canonical-provider-routing repair).
+    Gemini is an active canonical provider, never "retired" -- this raises
+    SettingsOnlyProviderError, not RetiredProviderError (g2 repair)."""
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-test")
+    from lingtai.tools.web_search import SettingsOnlyProviderError, setup as ws_setup
+    a = _stub_agent()
+    with pytest.raises(SettingsOnlyProviderError):
+        ws_setup(a, provider="gemini", api_key="sk-test")
 
 
 def test_web_no_provider_uses_duckduckgo():
@@ -69,3 +82,59 @@ def test_web_no_provider_uses_duckduckgo():
     a = _stub_agent()
     ws_setup(a)
     assert "web" in a._tool_handlers
+
+
+def test_shipped_init_jsonc_web_block_registers_the_web_tool():
+    """The canonical init.jsonc `web` block must compose successfully through
+    setup() -- a template-derived Agent must never silently lose the whole
+    `web` capability (no search, no browse, no manual) to a composition-time
+    error swallowed by Agent.__init__'s `except (ValueError, ImportError,
+    TypeError): capability_skipped` catch (Opus review 2026-07-28, blocker B1).
+    Composes the exact shipped dict, not a hand-written stand-in, so any
+    future edit to init.jsonc that reintroduces a retired/gated provider name
+    fails this test instead of silently deregistering `web` for every new
+    template-derived agent."""
+    from pathlib import Path
+
+    from lingtai.kernel.config_resolve import load_jsonc
+    from lingtai.tools.web_search import setup as ws_setup
+
+    root = Path(__file__).parents[1]
+    data = load_jsonc(root / "src/lingtai/init.jsonc")
+    web_kwargs = data["manifest"]["capabilities"]["web"]
+
+    a = _stub_agent()
+    ws_setup(a, **web_kwargs)
+
+    assert "web" in a._tool_handlers
+    assert not any(event == "capability_skipped" for event, _ in a._log_events)
+
+
+def test_shipped_init_jsonc_web_block_names_no_retired_or_gated_provider():
+    """A narrower, faster-failing companion to the composition test above:
+    directly asserts the shipped `web` block never names minimax/zhipu
+    (RetiredProviderError) or anthropic/gemini (SettingsOnlyProviderError)
+    through a direct default_engine=/provider= route, so a future edit is
+    caught at the exact invariant even before touching setup()."""
+    from pathlib import Path
+
+    from lingtai.kernel.config_resolve import load_jsonc
+    from lingtai.tools.web_search import PROVIDERS
+
+    root = Path(__file__).parents[1]
+    data = load_jsonc(root / "src/lingtai/init.jsonc")
+    web_kwargs = data["manifest"]["capabilities"]["web"]
+
+    named_providers = set()
+    if "provider" in web_kwargs:
+        named_providers.add(web_kwargs["provider"])
+    if "default_engine" in web_kwargs:
+        named_providers.add(web_kwargs["default_engine"])
+    for name, spec in web_kwargs.get("engines", {}).items():
+        named_providers.add(spec.get("provider", name) if isinstance(spec, dict) else name)
+
+    assert named_providers <= set(PROVIDERS["providers"]), (
+        f"init.jsonc web block names a retired/unadmitted provider: {named_providers - set(PROVIDERS['providers'])}"
+    )
+    assert "minimax" not in named_providers
+    assert "zhipu" not in named_providers

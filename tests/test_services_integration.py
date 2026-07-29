@@ -1,7 +1,7 @@
 """Integration tests for standalone services — hits real APIs.
 
 Run with: python -m pytest tests/test_services_integration.py -v -s
-Requires .env with GEMINI_API_KEY, MINIMAX_API_KEY.
+Requires .env with GEMINI_API_KEY.
 Saves outputs to ~/Downloads/lingtai-service-tests/
 """
 from __future__ import annotations
@@ -24,10 +24,12 @@ OUT_DIR = Path.home() / "Downloads" / "lingtai-service-tests"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
-MINIMAX_KEY = os.getenv("MINIMAX_API_KEY", "")
 
 
 # ─── Web Search ──────────────────────────────────────────────────────────
+# MiniMax was retired from create_search_service 2026-07-28 (issue 11114);
+# its live-API integration test was removed with it rather than left as a
+# permanently-failing skipif stub.
 
 class TestWebSearch:
     def test_duckduckgo(self):
@@ -46,19 +48,6 @@ class TestWebSearch:
         results = svc.search("what is lingtai AI agent framework")
         assert len(results) > 0
         print(f"\n  Gemini search: {results[0].snippet[:100]}...")
-
-    @pytest.mark.skipif(not MINIMAX_KEY, reason="MINIMAX_API_KEY not set")
-    def test_minimax(self):
-        from lingtai.services.websearch import create_search_service
-        svc = create_search_service("minimax", api_key=MINIMAX_KEY)
-        try:
-            results = svc.search("latest news today")
-            print(f"\n  MiniMax search: {len(results)} results")
-            for r in results[:2]:
-                print(f"    {r.title}: {r.snippet[:80]}")
-        finally:
-            if hasattr(svc, "close"):
-                svc.close()
 
 
 # ─── Vision ──────────────────────────────────────────────────────────────
