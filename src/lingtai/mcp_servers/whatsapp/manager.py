@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+from . import _family
 from .client import WhatsAppClient
 from .redaction import redact_account
 from .webhook import extract_events
@@ -48,37 +49,12 @@ _CS_WINDOW_NOTE = (
 _CONVERSATION_CONTEXT_MESSAGES = 10
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 
-ACTIONS = [
-    "send", "check", "read", "reply", "search", "react", "contacts", "add_contact",
-    "remove_contact", "templates", "accounts", "status", "manual",
-]
-
 DESCRIPTION = "WhatsApp Cloud API client for LingTai. Official Meta API only; no WhatsApp Web bridge."
 
-SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": ACTIONS,
-            "description": _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME),
-        },
-        "account": {"type": "string"},
-        "to": {"type": "string", "description": "WhatsApp wa_id recipient"},
-        "wa_id": {"type": "string"},
-        "message_id": {"type": "string", "description": "compound account:wa_id:wamid id"},
-        "text": {"type": "string"},
-        "template": {"type": "object"},
-        "media": {"type": "object"},
-        "emoji": {"type": "string"},
-        "query": {"type": "string"},
-        "limit": {"type": "integer", "default": 10},
-        "name": {"type": "string"},
-        "mark_read": {"type": "boolean", "default": True},
-        "preview_url": {"type": "boolean"},
-    },
-    "required": ["action"],
-}
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+ACTIONS = _family.WHATSAPP_ACTIONS
+SCHEMA = _family.WHATSAPP_SCHEMA
 
 
 def _utcnow() -> str:

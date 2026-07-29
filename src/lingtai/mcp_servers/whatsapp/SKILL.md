@@ -8,12 +8,14 @@ description: |
   notification transient-hook vs persistent-context split, and
   external-delivery side-effect caveats. Pulled on demand via action='manual'; you
   do not need to call it before every send.
-version: 1.2.0
-last_changed_at: "2026-07-19T00:00:00Z"
+version: 1.3.0
+last_changed_at: "2026-07-29T00:00:00Z"
 related_files:
+- src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/whatsapp/manager.py
 - src/lingtai/mcp_servers/whatsapp/server.py
 - src/lingtai/mcp_servers/whatsapp/client.py
+- src/lingtai/mcp_servers/whatsapp/_family.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
