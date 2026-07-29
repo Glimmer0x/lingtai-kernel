@@ -2,17 +2,20 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from .. import _config
+from .._results import json_tool_result as _tool_result
+from .._results import text_resource_result as _resource_result
+from .._results import unknown_resource_error as _unknown_resource
+from .._results import unknown_tool_error as _unknown_tool
 from .licc import push_inbox_event
 from .manager import WhatsAppManager, SCHEMA, DESCRIPTION
 from .resources import resource_text
@@ -63,47 +66,68 @@ def build_manager() -> tuple[WhatsAppManager, Path]:
     return manager, working_dir
 
 
-def _tool_result(obj: dict[str, Any]) -> list[types.TextContent]:
-    return [types.TextContent(type="text", text=json.dumps(obj, ensure_ascii=False))]
-
-
 def build_server(manager: WhatsAppManager | None) -> Server:
-    server: Server = Server("lingtai-whatsapp", instructions=_SERVER_INSTRUCTIONS)
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=[types.Tool(name="whatsapp", description=DESCRIPTION, input_schema=SCHEMA)],
+        )
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
-        return [types.Tool(name="whatsapp", description=DESCRIPTION, inputSchema=SCHEMA)]
-
-    @server.call_tool()
-    async def _call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
-        if name != "whatsapp":
-            raise ValueError(f"unknown tool: {name!r}")
+    async def _call_tool(
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        if params.name != "whatsapp":
+            raise _unknown_tool(params.name)
         if manager is None:
             return _tool_result({"status": "error", "error": "WhatsApp manager not initialized; check LINGTAI_WHATSAPP_CONFIG"})
         try:
-            result = await asyncio.to_thread(manager.handle, arguments or {})
+            result = await asyncio.to_thread(manager.handle, params.arguments or {})
         except Exception as e:
             result = {"status": "error", "error": str(e), "error_type": type(e).__name__}
         return _tool_result(result)
 
-    @server.list_resources()
-    async def _list_resources() -> list[types.Resource]:
-        return [types.Resource(uri=uri, name=uri.rsplit("/", 1)[-1], mimeType=mime) for uri, mime in [
-            ("lingtai://manifest", "application/json"),
-            ("lingtai://skills/whatsapp", "text/markdown; profile=lingtai-skill"),
-            ("lingtai://docs/configuration", "text/markdown"),
-            ("lingtai://docs/troubleshooting", "text/markdown"),
-            ("lingtai://status", "application/json"),
-            ("lingtai://onboarding/whatsapp", "text/markdown"),
-            ("lingtai://onboarding/html-template", "text/html"),
-        ]]
+    async def _list_resources(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListResourcesResult:
+        return types.ListResourcesResult(
+            resources=[types.Resource(uri=uri, name=uri.rsplit("/", 1)[-1], mime_type=mime) for uri, mime in [
+                ("lingtai://manifest", "application/json"),
+                ("lingtai://skills/whatsapp", "text/markdown; profile=lingtai-skill"),
+                ("lingtai://docs/configuration", "text/markdown"),
+                ("lingtai://docs/troubleshooting", "text/markdown"),
+                ("lingtai://status", "application/json"),
+                ("lingtai://onboarding/whatsapp", "text/markdown"),
+                ("lingtai://onboarding/html-template", "text/html"),
+            ]],
+        )
 
-    @server.read_resource()
-    async def _read_resource(uri: str) -> str:
+    async def _read_resource(
+        _ctx: ServerRequestContext,
+        params: types.ReadResourceRequestParams,
+    ) -> types.ReadResourceResult:
         status = manager.handle({"action": "status"}) if manager is not None else {"status": "not_initialized"}
-        text, _mime = resource_text(str(uri), status)
-        return text
+        uri = str(params.uri)
+        try:
+            text, mime = resource_text(uri, status)
+        except KeyError as exc:
+            # `resource_text` signals an unlisted URI with a bare KeyError,
+            # which would flatten to -32603. Same lookup-miss classification as
+            # the other resource servers.
+            raise _unknown_resource(uri) from exc
+        return _resource_result(uri, text, mime)
 
+    server: Server = Server(
+        "lingtai-whatsapp",
+        instructions=_SERVER_INSTRUCTIONS,
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+        on_list_resources=_list_resources,
+        on_read_resource=_read_resource,
+    )
     return server
 
 

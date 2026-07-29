@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -889,6 +890,12 @@ class Agent(BaseAgent):
                         clients.remove(client)
                     except ValueError:
                         pass
+                # Drop this client's reverse routes and advertised metadata now,
+                # while we still know which tools were its. A reconnect below
+                # may fail (see the `except` branch), and without this the
+                # closed client would keep a live-looking route and metadata.
+                # Other clients' entries are untouched.
+                self._forget_mcp_client_tools(client)
 
             # Re-attempt the spawn. Mirrors the dispatch in
             # `_load_mcp_from_workdir._spawn` — kept inline (not factored)
@@ -937,7 +944,24 @@ class Agent(BaseAgent):
                 recovered.append(name)
             else:
                 # Spawn returned without raising but the client is not
-                # connected — treat as still failed.
+                # connected — treat as still failed. `connect_mcp*` already
+                # registered this replacement's tools, so tear it down the same
+                # way the pre-reconnect teardown handles the old client:
+                # otherwise a server this retry reports as failed would keep a
+                # live-looking reverse route and advertised metadata.
+                if new_client is not None:
+                    try:
+                        new_client.close()
+                    except Exception:
+                        pass
+                    clients = getattr(self, "_mcp_clients", None)
+                    if isinstance(clients, list):
+                        try:
+                            clients.remove(new_client)
+                        except ValueError:
+                            pass
+                    self._forget_mcp_client_tools(new_client)
+                spec["client"] = None
                 self._log("mcp_retry_failed", name=name,
                           error="client not connected after retry")
                 still_failed.append(name)
@@ -1112,6 +1136,7 @@ class Agent(BaseAgent):
         Returns:
             List of registered tool names.
         """
+        from .services import mcp as mcp_service
         from .services.mcp import MCPClient
 
         # Expand per-agent placeholders (e.g. {agent_id}) so a shared registry
@@ -1133,6 +1158,7 @@ class Agent(BaseAgent):
         # List tools and register each one
         tools = client.list_tools()
         registered = []
+        metadata: dict[str, dict] = {}
         for tool in tools:
             name = tool["name"]
 
@@ -1141,11 +1167,20 @@ class Agent(BaseAgent):
                     return c.call_tool(tool_name, tool_args)
                 return handler
 
-            # Extract schema properties (MCP uses inputSchema with JSON Schema).
-            # ``FunctionSchema.parameters`` is an opaque JSON-Schema dict — an
-            # addon-owned root ``additionalProperties`` (e.g. a strict LTP-v2
-            # family) must survive mounting unchanged, not be stripped.
+            # ``schema`` is the SDK v2 ``input_schema`` JSON Schema, already
+            # unpacked by the service boundary. ``FunctionSchema.parameters`` is
+            # an opaque JSON-Schema dict — an addon-owned root
+            # ``additionalProperties`` (e.g. a strict LTP-v2 family) must
+            # survive mounting unchanged, so #1081 deliberately neither strips
+            # nor copies it: the exact advertised object is mounted as-is.
             schema = tool.get("schema", {})
+
+            # The server's other advertised metadata (title, output_schema,
+            # annotations, icons, execution, meta) has no FunctionSchema field,
+            # so retain it in a sidecar captured from the service record.
+            # Without this the record goes out of scope here and the metadata is
+            # silently lost after registration.
+            metadata[name] = mcp_service.tool_metadata(tool)
 
             self.add_tool(
                 name,
@@ -1154,6 +1189,8 @@ class Agent(BaseAgent):
                 description=tool.get("description", ""),
             )
             registered.append(name)
+
+        self._record_mcp_tool_metadata(metadata)
 
         if not hasattr(self, "_mcp_tool_names"):
             self._mcp_tool_names = set()
@@ -1218,6 +1255,53 @@ class Agent(BaseAgent):
             )
         except (OSError, ValueError, TypeError):
             return default
+
+    def _record_mcp_tool_metadata(self, metadata: dict[str, dict]) -> None:
+        """Store the advertised MCP metadata for newly registered tools.
+
+        Keyed by registered tool name so it shares the lifetime of
+        ``_mcp_clients_by_tool``: both are rebuilt from scratch on deep refresh
+        (see ``refresh``) and both are dropped by ``stop``, so a torn-down
+        client can never leave stale metadata visible. Re-registering a name
+        replaces its entry rather than merging into it.
+        """
+        if not hasattr(self, "_mcp_tool_metadata"):
+            self._mcp_tool_metadata: dict[str, dict] = {}
+        self._mcp_tool_metadata.update(metadata)
+
+    def _forget_mcp_client_tools(self, client: Any) -> None:
+        """Drop the reverse routes and metadata belonging to one MCP client.
+
+        Used when a single client is torn down on its own — the failed-retry
+        path — where the whole-surface resets in ``refresh``/``stop`` do not
+        apply. Entries owned by other clients are preserved, so tearing down
+        one unhealthy server never blinds the rest of the surface.
+        """
+        routes = getattr(self, "_mcp_clients_by_tool", None)
+        if not isinstance(routes, dict):
+            return
+        owned = [name for name, owner in routes.items() if owner is client]
+        metadata = getattr(self, "_mcp_tool_metadata", None)
+        collisions = getattr(self, "_mcp_tool_collisions", None)
+        for name in owned:
+            routes.pop(name, None)
+            if isinstance(metadata, dict):
+                metadata.pop(name, None)
+            # #1081 records a same-surface collision per tool name. Once this
+            # client's route is gone the recorded collision no longer describes
+            # a live pair, so drop it with the rest of the client's state.
+            if isinstance(collisions, set):
+                collisions.discard(name)
+
+    def mcp_tool_metadata(self, name: str) -> dict | None:
+        """Return advertised MCP metadata for one registered tool, or ``None``.
+
+        The returned mapping is a copy: mutating it cannot reach the stored
+        record. Fields absent from the server's advertisement are absent here;
+        an empty dict means the tool advertised none.
+        """
+        stored = getattr(self, "_mcp_tool_metadata", {}).get(name)
+        return deepcopy(stored) if stored is not None else None
 
     def _maybe_setup_task_card_controller(self) -> None:
         """Bind the host controller only to one exact, collision-free raw pair.
@@ -1291,6 +1375,7 @@ class Agent(BaseAgent):
         Returns:
             List of registered tool names.
         """
+        from .services import mcp as mcp_service
         from .services.mcp import HTTPMCPClient
 
         url = self._expand_agent_placeholders(url)
@@ -1309,6 +1394,7 @@ class Agent(BaseAgent):
 
         tools = client.list_tools()
         registered = []
+        metadata: dict[str, dict] = {}
         for tool in tools:
             name = tool["name"]
 
@@ -1317,9 +1403,11 @@ class Agent(BaseAgent):
                     return c.call_tool(tool_name, tool_args)
                 return handler
 
-            # Addon-owned root ``additionalProperties`` must survive mounting
-            # unchanged; see the matching comment in ``connect_mcp``.
+            # Same v2 tool record and the same metadata sidecar as the stdio
+            # path above. Addon-owned root ``additionalProperties`` must survive
+            # mounting unchanged; see the matching comment in ``connect_mcp``.
             schema = tool.get("schema", {})
+            metadata[name] = mcp_service.tool_metadata(tool)
 
             self.add_tool(
                 name,
@@ -1328,6 +1416,8 @@ class Agent(BaseAgent):
                 description=tool.get("description", ""),
             )
             registered.append(name)
+
+        self._record_mcp_tool_metadata(metadata)
 
         if not hasattr(self, "_mcp_tool_names"):
             self._mcp_tool_names = set()
@@ -1359,6 +1449,9 @@ class Agent(BaseAgent):
                 client.close()
             except Exception:
                 pass
+        # Advertised metadata describes those now-closed clients; drop it so a
+        # stopped agent cannot report a live-looking MCP tool surface.
+        self._mcp_tool_metadata = {}
 
         super().stop(timeout=timeout)
 
@@ -1575,6 +1668,9 @@ class Agent(BaseAgent):
         # a retained Task Card controller must never select a prior runtime route.
         self._mcp_clients_by_tool = {}
         self._mcp_tool_collisions = set()
+        # Advertised metadata belongs to those same closed clients. Drop it with
+        # them so a rebuilt surface never exposes a prior runtime's metadata.
+        self._mcp_tool_metadata = {}
 
         self._sealed = False
         self._tool_handlers.clear()

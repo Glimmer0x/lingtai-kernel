@@ -40,9 +40,13 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+
+from .._results import json_tool_result as _tool_result
+from .._results import text_resource_result as _resource_result
+from .._results import unknown_resource_error as _unknown_resource
+from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
 from ._migrate import migrate_legacy_state
@@ -564,47 +568,56 @@ def build_manager() -> tuple[IMAPMailManager, FilesystemMailBridge | None, Path]
 def build_server(manager: IMAPMailManager | None) -> Server:
     """Construct the MCP server. ``manager`` is None when eager start
     failed; in that case every tool call returns an error explaining why."""
-    server: Server = Server("lingtai-imap", instructions=_SERVER_INSTRUCTIONS)
-
-    @server.list_resources()
-    async def _list_resources() -> list[types.Resource]:
+    async def _list_resources(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListResourcesResult:
         profile = lingtai_profile(manager)
-        return [
-            types.Resource(
-                name=item["name"],
-                uri=item["uri"],
-                description=item["description"],
-                mimeType=item["mime_type"],
-            )
-            for item in profile["resources"]
-        ]
+        return types.ListResourcesResult(
+            resources=[
+                types.Resource(
+                    name=item["name"],
+                    uri=item["uri"],
+                    description=item["description"],
+                    mime_type=item["mime_type"],
+                )
+                for item in profile["resources"]
+            ],
+        )
 
-    @server.read_resource()
-    async def _read_resource(uri: object) -> list[ReadResourceContents]:
-        key = _canonical_resource_uri(uri)
+    async def _read_resource(
+        _ctx: ServerRequestContext,
+        params: types.ReadResourceRequestParams,
+    ) -> types.ReadResourceResult:
+        key = _canonical_resource_uri(params.uri)
         resources = lingtai_resources(manager)
         try:
             mime_type, content = resources[key]
         except KeyError as exc:
-            raise ValueError(f"unknown resource: {uri!s}") from exc
-        return [ReadResourceContents(content=content, mime_type=mime_type)]
+            raise _unknown_resource(key) from exc
+        return _resource_result(key, content, mime_type)
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="imap",
-                description=DESCRIPTION,
-                inputSchema=SCHEMA,
-            ),
-        ]
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="imap",
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+            ],
+        )
 
-    @server.call_tool()
     async def _call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[types.TextContent]:
-        if name != "imap":
-            raise ValueError(f"unknown tool: {name!r}")
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        if params.name != "imap":
+            raise _unknown_tool(params.name)
+        arguments = params.arguments or {}
         if manager is None:
             result = {
                 "status": "error",
@@ -623,10 +636,16 @@ def build_server(manager: IMAPMailManager | None) -> Server:
                     "error": str(e),
                     "error_type": type(e).__name__,
                 }
-        return [types.TextContent(
-            type="text", text=json.dumps(result, ensure_ascii=False),
-        )]
+        return _tool_result(result)
 
+    server: Server = Server(
+        "lingtai-imap",
+        instructions=_SERVER_INSTRUCTIONS,
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+        on_list_resources=_list_resources,
+        on_read_resource=_read_resource,
+    )
     return server
 
 

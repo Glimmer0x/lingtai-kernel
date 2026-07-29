@@ -41,8 +41,13 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+
+from .._results import json_tool_result as _tool_result
+from .._results import text_resource_result as _resource_result
+from .._results import unknown_resource_error as _unknown_resource
+from .._results import unknown_tool_error as _unknown_tool
 
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 
@@ -57,14 +62,17 @@ from .service import TelegramService
 log = logging.getLogger("lingtai.mcp_servers.telegram")
 
 # Kernel-driven reverse channel for the live Telegram Task Card. The kernel
-# reverse-calls a *private tool name* that ``list_tools`` never returns; because
-# it is unlisted, ``mcp.server.lowlevel.Server.call_tool`` finds no cached
-# definition, skips input validation, and still invokes the handler. The public
-# ``telegram`` name keeps its default schema validation, so a public caller
-# cannot reach the task-card path even by guessing ``_PRIVATE_TASK_CARD_ACTION``
-# (that action is absent from the public ``SCHEMA`` enum). When the private tool
-# name arrives, the handler forces ``action=_PRIVATE_TASK_CARD_ACTION`` before
-# ``manager.handle``, so the hidden route can only ever project the card.
+# reverse-calls a *private tool name* that ``list_tools`` never returns. When
+# the private name arrives, the handler forces
+# ``action=_PRIVATE_TASK_CARD_ACTION`` before ``manager.handle``, so the hidden
+# route can only ever project the card.
+#
+# The public ``telegram`` name must not reach that action. Official SDK v2's
+# low-level ``Server`` validates the typed MCP request envelope but not the
+# advertised per-tool ``input_schema``, which is published and never applied —
+# so the public ``SCHEMA`` enum that used to block a guessed
+# ``_PRIVATE_TASK_CARD_ACTION`` no longer stops anything on its own. The handler
+# therefore rejects the private action on the public name explicitly.
 # BaseAgent mirrors this name literally (see ``_TASK_CARD_TOOL`` in
 # ``kernel.base_agent``); keep the two in sync.
 _PRIVATE_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
@@ -699,74 +707,121 @@ def build_server(
 ) -> Server:
     """Construct the MCP server.
 
+    ``manager`` is None when eager start failed; in that case every tool call
+    returns an error explaining why.
+
     ``task_card_handler`` is an optional host-bound controller seam. The raw
     server owns the public schema/name; the Agent host may bind the independent
     lifecycle controller without registering a second public schema.
     """
-    server: Server = Server("lingtai-telegram", instructions=_SERVER_INSTRUCTIONS)
+    async def _list_resources(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListResourcesResult:
+        return types.ListResourcesResult(
+            resources=[
+                types.Resource(
+                    uri=item["uri"],
+                    name=item["name"],
+                    description=item["description"],
+                    mime_type=item["mimeType"],
+                )
+                for item in _RESOURCE_INDEX
+            ],
+        )
 
-    @server.list_resources()
-    async def _list_resources() -> list[types.Resource]:
-        return [
-            types.Resource(
-                uri=item["uri"],
-                name=item["name"],
-                description=item["description"],
-                mimeType=item["mimeType"],
-            )
-            for item in _RESOURCE_INDEX
-        ]
-
-    @server.read_resource()
-    async def _read_resource(uri: object) -> str:
-        resource_uri = _canonical_resource_uri(uri)
+    async def _read_resource(
+        _ctx: ServerRequestContext,
+        params: types.ReadResourceRequestParams,
+    ) -> types.ReadResourceResult:
+        resource_uri = _canonical_resource_uri(params.uri)
         try:
-            _mime, text = _resource_payloads(manager)[resource_uri]
+            mime, text = _resource_payloads(manager)[resource_uri]
         except KeyError as exc:
-            raise ValueError(f"unknown resource: {resource_uri}") from exc
-        return text
+            raise _unknown_resource(resource_uri) from exc
+        return _resource_result(resource_uri, text, mime)
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
         # Stable order is part of the raw MCP contract. The private reverse
         # route is intentionally absent.
-        return [
-            types.Tool(name="telegram", description=DESCRIPTION, inputSchema=SCHEMA),
-            types.Tool(
-                name="task_card",
-                description=task_card_description(),
-                inputSchema=TASK_CARD_SCHEMA,
-            ),
-        ]
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="telegram",
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+                types.Tool(
+                    name="task_card",
+                    description=task_card_description(),
+                    input_schema=TASK_CARD_SCHEMA,
+                ),
+            ],
+        )
 
-    # Default ``validate_input=True`` validates both listed public schemas. The
-    # private task-card route remains unlisted and is forced to its one manager
-    # action before any manager I/O.
-    @server.call_tool()
+    # The SDK has already validated the typed request envelope (``params.name``
+    # is a ``str``, ``params.arguments`` a ``dict | None``), but it never applies
+    # either advertised per-tool ``input_schema``. Both public families and the
+    # unlisted private task-card route therefore arrive here without per-tool
+    # argument checking, and this handler owns every routing decision (see
+    # ``_PRIVATE_TASK_CARD_TOOL`` above).
     async def _call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[types.TextContent]:
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        arguments = params.arguments or {}
+        if params.name == _PRIVATE_TASK_CARD_TOOL:
+            # Reverse channel. Force the private action so a caller cannot
+            # repurpose the hidden route for any public Telegram action, then
+            # dispatch through the same ``manager.handle`` path as the public
+            # families.
+            arguments = {**arguments, "action": _PRIVATE_TASK_CARD_ACTION}
+        elif params.name not in {"telegram", "task_card"}:
+            # A lookup miss is a caller-fixable parameter error (-32602), never
+            # a wrapped success payload.
+            raise _unknown_tool(params.name)
+        elif (
+            params.name == "telegram"
+            and arguments.get("action") == _PRIVATE_TASK_CARD_ACTION
+        ):
+            # The public family must never reach the reverse channel. v2 does
+            # not apply the advertised schema, so the enum that used to reject
+            # this is not a gate any more — this branch is.
+            return _tool_result({
+                "status": "error",
+                "error": f"unknown telegram action: {_PRIVATE_TASK_CARD_ACTION}",
+            })
+
         try:
-            if name == _PRIVATE_TASK_CARD_TOOL:
-                arguments = {**arguments, "action": _PRIVATE_TASK_CARD_ACTION}
+            if params.name == _PRIVATE_TASK_CARD_TOOL:
                 if manager is None:
-                    result = {"status": "error", "error": "Telegram manager unavailable"}
+                    result = {
+                        "status": "error",
+                        "error": "Telegram manager unavailable",
+                    }
                 else:
                     result = await asyncio.to_thread(manager.handle, arguments)
-            elif name == "telegram":
+            elif params.name == "telegram":
                 if manager is None:
                     result = handle_telegram(None, arguments)
                     if not result:
                         result = {
                             "status": "error",
                             "error": (
-                                "Telegram manager not initialized — server boot failed. "
-                                "Check stderr for the underlying exception."
+                                "Telegram manager not initialized — server boot "
+                                "failed. Check stderr for the underlying "
+                                "exception (most often missing "
+                                "LINGTAI_TELEGRAM_CONFIG or invalid bot token)."
                             ),
                         }
                 else:
-                    result = await asyncio.to_thread(handle_telegram, manager, arguments)
-            elif name == "task_card":
+                    result = await asyncio.to_thread(
+                        handle_telegram, manager, arguments
+                    )
+            else:  # task_card
                 if task_card_handler is not None:
                     result = await asyncio.to_thread(task_card_handler, arguments)
                 else:
@@ -774,20 +829,29 @@ def build_server(
                     if not result:
                         result = {
                             "status": "error",
-                            "error": "Task Card controller is host-bound and unavailable",
+                            "error": (
+                                "Task Card controller is host-bound and "
+                                "unavailable"
+                            ),
                         }
-            else:
-                raise ValueError(f"unknown tool: {name!r}")
         except Exception as e:
-            # Preserve the MCP protocol's native unknown-tool error semantics:
-            # listed families own their wrapped result errors, while an unlisted
-            # name must remain an actual call failure (not a successful generic
-            # dispatcher payload).
-            if name not in {"telegram", "task_card", _PRIVATE_TASK_CARD_TOOL}:
-                raise
-            result = {"status": "error", "error": str(e), "error_type": type(e).__name__}
-        return [types.TextContent(type="text", text=json.dumps(result, ensure_ascii=False))]
+            # A listed family owning a domain failure keeps it as a readable
+            # tool result; only lookup misses above are protocol errors.
+            result = {
+                "status": "error",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+        return _tool_result(result)
 
+    server: Server = Server(
+        "lingtai-telegram",
+        instructions=_SERVER_INSTRUCTIONS,
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+        on_list_resources=_list_resources,
+        on_read_resource=_read_resource,
+    )
     return server
 
 

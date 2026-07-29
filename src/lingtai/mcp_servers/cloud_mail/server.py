@@ -41,8 +41,11 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+
+from .._results import json_tool_result as _tool_result
+from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
 from .licc import push_inbox_event
@@ -134,24 +137,27 @@ def build_manager() -> tuple[CloudMailManager, Path]:
 def build_server(manager: CloudMailManager | None) -> Server:
     """Construct the MCP server. ``manager`` is None when eager start failed;
     in that case every tool call returns an error explaining why."""
-    server: Server = Server("lingtai-cloud-mail", instructions=_SERVER_INSTRUCTIONS)
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="cloud_mail",
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+            ],
+        )
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="cloud_mail",
-                description=DESCRIPTION,
-                inputSchema=SCHEMA,
-            ),
-        ]
-
-    @server.call_tool()
     async def _call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[types.TextContent]:
-        if name != "cloud_mail":
-            raise ValueError(f"unknown tool: {name!r}")
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        if params.name != "cloud_mail":
+            raise _unknown_tool(params.name)
+        arguments = params.arguments or {}
         if manager is None:
             result = {
                 "status": "error",
@@ -170,10 +176,14 @@ def build_server(manager: CloudMailManager | None) -> Server:
                     "error": str(e),
                     "error_type": type(e).__name__,
                 }
-        return [types.TextContent(
-            type="text", text=json.dumps(result, ensure_ascii=False),
-        )]
+        return _tool_result(result)
 
+    server: Server = Server(
+        "lingtai-cloud-mail",
+        instructions=_SERVER_INSTRUCTIONS,
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+    )
     return server
 
 

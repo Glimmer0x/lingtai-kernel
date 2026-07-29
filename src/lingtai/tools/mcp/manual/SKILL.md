@@ -29,13 +29,16 @@ description: >
   `mcp:` activation entries relate to the registry. Replaces the deprecated
   `lingtai-mcp` skill.
 
-  Does NOT cover the protocol spec: schema validation, env injection
-  (`LINGTAI_AGENT_DIR` / `LINGTAI_MCP_NAME`), the LICC v1 inbox callback
-  contract, and validator internals live in `lingtai-kernel-anatomy
-  reference/mcp-protocol.md`. Read this for *what to do*, anatomy for *how
-  it works*.
-version: 3.3.0
-last_changed_at: 2026-07-19T00:00:00Z
+  Does NOT cover the protocol spec. `lingtai-kernel-anatomy
+  reference/mcp-protocol.md` owns the supported SDK/protocol range, the
+  SDK-versus-LingTai ownership split, and the stdio env-injection boundary
+  (`LINGTAI_AGENT_DIR` / `LINGTAI_MCP_NAME`); it routes onward to
+  `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md` for the LICC v1 inbox
+  callback contract and to `src/lingtai/services/mcp_registry.py` for
+  validator internals. Read this for *what to do*, anatomy for *how it
+  works*.
+version: 3.4.0
+last_changed_at: 2026-07-28T00:00:00Z
 related_files:
 - src/lingtai/tools/mcp/__init__.py
 - src/lingtai/tools/mcp/ANATOMY.md
@@ -76,6 +79,7 @@ Promotion path: catalog → registry → active. You move things along by editin
 | MCP not behaving / cryptic boot errors / `KeyError: 'foo'` | `reference/troubleshooting.md` |
 | Update or deregister an MCP | `reference/troubleshooting.md` |
 | Spec-level questions (schema, env injection, LICC) | `lingtai-kernel-anatomy reference/mcp-protocol.md` |
+| Which MCP protocol/SDK version LingTai supports, and what it owns vs. delegates | `lingtai-kernel-anatomy reference/mcp-protocol.md` |
 
 **Before curated addon setup**, start with `reference/curated-addons.md`; it owns the setup contract and the registry-name → module-name table. Those first-party servers now ship inside the `lingtai` wheel under `lingtai.mcp_servers.*`; historical `lingtai_*` packages remain as thin compatibility wrappers.
 
@@ -144,7 +148,8 @@ All registry mutations happen via `write` / `edit` / `bash`. The `mcp` capabilit
 
 ## See also
 
-- **Canonical spec**: `lingtai-kernel-anatomy reference/mcp-protocol.md` — full three-layer model, env injection, validator schema, **LICC v1** inbox callback contract, reference implementations.
+- **Canonical spec**: `lingtai-kernel-anatomy reference/mcp-protocol.md` — supported SDK range (`mcp>=2,<3`), protocol `2026-07-28` with legacy fallback, the split between what the official SDK owns and what LingTai owns, the tool-metadata sidecar, and the stdio env-injection/registry boundary. It routes onward for the details it does not own.
+- **LICC v1 inbox callback contract**: `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md` — the normative event envelope and two-lane projection.
 - **File formats**: `lingtai-kernel-anatomy reference/file-formats.md` §2.7 (init.json `addons` + `mcp` fields), §6 (`mcp/servers.json` legacy direct mounts), §6.5 (`mcp_registry.jsonl`), §6.6 (`.mcp_inbox/<name>/<id>.json` LICC events).
 
 ## Cleanup / Footprint

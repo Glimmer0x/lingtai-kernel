@@ -36,8 +36,13 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+
+from .._results import json_tool_result as _tool_result
+from .._results import text_resource_result as _resource_result
+from .._results import unknown_resource_error as _unknown_resource
+from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
 from .licc import push_inbox_event
@@ -632,45 +637,54 @@ def build_manager() -> tuple[FeishuManager, Path]:
 # ---------------------------------------------------------------------------
 
 def build_server(manager: FeishuManager | None) -> Server:
-    server: Server = Server("lingtai-feishu", instructions=_SERVER_INSTRUCTIONS)
+    async def _list_resources(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListResourcesResult:
+        return types.ListResourcesResult(
+            resources=[
+                types.Resource(
+                    uri=item["uri"],
+                    name=item["name"],
+                    description=item["description"],
+                    mime_type=item["mimeType"],
+                )
+                for item in _RESOURCE_INDEX
+            ],
+        )
 
-    @server.list_resources()
-    async def _list_resources() -> list[types.Resource]:
-        return [
-            types.Resource(
-                uri=item["uri"],
-                name=item["name"],
-                description=item["description"],
-                mimeType=item["mimeType"],
-            )
-            for item in _RESOURCE_INDEX
-        ]
-
-    @server.read_resource()
-    async def _read_resource(uri: object) -> str:
-        resource_uri = _canonical_resource_uri(uri)
+    async def _read_resource(
+        _ctx: ServerRequestContext,
+        params: types.ReadResourceRequestParams,
+    ) -> types.ReadResourceResult:
+        resource_uri = _canonical_resource_uri(params.uri)
         try:
-            _mime, text = _resource_payloads(manager)[resource_uri]
+            mime, text = _resource_payloads(manager)[resource_uri]
         except KeyError as exc:
-            raise ValueError(f"unknown resource: {resource_uri}") from exc
-        return text
+            raise _unknown_resource(resource_uri) from exc
+        return _resource_result(resource_uri, text, mime)
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="feishu",
-                description=DESCRIPTION,
-                inputSchema=SCHEMA,
-            ),
-        ]
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="feishu",
+                    description=DESCRIPTION,
+                    input_schema=SCHEMA,
+                ),
+            ],
+        )
 
-    @server.call_tool()
     async def _call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[types.TextContent]:
-        if name != "feishu":
-            raise ValueError(f"unknown tool: {name!r}")
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        if params.name != "feishu":
+            raise _unknown_tool(params.name)
+        arguments = params.arguments or {}
         if manager is None:
             result = {
                 "status": "error",
@@ -689,10 +703,16 @@ def build_server(manager: FeishuManager | None) -> Server:
                     "error": str(e),
                     "error_type": type(e).__name__,
                 }
-        return [types.TextContent(
-            type="text", text=json.dumps(result, ensure_ascii=False),
-        )]
+        return _tool_result(result)
 
+    server: Server = Server(
+        "lingtai-feishu",
+        instructions=_SERVER_INSTRUCTIONS,
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+        on_list_resources=_list_resources,
+        on_read_resource=_read_resource,
+    )
     return server
 
 

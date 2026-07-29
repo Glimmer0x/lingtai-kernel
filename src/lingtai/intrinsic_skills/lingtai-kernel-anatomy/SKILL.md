@@ -7,12 +7,13 @@ description: >
   explains how an agent enters and descends that graph, how it pairs with the
   distributed CONTRACT.md interface-definition graph, and what to do when code
   and navigation disagree.
-version: 0.3.0
-last_changed_at: "2026-07-19T00:00:00Z"
+version: 0.4.0
+last_changed_at: "2026-07-28T00:00:00Z"
 related_files:
 - ANATOMY.md
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
+- src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/reference/mcp-protocol.md
 maintenance: |
   Tracks the ANATOMY.md/CONTRACT.md convention it routes into; update when the root anatomy-of-anatomy or the pairing/link rules it summarizes change.
 ---
@@ -99,6 +100,15 @@ code, so an agent must open the cited line to confirm the claim.
 `src/lingtai/kernel/ANATOMY.md` for the tiered `rebuild_agent_session_from_events()`
 path; it takes `--events`/`--molt-every` against a synthetic temp agent dir, or
 `--agent-dir <path>` to time an existing one.
+
+## Reference sidecars
+
+Open one of these only when the question is actually about it; the router above
+is enough for ordinary navigation.
+
+| Reference | Read it when |
+|---|---|
+| `reference/mcp-protocol.md` | You need the supported MCP SDK range and negotiated protocol version, the split between what the official SDK owns and what LingTai owns, the low-level server handler shape, the tool-metadata sidecar, or the stdio config/env-injection boundary. It routes onward for LICC and registry details rather than restating them. |
 
 ## Fallback essentials
 

@@ -15,13 +15,14 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
 
+import anyio
 import mcp.types as types
 import pytest as _pytest
+from mcp import Client
 
 from lingtai.kernel import meta_block
 from lingtai.kernel.notifications import submit as _submit
@@ -103,20 +104,27 @@ def _msg(message_id: int = 100, *, frm: dict = USER_A, text: str = "hello",
 
 
 def _call_tool(manager: TelegramManager, arguments: dict):
-    """Drive the real transport handler (native SCHEMA validation included)."""
-    server = build_server(manager)
-    handler = server.request_handlers[types.CallToolRequest]
+    """Drive the real transport through an in-memory SDK v2 client.
+
+    #1081 made ``telegram`` an LTP-v2 ToolFamily, so the wire argument is the
+    ``action``/``input``/``reasoning`` envelope, not the flat legacy dict these
+    tests author. v2's low-level server never applies the advertised per-tool
+    schema, so the ``chat_id`` constraint the family input schema declares is
+    enforced by the family/manager instead; these tests still exercise it
+    through the real transport.
+    """
     action = arguments.get("action")
     envelope = {
         "action": action,
         "input": {key: value for key, value in arguments.items() if key != "action"},
         "reasoning": "transport regression test",
     }
-    req = types.CallToolRequest(
-        method="tools/call",
-        params=types.CallToolRequestParams(name="telegram", arguments=envelope),
-    )
-    return asyncio.run(handler(req)).root
+
+    async def _run():
+        async with Client(build_server(manager)) as client:
+            return await client.call_tool("telegram", envelope)
+
+    return anyio.run(_run)
 
 
 def _payload(result) -> dict:
@@ -203,7 +211,7 @@ def test_public_read_recovers_generic_event_from_updates_bucket(
         "action": "read",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
     })
-    assert not result.isError
+    assert not result.is_error
     payload = _payload(result)
     assert payload["status"] == "ok"
     envelope = payload["messages"][0]["telegram"]
@@ -221,7 +229,7 @@ def test_public_read_recovers_inline_only_callback(tmp_path: Path) -> None:
         "action": "read",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
     })
-    assert not result.isError
+    assert not result.is_error
     payload = _payload(result)
     assert payload["messages"][0]["telegram"]["update"]["callback_query"] == cq
 
@@ -238,7 +246,7 @@ def test_public_search_accepts_reserved_bucket_chat_id(tmp_path: Path) -> None:
         "query": "poll",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
     })
-    assert not result.isError
+    assert not result.is_error
     payload = _payload(result)
     assert payload["total"] == 1
     assert payload["messages"][0]["telegram"]["event_id"] == "main:update:5003"
@@ -253,9 +261,11 @@ def test_send_rejects_reserved_bucket_and_reply_rejects_event_records(
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
         "text": "hi",
     })
-    # Strict action-owned send input rejects the reserved read/search-only bucket
-    # before manager I/O; the legacy flat call was schema-valid but handler-rejected.
-    assert result.isError
+    # Strict action-owned send input rejects the reserved read/search-only
+    # bucket before manager I/O. Under v2 that refusal carries the protocol
+    # error bit (v1 emitted a bare text block with no flag), so the model sees
+    # a readable, correctly-marked failure.
+    assert result.is_error is True
 
     reply = manager.handle({
         "action": "reply",
@@ -271,7 +281,7 @@ def test_arbitrary_string_chat_id_still_schema_rejected(tmp_path: Path) -> None:
         "action": "read",
         "chat_id": "not-a-chat",
     })
-    assert result.isError is True
+    assert result.is_error is True
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +707,7 @@ def test_reading_updates_bucket_clears_its_notification_mirror(
         "action": "read",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
     })
-    assert not result.isError
+    assert not result.is_error
     payload = _payload(result)
     assert payload["status"] == "ok"
     assert payload["messages"][0]["id"] == "main:updates:5100"
@@ -744,12 +754,12 @@ def test_mirror_stays_while_another_numeric_event_is_unread(
         "action": "read",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
     })
-    assert not result.isError
+    assert not result.is_error
     assert mirror.exists()
 
     # Reading the remaining numeric chat completes the lifecycle.
     result = _call_tool(manager, {"action": "read", "chat_id": 123})
-    assert not result.isError
+    assert not result.is_error
     assert not mirror.exists()
 
 
@@ -779,7 +789,7 @@ def test_outbound_paths_still_reject_synthetic_bucket(tmp_path: Path) -> None:
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
         "text": "hi",
     })
-    assert send_result.isError
+    assert send_result.is_error
     for action in ("reply", "edit"):
         result = manager.handle({
             "action": action,

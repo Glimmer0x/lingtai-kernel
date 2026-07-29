@@ -22,7 +22,14 @@ dependencies = [
     "openai>=1.0",
     "anthropic>=0.40",
     "google-genai>=1.0",
-    "mcp>=1.10.0",
+    # Official MCP Python SDK v2 (protocol 2026-07-28). The supported range is
+    # the SDK's own published compatibility window; the wheel exact-pins
+    # `mcp-types`, so never pin that separately here.
+    "mcp>=2,<3",
+    # Direct, not transitive: `services/mcp.py` imports httpx2 to build the
+    # AsyncClient the v2 Streamable HTTP transport requires. Floor matches the
+    # official SDK v2 declaration.
+    "httpx2>=2.5.0",
     "ddgs>=7.0",
     "trafilatura>=2.0",
     "filelock>=3.0",
