@@ -99,11 +99,11 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
     service = _service(tmp_path, "main")
     service.set_taskcard_enabled(False)
     state_path = tmp_path / "telegram" / "taskcard.json"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False, "normal_rows": 1}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False, "normal_rows": 1, "max_refreshes": 1000}
     assert _service(tmp_path, "main").taskcard_enabled() is False
 
     service.set_taskcard_enabled(True)
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True, "normal_rows": 1}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True, "normal_rows": 1, "max_refreshes": 1000}
     assert _service(tmp_path, "main").taskcard_enabled() is True
 
 
@@ -714,6 +714,7 @@ def test_taskcard_normal_rows_persist_and_are_shared_across_accounts(tmp_path: P
     assert json.loads((tmp_path / "telegram" / "taskcard.json").read_text()) == {
         "taskcard": True,
         "normal_rows": 7,
+        "max_refreshes": 1000,
     }
     restored = _service(tmp_path, "one")
     assert restored.taskcard_enabled() is True

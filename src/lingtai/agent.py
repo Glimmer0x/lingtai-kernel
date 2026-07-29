@@ -18,6 +18,7 @@ from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
     LLMService,
@@ -118,6 +119,28 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
             "max_aed_attempts", defaults.max_aed_attempts
         ),
         max_rpm=max_rpm,
+    )
+
+
+_LTP_V2_FAMILY_ROOT_FIELDS = {"action", "input", "reasoning", "summarize"}
+_LTP_V2_FAMILY_REQUIRED_FIELDS = {"action", "input", "reasoning"}
+
+
+def _is_strict_ltp_v2_family_schema(schema: Any) -> bool:
+    """Recognize the canonical closed root used by native MCP ToolFamilies."""
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    required = schema.get("required")
+    return (
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and isinstance(properties, dict)
+        and set(properties) == _LTP_V2_FAMILY_ROOT_FIELDS
+        and isinstance(required, list)
+        and set(required) == _LTP_V2_FAMILY_REQUIRED_FIELDS
+        and isinstance(properties.get("reasoning"), dict)
+        and properties["reasoning"].get("type") == "string"
     )
 
 
@@ -1030,6 +1053,29 @@ class Agent(BaseAgent):
         self._mcp_inbox_poller = MCPInboxPoller(self)
         self._mcp_inbox_poller.start()
 
+    def _dispatch_tool(self, tc: ToolCall) -> dict:
+        """Restore canonical reasoning only for mounted strict MCP ToolFamilies.
+
+        ``ToolExecutor`` deliberately renames model-facing ``reasoning`` to the
+        private ``_reasoning`` audit key before every dispatch.  Ordinary
+        in-process and legacy MCP handlers consume that existing shape.  A native
+        MCP ToolFamily instead validates the original closed LTP-v2 envelope, so
+        the wrapper composition root restores the public key immediately before
+        the inherited handler dispatch.  The input ToolCall is never mutated.
+        """
+        if tc.name in getattr(self, "_mcp_tool_names", set()):
+            schemas = [schema for schema in self._tool_schemas if schema.name == tc.name]
+            if (
+                len(schemas) == 1
+                and _is_strict_ltp_v2_family_schema(schemas[0].parameters)
+                and "_reasoning" in tc.args
+            ):
+                args = dict(tc.args)
+                reasoning = args.pop("_reasoning")
+                args.setdefault("reasoning", reasoning)
+                tc = ToolCall(name=tc.name, args=args, id=tc.id)
+        return super()._dispatch_tool(tc)
+
     def _expand_agent_placeholders(self, value):
         """Substitute per-agent placeholders in an MCP launch string.
 
@@ -1095,10 +1141,11 @@ class Agent(BaseAgent):
                     return c.call_tool(tool_name, tool_args)
                 return handler
 
-            # Extract schema properties (MCP uses inputSchema with JSON Schema)
+            # Extract schema properties (MCP uses inputSchema with JSON Schema).
+            # ``FunctionSchema.parameters`` is an opaque JSON-Schema dict — an
+            # addon-owned root ``additionalProperties`` (e.g. a strict LTP-v2
+            # family) must survive mounting unchanged, not be stripped.
             schema = tool.get("schema", {})
-            # Remove top-level keys that aren't valid for our FunctionSchema
-            schema.pop("additionalProperties", None)
 
             self.add_tool(
                 name,
@@ -1113,57 +1160,122 @@ class Agent(BaseAgent):
         self._mcp_tool_names.update(registered)
 
         # Build stable tool-name -> MCP client mapping for kernel-driven
-        # reverse calls (e.g. Telegram Task Card update).
-        if not hasattr(self, "_mcp_clients_by_tool"):
-            self._mcp_clients_by_tool: dict[str, Any] = {}
+        # reverse calls (e.g. Telegram Task Card update).  Preserve collision
+        # provenance so a later exact-looking pair cannot silently reclaim a
+        # name that another MCP already owned in this mounted surface.
         for name in registered:
-            self._mcp_clients_by_tool[name] = client
+            self._record_mcp_tool_owner(name, client)
 
         self._maybe_setup_task_card_controller()
         return registered
 
-    def _maybe_setup_task_card_controller(self) -> None:
-        """Register the Telegram-owned public ``task_card`` controller once a
-        Telegram reverse channel exists (Jason #7258/#7259).
+    def _record_mcp_tool_owner(self, name: str, client: Any) -> None:
+        """Map one MCP tool name while retaining same-surface collision provenance."""
+        if not hasattr(self, "_mcp_clients_by_tool"):
+            self._mcp_clients_by_tool: dict[str, Any] = {}
+        if not hasattr(self, "_mcp_tool_collisions"):
+            self._mcp_tool_collisions: set[str] = set()
+        previous = self._mcp_clients_by_tool.get(name)
+        if previous is not None and previous is not client:
+            self._mcp_tool_collisions.add(name)
+        self._mcp_clients_by_tool[name] = client
 
-        The controller drives the *programmable* slot of the single resident
-        Telegram Task Card, sharing the one resident message with the automatic
-        slot. It is Telegram MCP-owned (it drives the Telegram-owned reverse
-        channel ``_lingtai_telegram_task_card``) and lives under
-        ``lingtai.mcp_servers.telegram.task_card``, not in ``lingtai.tools``, so it
-        carries no glossary package. This method is only the Composition Root: it
-        detects the Telegram route and invokes the Telegram-owned ``setup``.
-        Idempotent: a no-op when the current controller owns the public handler
-        and its exact schema, and when no Telegram client is present. A full
-        refresh clears those public registries but retains active controller
-        watches, so reconnect re-registers that same controller rather than
-        starting a second manager.
-        """
-        if "telegram" not in getattr(self, "_mcp_clients_by_tool", {}):
+    def _fail_closed_task_card_binding(self) -> None:
+        """Remove only a host controller bind when package ownership is not exact."""
+        controller = getattr(self, "_task_card_controller", None)
+        if controller is None:
             return
+        handlers = getattr(self, "_tool_handlers", {})
+        handler = handlers.get("task_card")
+        if getattr(handler, "__self__", None) is not controller:
+            return
+        client = getattr(self, "_mcp_clients_by_tool", {}).get("task_card")
+        if client is None:
+            self._tool_handlers.pop("task_card", None)
+            return
+
+        def raw_handler(tool_args: dict, *, _client=client) -> dict:
+            return _client.call_tool("task_card", tool_args)
+
+        # Preserve the raw package schema/description; replace only the host-bound
+        # handler with the current MCP owner's ordinary public dispatch.
+        self.add_tool("task_card", handler=raw_handler)
+
+    def task_card_max_refreshes(self) -> int:
+        """Read the shared agent-wide Task Card fuse without owning its controller."""
+        default = 1000
+        try:
+            data = json.loads(
+                (self._working_dir / "telegram" / "taskcard.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            value = data.get("max_refreshes") if isinstance(data, dict) else None
+            return (
+                value
+                if type(value) is int and 0 < value <= default
+                else default
+            )
+        except (OSError, ValueError, TypeError):
+            return default
+
+    def _maybe_setup_task_card_controller(self) -> None:
+        """Bind the host controller only to one exact, collision-free raw pair.
+
+        The Telegram package remains the sole public schema/description owner.
+        Agent composition may replace only the ``task_card`` handler, and only
+        when both exact package families came from the same client without any
+        same-surface MCP name collision.  Every failed ownership check restores
+        ordinary raw MCP dispatch instead of leaving a prior host bind active.
+        A full refresh clears client/collision provenance, retains watch state,
+        and may rebind the same controller after a clean raw pair reconnects.
+        """
+        clients_by_tool = getattr(self, "_mcp_clients_by_tool", {})
+        pair = {"telegram", "task_card"}
+        if pair & getattr(self, "_mcp_tool_collisions", set()):
+            Agent._fail_closed_task_card_binding(self)
+            return
+        if not pair.issubset(clients_by_tool):
+            Agent._fail_closed_task_card_binding(self)
+            return
+        if clients_by_tool["task_card"] is not clients_by_tool["telegram"]:
+            Agent._fail_closed_task_card_binding(self)
+            return
+
+        from .mcp_servers.telegram.manager import (
+            DESCRIPTION as _telegram_description,
+            SCHEMA as _telegram_schema,
+        )
         from .mcp_servers.telegram.task_card import (
+            TaskCardController as _TaskCardController,
             get_description as _get_task_card_description,
             get_schema as _get_task_card_schema,
-            setup as _setup_task_card,
         )
 
+        telegram_schemas = [
+            schema for schema in self._tool_schemas if schema.name == "telegram"
+        ]
+        task_card_schemas = [
+            schema for schema in self._tool_schemas if schema.name == "task_card"
+        ]
+        if not (
+            len(telegram_schemas) == 1
+            and telegram_schemas[0].description == _telegram_description
+            and telegram_schemas[0].parameters == _telegram_schema
+            and len(task_card_schemas) == 1
+            and task_card_schemas[0].description == _get_task_card_description()
+            and task_card_schemas[0].parameters == _get_task_card_schema()
+        ):
+            Agent._fail_closed_task_card_binding(self)
+            return
+
         controller = getattr(self, "_task_card_controller", None)
-        if controller is not None:
-            schemas = [
-                schema for schema in self._tool_schemas if schema.name == "task_card"
-            ]
-            handler = self._tool_handlers.get("task_card")
-            has_public_registration = (
-                getattr(handler, "__self__", None) is controller
-                and len(schemas) == 1
-                and schemas[0].description == _get_task_card_description()
-                and schemas[0].parameters == _get_task_card_schema()
-                and schemas[0].system_prompt == ""
-                and schemas[0].glossary_package is None
-            )
-            if has_public_registration:
-                return
-        self._task_card_controller = _setup_task_card(self, controller=controller)
+        handler = self._tool_handlers.get("task_card")
+        if controller is not None and getattr(handler, "__self__", None) is controller:
+            return
+        controller = controller or _TaskCardController(self)
+        self.add_tool("task_card", handler=controller.handle_family)
+        self._task_card_controller = controller
 
     def connect_mcp_http(
         self,
@@ -1205,8 +1317,9 @@ class Agent(BaseAgent):
                     return c.call_tool(tool_name, tool_args)
                 return handler
 
+            # Addon-owned root ``additionalProperties`` must survive mounting
+            # unchanged; see the matching comment in ``connect_mcp``.
             schema = tool.get("schema", {})
-            schema.pop("additionalProperties", None)
 
             self.add_tool(
                 name,
@@ -1221,11 +1334,11 @@ class Agent(BaseAgent):
         self._mcp_tool_names.update(registered)
 
         # Build stable tool-name -> MCP client mapping for kernel-driven
-        # reverse calls (e.g. Telegram Task Card update).
-        if not hasattr(self, "_mcp_clients_by_tool"):
-            self._mcp_clients_by_tool: dict[str, Any] = {}
+        # reverse calls (e.g. Telegram Task Card update).  Preserve collision
+        # provenance so a later exact-looking pair cannot silently reclaim a
+        # name that another MCP already owned in this mounted surface.
         for name in registered:
-            self._mcp_clients_by_tool[name] = client
+            self._record_mcp_tool_owner(name, client)
 
         self._maybe_setup_task_card_controller()
         return registered
@@ -1461,6 +1574,7 @@ class Agent(BaseAgent):
         # only from successfully connected clients during the following MCP load;
         # a retained Task Card controller must never select a prior runtime route.
         self._mcp_clients_by_tool = {}
+        self._mcp_tool_collisions = set()
 
         self._sealed = False
         self._tool_handlers.clear()

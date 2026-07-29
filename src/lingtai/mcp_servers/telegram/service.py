@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 _TASKCARD_DEFAULT_NORMAL_ROWS = 1
 _TASKCARD_MIN_NORMAL_ROWS = 1
 _TASKCARD_MAX_NORMAL_ROWS = 10
+# Both the default AND the global hard ceiling: no per-agent setting may
+# exceed this value; only the settings owner can raise it (by changing this
+# constant), never a single ``start`` call.
+_TASKCARD_DEFAULT_MAX_REFRESHES = 1000
+_TASKCARD_MIN_MAX_REFRESHES = 1
+_TASKCARD_MAX_MAX_REFRESHES = 1000
 
 
 class TelegramService:
@@ -43,7 +49,11 @@ class TelegramService:
         # account-, chat-, session-, or project-scoped.
         self._taskcard_path = self._working_dir / "telegram" / "taskcard.json"
         self._taskcard_lock = threading.RLock()
-        self._taskcard, self._taskcard_normal_rows = self._load_taskcard_state()
+        (
+            self._taskcard,
+            self._taskcard_normal_rows,
+            self._taskcard_max_refreshes,
+        ) = self._load_taskcard_state()
         self._taskcard_listener: Callable[[bool], None] | None = None
 
         for cfg in accounts_config:
@@ -65,36 +75,39 @@ class TelegramService:
             self._accounts[alias] = acct
             self._account_order.append(alias)
 
-    def _load_taskcard_state(self) -> tuple[bool, int]:
-        """Load agent-wide Task Card preferences, preserving legacy state files."""
+    def _load_taskcard_state(self) -> tuple[bool, int, int]:
+        """Load preferences; one invalid field never erases valid sibling fields."""
         if not self._taskcard_path.is_file():
-            return True, _TASKCARD_DEFAULT_NORMAL_ROWS
+            return True, _TASKCARD_DEFAULT_NORMAL_ROWS, _TASKCARD_DEFAULT_MAX_REFRESHES
         try:
             data = read_json(self._taskcard_path, expect=dict)
-            enabled = data.get("taskcard")
-            if type(enabled) is not bool:
-                raise TypeError("taskcard must be a boolean")
-            normal_rows = data.get("normal_rows", _TASKCARD_DEFAULT_NORMAL_ROWS)
-            if (
-                type(normal_rows) is not int
-                or not _TASKCARD_MIN_NORMAL_ROWS <= normal_rows <= _TASKCARD_MAX_NORMAL_ROWS
-            ):
-                logger.warning(
-                    "Invalid Telegram taskcard normal_rows; defaulting to %d",
-                    _TASKCARD_DEFAULT_NORMAL_ROWS,
-                )
-                normal_rows = _TASKCARD_DEFAULT_NORMAL_ROWS
-            return enabled, normal_rows
         except (OSError, ValueError, TypeError):
-            # Content-free warning: the state file may be malformed and must never
-            # be echoed into logs. Preserve legacy behavior by failing open to on.
-            logger.warning("Invalid or unreadable Telegram taskcard state; defaulting to True")
-            return True, _TASKCARD_DEFAULT_NORMAL_ROWS
+            logger.warning("Invalid or unreadable Telegram taskcard state; using defaults")
+            return True, _TASKCARD_DEFAULT_NORMAL_ROWS, _TASKCARD_DEFAULT_MAX_REFRESHES
+        enabled = data.get("taskcard")
+        if type(enabled) is not bool:
+            logger.warning("Invalid Telegram taskcard state field; defaulting enabled to True")
+            enabled = True
+        normal_rows = data.get("normal_rows", _TASKCARD_DEFAULT_NORMAL_ROWS)
+        if (
+            type(normal_rows) is not int
+            or not _TASKCARD_MIN_NORMAL_ROWS <= normal_rows <= _TASKCARD_MAX_NORMAL_ROWS
+        ):
+            logger.warning("Invalid Telegram taskcard normal_rows; using default")
+            normal_rows = _TASKCARD_DEFAULT_NORMAL_ROWS
+        max_refreshes = data.get("max_refreshes")
+        if (
+            type(max_refreshes) is not int
+            or not _TASKCARD_MIN_MAX_REFRESHES <= max_refreshes <= _TASKCARD_MAX_MAX_REFRESHES
+        ):
+            logger.warning("Invalid Telegram taskcard max_refreshes; using default")
+            max_refreshes = _TASKCARD_DEFAULT_MAX_REFRESHES
+        return enabled, normal_rows, max_refreshes
 
-    def _persist_taskcard_state(self, enabled: bool, normal_rows: int) -> None:
+    def _persist_taskcard_state(self, enabled: bool, normal_rows: int, max_refreshes: int) -> None:
         atomic_write_json(
             self._taskcard_path,
-            {"taskcard": enabled, "normal_rows": normal_rows},
+            {"taskcard": enabled, "normal_rows": normal_rows, "max_refreshes": max_refreshes},
             fsync=True,
         )
 
@@ -114,7 +127,9 @@ class TelegramService:
             raise TypeError("enabled must be a boolean")
         with self._taskcard_lock:
             changed = self._taskcard != enabled
-            self._persist_taskcard_state(enabled, self._taskcard_normal_rows)
+            self._persist_taskcard_state(
+                enabled, self._taskcard_normal_rows, self._taskcard_max_refreshes
+            )
             self._taskcard = enabled
             listener = self._taskcard_listener if changed else None
         if listener is not None:
@@ -136,8 +151,37 @@ class TelegramService:
         ):
             raise ValueError("normal_rows must be an integer from 1 through 10")
         with self._taskcard_lock:
-            self._persist_taskcard_state(self._taskcard, normal_rows)
+            self._persist_taskcard_state(
+                self._taskcard, normal_rows, self._taskcard_max_refreshes
+            )
             self._taskcard_normal_rows = normal_rows
+
+    def taskcard_max_refreshes(self) -> int:
+        """Return the positive agent-wide Task Card refresh ceiling."""
+        with self._taskcard_lock:
+            return self._taskcard_max_refreshes
+
+    def set_taskcard_max_refreshes(self, max_refreshes: int) -> None:
+        """Persist a refresh ceiling atomically and fsynced.
+
+        ``max_refreshes`` is both the default and the global hard ceiling: a
+        single ``start`` call may only lower it via ``min(requested,
+        configured)``, never raise it. Rejecting values above the ceiling here
+        is what keeps that invariant enforceable.
+        """
+        if (
+            type(max_refreshes) is not int
+            or not _TASKCARD_MIN_MAX_REFRESHES <= max_refreshes <= _TASKCARD_MAX_MAX_REFRESHES
+        ):
+            raise ValueError(
+                f"max_refreshes must be an integer from {_TASKCARD_MIN_MAX_REFRESHES} "
+                f"through {_TASKCARD_MAX_MAX_REFRESHES}"
+            )
+        with self._taskcard_lock:
+            self._persist_taskcard_state(
+                self._taskcard, self._taskcard_normal_rows, max_refreshes
+            )
+            self._taskcard_max_refreshes = max_refreshes
 
     def get_account(self, alias: str) -> TelegramAccount:
         """Get account by alias. Raises KeyError if not found."""

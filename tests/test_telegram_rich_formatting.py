@@ -98,8 +98,27 @@ def _manager(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def _send_schema():
+    return next(
+        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
+        if branch.get("title") == "send input"
+    )
+
+
+def _schema_enum(schema):
+    if "enum" in schema:
+        return schema["enum"]
+    return [value for branch in schema.get("anyOf", []) for value in branch.get("enum", [])]
+
+
+def _schema_description(schema):
+    if "description" in schema:
+        return schema["description"]
+    return " ".join(branch.get("description", "") for branch in schema.get("anyOf", []))
+
+
 def test_schema_exposes_rich_formatting_fields():
-    props = SCHEMA["properties"]
+    props = _send_schema()["properties"]
     for field in (
         "parse_mode",
         "entities",
@@ -109,20 +128,20 @@ def test_schema_exposes_rich_formatting_fields():
     ):
         assert field in props
 
-    assert "" in props["parse_mode"]["enum"]
-    assert "plain text" in props["parse_mode"]["description"]
+    assert "" in _schema_enum(props["parse_mode"])
+    assert "plain text" in _schema_description(props["parse_mode"])
 
 
 def test_schema_allows_empty_chat_action():
-    props = SCHEMA["properties"]
-    assert "" in props["chat_action"]["enum"]
-    assert "empty string" in props["chat_action"]["description"]
+    props = _send_schema()["properties"]
+    assert "" in _schema_enum(props["chat_action"])
+    assert "empty string" in _schema_description(props["chat_action"])
 
 
 def test_schema_guides_generated_charts_to_documents():
-    props = SCHEMA["properties"]
-    media_description = props["media"]["description"]
-    action_description = props["action"]["description"]
+    props = _send_schema()["properties"]
+    media_description = _schema_description(props["media"])
+    action_description = SCHEMA["properties"]["action"]["description"]
 
     assert "charts" in media_description
     assert "generated artifacts" in media_description
@@ -159,7 +178,7 @@ def test_skill_file_exists_with_valid_frontmatter():
 def test_schema_exposes_manual_action():
     props = SCHEMA["properties"]
     assert "manual" in props["action"]["enum"]
-    action_description = props["action"]["description"]
+    action_description = SCHEMA["properties"]["action"]["description"]
     assert "manual:" in action_description
     assert "progressive-disclosure" in action_description
     # The frontmatter/catalog entry is injected into the schema: the action

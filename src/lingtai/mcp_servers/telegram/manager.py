@@ -26,7 +26,10 @@ from uuid import uuid4
 import logging
 import threading
 
+from lingtai.kernel._frontmatter import strip_frontmatter
+
 from .. import _skill
+from . import _family
 from . import updates as tg_updates
 from .account import TelegramRateLimitError
 from .task_card.resident import TaskCardResident
@@ -36,9 +39,6 @@ if TYPE_CHECKING:
     from .service import TelegramService
 
 log = logging.getLogger(__name__)
-
-
-from lingtai.kernel._frontmatter import strip_frontmatter
 
 
 def _load_notification_header_template() -> str:
@@ -518,6 +518,10 @@ DESCRIPTION = (
     "does not manage this card."
 )
 
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+SCHEMA = _family.TELEGRAM_SCHEMA
+
 
 class TelegramManager:
     """Tool handler + filesystem manager for the Telegram addon."""
@@ -651,6 +655,13 @@ class TelegramManager:
     # ------------------------------------------------------------------
 
     def handle(self, args: dict) -> dict:
+        # Keep the standalone manager surface in parity with the public family
+        # while retaining the flat internal boundary used by private reverse
+        # transport and existing manager tests. Family validation occurs before
+        # any manager action I/O; child dispatch re-enters here with a flat
+        # action mapping exactly once.
+        if isinstance(args, dict) and {"input", "reasoning"}.issubset(args):
+            return _family.handle_telegram(self, args)
         action = args.get("action")
         try:
             if action == "send":

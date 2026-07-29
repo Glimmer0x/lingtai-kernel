@@ -21,14 +21,20 @@ from pathlib import Path
 from typing import Any
 
 import mcp.types as types
+import pytest as _pytest
 
 from lingtai.kernel import meta_block
+from lingtai.kernel.notifications import submit as _submit
 from lingtai.mcp_servers.telegram import updates as tg_updates
 from lingtai.mcp_servers.telegram.account import TelegramAccount
-from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
+from lingtai.mcp_servers.telegram.manager import (
+    SCHEMA,
+    TelegramManager,
+    _mirror_identity_account,
+)
 from lingtai.mcp_servers.telegram.server import build_server
 from lingtai.services import mcp_inbox as inbox
-from tests._notification_store_helpers import notification_store_for
+from tests._notification_store_helpers import notification_store_for, store_agent_for
 
 DATE = 1781600000
 USER_A = {"id": 1, "is_bot": False, "first_name": "Alice", "username": "alice"}
@@ -100,9 +106,15 @@ def _call_tool(manager: TelegramManager, arguments: dict):
     """Drive the real transport handler (native SCHEMA validation included)."""
     server = build_server(manager)
     handler = server.request_handlers[types.CallToolRequest]
+    action = arguments.get("action")
+    envelope = {
+        "action": action,
+        "input": {key: value for key, value in arguments.items() if key != "action"},
+        "reasoning": "transport regression test",
+    }
     req = types.CallToolRequest(
         method="tools/call",
-        params=types.CallToolRequestParams(name="telegram", arguments=arguments),
+        params=types.CallToolRequestParams(name="telegram", arguments=envelope),
     )
     return asyncio.run(handler(req)).root
 
@@ -166,7 +178,11 @@ def test_poll_loop_requests_every_catalogued_branch(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_chat_id_schema_accepts_int_and_reserved_bucket_only() -> None:
-    chat_id_schema = SCHEMA["properties"]["chat_id"]
+    read = next(
+        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
+        if branch.get("title") == "read input"
+    )
+    chat_id_schema = read["properties"]["chat_id"]
     assert {"type": "integer"} in chat_id_schema["anyOf"]
     assert {
         "type": "string",
@@ -237,8 +253,9 @@ def test_send_rejects_reserved_bucket_and_reply_rejects_event_records(
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
         "text": "hi",
     })
-    assert not result.isError  # schema-valid; rejected by the handler
-    assert "read/search-only" in _payload(result)["error"]
+    # Strict action-owned send input rejects the reserved read/search-only bucket
+    # before manager I/O; the legacy flat call was schema-valid but handler-rejected.
+    assert result.isError
 
     reply = manager.handle({
         "action": "reply",
@@ -630,13 +647,6 @@ def test_edit_identity_does_not_regress_callback_or_delivered_filtering(
 # notification mirror (read-state-only identity validation).
 # ---------------------------------------------------------------------------
 
-import pytest as _pytest
-
-from lingtai.kernel.notifications import submit as _submit
-from lingtai.mcp_servers.telegram.manager import _mirror_identity_account
-from tests._notification_store_helpers import store_agent_for
-
-
 def _publish_mirror_from_event(workdir: Path, event: dict) -> Path:
     """Publish the real mcp.telegram mirror from an actual LICC event."""
     _submit(
@@ -764,12 +774,12 @@ def test_mirror_identity_account_accepts_exactly_two_shapes() -> None:
 def test_outbound_paths_still_reject_synthetic_bucket(tmp_path: Path) -> None:
     """The read-state validator must not loosen outbound targeting."""
     manager = _manager(tmp_path)
-    send = _payload(_call_tool(manager, {
+    send_result = _call_tool(manager, {
         "action": "send",
         "chat_id": tg_updates.SYNTHETIC_EVENTS_CHAT_ID,
         "text": "hi",
-    }))
-    assert "read/search-only" in send["error"]
+    })
+    assert send_result.isError
     for action in ("reply", "edit"):
         result = manager.handle({
             "action": action,

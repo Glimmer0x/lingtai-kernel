@@ -576,6 +576,110 @@ def test_connect_mcp_stdio_placeholder_expansion_is_unchanged(tmp_path, monkeypa
     }
 
 
+def test_strict_ltp_mcp_family_restores_host_reasoning_before_dispatch(
+    tmp_path, monkeypatch
+):
+    """The real host path must undo ToolExecutor's private reasoning rename.
+
+    Native MCP ToolFamilies own a strict public ``reasoning`` field, while
+    ToolExecutor deliberately normalizes that field to ``_reasoning`` for
+    ordinary in-process tools.  The Agent MCP adapter must restore the public
+    key for both raw MCP dispatch (``telegram``) and the host-bound Task Card
+    controller, without changing a legacy MCP tool's existing arguments.
+    """
+    from lingtai.kernel.llm.base import ToolCall
+    from lingtai.kernel.loop_guard import LoopGuard
+    from lingtai.kernel.tool_executor import ToolExecutor
+    from lingtai.mcp_servers.telegram.manager import DESCRIPTION, SCHEMA
+    from lingtai.mcp_servers.telegram.task_card import (
+        get_description as get_task_card_description,
+        get_schema as get_task_card_schema,
+    )
+    from lingtai.services import mcp
+
+    class FakeMCPClient(_FakeConnectionClient):
+        instances = []
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.calls: list[tuple[str, dict]] = []
+
+        def list_tools(self):
+            return [
+                {"name": "telegram", "schema": SCHEMA, "description": DESCRIPTION},
+                {
+                    "name": "task_card",
+                    "schema": get_task_card_schema(),
+                    "description": get_task_card_description(),
+                },
+                {
+                    "name": "legacy_echo",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Legacy flat MCP tool",
+                },
+            ]
+
+        def call_tool(self, name, args):
+            self.calls.append((name, copy.deepcopy(args)))
+            return {"status": "ok", "name": name}
+
+    monkeypatch.setattr(mcp, "MCPClient", FakeMCPClient)
+    agent, _ = _mk_agent(tmp_path)
+    assert agent.connect_mcp("fake-family-server") == [
+        "telegram",
+        "task_card",
+        "legacy_echo",
+    ]
+    client = FakeMCPClient.instances[-1]
+
+    executor = ToolExecutor(
+        dispatch_fn=agent._dispatch_tool,
+        make_tool_result_fn=lambda name, result, **_: {
+            "name": name,
+            "result": result,
+        },
+        guard=LoopGuard(max_total_calls=10),
+        known_tools={"telegram", "task_card", "legacy_echo"},
+        parallel_safe_tools=set(),
+    )
+
+    def run(name, args):
+        results, intercepted, _ = executor.execute(
+            [ToolCall(name=name, args=args, id=f"call-{name}")]
+        )
+        assert not intercepted
+        return results[0]["result"]
+
+    run(
+        "telegram",
+        {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
+    )
+    task_result = run(
+        "task_card",
+        {"action": "manual", "input": {}, "reasoning": "read the manual"},
+    )
+    run(
+        "legacy_echo",
+        {"value": "hello", "reasoning": "legacy audit metadata"},
+    )
+
+    assert client.calls[0] == (
+        "telegram",
+        {"action": "accounts", "input": {}, "reasoning": "inspect accounts"},
+    )
+    assert task_result["status"] == "ok"
+    assert task_result["action"] == "manual"
+    assert client.calls[1] == (
+        "legacy_echo",
+        {"value": "hello", "_reasoning": "legacy audit metadata"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Decompression
 # ---------------------------------------------------------------------------

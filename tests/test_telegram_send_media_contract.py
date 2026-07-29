@@ -48,7 +48,11 @@ def _manager(tmp_path: Path) -> tuple[TelegramManager, _Account]:
 
 
 def test_send_schema_advertises_exactly_runtime_supported_media_types():
-    advertised = SCHEMA["properties"]["media"]["properties"]["type"]["enum"]
+    send = next(
+        branch for branch in SCHEMA["properties"]["input"].get("oneOf", SCHEMA["properties"]["input"]["anyOf"])
+        if branch.get("title") == "send input"
+    )
+    advertised = send["properties"]["media"]["properties"]["type"]["enum"]
 
     assert advertised == list(SUPPORTED_SEND_MEDIA_TYPES) == ["photo", "document"]
 
