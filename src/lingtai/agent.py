@@ -18,6 +18,7 @@ from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
     LLMService,
@@ -118,6 +119,28 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
             "max_aed_attempts", defaults.max_aed_attempts
         ),
         max_rpm=max_rpm,
+    )
+
+
+_LTP_V2_FAMILY_ROOT_FIELDS = {"action", "input", "reasoning", "summarize"}
+_LTP_V2_FAMILY_REQUIRED_FIELDS = {"action", "input", "reasoning"}
+
+
+def _is_strict_ltp_v2_family_schema(schema: Any) -> bool:
+    """Recognize the canonical closed root used by native MCP ToolFamilies."""
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    required = schema.get("required")
+    return (
+        schema.get("type") == "object"
+        and schema.get("additionalProperties") is False
+        and isinstance(properties, dict)
+        and set(properties) == _LTP_V2_FAMILY_ROOT_FIELDS
+        and isinstance(required, list)
+        and set(required) == _LTP_V2_FAMILY_REQUIRED_FIELDS
+        and isinstance(properties.get("reasoning"), dict)
+        and properties["reasoning"].get("type") == "string"
     )
 
 
@@ -1029,6 +1052,29 @@ class Agent(BaseAgent):
         from .services.mcp_inbox import MCPInboxPoller
         self._mcp_inbox_poller = MCPInboxPoller(self)
         self._mcp_inbox_poller.start()
+
+    def _dispatch_tool(self, tc: ToolCall) -> dict:
+        """Restore canonical reasoning only for mounted strict MCP ToolFamilies.
+
+        ``ToolExecutor`` deliberately renames model-facing ``reasoning`` to the
+        private ``_reasoning`` audit key before every dispatch.  Ordinary
+        in-process and legacy MCP handlers consume that existing shape.  A native
+        MCP ToolFamily instead validates the original closed LTP-v2 envelope, so
+        the wrapper composition root restores the public key immediately before
+        the inherited handler dispatch.  The input ToolCall is never mutated.
+        """
+        if tc.name in getattr(self, "_mcp_tool_names", set()):
+            schemas = [schema for schema in self._tool_schemas if schema.name == tc.name]
+            if (
+                len(schemas) == 1
+                and _is_strict_ltp_v2_family_schema(schemas[0].parameters)
+                and "_reasoning" in tc.args
+            ):
+                args = dict(tc.args)
+                reasoning = args.pop("_reasoning")
+                args.setdefault("reasoning", reasoning)
+                tc = ToolCall(name=tc.name, args=args, id=tc.id)
+        return super()._dispatch_tool(tc)
 
     def _expand_agent_placeholders(self, value):
         """Substitute per-agent placeholders in an MCP launch string.
