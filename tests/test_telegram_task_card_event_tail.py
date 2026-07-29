@@ -438,7 +438,7 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at"}
+    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at", "status"}
     assert row["tool"] == "bash"
     assert row["tool_action"] == "run"
     assert row["reasoning"] == "safe text"
@@ -449,6 +449,36 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     assert "sk-should-never-appear" not in rendered
     assert "/very/secret/path" not in rendered
     assert "--token=abc123" not in rendered
+
+
+def test_tool_result_updates_status_and_elapsed(tmp_path):
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+
+    _write_lines(path, [_tool_call_line(tool_name="read", action="read", call_id="c1")])
+    manager._poll_event_tail()
+    assert "(0s, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+
+    _write_lines(path, [json.dumps({
+        "type": "tool_result", "tool_call_id": "c1", "status": "ok",
+        "elapsed_ms": 2300, "result": "RESULT_SECRET",
+    })])
+    manager._poll_event_tail()
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(2s, success)" in rendered
+    assert "RESULT_SECRET" not in rendered
+
+    _write_lines(path, [
+        _tool_call_line(tool_name="write", action="write", call_id="c2"),
+        json.dumps({
+            "type": "tool_result", "tool_call_id": "c2", "status": "error",
+            "elapsed_ms": 400,
+        }),
+    ])
+    manager._poll_event_tail()
+    assert "(0s, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
 
 def test_tool_call_action_is_rendered_as_tool_action():
