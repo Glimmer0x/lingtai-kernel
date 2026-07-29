@@ -6,17 +6,46 @@ description: |
   reply, check/read/search, media_path attachments (image/video/voice/file),
   contacts/accounts basics, and external-delivery side-effect caveats. Pulled on
   demand via action='manual'; you do not need to call it before every send.
-version: 1.0.1
-last_changed_at: "2026-07-19T00:00:00Z"
+version: 1.2.0
+last_changed_at: "2026-07-29T01:00:00Z"
 related_files:
 - src/lingtai/mcp_servers/wechat/manager.py
 - src/lingtai/mcp_servers/wechat/server.py
+- src/lingtai/mcp_servers/wechat/_family.py
 - src/lingtai/mcp_servers/wechat/api.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
 
 # WeChat MCP — usage manual (progressive disclosure)
+
+## PUBLIC TOOL FAMILY: strict LTP-v2
+
+Raw MCP discovery exposes exactly one public tool, `wechat`. It is an
+independent strict LTP-v2 family with the closed root
+`{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
+required). `action` selects one of the 10 actions below; `input` is a closed,
+action-owned object — only that action's own fields are accepted, and a field
+from another action (or any top-level/host-only key) is rejected before any
+WeChat I/O runs. `wechat` actions are exactly `send`, `check`, `read`,
+`reply`, `search`, `contacts`, `add_contact`, `remove_contact`, `accounts`,
+and `manual`. The `manual` action is the discovery path for this document. Do
+not use the retired flat/legacy shape (arguments at the top level alongside
+`action`), `_reasoning`, aliases, or a generic dispatcher.
+
+Example call:
+
+```json
+{
+  "action": "send",
+  "input": {"user_id": "wxid_abc123@im.wechat", "text": "hi"},
+  "reasoning": "acknowledging the user's question"
+}
+```
+
+`send`'s `text` and `media_path` are independent, combinable fields (at least
+one is required, and both may be given together in one call — see MEDIA /
+ATTACHMENTS below), not a mutually exclusive choice.
 
 ## RECIPIENTS: user_id
 
@@ -39,6 +68,11 @@ maintenance: |
   anything else → file.
 - For charts, reports, and other artifacts the user should open intact, send them
   as a file/document rather than pasting a local path into the message text.
+- `text` and `media_path` may be given together in one `send` call. They are
+  delivered as **two separate WeChat messages** — the text first, then the
+  media — not as a single captioned attachment. A missing `media_path` file
+  is rejected before any text is sent, but a later upload/transport failure
+  can still leave the text delivered without the media.
 
 ## INBOUND MEDIA / FILES
 

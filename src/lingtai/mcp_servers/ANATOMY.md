@@ -26,6 +26,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/mcp_servers/wechat/manager.py
+  - src/lingtai/mcp_servers/wechat/_family.py
   - src/lingtai/mcp_servers/whatsapp/manager.py
   - tests/test_cloud_mail_addon.py
   - tests/test_mcp_skill_manuals.py

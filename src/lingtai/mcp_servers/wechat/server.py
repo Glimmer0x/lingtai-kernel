@@ -1,9 +1,9 @@
 """LingTai WeChat MCP server.
 
-Exposes a single omnibus ``wechat`` MCP tool that dispatches to
-WechatManager for all 8 actions (send, check, read, reply, search,
-contacts, add_contact, remove_contact). Inbound WeChat events flow into
-the host agent's inbox via LICC.
+Exposes one independent public LTP-v2 family, ``wechat``. Actions dispatch to
+WechatManager for all 10 actions (send, check, read, reply, search, contacts,
+add_contact, remove_contact, accounts, manual). Inbound WeChat events flow
+into the host agent's inbox via LICC.
 
 Configuration:
     LINGTAI_WECHAT_CONFIG  — path to ``config.json``. ``credentials.json``
@@ -341,10 +341,11 @@ def _profile_manifest(
         "tools": [
             {
                 "name": "wechat",
-                "description": "Omnibus WeChat tool for send/check/read/reply/search/contacts/accounts.",
+                "description": "Strict WeChat LTP-v2 family.",
                 "actions": [
                     "send", "check", "read", "reply", "search",
                     "contacts", "add_contact", "remove_contact", "accounts",
+                    "manual",
                 ],
             }
         ],

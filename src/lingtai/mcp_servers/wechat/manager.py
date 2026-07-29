@@ -23,6 +23,7 @@ from .types import (
     msg_from_dict, msg_to_dict,
 )
 from . import api
+from . import _family
 from . import media as media_mod
 from .lockfile import AccountLock, PollerLockBusy
 from .. import _identity, _skill
@@ -69,68 +70,9 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 # state file bounded.
 SEEN_KEYS_MAX = 5000
 
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": [
-                "send", "check", "read", "reply", "search",
-                "contacts", "add_contact", "remove_contact", "accounts",
-                "manual",
-            ],
-            "description": (
-                "send: send a message to a WeChat user "
-                "(user_id, text; optional media_path for file/image/voice/video). "
-                "check: list recent conversations with unread counts. "
-                "read: read messages from a user (user_id; optional limit). "
-                "reply: reply to a specific message "
-                "(message_id from read results, text). "
-                "search: search inbox messages by regex "
-                "(query; optional user_id). "
-                "contacts: list saved contacts. "
-                "add_contact: save a contact (user_id, alias). "
-                "remove_contact: remove a contact (alias or user_id). "
-                "accounts: list configured WeChat accounts. "
-                + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
-            ),
-        },
-        "user_id": {
-            "type": "string",
-            "description": "WeChat user ID (e.g. wxid_abc123@im.wechat)",
-        },
-        "text": {
-            "type": "string",
-            "description": "Message text content",
-        },
-        "media_path": {
-            "type": "string",
-            "description": (
-                "Absolute path to a file to send as media. "
-                "Type detected from extension: "
-                ".jpg/.png=image, .mp4=video, .wav/.mp3=voice, other=file."
-            ),
-        },
-        "message_id": {
-            "type": "string",
-            "description": "Message ID from read results (for reply action)",
-        },
-        "limit": {
-            "type": "integer",
-            "description": "Max messages to return (for read, default 10)",
-            "default": 10,
-        },
-        "query": {
-            "type": "string",
-            "description": "Search query (regex pattern)",
-        },
-        "alias": {
-            "type": "string",
-            "description": "Human-friendly contact alias",
-        },
-    },
-    "required": ["action"],
-}
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+SCHEMA = _family.WECHAT_SCHEMA
 
 DESCRIPTION = (
     "WeChat client — interact with WeChat users via iLink Bot API. "
@@ -504,6 +446,12 @@ class WechatManager:
     # ── Tool handler dispatch ──────────────────────────────────
 
     def handle(self, args: dict) -> dict:
+        # Keep the standalone manager surface in parity with the public family
+        # while retaining the flat internal boundary used by existing manager
+        # tests. Family validation occurs before any manager action I/O; child
+        # dispatch re-enters here with a flat action mapping exactly once.
+        if isinstance(args, dict) and {"input", "reasoning"}.issubset(args):
+            return _family.handle_wechat(self, args)
         action = args.get("action")
         try:
             if action == "send":
