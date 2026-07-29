@@ -943,7 +943,18 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     # The kernel-synthesized delivery pair impersonates a voluntary
     # notification(action="check") read — not system(action="notification").
     assert call_block.name == "notification"
-    assert call_block.args["action"] == "check"
+    # Pin the full synthesized call envelope: it must be byte-identical to
+    # what a voluntary notification(action="check") call could produce, with
+    # no internal freshness field such as injection_seq. A provider/model can
+    # copy assistant-turn call args verbatim into a new real call, and
+    # notification's ToolFamily dispatcher rejects any root field outside the
+    # public {action, input, reasoning, summarize} allowlist with
+    # INVALID_ARGUMENT: unsupported notification argument.
+    assert call_block.args == {
+        "action": "check",
+        "input": {},
+        "reasoning": "kernel notification sync",
+    }
     assert isinstance(result_block, ToolResultBlock)
     assert result_block.name == "notification"
     assert result_block.synthesized is True
@@ -964,9 +975,47 @@ def test_sync_idle_injects_pair_with_synthesized_marker(tmp_path: Path) -> None:
     assert agent._notification_block_id == call_block.id
 
 
+def test_synthesized_notification_call_args_survive_real_dispatch(
+    tmp_path: Path,
+) -> None:
+    """A model that copies the synthesized call's args into a new real
+    notification call must not get INVALID_ARGUMENT.
+
+    This reproduces the live failure: the kernel-injected historical
+    notification(action="check") ToolCallBlock.args were fed straight into
+    the real dispatcher (as a provider/model copying an assistant-turn tool
+    call would do), and strict envelope validation rejected an
+    injection_seq root field with "unsupported notification argument".
+    """
+    from lingtai.kernel.llm.interface import ToolCallBlock
+    from lingtai.tools.notification import handle
+
+    publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    agent = _make_stub_agent_for_block_log(tmp_path)
+    agent._sync_notifications()
+
+    entries = agent._chat_stub.interface.entries
+    call_block = entries[0].content[0]
+    assert isinstance(call_block, ToolCallBlock)
+    assert call_block.name == "notification"
+
+    @dataclass
+    class _DispatchStub:
+        _working_dir: Path = tmp_path
+        _logs: list[tuple[str, dict]] = field(default_factory=list)
+
+        def _log(self, evt: str, **fields: Any) -> None:
+            self._logs.append((evt, fields))
+
+    res = handle(_DispatchStub(), dict(call_block.args))
+
+    assert res.get("error_code") != "INVALID_ARGUMENT"
+    assert res.get("_notification_placeholder") is True
+
+
 def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
-    """Two consecutive sync calls — old payload is released (append-only,
-    never mutated), new pair appended."""
+    """Payload A — payload B — payload A again keeps append-only history
+    and gives each synthetic result a fresh injection sequence."""
     from lingtai.kernel.base_agent import BaseAgent
     from lingtai.kernel.state import AgentState
 
@@ -1005,29 +1054,38 @@ def test_sync_idle_releases_then_reinjects(tmp_path: Path) -> None:
             pass
 
     agent = _Agent(tmp_path)
-    publish_test_payload(tmp_path, "email", {"count": 1})
+    payload_a = {"count": 1}
+    payload_b = {"count": 2, "extra": "more bytes"}
+
+    publish_test_payload(tmp_path, "email", payload_a)
     agent._sync_notifications()
     first_id = agent._notification_block_id
     assert first_id is not None
     assert len(agent._chat_stub.interface.entries) == 2
 
-    # Producer publishes new state — fingerprint must change for sync
-    # to fire.  Sleep a moment to bump mtime_ns.
-    import time as _time
-    _time.sleep(0.001)
-    publish_test_payload(tmp_path, "email", {"count": 2, "extra": "more bytes"})
+    publish_test_payload(tmp_path, "email", payload_b)
     agent._sync_notifications()
     second_id = agent._notification_block_id
 
     assert second_id is not None
     assert second_id != first_id
-    # Old pair is kept in history verbatim (append-only — released from live
-    # tracking, never mutated); new pair appended as the current holder.
-    assert len(agent._chat_stub.interface.entries) == 4
-    first_body = agent._chat_stub.interface.entries[1].content[0].content
+
+    # The original payload bytes reappear after an intervening payload.
+    publish_test_payload(tmp_path, "email", payload_a)
+    agent._sync_notifications()
+
+    # Every pair remains in history verbatim; only the newest is the current
+    # holder.
+    entries = agent._chat_stub.interface.entries
+    assert len(entries) == 6
+    first_body = entries[1].content[0].content
     assert first_body["_synthesized"] is True
-    first_block = agent._chat_stub.interface.entries[1].content[0]
-    assert first_block.metadata["agent_meta"]["notifications"]["attention"]["email"]["count"] == 1
+    result_blocks = [entries[index].content[0] for index in (1, 3, 5)]
+    assert [block.content["injection_seq"] for block in result_blocks] == [1, 2, 3]
+    assert [
+        block.metadata["agent_meta"]["notifications"]["attention"]["email"]["count"]
+        for block in result_blocks
+    ] == [1, 2, 1]
 
 
 def test_sync_idle_empty_releases_holder(tmp_path: Path) -> None:
