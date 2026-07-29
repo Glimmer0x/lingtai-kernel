@@ -1607,14 +1607,17 @@ class BaseAgent:
         distinguish kernel-injected reads from voluntary calls when reading
         conversation history.
 
-        Both call.args and result.content carry safe notification freshness
-        fields from build_meta plus a monotonic injection_seq. Internal tool-meta
+        The result content carries a monotonic injection_seq; its metadata
+        carries the current build_meta-derived runtime sidecar. Internal tool-meta
         transit keys are stripped below before the synthesized pair reaches the wire.
-        This makes
-        every synthesized pair tokenize uniquely even when the underlying
-        notification payload repeats — a protection layer against the
-        DeepSeek cache fast-path empty-response failure without needing a
-        visible assistant text prefix.
+        call.args deliberately carries none of this: it must stay byte-identical
+        to what a voluntary ``notification(action="check")`` call could produce,
+        since a provider/model can copy assistant-turn call args into a new real
+        call, and the freshness fields would fail the family's root-field
+        allowlist. The freshness fields still make every synthesized pair's
+        result tokenize uniquely even when the underlying notification payload
+        repeats — a protection layer against the DeepSeek cache fast-path
+        empty-response failure without needing a visible assistant text prefix.
 
         Returns True if injection succeeded, False if it had to abort
         (e.g. pending tool_calls block append).  When False is returned,
@@ -1667,12 +1670,12 @@ class BaseAgent:
 
         call_id = f"notif_{int(time.time()*1000):x}_{secrets.token_hex(2)}"
 
-        # Meta freshness fields — same build_meta current-state hints real tool
-        # results use for runtime state snapshots, embedded in BOTH call.args
-        # and result.content so every synthesized pair tokenizes
-        # uniquely even when the notification payload repeats. The monotonic
-        # injection_seq is added on top to guarantee novelty within the same
-        # second (heal+retry tight loops, time-blind agents).
+        # Capture the same build_meta current-state hints real tool results use
+        # for runtime diagnostics. This copy is recorded in the injection event;
+        # the model-visible freshness marker is added to result.content below.
+        # Keep both result-side representations out of call.args: the monotonic
+        # injection_seq guarantees novelty within the same second (heal+retry
+        # tight loops, time-blind agents).
         # Defensive getattr covers test doubles that bypass __init__ and
         # don't carry the full agent attribute surface.
         self._notification_inject_seq = getattr(self, "_notification_inject_seq", 0) + 1
@@ -1802,21 +1805,26 @@ class BaseAgent:
         # wire: successful notification sync should be a structured
         # notification(action="check") call/result pair, not a visible
         # synthesized diary/text-input row.
-        # ``notification`` is an LTP v2 family (``tools/CONTRACT.md``): a real
-        # voluntary read is ``{action, input, reasoning}`` with ``check``'s own
-        # strict-empty ``input``. This synthesized call must carry that same
-        # envelope, because the pair is deliberately byte-shape-identical to a
+        # ``notification`` is an LTP v2 family (``tools/CONTRACT.md``): the
+        # default voluntary read is ``{action, input, reasoning}`` with
+        # ``check``'s own strict-empty ``input``; the optional public
+        # ``summarize`` control is valid but absent here. This synthesized call
+        # must carry that same minimal envelope, because the pair is deliberately
+        # byte-shape-identical to a
         # voluntary read (see this method's docstring) — emitting the old flat
         # ``{action}`` shape would make the kernel's own injection the one
         # notification call the model could never have produced itself.
         # ``reasoning`` is required by the family schema, so a truthful
         # synthetic rationale is supplied rather than omitted.
-        # ``injection_seq`` remains outside the envelope: real tool calls don't
-        # carry runtime freshness fields in their args (those live in results),
-        # and the seq is only there to defeat byte-equality on the assistant
-        # turn. It never reaches the tool — this pair is spliced onto the wire,
-        # not dispatched — and ``notification.handle`` would reject it as an
-        # unknown root field if it ever were.
+        # ``injection_seq`` stays out of ``call_block.args``: a provider/model
+        # can and does copy assistant-turn tool-call args verbatim into a new
+        # real call, and ``notification.handle`` rejects any root field
+        # outside the public ``{action, input, reasoning, summarize}`` allowlist with
+        # ``INVALID_ARGUMENT: unsupported notification argument`` — so this
+        # pair's args must be exactly what a voluntary call could produce.
+        # Freshness/novelty against byte-equality is carried on the result
+        # side instead (``result_block.content["injection_seq"]`` /
+        # ``result_block.metadata``), which is never fed back as call args.
         call_block = ToolCallBlock(
             id=call_id,
             name="notification",
@@ -1824,7 +1832,6 @@ class BaseAgent:
                 "action": "check",
                 "input": {},
                 "reasoning": "kernel notification sync",
-                "injection_seq": self._notification_inject_seq,
             },
         )
         result_block = ToolResultBlock(

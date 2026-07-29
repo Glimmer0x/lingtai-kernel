@@ -163,11 +163,16 @@ are unchanged.
 - The kernel may synthesize the same `notification(action="check")` call/result
   shape at an idle boundary; that delivery plumbing is not another agent-callable
   action (`src/lingtai/kernel/base_agent/__init__.py:1255-1461`;
-  `src/lingtai/kernel/base_agent/__init__.py:1562-1800`). Because that pair is
+  `src/lingtai/kernel/base_agent/__init__.py:1582-1844`). Because that pair is
   deliberately byte-shape-identical to a voluntary read, its synthesized call
-  args carry the same LTP v2 envelope (`input: {}` plus a `reasoning` string);
-  the `injection_seq` freshness field stays outside the envelope and never
-  reaches the tool, since the pair is spliced onto the wire, not dispatched.
+  args carry the same minimal LTP v2 envelope (`action`, `input: {}`, and a
+  `reasoning` string); the optional public `summarize` control is valid but
+  absent here. No `injection_seq` or other internal freshness field is admitted,
+  since a provider/model can copy assistant-turn call args verbatim into a new
+  real call, and `_ROOT_FIELDS` rejects keys outside the public root allowlist
+  with `INVALID_ARGUMENT: unsupported notification argument`. Freshness/novelty
+  against byte-equality is carried on the result side (`content`/`metadata`)
+  instead, which is never fed back as call args.
 - Large tool results are ranked and compacted through
   `context(action="summarize")`. Notification dismissal retains only the legacy
   reminder escape hatch described by the manual.
