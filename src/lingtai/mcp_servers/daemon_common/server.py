@@ -6,16 +6,18 @@ any backend is allowed to mark a run done.
 """
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 import mcp.types as types
-from mcp.server import Server
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
 
 from lingtai.kernel._fsutil import atomic_write_json
+
+from .._results import json_tool_result as _tool_result
+from .._results import unknown_tool_error as _unknown_tool
 
 STATUSES = {"done", "failed", "incomplete"}
 
@@ -94,32 +96,30 @@ def _validate_finish(arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_server() -> Server:
-    server: Server = Server(
-        "lingtai-daemon-common",
-        instructions=(
-            "Use the `finish` tool to explicitly complete the daemon run. "
-            "Do not rely on final text alone."
-        ),
-    )
+    async def _list_tools(
+        _ctx: ServerRequestContext,
+        _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="finish",
+                    description=DESCRIPTION,
+                    input_schema=FINISH_SCHEMA,
+                ),
+            ],
+        )
 
-    @server.list_tools()
-    async def _list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="finish",
-                description=DESCRIPTION,
-                inputSchema=FINISH_SCHEMA,
-            ),
-        ]
-
-    @server.call_tool()
     async def _call_tool(
-        name: str, arguments: dict[str, Any],
-    ) -> list[types.TextContent]:
-        if name != "finish":
-            raise ValueError(f"unknown tool: {name!r}")
+        _ctx: ServerRequestContext,
+        params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        if params.name != "finish":
+            # A lookup miss is a caller-fixable parameter error (-32602), not a
+            # tool failure the model should try to recover from.
+            raise _unknown_tool(params.name)
         try:
-            payload = _validate_finish(arguments or {})
+            payload = _validate_finish(params.arguments or {})
             path = _completion_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_json(path, payload, ensure_ascii=False, indent=2)
@@ -134,10 +134,17 @@ def build_server() -> Server:
                 "error": str(e),
                 "error_type": type(e).__name__,
             }
-        return [types.TextContent(
-            type="text", text=json.dumps(result, ensure_ascii=False),
-        )]
+        return _tool_result(result)
 
+    server: Server = Server(
+        "lingtai-daemon-common",
+        instructions=(
+            "Use the `finish` tool to explicitly complete the daemon run. "
+            "Do not rely on final text alone."
+        ),
+        on_list_tools=_list_tools,
+        on_call_tool=_call_tool,
+    )
     return server
 
 

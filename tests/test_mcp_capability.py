@@ -1031,6 +1031,177 @@ def test_retry_failed_mcps_no_specs_is_noop(tmp_path):
                       "still_failed": [], "healthy": []}
 
 
+# ---------------------------------------------------------------------------
+# Failed retry must not leave a dead client's routes/metadata behind
+# ---------------------------------------------------------------------------
+
+class _ToolFakeMCPClient(_FakeMCPClient):
+    """`_FakeMCPClient` that advertises one v2 tool record."""
+
+    def __init__(self, is_connected_value: bool, tool_name: str, title: str):
+        super().__init__(is_connected_value)
+        self._tool_name = tool_name
+        self._title = title
+
+    def list_tools(self, timeout: float = 10):
+        return [{
+            "name": self._tool_name,
+            "description": "fake",
+            "schema": {"type": "object", "properties": {}},
+            "title": self._title,
+        }]
+
+    def call_tool(self, name, args, **kw):
+        return {"status": "success"}
+
+
+def _retry_workdir(tmp_path: Path) -> Path:
+    """One registry-gated stdio MCP named `telegram`, as the retry tests use."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    (workdir / "mcp_registry.jsonl").write_text(json.dumps({
+        "name": "telegram",
+        "summary": "test",
+        "transport": "stdio",
+        "command": "/bin/true",
+        "args": [],
+        "source": "user",
+    }) + "\n")
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {"telegram": {"type": "stdio", "command": "/bin/true"}},
+    }))
+    return workdir
+
+
+def _agent_with_unrelated_mcp_tool(workdir, monkeypatch, *, boot_alive: bool):
+    """Boot an agent whose `telegram` MCP registers one real tool.
+
+    Registration goes through the genuine `connect_mcp`, so the reverse-route
+    and metadata sidecars are populated the way production populates them. A
+    second, unrelated client is then connected to prove pruning is scoped.
+    """
+    import lingtai.services.mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod, "MCPClient",
+        lambda **kw: _ToolFakeMCPClient(boot_alive, "tg_tool", "Telegram Tool"),
+    )
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+
+    monkeypatch.setattr(
+        mcp_mod, "MCPClient",
+        lambda **kw: _ToolFakeMCPClient(True, "other_tool", "Other Tool"),
+    )
+    agent.connect_mcp("/bin/true")
+    return agent
+
+
+def test_failed_retry_clears_dead_client_metadata_and_route(tmp_path, monkeypatch):
+    """A retry that fails must not leave the closed client looking alive."""
+    workdir = _retry_workdir(tmp_path)
+    agent = _agent_with_unrelated_mcp_tool(workdir, monkeypatch, boot_alive=False)
+
+    assert agent.mcp_tool_metadata("tg_tool") == {"title": "Telegram Tool"}
+    dead = agent._mcp_init_specs["telegram"]["client"]
+    assert agent._mcp_clients_by_tool["tg_tool"] is dead
+
+    # Reconnect raises, so the retry ends in the `still_failed` branch.
+    def _boom(self, command, args=None, env=None):
+        raise RuntimeError("spawn refused")
+
+    monkeypatch.setattr(Agent, "connect_mcp", _boom)
+    report = agent._retry_failed_mcps()
+
+    assert report["still_failed"] == ["telegram"]
+    assert dead.closed
+    assert agent.mcp_tool_metadata("tg_tool") is None
+    assert "tg_tool" not in agent._mcp_clients_by_tool
+
+
+def test_failed_retry_preserves_an_unrelated_clients_metadata_and_route(
+    tmp_path, monkeypatch,
+):
+    """Pruning is scoped to the dead client; other servers stay usable."""
+    workdir = _retry_workdir(tmp_path)
+    agent = _agent_with_unrelated_mcp_tool(workdir, monkeypatch, boot_alive=False)
+    other_client = agent._mcp_clients_by_tool["other_tool"]
+
+    def _boom(self, command, args=None, env=None):
+        raise RuntimeError("spawn refused")
+
+    monkeypatch.setattr(Agent, "connect_mcp", _boom)
+    agent._retry_failed_mcps()
+
+    assert agent.mcp_tool_metadata("other_tool") == {"title": "Other Tool"}
+    assert agent._mcp_clients_by_tool["other_tool"] is other_client
+
+
+def test_successful_retry_publishes_replacement_metadata(tmp_path, monkeypatch):
+    """A recovered server's metadata is the new client's, not the dead one's."""
+    workdir = _retry_workdir(tmp_path)
+    agent = _agent_with_unrelated_mcp_tool(workdir, monkeypatch, boot_alive=False)
+    dead = agent._mcp_init_specs["telegram"]["client"]
+
+    import lingtai.services.mcp as mcp_mod
+    monkeypatch.setattr(
+        mcp_mod, "MCPClient",
+        lambda **kw: _ToolFakeMCPClient(True, "tg_tool", "Telegram Tool v2"),
+    )
+    report = agent._retry_failed_mcps()
+
+    assert report["recovered"] == ["telegram"]
+    assert agent.mcp_tool_metadata("tg_tool") == {"title": "Telegram Tool v2"}
+    assert agent._mcp_clients_by_tool["tg_tool"] is not dead
+    # The unrelated server is untouched by the recovery.
+    assert agent.mcp_tool_metadata("other_tool") == {"title": "Other Tool"}
+
+
+def test_unhealthy_replacement_is_torn_down_not_left_published(
+    tmp_path, monkeypatch,
+):
+    """A retry that registers a replacement then fails its health test.
+
+    `_ToolFakeMCPClient` already separates `is_connected_value` from
+    `list_tools`, so a replacement can register tools/metadata and still report
+    unhealthy — the exact branch where the spawn returns without raising but
+    the client is dead. That replacement must not stay published.
+    """
+    workdir = _retry_workdir(tmp_path)
+    agent = _agent_with_unrelated_mcp_tool(workdir, monkeypatch, boot_alive=False)
+    other_client = agent._mcp_clients_by_tool["other_tool"]
+
+    replacements: list = []
+
+    def _unhealthy_replacement(**kw):
+        client = _ToolFakeMCPClient(False, "tg_tool", "Telegram Tool v2")
+        replacements.append(client)
+        return client
+
+    import lingtai.services.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "MCPClient", _unhealthy_replacement)
+
+    report = agent._retry_failed_mcps()
+
+    assert report["still_failed"] == ["telegram"]
+    assert report["recovered"] == []
+    # The replacement registered tools, then failed the health test: it must be
+    # closed, de-listed, and unpublished rather than left looking alive.
+    replacement = replacements[-1]
+    assert replacement.closed
+    assert replacement not in agent._mcp_clients
+    assert agent.mcp_tool_metadata("tg_tool") is None
+    assert "tg_tool" not in agent._mcp_clients_by_tool
+    assert agent._mcp_init_specs["telegram"]["client"] is None
+    # An unrelated server is untouched by this teardown.
+    assert agent.mcp_tool_metadata("other_tool") == {"title": "Other Tool"}
+    assert agent._mcp_clients_by_tool["other_tool"] is other_client
+
+
 def test_curated_catalog_includes_whatsapp(tmp_path: Path):
     rep = decompress_addons(tmp_path, ["whatsapp"])
     assert rep["appended"] == ["whatsapp"]

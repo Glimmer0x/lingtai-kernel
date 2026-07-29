@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import yaml
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -1952,14 +1953,28 @@ class DaemonManager:
         self,
         registrations: list[dict],
     ) -> tuple[dict[str, FunctionSchema], dict, list[object]]:
-        """Start task-scoped MCP clients and return schemas/handlers/clients."""
+        """Start task-scoped MCP clients and return schemas/handlers/clients.
+
+        Advertised MCP metadata that ``FunctionSchema`` cannot carry (title,
+        output schema, annotations, icons, execution, meta) is retained on the
+        owner as ``_task_mcp_tool_metadata``, keyed by tool name, for the
+        lifetime of the clients returned here. The return arity is deliberately
+        unchanged: both call sites and several test doubles depend on the
+        3-tuple, and the sidecar is not part of the tool-surface contract.
+        """
+        # Reset first: this owner's previous task run owns neither these
+        # clients nor their metadata, and a raise below must not leave the
+        # prior run's entries visible.
+        self._task_mcp_tool_metadata = {}
         if not registrations:
             return {}, {}, []
+        from lingtai.services import mcp as mcp_service
         from lingtai.services.mcp import HTTPMCPClient, MCPClient
 
         schemas: dict[str, FunctionSchema] = {}
         handlers: dict = {}
         clients: list[object] = []
+        metadata: dict[str, dict] = {}
         licc_env = {"LINGTAI_AGENT_DIR": str(self._agent._working_dir)}
         try:
             for cfg in registrations:
@@ -1982,12 +1997,21 @@ class DaemonManager:
                     )
                 client.start()
                 clients.append(client)
+                # `list_tools` returns the complete SDK v2 tool record (paged to
+                # completion by the service boundary). This in-process task
+                # surface consumes the same contract as the agent adapter:
+                # `schema` is `input_schema`, and everything FunctionSchema
+                # cannot hold goes to the metadata sidecar below.
                 for tool in client.list_tools():
                     tool_name = tool["name"]
                     if tool_name in schemas:
                         raise ValueError(f"duplicate MCP tool name: {tool_name}")
                     schema = dict(tool.get("schema", {}) or {})
+                    # Intentional normalization, matching the agent adapter.
                     schema.pop("additionalProperties", None)
+                    # Captured pre-normalization, deep-copied by the service
+                    # helper so the sidecar never aliases the client's record.
+                    metadata[tool_name] = mcp_service.tool_metadata(tool)
 
                     def _make_handler(c, tn: str):
                         def handler(tool_args: dict) -> dict:
@@ -2002,16 +2026,38 @@ class DaemonManager:
                     handlers[tool_name] = _make_handler(client, tool_name)
         except Exception:
             self._close_task_mcp_clients(clients)
+            # Publish nothing for a surface that never came up.
+            self._task_mcp_tool_metadata = {}
             raise
+        self._task_mcp_tool_metadata = metadata
         return schemas, handlers, clients
 
-    @staticmethod
-    def _close_task_mcp_clients(clients: list[object] | None) -> None:
+    def task_mcp_tool_metadata(self, name: str) -> dict | None:
+        """Return advertised MCP metadata for one task-scoped tool, or ``None``.
+
+        The returned mapping is a copy, so a caller cannot mutate the stored
+        record through it. Entries live only as long as the task MCP clients
+        started by ``_connect_task_mcp_registrations``; closing them via
+        ``_close_task_mcp_clients`` clears the sidecar.
+        """
+        stored = getattr(self, "_task_mcp_tool_metadata", {}).get(name)
+        return deepcopy(stored) if stored is not None else None
+
+    def _close_task_mcp_clients(self, clients: list[object] | None) -> None:
+        """Close task-scoped MCP clients and drop their metadata sidecar.
+
+        Was a ``@staticmethod``; it now binds so teardown can clear the
+        sidecar recorded by ``_connect_task_mcp_registrations``. Every existing
+        call site already went through an instance (``self.`` or ``manager.``),
+        so the call shape is unchanged.
+        """
         for client in clients or []:
             try:
                 client.close()
             except Exception:
                 pass
+        # Metadata describes the clients just closed; never outlive them.
+        self._task_mcp_tool_metadata = {}
 
     def _task_skill_catalog(self, spec: dict) -> str | None:
         """Return rendered YAML skill context selected for one daemon task."""

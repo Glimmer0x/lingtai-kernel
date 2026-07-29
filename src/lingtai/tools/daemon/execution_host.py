@@ -238,7 +238,10 @@ class DetachedDaemonExecutionHost:
         return self._manager_type._run_has_daemon_common_mcp(run_dir)
 
     def _close_task_mcp_clients(self, clients):
-        return self._manager_type._close_task_mcp_clients(clients)
+        # Pass ``self`` explicitly: this is now an instance method (it clears
+        # the task MCP metadata sidecar), and this host is the owner that
+        # ``_connect_task_mcp_registrations`` recorded that sidecar on.
+        return self._manager_type._close_task_mcp_clients(self, clients)
 
     def _cli_start_new_session(self) -> bool:
         # The execution child already owns a fresh session/process group. Keep

@@ -654,6 +654,34 @@ class TelegramManager:
     # Action dispatch
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _invalid_chat_id_error(args: dict) -> dict | None:
+        """Reject a ``chat_id`` the public SCHEMA declares invalid.
+
+        The schema's ``anyOf`` allows an integer or exactly the reserved
+        synthetic events bucket, and its comment states that arbitrary strings
+        remain invalid. Official SDK v2's low-level server advertises that
+        schema but never applies it, so without this check an arbitrary string
+        would fall through to a silently empty read/search instead of an error.
+        """
+        if "chat_id" not in args:
+            return None
+        chat_id = args["chat_id"]
+        if isinstance(chat_id, bool):
+            # bool is an int subclass; a boolean is not a chat ID.
+            return {"error": f"chat_id must be an integer Telegram chat ID; got {chat_id!r}"}
+        if isinstance(chat_id, int):
+            return None
+        if chat_id == tg_updates.SYNTHETIC_EVENTS_CHAT_ID:
+            return None
+        return {
+            "error": (
+                "chat_id must be an integer Telegram chat ID, or exactly the "
+                f"reserved '{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}' bucket; "
+                f"got {chat_id!r}"
+            ),
+        }
+
     def handle(self, args: dict) -> dict:
         # Keep the standalone manager surface in parity with the public family
         # while retaining the flat internal boundary used by private reverse
@@ -663,6 +691,9 @@ class TelegramManager:
         if isinstance(args, dict) and {"input", "reasoning"}.issubset(args):
             return _family.handle_telegram(self, args)
         action = args.get("action")
+        chat_id_error = self._invalid_chat_id_error(args)
+        if chat_id_error is not None:
+            return chat_id_error
         try:
             if action == "send":
                 return self._send(args)
