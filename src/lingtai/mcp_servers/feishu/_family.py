@@ -151,6 +151,13 @@ _SCHEMA_FAMILY = _schema_only_family()
 
 def feishu_schema() -> dict[str, Any]:
     schema = _SCHEMA_FAMILY.build_schema()
+    # check/contacts/accounts/manual all share the empty-object branch, so a
+    # strict oneOf here is ambiguous ({} matches more than one branch). The
+    # root allOf discriminator still correlates each action to its exact
+    # closed branch; use anyOf for the model-discovery list so native
+    # JSON-Schema validators do not reject a valid input merely because
+    # another action's branch also fits.
+    schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "send: send a text message to a user or chat "
         "(receive_id, receive_id_type, text; optional account, placeholder). "
