@@ -16,6 +16,7 @@ from .._results import json_tool_result as _tool_result
 from .._results import text_resource_result as _resource_result
 from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
+from ._family import handle_whatsapp
 from .licc import push_inbox_event
 from .manager import WhatsAppManager, SCHEMA, DESCRIPTION
 from .resources import resource_text
@@ -81,12 +82,19 @@ def build_server(manager: WhatsAppManager | None) -> Server:
     ) -> types.CallToolResult:
         if params.name != "whatsapp":
             raise _unknown_tool(params.name)
+        arguments = params.arguments or {}
         if manager is None:
-            return _tool_result({"status": "error", "error": "WhatsApp manager not initialized; check LINGTAI_WHATSAPP_CONFIG"})
-        try:
-            result = await asyncio.to_thread(manager.handle, params.arguments or {})
-        except Exception as e:
-            result = {"status": "error", "error": str(e), "error_type": type(e).__name__}
+            result = handle_whatsapp(None, arguments)
+            if not result:
+                result = {
+                    "status": "error",
+                    "error": "WhatsApp manager not initialized; check LINGTAI_WHATSAPP_CONFIG",
+                }
+        else:
+            try:
+                result = await asyncio.to_thread(handle_whatsapp, manager, arguments)
+            except Exception as e:
+                result = {"status": "error", "error": str(e), "error_type": type(e).__name__}
         return _tool_result(result)
 
     async def _list_resources(
