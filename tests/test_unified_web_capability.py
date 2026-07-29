@@ -122,7 +122,7 @@ def test_missing_and_operator_defaults_report_the_computed_source(tmp_path, monk
     operator_agent = _Agent(tmp_path / "operator")
     operator = setup(
         operator_agent,
-        provider="gemini",
+        provider="openai",
         api_key_env=missing_env,
         browser_port=_Port(),
     )
@@ -322,14 +322,14 @@ def test_lazy_initialization_failure_updates_availability_truth(tmp_path, monkey
     monkeypatch.setattr("lingtai.services.websearch.create_search_service", fail_factory)
     manager = setup(
         _Agent(tmp_path),
-        provider="gemini",
+        provider="openai",
         api_key=secret,
         browser_port=_Port(),
     )
     result = manager.handle({"action": "search", "input": {"query": "question"}})
     assert result["error_code"] == "SEARCH_ENGINE_UNAVAILABLE"
     statuses = result["current_setting"]["available_engine_status"]
-    assert statuses == {"gemini": "initialization_failed"}
+    assert statuses == {"openai": "initialization_failed"}
     assert secret not in json.dumps(result)
 
 

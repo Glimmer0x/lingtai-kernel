@@ -3,8 +3,8 @@ name: web-manual
 description: >
   One web workflow: search first, browse a known result next, and use one
   explicit legacy fallback only when static browsing cannot serve the need.
-version: 7.0.1
-last_changed_at: "2026-07-27T00:00:00Z"
+version: 7.1.2
+last_changed_at: "2026-07-28T22:05:00Z"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
@@ -134,10 +134,28 @@ The read outcomes are deliberately simple:
 
 | File / engine state | Search behavior |
 |---|---|
-| File absent | Use the operator-selected or built-in composition default. |
+| File absent | Use the operator-selected default, or the built-in default: canonical OpenAI when genuinely available, else DuckDuckGo. |
 | Valid file, admitted available engine | Use exactly that engine. |
 | File present but invalid, or engine not admitted | Fail with `WEB_SETTINGS_INVALID`. |
 | Selected engine admitted but unavailable, credential-missing, or initialization failed | Fail with `SEARCH_ENGINE_UNAVAILABLE`. |
+| Selected `anthropic`/`gemini` on a non-canonical LLM backend | Fail with `PROVIDER_BACKEND_INELIGIBLE`; no provider construction, no search call. |
+
+Built-in Search admits exactly four engines: `openai` (canonical Responses
+API Web Search), `anthropic` and `gemini` (canonical first-party server-side
+search, **explicit opt-in only through a valid `settings/web.search.json`
+selection** — never selectable via an operator's flat `provider=`/
+`default_engine=` composition, which reject those two names outright — and
+eligible only when the current Agent's own LLM backend truthfully IS that
+same canonical provider, never Claude Code or an aliased/wire-compatible
+provider), and `duckduckgo` (the only automatic fallback and the built-in
+default's own fallback target). If a selected OpenAI search fails at
+runtime, `web` runs exactly one DuckDuckGo search and returns `status: "ok"`
+with a `comment` line stating OpenAI failed and DuckDuckGo was used, plus
+`openai_failure_class`; no other engine falls back automatically, and an
+Anthropic/Gemini runtime failure is reported, never silently substituted.
+MiniMax and Zhipu are retired from built-in admission entirely: naming
+either via `provider=`, `default_engine=`, or `engines={}` fails explicitly
+and actionably — never a silent DuckDuckGo substitution.
 
 There is no family-owned `settings/web.json`, no
 `settings/web.browse.json`, and no `settings/web.manual.json`. The old family

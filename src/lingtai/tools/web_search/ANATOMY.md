@@ -39,8 +39,48 @@ action implementations, settings, and diagnostics.
   `current_setting`/`action` onto envelope-level failures; lazy engine
   composition, settings diagnostics, and registration
   (`src/lingtai/tools/web_search/__init__.py:1-426`).
-- `_EngineSpec` and `_specs_from_kwargs` — immutable operator engine wiring and
-  legacy flat-config migration (`src/lingtai/tools/web_search/__init__.py:120-400`).
+- `_EngineSpec`, `_specs_from_kwargs`, `_canonical_default_specs()` —
+  immutable operator engine wiring. `_specs_from_kwargs` rejects a retired
+  provider name (`minimax`, `zhipu` — `_RETIRED_PROVIDERS`) supplied via the
+  flat `provider=`/`default_engine=` kwargs with `RetiredProviderError`, a
+  composition-time exception, never a silent DuckDuckGo substitution;
+  rejects a settings-gated engine name (`anthropic`, `gemini` —
+  `_BACKEND_GATED_ENGINES`) supplied the same way with the distinct
+  `SettingsOnlyProviderError` — Anthropic/Gemini are active canonical
+  providers, never "retired". A retired provider named inside `engines={}`
+  is rejected with `RetiredProviderError` the same way, while a genuinely
+  unrecognized/inherited legacy provider name keeps the pre-existing
+  `legacy_fallback_from`-tagged DuckDuckGo spec. The true no-config path
+  (no kwargs at all) calls
+  `_canonical_default_specs()`, which composes all four canonical providers
+  using each provider's own standard `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/
+  `GEMINI_API_KEY` environment variable as `_EngineSpec.api_key_env`
+  (`_CANONICAL_API_KEY_ENV`) — never the current Agent's own live
+  `agent.service` credentials (`src/lingtai/tools/web_search/__init__.py`).
+- `WebManager._default_engine_now()` — the live, per-call built-in default
+  resolver: canonical OpenAI Responses Web Search when genuinely available
+  (present in the operator's engine set and `_status() == "available"`),
+  else `duckduckgo` if composed, else `None` if the only remaining candidate
+  is a settings-gated engine (never lands the built-in default on
+  `anthropic`/`gemini`); only applies when no operator `default_engine`/
+  `provider` was explicitly chosen (`_default_source == "built_in_default"`)
+  (`src/lingtai/tools/web_search/__init__.py`).
+- `_same_provider_identity()` — the truthful, exact-match canonical-provider
+  identity check gating explicit Anthropic/Gemini opt-in against the current
+  Agent's own live `agent.service.provider`; module-private to `web_search`
+  (`src/lingtai/tools/web_search/__init__.py`) — only this capability's
+  policy needs it, so it is not a cross-tool API.
+- `WebManager._openai_duckduckgo_fallback()`/`_duckduckgo_fallback()` — the
+  one automatic runtime fallback, triggered only by the exact
+  `OpenAISearchError` subclass (never a bare `SearchProviderError` or
+  `Exception`, so an `AnthropicSearchError`/`GeminiSearchError` and a
+  manager/programming defect both fail normally instead of retrying):
+  exactly one DuckDuckGo attempt, comment line plus bounded
+  `openai_failure_class`/`duckduckgo_failure_class` provenance, no second
+  retry, no fallback for any other engine. `WebManager._search`'s exception
+  handler also recognizes the shared `SearchProviderError` base for any
+  other typed provider failure and stamps a bounded `provider_failure_class`
+  onto the `SEARCH_FAILED` result (`src/lingtai/tools/web_search/__init__.py`).
 - `read_settings()` — bounded regular-file snapshot and strict v1 selector
   validation over the action-owned `settings/web.search.json`
   (`src/lingtai/tools/web_search/settings.py:49-182`).

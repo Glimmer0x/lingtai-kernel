@@ -3,9 +3,13 @@
 Providers:
 - DuckDuckGoSearchService — zero-API-key search via ddgs package.
 - AnthropicSearchService — Anthropic native web search tool.
-- OpenAISearchService — OpenAI search-preview model.
+- OpenAISearchService — OpenAI canonical Responses API web search tool.
 - GeminiSearchService — Gemini Google Search grounding.
-- MiniMaxSearchService — MiniMax MCP web_search tool.
+
+MiniMax and Zhipu were retired from this factory 2026-07-28 (Jason authorized
+deletion, issue 11114): they are no longer built-in web search providers.
+Wire either through a third-party MCP server instead — see
+src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md.
 
 Factory:
     create_search_service(provider, api_key) — instantiate by provider name.
@@ -22,6 +26,24 @@ class SearchResult:
     title: str
     url: str
     snippet: str
+
+
+class SearchProviderError(RuntimeError):
+    """A canonical provider's own search request failed at runtime.
+
+    Carries a bounded, secret-free failure class and the provider name so
+    callers (the ``web`` capability's use-case policy) can report typed,
+    actionable failure without ever logging or returning raw SDK exception
+    text, request bodies, or credentials. Earned once, shared by all three
+    canonical adapters (``anthropic.py``, ``openai.py``, ``gemini.py``)
+    rather than three near-identical private classes or one speculative
+    cross-tool error hierarchy.
+    """
+
+    def __init__(self, provider: str, failure_class: str) -> None:
+        self.provider = provider[:32]
+        self.failure_class = failure_class[:64]
+        super().__init__(f"{self.provider}: {self.failure_class}")
 
 
 class SearchService(ABC):
@@ -50,18 +72,14 @@ def create_search_service(
     *,
     api_key: str | None = None,
     model: str | None = None,
-    api_host: str | None = None,
-    z_ai_mode: str = "ZAI",
 ) -> SearchService:
     """Factory — create a SearchService for the given provider.
 
     Args:
         provider: Provider name (``"duckduckgo"``, ``"anthropic"``,
-                  ``"openai"``, ``"gemini"``, ``"minimax"``).
+                  ``"openai"``, ``"gemini"``).
         api_key: API key for the provider (required for all except duckduckgo).
         model: Optional model override.
-        api_host: MiniMax MCP host, required by the MiniMax provider.
-        z_ai_mode: Zhipu/Z.AI endpoint mode for the Zhipu provider.
 
     Returns:
         A configured SearchService instance.
@@ -104,15 +122,7 @@ def create_search_service(
             kwargs["model"] = model
         return GeminiSearchService(**kwargs)
 
-    if name == "minimax":
-        from .minimax import MiniMaxSearchService
-        return MiniMaxSearchService(api_key=_require_key(), api_host=api_host)
-
-    if name == "zhipu":
-        from .zhipu import ZhipuSearchService
-        return ZhipuSearchService(api_key=_require_key(), z_ai_mode=z_ai_mode)
-
     raise ValueError(
         f"Unknown web search provider: {provider!r}. "
-        f"Supported: duckduckgo, anthropic, openai, gemini, minimax, zhipu."
+        f"Supported: duckduckgo, anthropic, openai, gemini."
     )

@@ -48,7 +48,27 @@ A second route still exists: `<working_dir>/mcp/servers.json`. The kernel loads 
 }
 ```
 
+MiniMax's own `web_search` tool wires the same way, as a stdio server:
+
+```json
+{
+  "minimax-web-search": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "minimax-coding-plan-mcp"],
+    "env": {
+      "MINIMAX_API_KEY": "your-key"
+    }
+  }
+}
+```
+
 Use the registry route for anything you want to keep. Use `mcp/servers.json` when you just want to wire up a single server quickly.
+
+MiniMax and Zhipu's own search results are no longer available through the
+built-in `web` capability's `search` action; wire either MCP server through
+one of the two routes above and call its `web_search`/`web_search_prime` tool
+directly.
 
 ## Server config fields (both routes)
 

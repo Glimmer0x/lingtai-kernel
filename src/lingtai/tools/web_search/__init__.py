@@ -22,11 +22,93 @@ if TYPE_CHECKING:
     from lingtai.services.websearch import SearchService
     from ..browser.port import BrowserPort
 
+# MiniMax and Zhipu are no longer built-in `web` providers (see
+# src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md for the
+# skill-owned MCP route). Anthropic and Gemini are explicit opt-in only,
+# gated on canonical backend identity — never an implicit built-in default.
 PROVIDERS = {
-    "providers": ["duckduckgo", "minimax", "zhipu", "gemini", "anthropic", "openai"],
+    "providers": ["duckduckgo", "gemini", "anthropic", "openai"],
     "default": "duckduckgo",
     "fallback_on_inherit": "duckduckgo",
 }
+
+# Named provider slugs retired from built-in admission by this product
+# decision (as opposed to a genuinely unrecognized/inherited legacy name,
+# which keeps the pre-existing DuckDuckGo legacy_fallback_from behavior
+# below). Selecting one of these must fail explicitly and actionably at
+# composition time — never a silent DuckDuckGo substitution — per Contract
+# item 9 and repair item 3.
+_RETIRED_PROVIDERS = frozenset({"minimax", "zhipu"})
+
+
+class RetiredProviderError(ValueError):
+    """A composition kwarg named a provider retired from built-in admission.
+
+    Reserved for MiniMax/Zhipu (``_RETIRED_PROVIDERS``) — providers that no
+    longer exist as a `web` built-in at all. Anthropic and Gemini are still
+    fully active, admitted, canonical providers; a composition kwarg
+    attempting to select either through a forbidden route raises the
+    distinct :class:`SettingsOnlyProviderError` instead, never this class.
+    """
+
+
+class SettingsOnlyProviderError(ValueError):
+    """A composition kwarg tried to select a settings-only canonical provider.
+
+    Raised when ``provider=``/``default_engine=`` (or an ``engines={}``-only
+    engine set with no ``duckduckgo``/``openai`` fallback) would otherwise
+    select Anthropic or Gemini — both fully active, canonical, currently
+    admitted providers, just restricted to explicit opt-in through a valid
+    hot-read ``settings/web.search.json`` selection plus canonical-backend
+    eligibility (never this composition-time route). Distinct from
+    :class:`RetiredProviderError`, which is reserved for a provider retired
+    from admission entirely (MiniMax, Zhipu) — Anthropic/Gemini are never
+    "retired" and must never be described as such in error text, tests, or
+    docs.
+    """
+
+
+# Explicit-opt-in engines: admitted only through a valid hot-read
+# settings/web.search.json selection, and only when the current Agent's LLM
+# backend truthfully IS that same canonical provider. Never selectable via
+# the flat ``provider=``/``default_engine=`` composition kwargs — those are
+# rejected outright at composition time (see ``_specs_from_kwargs``).
+_BACKEND_GATED_ENGINES = frozenset({"anthropic", "gemini"})
+
+# The standard, publicly-documented environment variable each canonical
+# first-party provider's own LLM adapter already trusts for its API key when
+# no explicit key is supplied (``src/lingtai/llm/openai/defaults.py``,
+# ``anthropic/defaults.py``, ``gemini/defaults.py``). The no-config built-in
+# default spec set below reads only these — never the current Agent's own
+# live ``agent.service`` credentials or any private LLM-adapter attribute.
+_CANONICAL_API_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def _same_provider_identity(agent: "BaseAgent", name: str) -> bool:
+    """Return whether *agent*'s live LLM backend truthfully IS canonical *name*.
+
+    Exact equality against ``agent.service.provider`` — the one registered
+    name bound to a provider's own dedicated adapter factory
+    (``LLMService.register_adapter`` in ``lingtai.llm._register``). Aliased,
+    CLI-login, or wire-compatible names (``claude-code``/``claude_code``,
+    ``custom``, ``openrouter``, ``deepseek``, ``glm``/``zhipu``, ``grok``,
+    ``qwen``, ``kimi``, ``codex``/``codex-pool``/``codex_pool``) never
+    register under ``"anthropic"`` or ``"gemini"``, so exact equality is the
+    smallest truthful boundary — no substring, alias, or model-name guess.
+    Private to ``web``: only this capability's Anthropic/Gemini opt-in needs
+    this predicate today, so it stays unexported rather than becoming a
+    speculative cross-tool identity API.
+    """
+    if name not in _BACKEND_GATED_ENGINES:
+        return False
+    service = getattr(agent, "service", None)
+    provider = getattr(service, "provider", None)
+    return isinstance(provider, str) and provider.lower() == name
+
 
 _SEARCH_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -209,9 +291,30 @@ class WebManager:
             block["legacy_fallback"] = "operator-config-only"
         return block
 
+    def _default_engine_now(self) -> str | None:
+        # The built-in default (no operator ``default_engine``/``provider``
+        # and no settings-file selection) resolves live, per call: canonical
+        # OpenAI Responses Web Search when genuinely available, else
+        # DuckDuckGo. An operator-chosen ``default_engine``/``provider`` (a
+        # non-``built_in_default`` source) is never overridden here.
+        if self._default_source != "built_in_default":
+            return self._default_engine
+        if "openai" in self._specs and self._status(self._specs["openai"]) == "available":
+            return "openai"
+        if "duckduckgo" in self._specs:
+            return "duckduckgo"
+        if self._default_engine in _BACKEND_GATED_ENGINES:
+            # The built-in default must never land on a settings-gated
+            # engine (Contract item 3/repair item 2) — even one that
+            # happened to be first in an operator's ``engines={}`` mapping
+            # with no explicit ``default_engine``/``provider`` choice and no
+            # ``duckduckgo`` spec composed at all.
+            return None
+        return self._default_engine
+
     def _resolve(self) -> tuple[str | None, SettingsSnapshot, dict[str, Any]]:
         snapshot = read_settings(
-            self._agent, self._specs, self._default_engine, self._default_source
+            self._agent, self._specs, self._default_engine_now(), self._default_source
         )
         return snapshot.engine, snapshot, self._diagnostics(snapshot)
 
@@ -246,12 +349,6 @@ class WebManager:
             if spec.api_key_env:
                 key = os.environ.get(spec.api_key_env)
             kwargs = dict(spec.extra) if isinstance(spec.extra, Mapping) else {}
-            if spec.provider == "minimax" and "api_host" not in kwargs:
-                from .._media_host import resolve_media_host
-                kwargs["api_host"] = resolve_media_host(self._agent)
-            if spec.provider == "zhipu" and "z_ai_mode" not in kwargs:
-                from .._zhipu_mode import resolve_z_ai_mode
-                kwargs["z_ai_mode"] = resolve_z_ai_mode(self._agent)
             service = create_search_service(spec.provider or name, api_key=key, model=spec.model, **kwargs)
             self._services[name] = service
             return service
@@ -265,6 +362,60 @@ class WebManager:
             return (str(item.get("title", "")), str(item.get("url", item.get("link", ""))), str(item.get("snippet", item.get("content", ""))))
         return (str(getattr(item, "title", "")), str(getattr(item, "url", "")), str(getattr(item, "snippet", "")))
 
+    def _run_service(self, service: Any, query: str) -> list[dict[str, str]]:
+        raw_results = service.search(query)
+        if raw_results is None:
+            raw_results = []
+        results: list[dict[str, str]] = []
+        for item in islice(iter(raw_results), 20):
+            title, url, snippet = self._result_fields(item)
+            title, url, snippet = title[:512], url[:2048], snippet[:2000]
+            if not url:
+                # No official source URL for this item (e.g. a provider's
+                # bounded synthesized-narrative fallback result with no
+                # citation). Preserve it — real, nonempty provider output
+                # must stay visible to the Agent — but never fabricate a
+                # link_ref for a URL that does not exist.
+                if snippet or title:
+                    results.append({"title": title, "url": "", "snippet": snippet, "link_ref": None})
+                continue
+            results.append({"title": title, "url": url, "snippet": snippet, "link_ref": self._engine.refs.add_link_ref(url)})
+        return results
+
+    def _duckduckgo_fallback(self, query: str) -> tuple[list[dict[str, str]], str | None]:
+        # The one automatic runtime fallback: exactly one DuckDuckGo attempt,
+        # for a typed OpenAI provider failure only. DuckDuckGo takes no
+        # credentials, so this never touches provider construction/service
+        # caching for another engine. If DuckDuckGo itself fails, that is
+        # reported as a bounded failure class, never a second retry.
+        try:
+            spec = self._specs.get("duckduckgo")
+            service = spec.service if spec is not None and spec.service is not None else None
+            if service is None:
+                from lingtai.services.websearch.duckduckgo import DuckDuckGoSearchService
+                service = DuckDuckGoSearchService()
+            return self._run_service(service, query), None
+        except Exception as exc:
+            return [], type(exc).__name__[:64]
+
+    def _openai_duckduckgo_fallback(self, query: str, openai_failure_class: str, diagnostic: dict[str, Any]) -> dict[str, Any]:
+        ddg_results, ddg_failure_class = self._duckduckgo_fallback(query)
+        if ddg_failure_class is not None:
+            return {
+                "status": "failed", "action": "search", "error_code": "SEARCH_FAILED",
+                "message": "OpenAI web search failed and the DuckDuckGo fallback also failed",
+                "current_setting": diagnostic,
+                "openai_failure_class": openai_failure_class, "duckduckgo_failure_class": ddg_failure_class,
+            }
+        comment = f"# OpenAI web search failed ({openai_failure_class}); DuckDuckGo was used as the fallback."
+        return {
+            "status": "ok", "action": "search", "query": query[:2000],
+            "comment": comment,
+            "engine": "openai", "actual_engine": "duckduckgo",
+            "openai_failure_class": openai_failure_class,
+            "results": ddg_results, "count": len(ddg_results), "current_setting": diagnostic,
+        }
+
     def _search(self, args: dict[str, Any], snapshot: SettingsSnapshot, diagnostic: dict[str, Any]) -> dict[str, Any]:
         query = args.get("query")
         if not isinstance(query, str) or not query.strip():
@@ -274,6 +425,29 @@ class WebManager:
             return self._failure("search", snapshot, diagnostic, "WEB_SETTINGS_INVALID", "settings/web.search.json is invalid; no search engine was selected")
         if not name or name not in self._specs:
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine is unavailable")
+        if name in _BACKEND_GATED_ENGINES:
+            if snapshot.source != "settings/web.search.json":
+                # Anthropic/Gemini are explicit opt-in through a valid
+                # hot-read settings/web.search.json selection only. A
+                # composition-time default_engine/provider can never select
+                # them (rejected outright in _specs_from_kwargs), and the
+                # no-config built-in default never picks them either — this
+                # branch is the last-resort guard against any other route
+                # reaching a gated engine name.
+                return self._failure(
+                    "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
+                    f"engine {name!r} is explicit opt-in only, through settings/web.search.json",
+                )
+            if not _same_provider_identity(self._agent, name):
+                # Explicit Anthropic/Gemini opt-in fails explicitly when the
+                # current Agent's own LLM backend is not truthfully that same
+                # canonical provider — no provider construction, no search
+                # call, no silent substitution (settings-selected, not the
+                # automatic OpenAI-only runtime fallback in Contract item 7).
+                return self._failure(
+                    "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
+                    f"engine {name!r} requires the Agent's own LLM backend to be the canonical {name} API provider",
+                )
         spec = self._specs[name]
         if self._status(spec) != "available":
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine is unavailable")
@@ -285,22 +459,40 @@ class WebManager:
             diagnostic = self._diagnostics(snapshot)
             return self._failure("search", snapshot, diagnostic, "SEARCH_ENGINE_UNAVAILABLE", "the selected search engine could not be initialized")
         try:
-            raw_results = service.search(query)
-            if raw_results is None:
-                raw_results = []
-            results: list[dict[str, str]] = []
-            for item in islice(iter(raw_results), 20):
-                title, url, snippet = self._result_fields(item)
-                title, url, snippet = title[:512], url[:2048], snippet[:2000]
-                if not url:
-                    continue
-                results.append({"title": title, "url": url, "snippet": snippet, "link_ref": self._engine.refs.add_link_ref(url)})
+            results = self._run_service(service, query)
             return {
                 "status": "ok", "action": "search", "query": query[:2000],
                 "engine": name, "actual_engine": name, "results": results,
                 "count": len(results), "current_setting": diagnostic,
             }
-        except Exception:
+        except Exception as exc:
+            from lingtai.services.websearch import SearchProviderError
+            from lingtai.services.websearch.openai import OpenAISearchError
+            if name == "openai" and isinstance(exc, OpenAISearchError):
+                # The one automatic runtime fallback: a *provider-typed*
+                # OpenAI failure only (timeout, rate limit, HTTP/SDK error —
+                # everything OpenAISearchService itself catches and raises
+                # as OpenAISearchError). A bug inside
+                # _run_service/_result_fields (a TypeError, an
+                # AttributeError from malformed data, ...) is a programming
+                # defect, not a provider failure, and falls through to the
+                # generic SEARCH_FAILED return below — never silently
+                # retried against DuckDuckGo.
+                return self._openai_duckduckgo_fallback(query, exc.failure_class, diagnostic)
+            if isinstance(exc, SearchProviderError):
+                # A typed Anthropic/Gemini (or any other) provider failure —
+                # including Anthropic's official in-body HTTP-200
+                # web_search_tool_result_error — never triggers a fallback
+                # for any engine except the one explicit OpenAI case above.
+                # Only the bounded failure class is exposed; never the raw
+                # exception text, request body, or credentials.
+                return self._failure(
+                    "search", snapshot, diagnostic, "SEARCH_FAILED",
+                    "the selected search engine failed",
+                    provider_failure_class=exc.failure_class,
+                )
+            # A non-provider exception (a manager/programming defect) fails
+            # the same way but carries no provider-specific failure class.
             return self._failure("search", snapshot, diagnostic, "SEARCH_FAILED", "the selected search engine failed")
 
     def manual(self, diagnostic: dict[str, Any]) -> dict[str, Any]:
@@ -395,6 +587,24 @@ class WebManager:
         return result
 
 
+def _canonical_default_specs() -> dict[str, _EngineSpec]:
+    # The real no-config built-in spec set: all four canonical providers,
+    # using only each provider's own standard, publicly-documented API-key
+    # env var (_CANONICAL_API_KEY_ENV) as the credential source — never the
+    # current Agent's own live LLM service credentials or any private
+    # LLM-adapter attribute. DuckDuckGo needs no credential. Anthropic/Gemini
+    # are present as selectable specs (so their status is honestly reported
+    # in diagnostics) but are never chosen by the default resolver — only an
+    # explicit settings/web.search.json selection plus canonical-backend
+    # eligibility can select them (see WebManager._search).
+    return {
+        "duckduckgo": _EngineSpec("duckduckgo", provider="duckduckgo"),
+        "openai": _EngineSpec("openai", provider="openai", api_key_env=_CANONICAL_API_KEY_ENV["openai"]),
+        "anthropic": _EngineSpec("anthropic", provider="anthropic", api_key_env=_CANONICAL_API_KEY_ENV["anthropic"]),
+        "gemini": _EngineSpec("gemini", provider="gemini", api_key_env=_CANONICAL_API_KEY_ENV["gemini"]),
+    }
+
+
 def _specs_from_kwargs(
     *, search_service: Any | None, provider: str | None, api_key: str | None,
     api_key_env: str | None, model: str | None, default_engine: str | None,
@@ -404,12 +614,59 @@ def _specs_from_kwargs(
     legacy_fallback_from: str | None = None
     if default_engine is not None and not valid_engine_name(default_engine):
         raise ValueError("web default_engine must be a bounded engine name")
+    if default_engine in _RETIRED_PROVIDERS or provider in _RETIRED_PROVIDERS:
+        # Retired-by-product-decision providers (minimax, zhipu) must fail
+        # explicitly and actionably — never a silent DuckDuckGo substitution
+        # (Contract item 9, repair item 3). This is distinct from the
+        # pre-existing legacy_fallback_from path below, which covers a
+        # genuinely unrecognized/inherited legacy provider name, not one of
+        # these two deliberately-retired, previously-admitted names.
+        raise RetiredProviderError(
+            f"provider {(default_engine or provider)!r} is retired from built-in web search admission; "
+            "wire it as a third-party MCP server instead (see "
+            "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+        )
+    if default_engine in _BACKEND_GATED_ENGINES or provider in _BACKEND_GATED_ENGINES:
+        # Anthropic/Gemini are active, fully-admitted canonical providers —
+        # never retired — restricted to explicit opt-in through
+        # settings/web.search.json only; a composition-time
+        # default_engine/provider must never select them, even when the
+        # composed spec set would otherwise be eligible (Contract item 3,
+        # g1 repair item 2). engines={...} may still declare a bounded spec
+        # for one of them (credential/service injection for
+        # tests/integration) without selecting it as the default.
+        raise SettingsOnlyProviderError(
+            f"engine {(default_engine or provider)!r} is a canonical provider explicit opt-in "
+            "only through settings/web.search.json; it cannot be selected via default_engine= or provider="
+        )
     if engines is not None:
         if not isinstance(engines, Mapping) or not engines:
             raise ValueError("web.engines must be a non-empty mapping")
+        retired_fallback: _EngineSpec | None = None
         for name, raw in engines.items():
             if not valid_engine_name(name):
                 raise ValueError("web engine names must use the bounded selector grammar")
+            explicit_provider = raw.get("provider", name) if isinstance(raw, Mapping) else name
+            if explicit_provider in _RETIRED_PROVIDERS:
+                raise RetiredProviderError(
+                    f"provider {explicit_provider!r} is retired from built-in web search admission; "
+                    "wire it as a third-party MCP server instead (see "
+                    "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+                )
+            if explicit_provider not in PROVIDERS["providers"]:
+                # Retain the pre-existing legacy_fallback_from behavior for a
+                # genuinely unrecognized/inherited legacy provider name only
+                # (not minimax/zhipu, rejected explicitly above). Held aside
+                # rather than written into ``specs`` immediately, so a
+                # genuine ``duckduckgo`` entry elsewhere in the same mapping
+                # is never silently overwritten regardless of dict order.
+                legacy_fallback_from = explicit_provider
+                retired_fallback = _EngineSpec(
+                    "duckduckgo", provider="duckduckgo",
+                    service=raw.get("search_service") if isinstance(raw, Mapping) else raw,
+                    legacy_fallback_from=explicit_provider,
+                )
+                continue
             if isinstance(raw, Mapping):
                 data = raw
                 specs[name] = _EngineSpec(
@@ -419,6 +676,8 @@ def _specs_from_kwargs(
                 )
             else:
                 specs[name] = _EngineSpec(name, provider=name, service=raw)
+        if retired_fallback is not None and "duckduckgo" not in specs:
+            specs["duckduckgo"] = retired_fallback
         if default_engine is not None and default_engine not in specs:
             raise ValueError("web default_engine must name an admitted engine")
     elif search_service is not None or provider is not None or api_key is not None or api_key_env is not None or model is not None:
@@ -437,14 +696,25 @@ def _specs_from_kwargs(
                 raise ValueError("web engine names must use the bounded selector grammar")
             specs[name] = _EngineSpec(name, provider=provider or name, service=search_service, api_key=api_key, api_key_env=api_key_env, model=model, extra=kwargs)
     else:
-        name = default_engine or "duckduckgo"
-        if not valid_engine_name(name):
-            raise ValueError("web engine names must use the bounded selector grammar")
-        specs[name] = _EngineSpec(name, provider=name)
+        # True no-config path: build the real canonical spec set (all four
+        # providers) rather than a single bare duckduckgo spec, so the
+        # runtime default resolver (WebManager._default_engine_now) can
+        # actually see and select OpenAI when its standard credential env
+        # var is genuinely set — the ordinary, no-operator-config runtime
+        # path, not a test-only injected engine set.
+        specs = _canonical_default_specs()
     if default_engine is not None and default_engine not in specs:
         raise ValueError("web default_engine must name an admitted engine")
     chosen = default_engine or (provider if provider in specs else next(iter(specs), None))
-    source = "operator_default" if default_engine or provider or engines is not None or search_service is not None else "built_in_default"
+    # ``source`` distinguishes an operator's *explicit* default pick
+    # (``default_engine``/``provider``) from mere engine-set composition
+    # (``engines=``/``search_service=`` alone, or the true no-config path):
+    # the latter still leaves the engine choice itself to the runtime
+    # built-in default resolver (``WebManager._default_engine_now`` —
+    # canonical OpenAI when genuinely available, else DuckDuckGo), so it
+    # must not be misreported as an operator override that resolution
+    # should never touch.
+    source = "operator_default" if default_engine or provider else "built_in_default"
     return specs, chosen, source, legacy_fallback_from
 
 
