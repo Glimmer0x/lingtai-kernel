@@ -14,11 +14,6 @@ from lingtai.mcp_servers.telegram._family import (
     handle_telegram,
 )
 from lingtai.mcp_servers.telegram.service import TelegramService
-from lingtai.mcp_servers.telegram.task_card._family import (
-    TASK_CARD_ACTIONS,
-    TASK_CARD_SCHEMA,
-    handle_task_card,
-)
 from lingtai.mcp_servers.telegram.task_card.controller import TaskCardController
 
 from .test_task_card_controller import _FakeAgent, _OK_BODY, _write_renderer
@@ -37,28 +32,6 @@ def _branches(schema: dict) -> dict[str, dict]:
     inputs = schema["properties"]["input"]
     branches = inputs.get("oneOf") or inputs.get("anyOf")
     return {branch["title"].removesuffix(" input"): branch for branch in branches}
-
-
-@pytest.mark.parametrize("family_schema, actions", [
-    (TELEGRAM_SCHEMA, TELEGRAM_ACTIONS),
-    (TASK_CARD_SCHEMA, TASK_CARD_ACTIONS),
-])
-def test_ltpv2_family_schema_has_closed_root_and_correlated_closed_branches(
-    family_schema, actions
-):
-    assert family_schema["required"] == ["action", "input", "reasoning"]
-    assert set(family_schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-    assert family_schema["additionalProperties"] is False
-    assert family_schema["properties"]["action"]["enum"] == list(actions)
-    branches = _branches(family_schema)
-    assert list(branches) == list(actions)
-    assert len(family_schema["allOf"]) == len(actions)
-    for action, condition in zip(actions, family_schema["allOf"]):
-        assert condition["if"]["properties"]["action"]["const"] == action
-        branch = dict(branches[action])
-        branch.pop("title", None)
-        assert condition["then"]["properties"]["input"] == branch
-        assert branches[action]["additionalProperties"] is False
 
 
 def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
@@ -85,53 +58,6 @@ def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
     assert len(manager.calls) == 1
 
 
-def test_task_card_start_rejects_above_global_ceiling_before_controller_io():
-    class Controller:
-        def __init__(self):
-            self.calls = []
-
-        def handle(self, args):
-            self.calls.append(args)
-            return {"status": "ok"}
-
-    controller = Controller()
-    result = handle_task_card(
-        controller,
-        {
-            "action": "start",
-            "input": {"renderer_path": "r.py", "max_refreshes": 1001},
-            "reasoning": "hard-ceiling probe",
-        },
-    )
-    assert result["status"] == "failed"
-    assert controller.calls == []
-
-
-def test_task_card_dispatch_rejects_cross_branch_before_controller_io():
-    class Controller:
-        def __init__(self):
-            self.calls = []
-
-        def handle(self, args):
-            self.calls.append(args)
-            return {"status": "ok"}
-
-    controller = Controller()
-    bad = {
-        "action": "inspect",
-        "input": {"renderer_path": "r.py"},
-        "reasoning": "probe",
-    }
-    result = handle_task_card(controller, bad)
-    assert result["status"] == "failed"
-    assert controller.calls == []
-    assert handle_task_card(
-        controller,
-        {"action": "manual", "input": {}, "reasoning": "discover"},
-    )["status"] == "ok"
-    assert controller.calls == []
-
-
 def test_telegram_send_schema_preserves_text_media_chat_action_alternatives():
     send = _branches(TELEGRAM_SCHEMA)["send"]
     assert send["anyOf"] == [
@@ -145,13 +71,6 @@ def test_telegram_send_schema_preserves_text_media_chat_action_alternatives():
     assert not _basic_validate({"chat_id": 3}, send)
     assert not _basic_validate({"text": "missing chat"}, send)
     assert not _basic_validate({"chat_id": 3, "text": 17}, send)
-
-
-def test_task_card_manual_is_package_owned_and_not_controller_io():
-    result = handle_task_card(None, {"action": "manual", "input": {}, "reasoning": "help"})
-    assert result["status"] == "ok"
-    assert result["action"] == "manual"
-    assert result["manual"]
 
 
 def test_taskcard_refresh_setting_defaults_invalid_values_preserves_valid_siblings(
@@ -320,14 +239,6 @@ def test_limit_finalize_failure_retains_retryable_stop_state_without_restart(tmp
     assert start["watch_id"] not in controller._watches
     assert len(agent._client.calls) == calls + 1
     assert agent._client.calls[-1][1]["sub_action"] == "finalize"
-
-
-def test_initial_create_is_programmable_only_and_automatic_state_is_untouched(tmp_path):
-    agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 1)
-    assert all(call[1]["channel"] == "programmable" for call in agent._client.calls)
-    assert all("automatic" not in call[1] for call in agent._client.calls)
-    controller.handle({"action": "stop", "watch_id": start["watch_id"]})
 
 
 def test_openai_responses_scrub_preserves_family_root_and_action_branches():

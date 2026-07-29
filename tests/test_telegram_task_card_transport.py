@@ -208,14 +208,21 @@ def test_each_public_family_has_strict_root_and_action_owned_branches(tmp_path):
     assert [tool.name for tool in tools] == ["telegram", "task_card"]
     for tool in tools:
         schema = tool.inputSchema
-        assert schema["required"] == ["action", "input", "reasoning"]
-        assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert schema["additionalProperties"] is False
-        assert len(schema["allOf"]) == len(schema["properties"]["action"]["enum"])
+        actions = schema["properties"]["action"]["enum"]
         branches = schema["properties"]["input"].get(
             "oneOf", schema["properties"]["input"].get("anyOf")
         )
-        assert len(branches) == len(schema["properties"]["action"]["enum"])
+        assert schema["required"] == ["action", "input", "reasoning"]
+        assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+        assert schema["additionalProperties"] is False
+        assert len(schema["allOf"]) == len(actions) == len(branches)
+        for action, branch, condition in zip(actions, branches, schema["allOf"]):
+            assert branch["title"] == f"{action} input"
+            assert branch["additionalProperties"] is False
+            assert condition["if"]["properties"]["action"]["const"] == action
+            expected = dict(branch)
+            expected.pop("title")
+            assert condition["then"]["properties"]["input"] == expected
 
 
 def test_raw_task_card_manual_is_family_owned_and_flat_root_is_rejected(tmp_path):
@@ -236,16 +243,21 @@ def test_raw_task_card_manual_is_family_owned_and_flat_root_is_rejected(tmp_path
     assert not account.calls
 
 
-def test_raw_task_card_cross_branch_input_is_rejected_before_controller_io(tmp_path):
+def test_raw_task_card_invalid_inputs_are_rejected_before_controller_io(tmp_path):
     manager, account = _make_manager(tmp_path)
-    result = _call_tool_via_transport(
-        manager,
-        "task_card",
+    invalid = (
         {
             "action": "inspect",
             "input": {"renderer_path": "watch.py"},
             "reasoning": "cross branch probe",
         },
+        {
+            "action": "start",
+            "input": {"renderer_path": "watch.py", "max_refreshes": 1001},
+            "reasoning": "hard ceiling probe",
+        },
     )
-    assert result.isError is True
-    assert not account.calls
+    for payload in invalid:
+        result = _call_tool_via_transport(manager, "task_card", payload)
+        assert result.isError is True
+        assert not account.calls
