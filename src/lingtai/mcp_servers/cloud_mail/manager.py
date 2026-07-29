@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from .client import CloudMailClient, CloudMailError
 from ._watermark import WatermarkStore
+from . import _family
 from .. import _skill
 
 log = logging.getLogger("lingtai_cloud_mail")
@@ -87,6 +88,10 @@ SCHEMA: dict[str, Any] = {
     },
     "required": ["action"],
 }
+
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+SCHEMA = _family.CLOUD_MAIL_SCHEMA
 
 
 class CloudMailAccount:

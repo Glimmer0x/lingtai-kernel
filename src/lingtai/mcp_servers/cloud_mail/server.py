@@ -1,8 +1,9 @@
 """LingTai Cloud Mail MCP server.
 
-Exposes a single omnibus ``cloud_mail`` MCP tool that dispatches to
-``CloudMailManager`` (check/read/search/send/accounts/add_user). Inbound mail
-flows into the host agent's inbox via LICC.
+Exposes a single ``cloud_mail`` MCP tool with the strict LTP-v2 envelope
+(``action``/``input``/``reasoning``/``summarize``, see ``_family.py``) that
+dispatches through ``CloudMailManager`` (check/read/search/send/accounts/
+add_user). Inbound mail flows into the host agent's inbox via LICC.
 
 Configuration:
     LINGTAI_CLOUD_MAIL_CONFIG  — path to a JSON config file (required).
@@ -50,6 +51,7 @@ from .._results import unknown_tool_error as _unknown_tool
 from .. import _config
 from .licc import push_inbox_event
 from .manager import CloudMailManager, DESCRIPTION, SCHEMA
+from ._family import handle_cloud_mail
 
 log = logging.getLogger("lingtai_cloud_mail")
 
@@ -169,7 +171,7 @@ def build_server(manager: CloudMailManager | None) -> Server:
             }
         else:
             try:
-                result = await asyncio.to_thread(manager.handle, arguments)
+                result = await asyncio.to_thread(handle_cloud_mail, manager, arguments)
             except Exception as e:
                 result = {
                     "status": "error",
