@@ -83,9 +83,12 @@ both built from the same deep-copied canonical child schemas:
    `allOf`/`if`/`then` schema without error on the current route (see
    `_scrub_responses_schema` in `../../llm/openai/adapter.py` for the
    corresponding wire-level change and its own scope note).
-2. **`input.oneOf` disclosure:** the same per-child `input_schema`s, embedded
-   verbatim under a `title`, retained under `input` for model discoverability
-   of every action's exact shape in one place.
+2. **Typed `input.oneOf` disclosure:** `input` explicitly declares the common
+   `type: object` constraint required of every action, then embeds the same
+   per-child `input_schema`s verbatim under a `title` for model discoverability
+   of every action's exact shape in one place. The direct type is redundant for
+   a complete JSON Schema validator, but keeps the object contract unambiguous
+   for model/provider schema consumers that inspect only the immediate node.
 
 Both layers expose the envelope root `action`, `input`, required
 `reasoning`, and optional `summarize` — exactly the four public fields;
@@ -344,8 +347,9 @@ its own scoped migration.
 - A `ToolFamily`'s child registry MUST be validated at construction: duplicate
   child names and more than one child named the reserved `manual` MUST raise
   `ToolFamilyError`, not register silently or resolve by precedence.
-- `build_schema()` MUST embed each child's own `input_schema` verbatim (no
-  copy-and-reshape) under a `oneOf` branch pairing it with that child's
+- `build_schema()` MUST declare the aggregate `input` property as direct
+  `type: object`, then embed each child's own object `input_schema` verbatim
+  (no copy-and-reshape) under a `oneOf` branch pairing it with that child's
   `title`. It MUST declare a root `reasoning` string property and include
   `reasoning` in the root `required` list — `reasoning` is Host
   InvocationContext/audit metadata, not left to Agent schema composition's
