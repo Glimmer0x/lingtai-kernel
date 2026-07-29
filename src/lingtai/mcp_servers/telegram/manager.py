@@ -2241,6 +2241,7 @@ class TelegramManager:
                     # Keep the long-standing public helper shape for tool rows;
                     # grouping metadata remains internal to the resident renderer.
                     row.pop("group_id", None)
+                    row.pop("_tool_call_id", None)
                 if row.get("kind") == "tool":
                     row.pop("kind", None)
                 rows.append(row)
@@ -2273,6 +2274,9 @@ class TelegramManager:
             # The ellipsis itself must stay inside the cap, not extend past it.
             reasoning = reasoning[:cap - 1] + "…"
         row = {"tool": tool_name, "reasoning": reasoning}
+        call_id = event.get("tool_call_id")
+        if isinstance(call_id, str) and call_id:
+            row.update({"_tool_call_id": call_id, "status": "???"})
         action = tool_args.get("action")
         if isinstance(action, str) and action:
             row["tool_action"] = action
@@ -2567,10 +2571,14 @@ class TelegramManager:
 
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
+        tool_results: dict[str, dict] = {}
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
                 continue
+            call_id = event.get("tool_call_id")
+            if event.get("type") == "tool_result" and isinstance(call_id, str) and call_id:
+                tool_results[call_id] = event
             row = self._project_task_card_event(event)
             if row is not None:
                 projected_events.append((event, row))
@@ -2580,6 +2588,7 @@ class TelegramManager:
                 # candidate is the only current snapshot.
                 latest_metadata = candidate
 
+        result_changed = False
         with self._task_card_event_lock:
             metadata_changed = (
                 latest_metadata is not None
@@ -2598,7 +2607,21 @@ class TelegramManager:
                         combined.append(({"api_call_id": group_id}, event_row))
                 combined.extend(projected_events)
                 self._task_card_event_groups = self._group_task_card_events(combined)
-        return bool(projected_events) or metadata_changed
+            for group in self._task_card_event_groups:
+                for event_row in group.get("events", []):
+                    result = tool_results.get(event_row.get("_tool_call_id"))
+                    if result is None:
+                        continue
+                    status = result.get("status")
+                    event_row["status"] = (
+                        "error" if status == "error" else "success"
+                        if isinstance(status, str) and status else "???"
+                    )
+                    elapsed_ms = result.get("elapsed_ms")
+                    if type(elapsed_ms) in (int, float) and elapsed_ms >= 0:
+                        event_row["elapsed_s"] = elapsed_ms / 1000
+                    result_changed = True
+        return bool(projected_events) or metadata_changed or result_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.
@@ -3202,7 +3225,7 @@ class TelegramManager:
         # still exceed the ceiling and Telegram's transport limit.  Each row
         # carries its own captured ``started_at`` inline; malformed/missing
         # values degrade to an empty suffix rather than raising.
-        tool_prepared: list[tuple[int, str, str, str, bool, str]] = []
+        tool_prepared: list[tuple[int, str, str, str, bool, str, str | None]] = []
         text_prepared: list[tuple[int, str]] = []
         api_prepared: list[tuple[int, str]] = []
         for idx, row in enumerate(rows):
@@ -3228,7 +3251,9 @@ class TelegramManager:
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
             started_at = started_at if isinstance(started_at, str) else ""
-            tool_prepared.append((idx, label, redacted, elapsed, done, started_at))
+            status = row.get("status")
+            status = status if status in {"success", "error", "???"} else None
+            tool_prepared.append((idx, label, redacted, elapsed, done, started_at, status))
 
         metadata_lines = cls._format_task_card_metadata(metadata)
         # The bottom time line always reflects the render instant, never a
@@ -3257,12 +3282,13 @@ class TelegramManager:
         api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
         text_scaffold = sum(len(text) + 4 for _, text in text_prepared)
         tool_scaffold = 0
-        for _, label, _redacted, elapsed, done, started_at in tool_prepared:
-            marker = "✓ " if done else "• "
+        for _, label, _redacted, elapsed, done, started_at, status in tool_prepared:
+            marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
+            status_suffix = f", {status}" if status else ""
             # +1 newline, +1 for a possible truncation ellipsis (conservative).
-            tool_scaffold += len(prefix) + len(f" ({elapsed}s)") + len(stamp_suffix) + 2
+            tool_scaffold += len(prefix) + len(f" ({elapsed}s{status_suffix})") + len(stamp_suffix) + 2
         fixed = (
             len(cls._TASK_CARD_HEADER) + 1  # header + newline
             + 1                              # blank line before footer
@@ -3281,12 +3307,13 @@ class TelegramManager:
 
         # Render in original row order so tool and API rows interleave correctly.
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done, started_at in tool_prepared:
+        for idx, label, redacted, elapsed, done, started_at, status in tool_prepared:
             excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
-            marker = "✓ " if done else "• "
+            marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s){stamp_suffix}"
+            status_suffix = f", {status}" if status else ""
+            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s{status_suffix}){stamp_suffix}"
         for idx, text in text_prepared:
             excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
             by_idx[idx] = f"• {excerpt}"
