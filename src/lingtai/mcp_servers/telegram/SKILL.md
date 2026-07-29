@@ -8,8 +8,8 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.3
-last_changed_at: 2026-07-28T00:00:00Z
+version: 1.5.4
+last_changed_at: 2026-07-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/manager.py
@@ -18,6 +18,7 @@ related_files:
 - src/lingtai/mcp_servers/telegram/task_card/_family.py
 - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
 - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+- src/lingtai/mcp_servers/telegram/reference/rate-limits/SKILL.md
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
@@ -44,12 +45,20 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
     custom-renderer example, the renderer contract, the
     start|inspect|retry|stop walkthrough, and terminal/fail-loud cleanup.
     Read this before authoring a renderer.
+- name: telegram-rate-limits
+  location: reference/rate-limits/SKILL.md
+  description: |
+    Current Telegram Bot API flood-control guidance and official source links:
+    published per-chat, group, and bulk quotas; the exact `retry_after` meaning;
+    what Telegram leaves unspecified; and safe client behavior. Read this before
+    changing send cadence, programmable Task Card cadence, or 429 recovery.
 ```
 
 | Need | Read |
 |---|---|
 | Send/reply/edit, media, reading, rich text, slash commands, `/taskcard`, errors | this file |
 | Authoring or operating a programmable Task Card watcher | [`task_card/SKILL.md`](task_card/SKILL.md) |
+| Current Telegram quotas, `retry_after`, and safe 429 policy | [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md) |
 | Normative resident/slot promises and code structure | [`task_card/CONTRACT.md`](task_card/CONTRACT.md), [`task_card/ANATOMY.md`](task_card/ANATOMY.md) |
 
 ## MEDIA: document vs photo
@@ -310,11 +319,15 @@ chat-history cardinality. Normative source:
   Check for the `'error'` key and surface or act on it rather than assuming the
   message was delivered.
 - Telegram HTTP 429 responses fail fast with `status: 'error'`,
-  `error_code: 429`, `retryable: false`, and the provider's numeric
-  `retry_after` when Telegram supplied one. Wait at least that many seconds and
-  do not retry the action automatically. The addon never sleeps inside the tool
-  call or schedules a hidden second side effect; missing or malformed cooldown
-  metadata is omitted rather than replaced with a guessed default.
+  `error_code: 429`, and `auto_retry: false`. A valid provider `retry_after`
+  makes `retryable: true`: wait at least that many seconds before starting a new
+  action. Without valid cooldown metadata, both `retryable` and `retry_after`
+  are omitted rather than guessed. The addon never sleeps inside a
+  tool call or schedules a hidden second side effect.
+- Read [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md) for
+  Telegram's currently documented quotas, official source links, and the
+  distinction between provider facts and product policy before changing message
+  or programmable Task Card cadence.
 - The hosted Telegram Bot API limits `getFile` downloads to 20 MB. If an inbound
   document cannot be downloaded, `read` retains its available Telegram metadata
   without a local path, adds a safe bounded provider reason in `download_error`,

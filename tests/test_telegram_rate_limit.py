@@ -1,5 +1,6 @@
 """Focused contract tests for Telegram Bot API 429 handling."""
 
+from importlib import resources
 from pathlib import Path
 import time
 from unittest.mock import Mock
@@ -124,19 +125,43 @@ def test_manager_serializes_rate_limit_without_persisting_a_send(
         "status": "error",
         "error": "Telegram API rate limited",
         "error_code": 429,
-        "retryable": False,
-        "guidance": "Do not retry this Telegram action automatically.",
+        "auto_retry": False,
+        "guidance": (
+            "Do not retry this Telegram action automatically; Telegram "
+            "did not supply a valid retry_after."
+        ),
     }
     if retry_after is not None:
         expected.update({
             "error": f"Telegram API rate limited; retry after {retry_after} seconds",
+            "retryable": True,
             "retry_after": retry_after,
             "guidance": (
-                "Do not retry this Telegram action for at least "
-                f"{retry_after} seconds."
+                f"Wait at least {retry_after} seconds before starting a new "
+                "Telegram action; do not retry it automatically."
             ),
         })
 
     assert result == expected
     assert service.default_account.calls == 1
     assert not (tmp_path / "telegram" / "bot" / "sent").exists()
+
+
+def test_manual_progressively_routes_current_rate_limit_reference() -> None:
+    package = resources.files("lingtai.mcp_servers.telegram")
+    manual = package.joinpath("SKILL.md").read_text(encoding="utf-8")
+    reference = (
+        package.joinpath("reference")
+        .joinpath("rate-limits")
+        .joinpath("SKILL.md")
+        .read_text(encoding="utf-8")
+    )
+
+    assert "reference/rate-limits/SKILL.md" in manual
+    assert "https://core.telegram.org/bots/api#responseparameters" in reference
+    assert "https://core.telegram.org/bots/faq#broadcasting-to-users" in reference
+    assert "one message per second" in reference
+    assert "20 messages per minute" in reference
+    assert "about 30 messages" in reference
+    assert "per second" in reference
+    assert "retry_scope" in reference
