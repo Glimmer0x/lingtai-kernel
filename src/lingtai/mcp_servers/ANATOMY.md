@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/mcp_servers/cloud_mail/manager.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/mcp_servers/imap/manager.py
+  - src/lingtai/mcp_servers/imap/_family.py
+  - tests/test_imap_toolfamily_ltpv2.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/server.py
@@ -63,6 +65,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 - Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/lingtai/tools/mcp/ANATOMY.md`).
 - Manager schemas include `manual` in each action enum and use `_skill.manual_action_description()` to advertise the bundled skill without loading the full body into the resident schema.
 - Tests pin the manual contract, package-data sidecar support, and Telegram parity in `tests/test_mcp_skill_manuals.py` and `tests/test_telegram_rich_formatting.py`.
+- `telegram/_family.py` and `imap/_family.py` each own an independent strict LTP-v2 envelope (`{action, input, reasoning, summarize?}`) built on `lingtai.tools.tool_family.ToolFamily`, with a dependency-free `_basic_validate` dispatch-safety gate that rejects an unknown action, non-string `reasoning`, unknown root field, or cross-branch `input` key before any manager I/O runs. Each manager module keeps its original flat `SCHEMA`/`DESCRIPTION` for the pre-migration per-action description text and `manager.handle()`'s legacy flat-args dispatch, then reassigns the module-level `SCHEMA` name to the family's composed schema (`SCHEMA = _family.TELEGRAM_SCHEMA` / `SCHEMA = _family.IMAP_SCHEMA`) so callers see the strict envelope while the manager's own internal dispatch boundary is unchanged. `tests/test_imap_toolfamily_ltpv2.py` is IMAP's family-specific evidence, mirroring `tests/test_telegram_toolfamily_ltpv2.py`.
 
 ## Composition
 

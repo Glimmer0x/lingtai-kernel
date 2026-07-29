@@ -49,6 +49,7 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 
 from .. import _config
+from ._family import handle_imap
 from ._migrate import migrate_legacy_state
 from .bridge import FilesystemMailBridge
 from .licc import push_inbox_event
@@ -618,24 +619,27 @@ def build_server(manager: IMAPMailManager | None) -> Server:
         if params.name != "imap":
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
-        if manager is None:
+        try:
+            if manager is None:
+                result = handle_imap(None, arguments)
+                if not result:
+                    result = {
+                        "status": "error",
+                        "error": (
+                            "IMAP manager not initialized — server boot failed. "
+                            "Check stderr for the underlying exception (most "
+                            "often missing LINGTAI_IMAP_CONFIG or invalid "
+                            "credentials)."
+                        ),
+                    }
+            else:
+                result = await asyncio.to_thread(handle_imap, manager, arguments)
+        except Exception as e:
             result = {
                 "status": "error",
-                "error": (
-                    "IMAP manager not initialized — server boot failed. "
-                    "Check stderr for the underlying exception (most often "
-                    "missing LINGTAI_IMAP_CONFIG or invalid credentials)."
-                ),
+                "error": str(e),
+                "error_type": type(e).__name__,
             }
-        else:
-            try:
-                result = await asyncio.to_thread(manager.handle, arguments)
-            except Exception as e:
-                result = {
-                    "status": "error",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                }
         return _tool_result(result)
 
     server: Server = Server(

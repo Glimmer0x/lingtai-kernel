@@ -8,12 +8,13 @@ description: |
   important external-email side-effect caveats (real outbound mail — confirm
   before sending). Pulled on demand via action='manual'; you do not need to call
   it before every send.
-version: 1.0.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 1.1.0
+last_changed_at: 2026-07-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/imap/manager.py
 - src/lingtai/mcp_servers/imap/server.py
 - src/lingtai/mcp_servers/imap/service.py
+- src/lingtai/mcp_servers/imap/_family.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
@@ -86,6 +87,20 @@ a list of ids.
 - Actions return a result dict on success or one carrying an `'error'` key on
   failure (e.g. unknown account, bad `email_id`, unreadable attachment). Check
   for the error and surface or act on it rather than assuming delivery.
+
+## PUBLIC TOOL FAMILY: strict LTP-v2
+
+Raw MCP discovery exposes exactly one public tool, `imap`, as a strict LTP-v2
+family with the closed root `{action, input, reasoning, summarize?}` (`action`,
+`input`, and `reasoning` required) and a closed action-owned input branch.
+`imap` actions are exactly `send`, `check`, `read`, `reply`, `search`, `delete`,
+`move`, `flag`, `folders`, `contacts`, `add_contact`, `remove_contact`,
+`edit_contact`, `accounts`, and `manual`. For example, checking the default
+account's inbox is `imap(action="check", input={}, reasoning="...")`, and
+sending mail is `imap(action="send", input={"address": "a@b.com", "message":
+"hi"}, reasoning="...")`. Do not use the retired flat/legacy shape (top-level
+`address`/`message`/`email_id`/... alongside `action`), `_reasoning`, aliases,
+or a generic dispatcher.
 
 ### Outlook IMAP OAuth
 ```json

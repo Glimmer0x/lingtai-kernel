@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from .. import _skill
+from . import _family
 
 if TYPE_CHECKING:
     from .account import IMAPAccount
@@ -226,6 +227,10 @@ DESCRIPTION = (
     "(2) you can confirm the sender is the same human who contacts you via internal email. "
     "Unknown external senders require confirmation from your human before replying."
 )
+
+# Public callers receive the strict LTP-v2 family schema. Manager dispatch
+# remains the internal flat action boundary after family validation.
+SCHEMA = _family.IMAP_SCHEMA
 
 
 # ---------------------------------------------------------------------------
