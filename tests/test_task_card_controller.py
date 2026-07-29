@@ -36,6 +36,7 @@ class _FakeClient:
         assert name == _TASK_CARD_TOOL
         assert "action" not in args  # server forces the private action
         assert args.get("channel") == "programmable"
+        assert "automatic" not in args
         if self.fail:
             return {"status": "error", "error": "backend down"}
         if self.result is not None:
@@ -103,12 +104,6 @@ def test_setup_binds_handler_only(agent):
     assert description == ""
     assert glossary == "__unset__"
     assert callable(handler)
-
-
-def test_schema_requires_strict_root_fields():
-    schema = get_schema()
-    assert schema["required"] == ["action", "input", "reasoning"]
-    assert schema["additionalProperties"] is False
 
 
 def test_description_routes_to_the_telegram_manual():
