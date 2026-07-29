@@ -50,7 +50,7 @@ class OpenAISearchService(SearchService):
         self._api_key = api_key
         self._model = model
 
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+    def search(self, query: str, max_results: int | None = 5) -> list[SearchResult]:
         import openai as openai_sdk
 
         client = openai_sdk.OpenAI(api_key=self._api_key)

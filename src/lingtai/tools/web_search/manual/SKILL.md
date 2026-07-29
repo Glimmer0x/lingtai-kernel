@@ -3,11 +3,12 @@ name: web-manual
 description: >
   One web workflow: search first, browse a known result next, and use one
   explicit legacy fallback only when static browsing cannot serve the need.
-version: 7.1.2
-last_changed_at: "2026-07-28T22:05:00Z"
+version: 8.1.0
+last_changed_at: "2026-07-29T00:00:00Z"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
+  - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/manual/scripts/extract_page.py
@@ -38,14 +39,19 @@ field and no nested branch admits `reasoning`, `_reasoning`, or `summarize`.
 web(action="search", input={"query": "precise question"}, reasoning="discover current sources")
 ```
 
-The search branch accepts only `query`. Search returns bounded structured
-results with `title`, `url`, `snippet`, and a same-Agent `link_ref`. The
-selected engine is reported as `engine`; every success or failure includes a
-bounded `current_setting`. Search never fetches page bodies and never accepts a
-per-call `engine` field. Search results can be bulky (many results, one per
-line) — use root `summarize=true` when you only need a distilled read, and
-leave it `false` (the default) when you need the exact `url`/`link_ref` values
-to browse a specific result next.
+The search branch accepts only `query`. Search returns the complete result set
+the selected provider returned for that call — there is no LingTai-imposed
+top-N/result-count cap — as `{title, url, snippet}` objects, plus a same-Agent
+`link_ref` on any result carrying a usable URL (a synthesized or URL-less
+result stays in the set without a `link_ref`). `count` is the true, uncapped
+result count. The selected engine is reported as `engine`; every success or
+failure includes a bounded `current_setting`. Search never fetches page bodies
+and never accepts a per-call `engine` field. A large result set is delivered
+as a complete artifact file rather than a lossy inline truncation — see
+"Output size and the shared `settings/web.json` threshold" below. Use root
+`summarize=true` when you only need a distilled read, and leave it `false`
+(the default) when you need the exact `url`/`link_ref` values to browse a
+specific result next.
 
 ## 2. Browse a known result
 
@@ -75,13 +81,21 @@ web(action="browse", input={
 
 Browse is static, read-only, SSRF-vetted HTTP(S) GET. Its strict input
 branch uses JSON `null` for absent optional fields; null is normalized to
-omission before dispatch. Browse returns bounded blocks, links, provenance,
-source hash, an untrusted-content marker, and typed failures.
-Use `cursor` with the same URL or link reference for continuation. Do not expect
-JavaScript, PDF, login, cookies, forms, or hidden search fallback. Keep the
-`final_url` and `source_sha256` with quotations — set root `summarize=true`
-only when you do not need to quote the page precisely; whether a browse result
-is bulky depends on what you asked it to extract, so choose per call.
+omission before dispatch. A fresh browse call delivers the complete extracted
+document for that fetch in one call — never only a first page — plus links,
+provenance, source hash, an untrusted-content marker, and typed failures. It
+never mints a continuation `next_cursor` on success; an existing `cursor`
+value is accepted only as a compatibility locator for an already-fetched page
+(no refetch), and still returns the same complete document under the same
+policy, not another partial page. A large document is delivered as a complete
+artifact file rather than a truncated inline page — see the next section. If
+the fetched page's cached snapshot is no longer available when the delivery
+decision runs (only under extreme concurrent pressure on the small
+process-local snapshot cache), browse fails loud with `error_code:
+"BROWSE_SNAPSHOT_UNAVAILABLE"` rather than returning a partial/first-page
+result. Do not expect JavaScript, PDF, login, cookies, forms, or hidden search
+fallback. Keep the `final_url` and `source_sha256` with quotations — set root
+`summarize=true` only when you do not need to quote the page precisely.
 
 ## 3. Manual, settings, and `summarize`
 
@@ -99,6 +113,71 @@ never an implementation argument to search, browse, or manual. A call that
 succeeds with `summarize=true` returns a generated-summary replacement instead
 of the raw result; a call that fails (`status: "failed"`) always returns its
 exact, unsummarized error, on every action, regardless of `summarize`.
+
+### Output size and the shared `settings/web.json` threshold
+
+Search and browse both build their complete canonical content first, then
+apply one shared, family-owned delivery threshold before returning:
+`<agent-workdir>/settings/web.json`, hot-read on every search/browse call
+(missing → default 50000; a present, invalid file fails loud — see below).
+Its complete v1 document is:
+
+```json
+{
+  "schema_version": 1,
+  "max_chars": 50000
+}
+```
+
+| Field | Required value |
+|---|---|
+| `schema_version` | JSON integer `1` exactly. |
+| `max_chars` | JSON integer, `1..100000` inclusive. Not a boolean, float, or string. |
+
+The threshold decision is measured against the exact canonical serialization
+of the content that would actually be returned inline — for search, the
+rendered JSON result list; for browse, the JSON serialization of the complete
+structured `blocks` array (not the smaller plain joined-text form). A page
+with many small blocks can have joined text well under 50000 characters while
+its structured `blocks` form is several times larger — the threshold decision
+catches that case explicitly rather than leaving it to be caught later by an
+unrelated, lossy safety net.
+
+If the decision content is at or below `max_chars`, it is returned inline
+unchanged, with `delivery: "inline"` and an exact `content_chars` (the length
+of what was actually returned — for browse, the structured `blocks`
+serialization) added. If it is larger, **no partial/prefix content is ever
+returned**: the complete content is atomically written to a file under the
+canonical `<agent-workdir>/tmp/tool-results/` directory (the same directory
+the kernel's generic oversized-tool-result spill already uses), and the
+response instead carries `delivery: "artifact"`, a workdir-relative
+`file_path`, exact `content_chars` and `content_sha256` of that file (for
+browse, the smaller plain-text document, not the structured decision length),
+`content_kind`/`format`/`encoding`, `output_setting_source`/
+`output_setting_revision`/`output_setting_hash` (which setting state produced
+this threshold), and an explicit instruction to read it in full with the
+`file.read` tool. When the decision length differs from the file's own
+`content_chars` (browse's case), the envelope also carries
+`delivery_decision_chars`/`delivery_decision_basis` so the file is never
+misread as itself having exceeded the threshold. Nothing is omitted or
+shortened in the artifact — it is the same complete content that would
+otherwise have been inline. Search's `results` array or Browse's
+`blocks`/`partial`/`next_cursor` are absent from a spilled envelope; do not
+expect a lossy subset alongside the artifact. A write failure returns
+`status: "failed"`, `error_code: "ARTIFACT_WRITE_FAILED"` rather than a
+silent fallback.
+
+Browse's existing per-call `input.max_chars` (`1..100000`, or `null`) still
+works, but now overrides this shared threshold for that one call instead of
+choosing a pagination page size; `null` uses the shared setting.
+
+`settings/web.json` is a separate file from `settings/web.search.json` below
+— different filename, different owner concern (shared output threshold vs.
+search-only engine selection), never merged or cross-read. Manual reads
+neither file. A present-but-invalid `settings/web.json` (wrong schema,
+unknown field, wrong type, out-of-range `max_chars`) fails the in-flight
+search or browse call with `error_code: "WEB_OUTPUT_SETTINGS_INVALID"` before
+any provider call or page fetch — never silently defaulted or clamped.
 
 ### Search settings — exact contract
 
@@ -157,13 +236,14 @@ MiniMax and Zhipu are retired from built-in admission entirely: naming
 either via `provider=`, `default_engine=`, or `engines={}` fails explicitly
 and actionably — never a silent DuckDuckGo substitution.
 
-There is no family-owned `settings/web.json`, no
-`settings/web.browse.json`, and no `settings/web.manual.json`. The old family
-path is not a compatibility source. Lingtai does not cross-read, merge, overlay,
-or apply precedence between settings files, and it never silently substitutes
-another engine when a present selection is invalid or unavailable. Operator
-composition owns admitted engines, provider credentials, models, and provider
-kwargs outside this file.
+There is no `settings/web.browse.json` and no `settings/web.manual.json`.
+`settings/web.json` exists but is a separate, family-owned file for the
+shared output-delivery threshold (previous section) — engine selection lives
+only in `settings/web.search.json`, and Lingtai never cross-reads, merges,
+overlays, or applies precedence between the two files, and never silently
+substitutes another engine when a present selection is invalid or
+unavailable. Operator composition owns admitted engines, provider
+credentials, models, and provider kwargs outside this file.
 
 Browse and manual stay usable and provider/network independent even when the
 search settings file is invalid. Their `current_setting` block is explicitly

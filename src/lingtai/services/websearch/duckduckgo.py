@@ -12,9 +12,10 @@ class DuckDuckGoSearchService(SearchService):
     ``pip install ddgs``.
     """
 
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+    def search(self, query: str, max_results: int | None = 5) -> list[SearchResult]:
         from ddgs import DDGS  # type: ignore[import-untyped]
-        raw = DDGS().text(query, max_results=max_results)
+        kwargs = {} if max_results is None else {"max_results": max_results}
+        raw = DDGS().text(query, **kwargs)
         return [
             SearchResult(
                 title=r.get("title", ""),

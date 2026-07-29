@@ -1,6 +1,6 @@
 ---
 name: browser-internal
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/browser/ANATOMY.md
@@ -35,8 +35,16 @@ model-facing browser tool.
 `BrowserEngine.handle` accepts browse arguments and returns the existing
 structured success or typed failure payload, including provenance, source hash,
 SSRF-safe redirects, snapshots, cursors, refs, bounded extraction, and
-`untrusted_content`. The unified parent adds public `action` and setting
-metadata. Manual loading belongs to the parent web manager.
+`untrusted_content`. Internally it still paginates a fetched/continued page
+via `paginate_blocks` and its own `max_chars`, but the unified parent
+(`WebManager._deliver_browse`) always overrides that internal page with the
+complete joined `snapshot.blocks` text before returning: the public contract
+never exposes only a first page or partial document for a fresh success. The
+unified parent adds public `action`, output-delivery setting metadata, and the
+inline-vs-artifact decision over that complete text (see
+`web_search/CONTRACT.md`); this Core has no knowledge of `settings/web.json`
+or artifact files — it only ever returns its own paginated shape, which the
+parent replaces or spills. Manual loading belongs to the parent web manager.
 
 ## Port
 

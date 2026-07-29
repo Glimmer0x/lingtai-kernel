@@ -47,6 +47,19 @@ from ._fsutil import atomic_write_text
 # readable.
 ARTIFACT_MARKER = "lingtai_tool_result_spill"
 
+# Canonical marker for the ``web`` capability's own inline-vs-artifact
+# envelope (``tools/web_search/_spill.py``). This is a DIFFERENT manifest
+# shape from ``ARTIFACT_MARKER`` above — a web artifact envelope is a
+# successful action result (``status`` is the family's own "ok"/"failed",
+# never "spilled") with the large body already omitted, not a generic
+# too-big-result replacement. ``is_spill_manifest`` recognizes it via a
+# separate branch (see below) precisely so the generic preventive spill in
+# ``spill_oversized_result`` treats an already-built web artifact as "already
+# spilled, leave it alone" without requiring it to fake ``status: "spilled"``
+# and without the generic recognizer accidentally matching an unrelated
+# family's dict that merely happens to reuse a "status"/"spill_path" pair.
+WEB_ARTIFACT_MARKER = "lingtai_web_output_artifact/v1"
+
 # Top-level reserved fields that ``ToolExecutor`` attaches to dict-shaped
 # primary results before they reach the wire.  When the primary result
 # itself is oversized and gets spilled, replacing the whole dict with the
@@ -90,24 +103,43 @@ def _slug(value: str, *, limit: int = 40) -> str:
 
 
 def is_spill_manifest(value: Any) -> bool:
-    """Return True iff ``value`` is a manifest produced by ``spill_oversized_result``.
+    """Return True iff ``value`` is a manifest/artifact envelope this module
+    (or a recognized sibling owner) already spilled the full content for.
 
-    Detection is conservative.  The preferred shape carries the explicit
-    namespaced marker ``artifact == ARTIFACT_MARKER`` *and* the required
-    structural fields (``status="spilled"``, ``spill_path`` key,
-    ``cap_chars``, ``original_char_count``) — this matches everything
-    produced by the current implementation and refuses arbitrary business
-    dicts that happen to use ``status`` + ``spill_path`` independently.
+    Two independent recognized shapes:
 
-    Backward-compatible legacy branch: dicts without the marker are still
-    accepted as manifests when *all four* structural fields are present
-    with the right types.  This preserves recognition of any persisted
-    history from earlier turns of this same patch (which produced manifests
-    before the marker was added) but rejects unrelated dicts that happen to
-    share one or two keys.
+    1. The generic ``spill_oversized_result`` manifest: the preferred form
+       carries the explicit namespaced marker ``artifact == ARTIFACT_MARKER``
+       *and* the required structural fields (``status="spilled"``,
+       ``spill_path`` key, ``cap_chars``, ``original_char_count``) — this
+       matches everything produced by the current implementation and refuses
+       arbitrary business dicts that happen to use ``status`` + ``spill_path``
+       independently. A backward-compatible legacy branch accepts dicts
+       without the marker when *all four* structural fields are present with
+       the right types, preserving recognition of persisted history from
+       before the marker was added.
+
+    2. The ``web`` capability's own artifact envelope
+       (``tools/web_search/_spill.py``): carries ``artifact ==
+       WEB_ARTIFACT_MARKER`` plus its own required structural fields
+       (``file_path``, ``content_chars``, ``content_sha256``). This shape's
+       top-level ``status`` is the *family's own* "ok"/"failed" value, never
+       "spilled" — recognized on its own namespaced marker precisely so this
+       is never confused with shape 1 and never requires web to fake a
+       generic-shaped manifest.  Recognizing this shape lets the generic
+       preventive spill in ``spill_oversized_result`` treat an already-built
+       web artifact as already spilled (skip re-spilling it) even if its
+       serialized size happens to exceed ``PREVENTIVE_MAX_CHARS``.
     """
     if not isinstance(value, dict):
         return False
+    if (
+        value.get("artifact") == WEB_ARTIFACT_MARKER
+        and isinstance(value.get("file_path"), str)
+        and isinstance(value.get("content_chars"), int)
+        and isinstance(value.get("content_sha256"), str)
+    ):
+        return True
     if value.get("status") != "spilled":
         return False
     if "spill_path" not in value:
@@ -121,6 +153,69 @@ def is_spill_manifest(value: Any) -> bool:
         and isinstance(value.get("cap_chars"), int)
         and isinstance(value.get("original_char_count"), int)
     )
+
+
+def build_artifact_filename(*, stem_slug: str, ext: str) -> str:
+    """Return a fresh ``<timestamp>-<stem_slug>-<uuid6>.<ext>`` filename.
+
+    The one canonical filename-shaping rule shared by every caller of
+    :func:`write_artifact_file` that does not need its own bespoke shape:
+    UUID/call-identity-only components, never caller-controlled query/title/
+    URL text. ``spill_oversized_result`` builds its own richer
+    ``<timestamp>-<tool>-<id>-<uuid>`` filename directly (its identity
+    components are already validated/slugged there) and passes it to
+    :func:`write_artifact_file` as an explicit ``filename`` instead of using
+    this helper.
+    """
+    timestamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    unique = _uuid.uuid4().hex[:6]
+    return f"{timestamp}-{stem_slug}-{unique}.{ext}"
+
+
+def write_artifact_file(
+    text: str,
+    *,
+    directory: Path,
+    working_dir: Path,
+    filename: str | None = None,
+    stem_slug: str | None = None,
+    ext: str | None = None,
+) -> tuple[str | None, str | None, str | None]:
+    """Atomically write *text* under ``directory`` and return its paths.
+
+    Shared low-level primitive underneath both ``spill_oversized_result``
+    (generic, any-tool, 200K-ceiling preventive spill) and callers that need
+    the exact same atomic-write-and-relative-path convention for their own,
+    differently-shaped manifest (for example the ``web`` capability's
+    configurable-threshold, no-preview artifact envelope) — there is exactly
+    one atomic-write code path for tool-result artifacts, shared by both.
+
+    Callers pass either an explicit, already-built ``filename`` (e.g.
+    ``spill_oversized_result``, which needs its own richer
+    ``<timestamp>-<tool>-<id>-<uuid>`` shape built from already-slugged
+    identity components) or ``stem_slug``/``ext`` to have
+    :func:`build_artifact_filename` build a fresh
+    ``<timestamp>-<stem_slug>-<uuid6>.<ext>`` name. Exactly one of
+    ``filename`` or (``stem_slug`` and ``ext``) must be supplied.
+
+    Returns ``(relative_path, absolute_path, error)``. On success ``error``
+    is ``None`` and both paths are set. On failure both paths are ``None``
+    and ``error`` carries a ``"<ExceptionType>: <message>"`` string that
+    includes the raw ``OSError`` text (which may embed the absolute host
+    path); callers that must not surface host paths substitute their own
+    fixed message instead of exposing this string.
+    """
+    if filename is None:
+        if stem_slug is None or ext is None:
+            raise TypeError("write_artifact_file requires either filename or (stem_slug and ext)")
+        filename = build_artifact_filename(stem_slug=stem_slug, ext=ext)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / filename
+        atomic_write_text(target, text)
+        return str(target.relative_to(working_dir)), str(target.resolve()), None
+    except OSError as exc:
+        return None, None, f"{type(exc).__name__}: {exc}"
 
 
 def spill_oversized_result(
@@ -195,14 +290,12 @@ def spill_oversized_result(
     if working_dir is not None:
         wd = Path(working_dir)
         spill_dir = workdir_layout(wd).tool_results_dir
-        try:
-            spill_dir.mkdir(parents=True, exist_ok=True)
-            spill_path = spill_dir / filename
-            atomic_write_text(spill_path, serialized_text)
-            spill_path_str = str(spill_path.relative_to(wd))
-            spill_path_abs = str(spill_path.resolve())
-        except OSError as exc:
-            spill_failed = f"{type(exc).__name__}: {exc}"
+        spill_path_str, spill_path_abs, spill_failed = write_artifact_file(
+            serialized_text,
+            directory=spill_dir,
+            working_dir=wd,
+            filename=filename,
+        )
 
     # Build the compact manifest.  Preview is a head of the canonical text,
     # bounded so the manifest itself stays comfortably under the cap even

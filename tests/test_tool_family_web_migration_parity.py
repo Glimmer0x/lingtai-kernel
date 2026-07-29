@@ -100,7 +100,7 @@ def _pre_migration_schema() -> dict:
                                 "type": ["integer", "null"],
                                 "minimum": 1,
                                 "maximum": 100000,
-                                "description": "Maximum returned characters, or null for the default 12000.",
+                                "description": "Per-call override of the inline-vs-artifact delivery threshold; null uses the shared settings/web.json setting (default 50000). The complete document is always delivered, inline or as an artifact.",
                             },
                         },
                         "required": ["url", "link_ref", "cursor", "extract", "max_chars"],

@@ -39,22 +39,22 @@ class AnthropicSearchService(SearchService):
         self._api_key = api_key
         self._model = model
 
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
+    def search(self, query: str, max_results: int | None = 5) -> list[SearchResult]:
         import anthropic
 
         client = anthropic.Anthropic(api_key=self._api_key)
+        web_search_tool: dict = {
+            "type": "web_search_20250305",
+            "name": "web_search",
+        }
+        if max_results is not None:
+            web_search_tool["max_uses"] = max_results
         try:
             raw = client.messages.create(
                 model=self._model,
                 max_tokens=4096,
                 messages=[{"role": "user", "content": query}],
-                tools=[
-                    {
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": max_results,
-                    }
-                ],
+                tools=[web_search_tool],
             )
         except Exception as e:
             logger.warning("Anthropic web search failed: %s", type(e).__name__)

@@ -39,7 +39,7 @@ class FakeSearch:
     def __init__(self):
         self.queries: list[str] = []
 
-    def search(self, query: str):
+    def search(self, query: str, max_results: int | None = None):
         self.queries.append(query)
         return [{
             "title": "Provider-shaped result",
@@ -89,7 +89,7 @@ def test_web_browse_vertical_slice(tmp_path):
                 "link_ref": None,
                 "cursor": None,
                 "extract": None,
-                "max_chars": 18,
+                "max_chars": None,
             },
         })
         assert first["status"] == "ok"
@@ -98,25 +98,38 @@ def test_web_browse_vertical_slice(tmp_path):
         assert first["requested_url"] == "https://public.example/page"
         assert first["final_url"] == "https://public.example/page"
         assert first["untrusted_content"] is True
-        assert first["next_cursor"]
+        # A fresh Browse success delivers the complete extracted document in
+        # one call and never mints a continuation cursor.
+        assert first["next_cursor"] is None
+        assert first["partial"] is False
+        assert first["delivery"] == "inline"
         calls_after_first = len(port.calls)
 
+        # A legacy cursor (obtained directly from the underlying engine, as a
+        # pre-migration caller would have) remains accepted only as a
+        # compatibility locator: it resolves the same cached snapshot without
+        # a refetch, but still returns the complete document under the new
+        # full-output policy rather than another partial page.
+        from lingtai.tools.browser.cursor import CursorPayload
+        web_manager = agent._tool_handlers["web"].__self__
+        engine = web_manager.browser_engine
+        snapshot_id = first["snapshot_id"]
+        legacy_cursor = engine.cursor.encode(CursorPayload(snapshot_id, "article", 0, 5))
         second = agent._tool_handlers["web"]({
             "action": "browse",
             "input": {
                 "url": "https://public.example/page",
                 "link_ref": None,
-                "cursor": first["next_cursor"],
+                "cursor": legacy_cursor,
                 "extract": None,
-                "max_chars": 18,
+                "max_chars": None,
             },
         })
         assert second["status"] == "ok"
-        assert second["timings_ms"] == {}
         assert len(port.calls) == calls_after_first
-        first_ids = {block["id"] for block in first["blocks"]}
-        second_ids = {block["id"] for block in second["blocks"]}
-        assert first_ids.isdisjoint(second_ids)
+        assert second["next_cursor"] is None
+        assert second["partial"] is False
+        assert second["blocks"] == first["blocks"]
 
         link_ref = first["links"][0]["ref"]
         followed = agent._tool_handlers["web"]({

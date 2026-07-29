@@ -6,12 +6,15 @@ related_files:
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
+  - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/services/websearch/ANATOMY.md
+  - src/lingtai/kernel/tool_result_artifacts.py
+  - src/lingtai/kernel/workdir.py
 maintenance: |
   Keep this public web Anatomy and its Contract reciprocal, keep the parent
   link bidirectional, and keep the sole web-manual edge on both owner twins.
@@ -83,7 +86,18 @@ action implementations, settings, and diagnostics.
   onto the `SEARCH_FAILED` result (`src/lingtai/tools/web_search/__init__.py`).
 - `read_settings()` — bounded regular-file snapshot and strict v1 selector
   validation over the action-owned `settings/web.search.json`
-  (`src/lingtai/tools/web_search/settings.py:49-182`).
+  (`src/lingtai/tools/web_search/settings.py`).
+- `read_output_settings()` — bounded regular-file snapshot and strict v1
+  `max_chars` validation over the family-owned `settings/web.json`, shared
+  identically by `search` and `browse` (`src/lingtai/tools/web_search/settings.py`).
+- `spill_if_over_threshold()` — the shared Web-owned inline-vs-artifact
+  decision and envelope builder, called by both `_deliver_search` and
+  `_deliver_browse`; atomically writes complete content via the kernel's
+  `write_artifact_file` under the canonical `WorkdirLayout.tool_results_dir`
+  (the same directory the generic preventive spill owns), and stamps the
+  envelope with the kernel's `WEB_ARTIFACT_MARKER` so `is_spill_manifest`
+  recognizes it explicitly
+  (`src/lingtai/tools/web_search/_spill.py`).
 - `BrowserEngine` — internal static browse use case, provenance, refs, cursors,
   SSRF policy, and typed failures (`src/lingtai/tools/browser/core.py:126-327`).
 - `SearchService` adapters — provider implementations behind the internal
@@ -117,9 +131,14 @@ that promise for web's actions, behavior, and evidence.
 
 Each manager owns immutable engine specs, a lazy per-engine service cache, one
 browser engine, and its bounded ref/snapshot/cursor stores. Settings are read
-from the Agent workdir on every call and never written by the capability.
-Credentials stay in operator wiring or process configuration; no call mutates
-environment state.
+from the Agent workdir on every call and never written by the capability,
+except for the artifact files `spill_if_over_threshold()` writes under the
+canonical `<agent-workdir>/tmp/tool-results/` directory when a call's
+complete content exceeds the shared threshold — the same directory the
+kernel's generic preventive spill already owns, not a second web-owned
+directory. Those are ephemeral output artifacts, not settings state, and
+unrelated to `<agent-workdir>/settings/*.json` above. Credentials stay in
+operator wiring or process configuration; no call mutates environment state.
 
 ## Notes
 

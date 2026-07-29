@@ -1,10 +1,14 @@
-"""Strict per-Agent settings for the ``web`` capability's ``search`` action.
+"""Strict per-Agent settings for the ``web`` capability.
 
-The settings file is intentionally a tiny selector, not a provider
+``settings/web.search.json`` is intentionally a tiny selector, not a provider
 configuration file.  Operators configure engines and credentials at setup;
 an Agent-owned, action-owned ``settings/web.search.json`` may select only one
-admitted engine.  There is no family-owned ``settings/web.json``; browse and
-manual read no settings file at all.
+admitted engine.
+
+``settings/web.json`` is a separate, family-owned file that holds the shared
+``max_chars`` inline-vs-artifact delivery threshold consumed identically by
+both ``search`` and ``browse``.  It is read by neither ``manual`` nor by the
+engine-selector reader above; the two files are never merged or cross-read.
 """
 from __future__ import annotations
 
@@ -56,6 +60,44 @@ def settings_path(agent: Any) -> Path:
     return Path(agent._working_dir) / "settings" / "web.search.json"
 
 
+DEFAULT_OUTPUT_MAX_CHARS = 50_000
+MIN_OUTPUT_MAX_CHARS = 1
+MAX_OUTPUT_MAX_CHARS = 100_000
+
+
+def output_settings_path(agent: Any) -> Path:
+    """Return the one fixed, family-owned output-delivery settings path."""
+    return Path(agent._working_dir) / "settings" / "web.json"
+
+
+@dataclass(frozen=True, slots=True)
+class OutputSettingsSnapshot:
+    max_chars: int | None
+    source: str
+    revision: str
+    digest: str | None
+    error: str | None = None
+
+
+def _default_output_snapshot() -> "OutputSettingsSnapshot":
+    """Return the deterministic snapshot for a missing ``settings/web.json``.
+
+    ``revision``/``digest`` are not ``None``/a bare sentinel string: they are
+    computed the same way a present, valid file's own canonical serialization
+    would be hashed, over the *effective default document*
+    (``{"schema_version": 1, "max_chars": DEFAULT_OUTPUT_MAX_CHARS}``). This
+    makes "default applied" a truthful, stable, independently-verifiable
+    diagnostic fact rather than an opaque absence — a caller can recompute
+    the same digest from the documented default and confirm it matches.
+    """
+    canonical = json.dumps(
+        {"schema_version": 1, "max_chars": DEFAULT_OUTPUT_MAX_CHARS},
+        sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()[:32]
+    return OutputSettingsSnapshot(DEFAULT_OUTPUT_MAX_CHARS, "default", "default", digest)
+
+
 def _bounded_error(exc: Exception) -> str:
     # OS errors commonly include the absolute path passed to ``open``. The
     # result contract exposes only the agent-relative settings path, never the
@@ -75,15 +117,21 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _read_stable(path: Path) -> tuple[bytes, str]:
+def _read_stable_named(path: Path, *, filename: str) -> tuple[bytes, str]:
+    """Bounded, race-checked read of one settings file, named for error text.
+
+    Shared by both settings readers so ``settings/web.json`` gets the exact
+    same symlink/non-regular/size/stability guarantees as
+    ``settings/web.search.json`` without duplicating the check logic.
+    """
     try:
         first = path.lstat()
     except FileNotFoundError:
         return b"", "missing"
     if stat.S_ISLNK(first.st_mode) or not stat.S_ISREG(first.st_mode):
-        raise SettingsError("settings/web.search.json must be a regular file")
+        raise SettingsError(f"{filename} must be a regular file")
     if first.st_size > MAX_SETTINGS_BYTES:
-        raise SettingsError("settings/web.search.json exceeds the bounded size")
+        raise SettingsError(f"{filename} exceeds the bounded size")
     # Open by path only after lstat: a changed link/non-regular file is rejected
     # rather than followed.  A second stat closes ordinary replacement races.
     with path.open("rb") as handle:
@@ -103,6 +151,10 @@ def _read_stable(path: Path) -> tuple[bytes, str]:
         raise SettingsError("settings snapshot changed during read")
     digest = hashlib.sha256(raw).hexdigest()[:32]
     return raw, digest
+
+
+def _read_stable(path: Path) -> tuple[bytes, str]:
+    return _read_stable_named(path, filename="settings/web.search.json")
 
 
 def read_settings(
@@ -148,6 +200,60 @@ def read_settings(
             digest or "error",
             digest,
             _bounded_error(exc if isinstance(exc, Exception) else SettingsError("invalid settings")),
+        )
+
+
+def read_output_settings(agent: Any) -> OutputSettingsSnapshot:
+    """Read and validate the shared ``settings/web.json`` output-delivery snapshot.
+
+    Consumed identically by ``search`` and ``browse`` for the inline-vs-artifact
+    ``max_chars`` threshold. Missing file uses the built-in default
+    (``DEFAULT_OUTPUT_MAX_CHARS``); a present-but-invalid file (malformed JSON,
+    unknown/duplicate fields, wrong schema_version, non-int/bool/out-of-range
+    ``max_chars``, symlink, non-regular, oversize, bad UTF-8, unstable snapshot)
+    fails loud via ``OutputSettingsSnapshot.error`` — never silently clamped or
+    coerced, and never treated as missing. Neither ``manual`` nor
+    ``read_settings`` calls this reader.
+    """
+    path = output_settings_path(agent)
+    try:
+        raw, revision = _read_stable_named(path, filename="settings/web.json")
+        if revision == "missing":
+            return _default_output_snapshot()
+        text = raw.decode("utf-8")
+        value = json.loads(text, object_pairs_hook=_pairs)
+        if not isinstance(value, dict) or set(value) != {"schema_version", "max_chars"}:
+            raise SettingsError("settings/web.json must contain only schema_version and max_chars")
+        if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+            raise SettingsError("settings/web.json schema_version must be integer 1")
+        max_chars = value["max_chars"]
+        if (
+            isinstance(max_chars, bool)
+            or not isinstance(max_chars, int)
+            or not (MIN_OUTPUT_MAX_CHARS <= max_chars <= MAX_OUTPUT_MAX_CHARS)
+        ):
+            raise SettingsError(
+                f"settings/web.json max_chars must be an integer between "
+                f"{MIN_OUTPUT_MAX_CHARS} and {MAX_OUTPUT_MAX_CHARS}"
+            )
+        return OutputSettingsSnapshot(max_chars, "settings/web.json", revision, revision)
+    except (OSError, UnicodeError, json.JSONDecodeError, SettingsError) as exc:
+        digest: str | None = None
+        try:
+            if path.is_file() and not path.is_symlink():
+                with path.open("rb") as handle:
+                    digest = hashlib.sha256(handle.read(MAX_SETTINGS_BYTES)).hexdigest()[:32]
+        except OSError:
+            pass
+        message = str(exc).replace("\n", " ").strip()
+        if isinstance(exc, OSError):
+            message = f"settings/web.json could not be read ({type(exc).__name__})"
+        return OutputSettingsSnapshot(
+            None,
+            "settings_error",
+            digest or "error",
+            digest,
+            (message or "invalid settings")[:240],
         )
 
 

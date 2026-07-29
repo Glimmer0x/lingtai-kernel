@@ -111,7 +111,7 @@ def test_real_no_config_default_falls_back_to_duckduckgo_without_openai_key(tmp_
     assert result["current_setting"]["source"] == "built_in_default"
     assert result["engine"] == "duckduckgo"
     assert result["status"] == "ok"
-    mock_ddg_cls.return_value.search.assert_called_once_with("q")
+    mock_ddg_cls.return_value.search.assert_called_once_with("q", max_results=None)
 
 
 def test_real_no_config_default_reports_anthropic_and_gemini_as_selectable_but_unselected(tmp_path, monkeypatch):
@@ -201,7 +201,7 @@ def test_settings_file_selection_succeeds_on_canonical_backend(tmp_path, engine)
     result = mgr.handle({"action": "search", "input": {"query": "q"}})
     assert result["status"] == "ok"
     assert result["engine"] == engine
-    service.search.assert_called_once_with("q")
+    service.search.assert_called_once_with("q", max_results=None)
 
 
 @pytest.mark.parametrize("engine", ["anthropic", "gemini"])
@@ -238,7 +238,7 @@ def test_settings_file_selection_is_hot_read_live_change_no_refresh(tmp_path):
     second = mgr.handle({"action": "search", "input": {"query": "q"}})
     assert second["engine"] == "duckduckgo"
     assert second["current_setting"]["source"] == "settings/web.search.json"
-    ddg_service.search.assert_called_once_with("q")
+    ddg_service.search.assert_called_once_with("q", max_results=None)
 
 
 @pytest.mark.parametrize("engine", ["anthropic", "gemini"])
@@ -413,7 +413,7 @@ def test_openai_runtime_failure_falls_back_to_duckduckgo_once(tmp_path):
     assert "comment" in result and "OpenAI" in result["comment"] and "DuckDuckGo" in result["comment"]
     assert result["openai_failure_class"] == "Timeout"
     assert result["count"] == 1
-    mock_ddg_cls.return_value.search.assert_called_once_with("q")
+    mock_ddg_cls.return_value.search.assert_called_once_with("q", max_results=None)
 
 
 def test_openai_runtime_failure_no_secrets_in_comment_or_diagnostics(tmp_path):
@@ -443,7 +443,7 @@ def test_openai_and_duckduckgo_both_fail_reports_typed_failure_no_second_retry(t
     assert result["error_code"] == "SEARCH_FAILED"
     assert result["openai_failure_class"] == "ServerError"
     assert result["duckduckgo_failure_class"] == "RuntimeError"
-    mock_ddg_cls.return_value.search.assert_called_once_with("q")
+    mock_ddg_cls.return_value.search.assert_called_once_with("q", max_results=None)
 
 
 def test_openai_programming_bug_does_not_trigger_duckduckgo_fallback(tmp_path):
