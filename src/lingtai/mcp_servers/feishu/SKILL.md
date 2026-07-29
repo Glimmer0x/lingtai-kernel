@@ -8,12 +8,13 @@ description: |
   transient-hook vs persistent-context split, and side-effect caveats.
   Pulled on demand via action='manual'; you do not need to call it before every
   send.
-version: 1.2.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 1.3.0
+last_changed_at: 2026-07-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/feishu/manager.py
 - src/lingtai/mcp_servers/feishu/server.py
 - src/lingtai/mcp_servers/feishu/service.py
+- src/lingtai/mcp_servers/feishu/_family.py
 maintenance: |
   Tracks the MCP server's manager/config behavior; update when the server's setup or API surface changes.
 ---
@@ -94,3 +95,14 @@ rules live in
 - Actions return a result dict on success or `{'error': <message>}` on failure
   (e.g. missing `receive_id`, bad `message_id`). Check for the `'error'` key and
   surface or act on it rather than assuming delivery.
+
+## PUBLIC TOOL FAMILY: strict LTP-v2
+
+Raw MCP discovery exposes exactly one public tool, `feishu`. It is an
+independent strict LTP-v2 family with the closed root
+`{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
+required) and a closed action-owned input branch. `feishu` actions are exactly
+`send`, `check`, `read`, `reply`, `search`, `delete`, `edit`, `contacts`,
+`add_contact`, `remove_contact`, `accounts`, and `manual`. The `manual` action
+is the discovery path for this packaged doc. Do not use the retired flat/legacy
+shape, `_reasoning`, aliases, or a generic dispatcher.

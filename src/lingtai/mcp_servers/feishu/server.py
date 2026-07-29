@@ -47,6 +47,7 @@ from .._results import unknown_tool_error as _unknown_tool
 from .. import _config
 from .licc import push_inbox_event
 from .manager import FeishuManager, SCHEMA, DESCRIPTION
+from ._family import handle_feishu
 from .service import FeishuService
 
 log = logging.getLogger("lingtai.mcp_servers.feishu")
@@ -686,17 +687,19 @@ def build_server(manager: FeishuManager | None) -> Server:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
         if manager is None:
-            result = {
-                "status": "error",
-                "error": (
-                    "Feishu manager not initialized — server boot failed. "
-                    "Check stderr for the underlying exception (most often "
-                    "missing LINGTAI_FEISHU_CONFIG or invalid app credentials)."
-                ),
-            }
+            result = handle_feishu(None, arguments)
+            if not result:
+                result = {
+                    "status": "error",
+                    "error": (
+                        "Feishu manager not initialized — server boot failed. "
+                        "Check stderr for the underlying exception (most often "
+                        "missing LINGTAI_FEISHU_CONFIG or invalid app credentials)."
+                    ),
+                }
         else:
             try:
-                result = await asyncio.to_thread(manager.handle, arguments)
+                result = await asyncio.to_thread(handle_feishu, manager, arguments)
             except Exception as e:
                 result = {
                     "status": "error",
