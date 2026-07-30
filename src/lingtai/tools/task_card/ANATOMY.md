@@ -24,7 +24,10 @@ plus its persisted agent-wide configuration, both under `<workdir>/taskcard/`,
 and nothing else. It is producer-first and channel-neutral: it runs a
 renderer, writes `taskcard/taskcard.md`, and writes `taskcard/status` as exact
 `active` or `inactive`, reading `taskcard/taskcard.json` to resolve each new
-watch's cadence/ceiling defaults. It does not own Telegram, Feishu, portals,
+watch's cadence/ceiling defaults. `stop` pauses a watch and preserves the last
+body; `remove` is the terminal lifecycle action that also retires any active
+watch and deletes the body, so a caller never needs to reach around this
+capability with a filesystem delete. It does not own Telegram, Feishu, portals,
 chat IDs, retry policy against a transport, or any resident message state.
 Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
@@ -76,8 +79,10 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 ## Notes
 
 - Atomic ordering is the structural point of this unit: write the body fully
-  before activation, update the body by atomic replace, and write `inactive`
-  before stopping.
+  before activation, update the body by atomic replace, write `inactive`
+  before stopping, and — for `remove` — confirm the watch has quiesced before
+  deleting the body, so the updater can never recreate a file `remove` just
+  removed.
 - Missing, invalid, or inactive producer state is a consumer concern. This
   intrinsic capability only writes the artifact truthfully.
 - The legacy-config migration is a one-time bootstrap, not an integration:

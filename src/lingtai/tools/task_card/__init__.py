@@ -101,12 +101,14 @@ _START_INPUT_SCHEMA = _object(
     required=["renderer_path"],
 )
 _WATCH_INPUT_SCHEMA = _object({"watch_id": {"type": "string"}}, required=["watch_id"])
+_REMOVE_INPUT_SCHEMA = _object({}, required=[])
 
 _CHILDREN: tuple[tuple[str, dict[str, Any]], ...] = (
     ("start", _START_INPUT_SCHEMA),
     ("inspect", _WATCH_INPUT_SCHEMA),
     ("retry", _WATCH_INPUT_SCHEMA),
     ("stop", _WATCH_INPUT_SCHEMA),
+    ("remove", _REMOVE_INPUT_SCHEMA),
     ("manual", MANUAL_INPUT_SCHEMA),
 )
 
@@ -126,7 +128,8 @@ def get_schema() -> dict[str, Any]:
     schema["properties"]["action"]["description"] = (
         "Declarative Task Card action. start keeps one renderer watch writing the "
         "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
-        "stop, and manual read or control that one artifact."
+        "and stop read or control that one artifact; remove is the terminal "
+        "lifecycle cleanup; manual explains the full contract."
     )
     return schema
 
@@ -141,7 +144,10 @@ def get_description() -> str:
         "channel-specific readers. Use it proactively for meaningful long-running, "
         "multi-step, or parallel work so a human can follow progress; skip it for "
         "quick single-step work, ritual updates, or a body you cannot keep truthful "
-        "and current. Actions: start, inspect, retry, stop, manual."
+        "and current. Use stop to pause a watch while preserving its last body, and "
+        "remove once the work is completed, cancelled, or abandoned so the artifact "
+        "cannot mislead a consumer as stale. Actions: start, inspect, retry, stop, "
+        "remove, manual."
     )
 
 
@@ -225,6 +231,7 @@ class TaskCardManager:
             ChildTool("inspect", _WATCH_INPUT_SCHEMA, self._inspect_child),
             ChildTool("retry", _WATCH_INPUT_SCHEMA, self._retry_child),
             ChildTool("stop", _WATCH_INPUT_SCHEMA, self._stop_child),
+            ChildTool("remove", _REMOVE_INPUT_SCHEMA, self._remove_child),
             build_manual_child(self._agent, _MANUAL_SKILL_NAME),
         ]
         return ToolFamily("task_card", children)
@@ -381,6 +388,72 @@ class TaskCardManager:
             **self._status_payload("inactive"),
             **self._refresh_fields(watch),
         }
+
+    def _remove_child(self, input_: dict[str, Any]) -> dict[str, Any]:
+        """Terminal lifecycle cleanup: retire any active watch, then delete the body.
+
+        Unlike ``stop``, ``remove`` takes no ``watch_id`` — it targets this
+        agent's one artifact, not a specific watch, so it stays useful even
+        after a restart lost the in-memory watch handle. If a watch is
+        active it is retired exactly like ``stop`` (write ``inactive`` before
+        the updater joins), so the updater cannot race a deleted body back
+        into existence; only once that retirement is confirmed is the body
+        actually removed. A stop failure (thread still running) blocks
+        removal and is returned verbatim under ``state: "remove_blocked"`` so
+        the caller can retry once the watch is quiescent.
+        """
+        with self._lock:
+            watch = self._watch
+        if watch is not None:
+            stopped = self._stop_watch(watch)
+            if stopped["status"] != "ok":
+                return {**stopped, "state": "remove_blocked"}
+        return self._finalize_remove()
+
+    def _finalize_remove(self) -> dict[str, Any]:
+        try:
+            self._write_status("inactive")
+        except OSError as exc:
+            return {
+                "status": "error",
+                "state": "remove_failed",
+                "error": {
+                    "code": "remove_finalize_failed",
+                    "retryable": True,
+                    "message": f"failed to write inactive status: {type(exc).__name__}",
+                },
+                **self._paths_payload(),
+                **self._status_payload("inactive"),
+            }
+        body_removed, delete_error = self._delete_body()
+        if delete_error is not None:
+            return {
+                "status": "error",
+                "state": "remove_failed",
+                "error": {
+                    "code": "remove_body_failed",
+                    "retryable": True,
+                    "message": f"failed to remove task card body: {type(delete_error).__name__}",
+                },
+                **self._paths_payload(),
+                **self._status_payload("inactive"),
+            }
+        return {
+            "status": "ok",
+            "state": "removed",
+            "body_removed": body_removed,
+            **self._paths_payload(),
+            **self._status_payload("inactive"),
+        }
+
+    def _delete_body(self) -> tuple[bool, OSError | None]:
+        try:
+            self._body_path.unlink()
+        except FileNotFoundError:
+            return False, None
+        except OSError as exc:
+            return False, exc
+        return True, None
 
     def _spawn(self, watch: _Watch) -> None:
         watch.thread = threading.Thread(

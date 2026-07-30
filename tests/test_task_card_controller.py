@@ -203,6 +203,143 @@ def test_stop_writes_inactive_before_removing_the_watch(agent, manager, monkeypa
     assert writes == ["inactive"]
 
 
+def test_remove_after_stop_deletes_the_preserved_body(agent, manager):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "pause"})
+    assert Path(started["body_path"]).exists()
+
+    result = manager.handle({"action": "remove", "input": {}, "reasoning": "work is done"})
+
+    assert result["status"] == "ok"
+    assert result["state"] == "removed"
+    assert result["body_removed"] is True
+    assert result["status_value"] == "inactive"
+    assert not Path(result["body_path"]).exists()
+    assert Path(result["status_path"]).read_text(encoding="utf-8") == "inactive"
+    assert manager._watch is None
+
+
+def test_remove_while_active_retires_the_watch_before_deleting_the_body(agent, manager, monkeypatch):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch = manager._watch
+    assert watch.thread is not None and watch.thread.is_alive()
+
+    order: list[str] = []
+    real_stop_watch = manager._stop_watch
+    real_delete_body = manager._delete_body
+
+    def record_stop(w):
+        order.append("stop")
+        return real_stop_watch(w)
+
+    def record_delete():
+        order.append("delete")
+        return real_delete_body()
+
+    monkeypatch.setattr(manager, "_stop_watch", record_stop)
+    monkeypatch.setattr(manager, "_delete_body", record_delete)
+
+    result = manager.handle({"action": "remove", "input": {}, "reasoning": "abandon this work"})
+
+    assert order == ["stop", "delete"]
+    assert result["status"] == "ok"
+    assert result["state"] == "removed"
+    assert result["body_removed"] is True
+    assert not Path(started["body_path"]).exists()
+    assert Path(started["status_path"]).read_text(encoding="utf-8") == "inactive"
+    assert manager._watch is None
+    # The updater thread is fully joined before the body is unlinked, so it
+    # cannot race a deleted body back into existence.
+    assert not watch.thread.is_alive()
+
+
+def test_remove_blocks_when_the_watch_will_not_stop_and_does_not_delete_the_body(
+    agent, manager, monkeypatch
+):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch = manager._watch
+    stop_failure = {
+        "status": "error",
+        "watch_id": watch.watch_id,
+        "state": "stop_failed",
+        "error": {"code": "stop_thread_alive", "retryable": True, "message": "still running"},
+        **manager._paths_payload(),
+        **manager._status_payload("inactive"),
+        **manager._refresh_fields(watch),
+    }
+    delete_calls: list[str] = []
+    monkeypatch.setattr(manager, "_stop_watch", lambda w: stop_failure)
+    monkeypatch.setattr(manager, "_delete_body", lambda: delete_calls.append("delete"))
+
+    result = manager.handle({"action": "remove", "input": {}, "reasoning": "abandon this work"})
+
+    assert result["status"] == "error"
+    assert result["state"] == "remove_blocked"
+    assert result["error"]["code"] == "stop_thread_alive"
+    assert delete_calls == []
+    assert Path(started["body_path"]).exists()
+    # ``stop``'s own retryable contract still applies: the watch is retained
+    # so a later remove can retry once the updater actually quiesces.
+    assert manager._watch is watch
+
+    monkeypatch.undo()
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})
+
+
+def test_remove_is_idempotent_when_never_started_or_already_removed(agent, manager):
+    never_started = manager.handle({"action": "remove", "input": {}, "reasoning": "cleanup just in case"})
+
+    assert never_started["status"] == "ok"
+    assert never_started["state"] == "removed"
+    assert never_started["body_removed"] is False
+    assert never_started["status_value"] == "inactive"
+    assert Path(never_started["status_path"]).read_text(encoding="utf-8") == "inactive"
+    assert not Path(never_started["body_path"]).exists()
+
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    manager.handle(
+        {"action": "start", "input": {"renderer_path": renderer, "interval_s": 3600}, "reasoning": "start"}
+    )
+    first = manager.handle({"action": "remove", "input": {}, "reasoning": "cleanup"})
+    assert first["body_removed"] is True
+
+    second = manager.handle({"action": "remove", "input": {}, "reasoning": "cleanup again"})
+    assert second["status"] == "ok"
+    assert second["state"] == "removed"
+    assert second["body_removed"] is False
+    assert manager._watch is None
+
+
+def test_remove_rejects_unknown_input_fields(agent, manager):
+    result = manager.handle(
+        {
+            "action": "remove",
+            "input": {"watch_id": "tc_1"},
+            "reasoning": "probe schema",
+        }
+    )
+    assert result["status"] == "failed"
+    assert result["error_code"] == "INVALID_ARGUMENT"
+
+
 def test_only_one_watch_may_be_active_per_agent(agent, manager):
     renderer = _write_renderer(agent._working_dir, _OK_BODY)
     started = manager.handle(

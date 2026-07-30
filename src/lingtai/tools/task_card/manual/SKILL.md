@@ -23,14 +23,18 @@ progress view would materially help them track it. Skip it for quick
 single-step work: starting a watch you will stop moments later is ritual
 noise, not progress reporting. Only keep a watch running while you can make
 its renderer output truthful and current; a stale or inaccurate card misleads
-more than no card at all, so stop the watch rather than let it drift.
+more than no card at all. Optionally `retry` once more to publish a final
+state before winding down. Use `stop` to pause a watch while preserving its
+last body for a possible later `retry`/inspection; use `remove` once the
+underlying work is completed, cancelled, or abandoned, so `/taskcard` and
+other consumers cannot keep exposing a stale card.
 
 The capability owns exactly two files under your working directory:
 
 - `taskcard/status`
 - `taskcard/taskcard.md`
 
-Actions are `start`, `inspect`, `retry`, `stop`, and `manual`.
+Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
 
 `start` runs a Python renderer under your working directory. The renderer must
 exit `0` and print a nonempty full body to stdout; that body is written to
@@ -41,7 +45,23 @@ writes `taskcard/status` as the exact text `active`.
 only `taskcard/taskcard.md` atomically; the status stays `active`.
 
 `stop` writes `taskcard/status` as `inactive` before stopping the updater. The
-last body stays on disk. Consumers treat non-`active` status as no-op.
+last body stays on disk. Consumers treat non-`active` status as no-op. `stop`
+is for pausing/preserving a card you may still `retry` or reinspect — it is
+not lifecycle cleanup.
+
+`remove` is the terminal lifecycle action: it retires any active watch exactly
+like `stop` (write `inactive`, then wait for the updater to quiesce) and then
+deletes `taskcard/taskcard.md`, so it never races the updater into recreating
+a body it just removed. It takes no `watch_id` — it targets your one artifact,
+not a specific in-memory watch — so it still works after a restart lost the
+watch handle. Call `remove`, not a shell/file-tool delete, once the underlying
+work is completed, cancelled, or abandoned, so `/taskcard` and other consumers
+cannot keep exposing a stale card. `remove` is idempotent: calling it again
+after a successful removal, or when no watch was ever started, still leaves
+`status` at exact `inactive` and reports no body to delete, never an error. If
+the watch will not quiesce (the same failure `stop` can report), `remove`
+reports that failure and leaves the body untouched so you can retry once the
+updater is actually stopped.
 
 ## Cadence and safety defaults
 
