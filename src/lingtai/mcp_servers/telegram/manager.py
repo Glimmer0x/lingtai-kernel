@@ -17,6 +17,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -26,7 +27,10 @@ from uuid import uuid4
 import logging
 import threading
 
+from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel._frontmatter import strip_frontmatter
+from lingtai.kernel.agent_presence import observe_alive
+from lingtai.kernel.state import AgentState
 
 from .. import _skill
 from . import _family
@@ -116,6 +120,12 @@ _TASK_CARD_FOOTER = (
 _TASK_CARD_DEFAULT_NORMAL_ROWS = 1
 _TASK_CARD_METADATA_MAX_CHARS = 150
 _TASK_CARD_METADATA_MAX_LINES = 2
+
+# Canonical AgentState values that render without a /refresh hint; "stuck" is
+# the exact same enum plus the hint, and "offline" is not an AgentState value
+# at all — it is this footer's own name for a stale heartbeat overriding an
+# active/idle/asleep snapshot (see ``_task_card_agent_lifecycle_status``).
+_TASK_CARD_AGENT_STATES = frozenset(state.value for state in AgentState)
 
 # Card-level "last updated" line prefix.  The automatic channel's final
 # standalone line reports when that channel's event-tail snapshot was last
@@ -2223,7 +2233,52 @@ class TelegramManager:
     def _task_card_event_metadata_snapshot(self) -> dict | None:
         with self._task_card_event_lock:
             metadata = self._task_card_event_metadata
-            return dict(metadata) if isinstance(metadata, dict) else None
+            snapshot = dict(metadata) if isinstance(metadata, dict) else {}
+        lifecycle = self._task_card_agent_lifecycle_status()
+        if lifecycle is not None:
+            snapshot["agent_lifecycle"] = lifecycle
+        return snapshot or None
+
+    def _task_card_agent_lifecycle_status(self) -> str | None:
+        """Read this agent's own canonical lifecycle for the footer.
+
+        Sources ``.status.json``'s ``runtime.state`` — the same
+        ``AgentState`` value ``BaseAgent._write_status_snapshot`` writes on
+        every turn — and, only for the non-terminal ``active``/``idle``/
+        ``asleep`` states, falls back to the canonical presence liveness
+        policy (``kernel.agent_presence.observe_alive`` via
+        ``PosixAgentPresenceStoreAdapter``) to catch a process that died
+        without ever writing ``stuck``. ``stuck`` and ``suspended`` are
+        trusted as-is: both are the process explicitly reporting its own
+        state, and a stale heartbeat proves nothing more in either case.
+        Missing, malformed, non-UTF-8, or non-object status data degrades to
+        ``None`` — no line is rendered rather than fabricating a state.
+        """
+        try:
+            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        runtime = data.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        state = runtime.get("state")
+        if state not in _TASK_CARD_AGENT_STATES:
+            return None
+        if state in (AgentState.SUSPENDED.value, AgentState.STUCK.value):
+            return state
+        try:
+            alive = observe_alive(
+                PosixAgentPresenceStoreAdapter(self._working_dir), time.time(),
+            )
+        except Exception:
+            return state
+        return state if alive else "offline"
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:
@@ -3332,11 +3387,29 @@ class TelegramManager:
         ):
             context_parts.append(f"{float(usage):.0%}")
 
+        agent_line: str | None = None
+        lifecycle = metadata.get("agent_lifecycle")
+        if lifecycle in (AgentState.STUCK.value, "offline"):
+            agent_line = f"agent · {lifecycle} · try /refresh"
+        elif lifecycle in _TASK_CARD_AGENT_STATES:
+            agent_line = f"agent · {lifecycle}"
+
+        session_line = "session · " + " · ".join(session_parts) if session_parts else None
+        context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
+
+        # Agent health leads within line 1 so stuck/offline's actionable hint
+        # is never the line dropped to the 2-line cap; session shares line 1
+        # with it (rather than displacing ctx to a 3rd, always-dropped line)
+        # so ctx survives whenever both agent and session metadata exist.
         lines: list[str] = []
-        if session_parts:
-            lines.append("session · " + " · ".join(session_parts))
-        if context_parts:
-            lines.append("ctx · " + " · ".join(context_parts))
+        if agent_line and session_line:
+            lines.append(f"{agent_line} · {session_line}")
+        elif agent_line:
+            lines.append(agent_line)
+        elif session_line:
+            lines.append(session_line)
+        if context_line:
+            lines.append(context_line)
         lines = lines[:_TASK_CARD_METADATA_MAX_LINES]
         if not lines:
             return []

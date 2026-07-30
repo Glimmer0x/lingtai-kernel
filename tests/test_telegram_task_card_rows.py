@@ -373,3 +373,238 @@ def test_metadata_pathological_counts_never_overflow_or_break_budget():
     assert len(lines) == 2
     assert len("\n".join(lines)) <= 150
     assert "inf" not in "\n".join(lines).lower()
+
+
+# ---------------------------------------------------------------------------
+# Agent lifecycle/health in the automatic metadata footer
+# ---------------------------------------------------------------------------
+
+def test_metadata_renders_compact_normal_lifecycle_states():
+    for state in ("active", "idle", "asleep", "suspended"):
+        lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": state})
+        assert lines == [f"agent · {state}"]
+        assert "/refresh" not in lines[0]
+
+
+def test_metadata_renders_stuck_with_refresh_hint():
+    lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "stuck"})
+    assert lines == ["agent · stuck · try /refresh"]
+
+
+def test_metadata_renders_offline_with_refresh_hint():
+    lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "offline"})
+    assert lines == ["agent · offline · try /refresh"]
+
+
+def test_metadata_suspended_never_gets_refresh_hint():
+    lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "suspended"})
+    assert lines == ["agent · suspended"]
+    assert "/refresh" not in lines[0]
+
+
+def test_metadata_ignores_unrecognized_lifecycle_value():
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "haunted",
+        "session_cache_rate": 0.5,
+    })
+    assert lines == ["session · cache 50.0%"]
+
+
+def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
+    """Regression: merging agent+session onto line 1 must not drop ctx."""
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "session_cache_rate": 0.87803,
+        "cache_miss_tokens": 170631,
+        "cache_miss_budget": 1_000_000,
+        "api_calls": 13,
+        "context_tokens": 171246,
+        "context_window": 272000,
+        "context_usage": 0.62958,
+    })
+    assert lines == [
+        "agent · active · session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "ctx · 171.2k/272.0k · 63%",
+    ]
+    assert len(lines) <= 2
+    assert len("\n".join(lines)) <= 150
+
+
+def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "stuck",
+        "session_cache_rate": 0.87803,
+        "cache_miss_tokens": 170631,
+        "cache_miss_budget": 1_000_000,
+        "api_calls": 13,
+        "context_tokens": 171246,
+        "context_window": 272000,
+        "context_usage": 0.62958,
+    })
+    # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
+    # and ctx survives as line 2 instead of being dropped by the cap.
+    assert lines == [
+        "agent · stuck · try /refresh · session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "ctx · 171.2k/272.0k · 63%",
+    ]
+    assert lines[0].startswith("agent · stuck · try /refresh")
+    assert len(lines) <= 2
+    assert len("\n".join(lines)) <= 150
+
+
+def test_metadata_unchanged_when_no_agent_lifecycle_present():
+    """Regression guard: no agent key means byte-identical old behavior."""
+    lines = TelegramManager._format_task_card_metadata({
+        "session_cache_rate": 0.87803,
+        "cache_miss_tokens": 170631,
+        "cache_miss_budget": 1_000_000,
+        "api_calls": 13,
+        "context_tokens": 171246,
+        "context_window": 272000,
+        "context_usage": 0.62958,
+    })
+    assert lines == [
+        "session · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "ctx · 171.2k/272.0k · 63%",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# _task_card_agent_lifecycle_status — sources .status.json, degrades safely
+# ---------------------------------------------------------------------------
+
+def _write_status(tmp_path, payload):
+    import json as _json
+    (tmp_path / ".status.json").write_text(_json.dumps(payload), encoding="utf-8")
+
+
+def test_lifecycle_status_missing_file_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_malformed_json_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    (tmp_path / ".status.json").write_text("{not json", encoding="utf-8")
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_non_object_json_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    (tmp_path / ".status.json").write_text("[1, 2, 3]", encoding="utf-8")
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_non_utf8_bytes_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    (tmp_path / ".status.json").write_bytes(b"\xff\xfe\x00\x01")
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_missing_runtime_block_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"identity": {}})
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_runtime_not_a_dict_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": "active"})
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_unrecognized_state_degrades_to_none(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "haunted"}})
+    assert mgr._task_card_agent_lifecycle_status() is None
+
+
+def test_lifecycle_status_suspended_never_checks_presence(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    def _boom(*a, **kw):
+        raise AssertionError("suspended must not consult presence liveness")
+
+    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "suspended"}})
+    assert mgr._task_card_agent_lifecycle_status() == "suspended"
+
+
+def test_lifecycle_status_stuck_never_checks_presence(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    def _boom(*a, **kw):
+        raise AssertionError("stuck must not consult presence liveness")
+
+    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "stuck"}})
+    assert mgr._task_card_agent_lifecycle_status() == "stuck"
+
+
+def test_lifecycle_status_active_trusts_fresh_presence(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: True)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    assert mgr._task_card_agent_lifecycle_status() == "active"
+
+
+def test_lifecycle_status_idle_with_stale_presence_becomes_offline(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: False)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "idle"}})
+    assert mgr._task_card_agent_lifecycle_status() == "offline"
+
+
+def test_lifecycle_status_asleep_with_stale_presence_becomes_offline(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: False)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "asleep"}})
+    assert mgr._task_card_agent_lifecycle_status() == "offline"
+
+
+def test_lifecycle_status_presence_error_falls_back_to_raw_state(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    def _boom(*a, **kw):
+        raise OSError("presence adapter blew up")
+
+    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "idle"}})
+    assert mgr._task_card_agent_lifecycle_status() == "idle"
+
+
+# ---------------------------------------------------------------------------
+# _task_card_event_metadata_snapshot — merges lifecycle without a new store
+# ---------------------------------------------------------------------------
+
+def test_event_metadata_snapshot_none_when_nothing_available(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    assert mgr._task_card_event_metadata_snapshot() is None
+
+
+def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path, monkeypatch):
+    import lingtai.mcp_servers.telegram.manager as manager_mod
+
+    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: True)
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    assert mgr._task_card_event_metadata_snapshot() == {"agent_lifecycle": "active"}
+
+
+def test_event_metadata_snapshot_merges_with_existing_session_metadata(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "suspended"}})
+    mgr._task_card_event_metadata = {"api_calls": 4}
+    snapshot = mgr._task_card_event_metadata_snapshot()
+    assert snapshot == {"api_calls": 4, "agent_lifecycle": "suspended"}
+    # The manager's own stored metadata must not be mutated by the merge.
+    assert mgr._task_card_event_metadata == {"api_calls": 4}
