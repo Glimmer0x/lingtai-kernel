@@ -573,6 +573,10 @@ class TelegramManager:
         self._task_card_event_offset = 0
         self._task_card_event_size = 0
         self._task_card_event_inode: int | None = None
+        # Portable "is this still the same file?" token — the inode where the
+        # platform supplies a real one, else the creation timestamp. ``None``
+        # always means *unknown*, never *changed*. See ``_event_file_identity``.
+        self._task_card_event_identity: tuple[str, float | int] | None = None
         # Grouped by provider call; the compatibility row view is derived.
         self._task_card_event_groups: list[dict] = []
         # The current telemetry snapshot is carried only by the latest final
@@ -2454,6 +2458,39 @@ class TelegramManager:
             return ""
         return _format_task_card_current_time(local)
 
+    @staticmethod
+    def _event_file_identity(stat_result: os.stat_result) -> tuple[str, float | int] | None:
+        """Return a best-effort "same file?" token, or ``None`` when unknown.
+
+        POSIX: ``st_ino`` is authoritative and never ``0`` for a real file.
+
+        Windows: ``st_ino`` is usually the real NTFS file index, but CPython
+        falls back to an attribute-only stat (yielding ``st_ino == 0``) whenever
+        it cannot open a handle to the file — a writer holding it without full
+        share rights, an AV scanner, some network/virtualised filesystems. A
+        ``0`` therefore means *unknown*, and must not be read as *replaced*.
+
+        ``st_mtime`` is the wrong fallback: appending to the log is precisely
+        what moves mtime, so comparing it classifies every single append as a
+        file replacement and forces a full rehydrate + rebroadcast on every
+        poll. Creation time (``st_birthtime`` where the platform exposes it,
+        otherwise Windows' ``st_ctime``, which *is* the creation time there)
+        changes when the log is recreated and stays put on append, so it is the
+        correct stand-in. POSIX ``st_ctime`` is inode-change time — it moves on
+        append — so it is deliberately never used here.
+        """
+        inode = getattr(stat_result, "st_ino", None)
+        if isinstance(inode, int) and not isinstance(inode, bool) and inode:
+            return ("ino", inode)
+        birthtime = getattr(stat_result, "st_birthtime", None)
+        if type(birthtime) in (int, float):
+            return ("btime", birthtime)
+        if os.name == "nt":
+            ctime = getattr(stat_result, "st_ctime", None)
+            if type(ctime) in (int, float):
+                return ("btime", ctime)
+        return None
+
     def _init_event_tail(self) -> None:
         """Rehydrate the latest-N window and forward offset from the file tail.
 
@@ -2475,6 +2512,7 @@ class TelegramManager:
                 self._task_card_event_offset = 0
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
+                self._task_card_event_identity = None
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
@@ -2490,6 +2528,7 @@ class TelegramManager:
                 self._task_card_event_offset = 0
                 self._task_card_event_size = 0
                 self._task_card_event_inode = None
+                self._task_card_event_identity = None
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
@@ -2499,6 +2538,7 @@ class TelegramManager:
             self._task_card_event_offset = offset
             self._task_card_event_size = stat.st_size
             self._task_card_event_inode = getattr(stat, "st_ino", None)
+            self._task_card_event_identity = self._event_file_identity(stat)
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
             self._task_card_event_metadata = metadata
@@ -2631,14 +2671,22 @@ class TelegramManager:
 
         with self._task_card_event_lock:
             offset = self._task_card_event_offset
-            tracked_inode = self._task_card_event_inode
+            tracked_identity = self._task_card_event_identity
 
         current_inode = getattr(stat, "st_ino", None)
-        truncated = stat.st_size < offset or (
-            tracked_inode is not None
-            and current_inode is not None
-            and current_inode != tracked_inode
+        current_identity = self._event_file_identity(stat)
+        # Only a *proven* identity change counts as replacement. Two tokens of
+        # different kinds are not comparable (a stat that degraded from inode to
+        # creation time says nothing about the file), and an unknown token on
+        # either side leaves the size check as the sole signal. Fail closed
+        # toward "same file" so a plain append is never read as a rewrite.
+        replaced = (
+            tracked_identity is not None
+            and current_identity is not None
+            and tracked_identity[0] == current_identity[0]
+            and tracked_identity != current_identity
         )
+        truncated = stat.st_size < offset or replaced
         if truncated:
             # Truncation/replacement is itself the signal of change: the file
             # content the resident cards were showing no longer exists, so the
@@ -2650,6 +2698,11 @@ class TelegramManager:
             changed = self._append_new_lines(path, offset, stat.st_size)
             with self._task_card_event_lock:
                 self._task_card_event_inode = current_inode
+                # Refresh the token whenever this stat produced one, so a single
+                # degraded stat (Windows handing back ``st_ino == 0``) cannot
+                # strand an old token and fabricate a replacement later.
+                if current_identity is not None:
+                    self._task_card_event_identity = current_identity
         else:
             changed = False
 
@@ -3026,6 +3079,33 @@ class TelegramManager:
                 "stale_delete_failed": True,
             }
 
+        # Cross-process guard for the duplicate-Task-Card bug. Sibling Telegram
+        # MCP server processes share this route, and each probes with the id it
+        # remembers. Once a peer has rotated/replaced the resident, our probe of
+        # the *old* id reports "already missing" — the very outcome that would
+        # authorize a replacement — while the peer's brand-new card is alive and
+        # visible. Sending here is what puts a second (third, fourth …) card in
+        # the chat. Re-read the resident first: when it has moved on, edit that
+        # live card instead of injecting another one.
+        current = self._get_resident_task_card(account, chat_id)
+        if current and current != stale_id:
+            adopt_outcome, adopt_error = self._try_update_progress_message(
+                current, text
+            )
+            if adopt_outcome == _TASK_CARD_EDIT_OK:
+                log.debug("Adopted the resident task card established by a peer")
+                return {
+                    "status": "ok",
+                    "message_id": current,
+                    "adopted_resident": True,
+                }
+            if adopt_outcome == _TASK_CARD_EDIT_FAILED:
+                # Unknown/transient failure against the live resident proves
+                # nothing; never answer it by adding a card.
+                return {"status": "error", "error": adopt_error or error}
+            # The peer's card is itself provably gone, so this route really does
+            # need one new card: fall through to the single replacement send.
+
         result = self.send_progress_message(account, chat_id, text)
         if result is None or result.get("status") != "sent":
             # Replacement send failed or returned no usable id. Preserve the truth
@@ -3119,12 +3199,93 @@ class TelegramManager:
         )
 
     def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
-        """Read the persisted resident card id for (account, chat); fail-open."""
+        """Read the live resident card id for (account, chat); fail-open.
+
+        One host commonly runs several Telegram MCP server processes against the
+        same bot and route (one per agent/daemon runtime). Each holds its own
+        ``TelegramAccount`` whose ``task_cards`` map was loaded once, at
+        construction: when a peer process rotates or replaces the resident card
+        it persists the new id to ``state.json``, and every other process keeps
+        believing in the id it remembers. Editing that remembered id then fails
+        with "message to edit not found", which the delivery path reads as
+        "resident is gone → send a replacement", and each process injects its
+        own card. That is the duplicate-Task-Card bug.
+
+        So the durable file is consulted alongside the in-memory value and the
+        newer of the two wins. Telegram message ids increase monotonically per
+        chat, so "newer" is well defined and can never walk the resident
+        backwards onto a card a peer has already deleted. Every failure mode
+        (no state path, unreadable/malformed file, a test double without one)
+        degrades to the in-memory value rather than raising.
+        """
         try:
-            return self._service.get_account(account).get_task_card(chat_id)
+            acct = self._service.get_account(account)
         except Exception as e:
             log.debug("Failed to read resident task card: %s", e)
             return None
+        try:
+            tracked = acct.get_task_card(chat_id)
+        except Exception as e:
+            log.debug("Failed to read resident task card: %s", e)
+            tracked = None
+        durable = self._durable_resident_task_card(acct, chat_id)
+        return self._newer_resident_id(account, chat_id, tracked, durable)
+
+    @staticmethod
+    def _durable_resident_task_card(account_obj: object, chat_id: int) -> str | None:
+        """Read one chat's resident id straight from the account's state file.
+
+        Strictly read-only and best-effort. Every writer replaces that file
+        atomically (``tempfile`` + ``os.replace``), so a torn read is not
+        possible; anything else — no state path (test doubles), missing file,
+        malformed JSON, wrong types — simply yields ``None`` so the caller falls
+        back to its in-memory view.
+        """
+        path_getter = getattr(account_obj, "_state_path", None)
+        if not callable(path_getter):
+            return None
+        try:
+            path = path_getter()
+            if path is None:
+                return None
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as e:
+            log.debug("Failed to read durable resident task card: %s", e)
+            return None
+        cards = data.get("task_cards") if isinstance(data, dict) else None
+        if not isinstance(cards, dict):
+            return None
+        value = cards.get(str(chat_id))
+        return value if isinstance(value, str) and value else None
+
+    def _newer_resident_id(
+        self, account: str, chat_id: int, tracked: str | None, durable: str | None,
+    ) -> str | None:
+        """Pick the higher-numbered of two resident ids for this exact route.
+
+        Only ids that parse and are bound to this precise account+chat are
+        comparable. When neither qualifies the in-memory value is returned
+        unchanged, so a corrupt/cross-bound id still reaches the delivery
+        path's own authorization check instead of silently becoming ``None``
+        (which would authorize an untracked send).
+        """
+        best: str | None = None
+        best_tg = -1
+        for candidate in (tracked, durable):
+            if not isinstance(candidate, str) or not candidate:
+                continue
+            try:
+                cand_account, cand_chat_id, cand_tg_id = self._parse_compound_id(
+                    candidate)
+            except Exception:
+                continue
+            if cand_account != account or cand_chat_id != chat_id:
+                continue
+            if cand_tg_id > best_tg:
+                best, best_tg = candidate, cand_tg_id
+        if best is None:
+            return tracked if tracked else durable
+        return best
 
     def _set_resident_task_card(
         self, account: str, chat_id: int, compound_id: str,
