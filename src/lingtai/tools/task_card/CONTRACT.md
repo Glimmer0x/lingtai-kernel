@@ -91,6 +91,12 @@ declarative artifact and one active watch per agent.
     `max_refreshes` at its own never-customized default — migrating that
     incidental value would silently cap most ordinary agents below the new
     built-in default instead of leaving them on it.
+12. Agents SHOULD start a watch proactively — without being asked — when a
+    human is following meaningful long-running, multi-step, or parallel work
+    and a durable progress view would materially help; they SHOULD NOT start
+    one for quick single-step work, as ritual, or when they cannot keep the
+    rendered body truthful and current. This is agent usage guidance, not a
+    runtime-enforced precondition.
 
 ## Port
 
@@ -131,8 +137,9 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 - `tests/test_task_card_controller.py` covers intrinsic registration,
   exact paths, atomic ordering, one-watch enforcement, failure/recovery, stop
   semantics, configured defaults/ceilings (including the omitted-value and
-  lower-not-bypass cases), per-field config validation, and the one-way
-  legacy-migration fallback.
+  lower-not-bypass cases), per-field config validation, the one-way
+  legacy-migration fallback, and the proactive-use guidance carried in the
+  description, manual, and this contract's Behavior rule 12.
 - `tests/test_telegram_toolfamily_ltpv2.py` covers the strict public family
   schema plus intrinsic refresh-limit behavior.
 - `tests/test_telegram_task_card_programmable.py` covers Telegram's read-only

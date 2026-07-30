@@ -138,7 +138,10 @@ def get_description() -> str:
         "body to write into taskcard/taskcard.md. The capability writes taskcard/"
         "taskcard.md atomically, writes taskcard/status as exact active/inactive, "
         "keeps at most one active watch per agent, and leaves projection to "
-        "channel-specific readers. Actions: start, inspect, retry, stop, manual."
+        "channel-specific readers. Use it proactively for meaningful long-running, "
+        "multi-step, or parallel work so a human can follow progress; skip it for "
+        "quick single-step work, ritual updates, or a body you cannot keep truthful "
+        "and current. Actions: start, inspect, retry, stop, manual."
     )
 
 

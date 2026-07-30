@@ -15,6 +15,16 @@ maintenance: |
 
 Use `task_card` to maintain one agent-local declarative Task Card artifact.
 
+## When to use it
+
+Start a watch proactively — without waiting to be asked — whenever a human is
+following meaningful long-running, multi-step, or parallel work and a durable
+progress view would materially help them track it. Skip it for quick
+single-step work: starting a watch you will stop moments later is ritual
+noise, not progress reporting. Only keep a watch running while you can make
+its renderer output truthful and current; a stale or inaccurate card misleads
+more than no card at all, so stop the watch rather than let it drift.
+
 The capability owns exactly two files under your working directory:
 
 - `taskcard/status`
