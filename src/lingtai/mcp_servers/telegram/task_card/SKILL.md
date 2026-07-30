@@ -28,8 +28,8 @@ The authoritative public capability owner is
 model-facing instructions live at
 [`src/lingtai/tools/task_card/manual/SKILL.md`](../../../tools/task_card/manual/SKILL.md).
 Use that intrinsic manual for renderer authoring, the
-`start | inspect | retry | stop | manual` actions, refresh limits, failure
-handling, and terminal cleanup.
+`start | inspect | retry | stop | remove | manual` actions, refresh limits,
+failure handling, and terminal cleanup.
 
 Current contract summary:
 

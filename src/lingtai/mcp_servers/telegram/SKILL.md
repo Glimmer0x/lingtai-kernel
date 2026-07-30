@@ -295,10 +295,12 @@ chat-history cardinality. Normative source:
   `<workdir>/taskcard/taskcard.md`, then writes exact `active` to
   `<workdir>/taskcard/status`. `stop` and agent shutdown write exact `inactive`;
   the last body remains on disk.
-- Actions are `start | inspect | retry | stop | manual`. `start` performs the
-  first render synchronously and starts no watch on failure. `retry` updates only
-  the body for the active watch. `stop` deactivates the intrinsic artifact. One
-  intrinsic-owned watch may be active per agent.
+- Actions are `start | inspect | retry | stop | remove | manual`. `start`
+  performs the first render synchronously and starts no watch on failure.
+  `retry` updates only the body for the active watch. `stop` deactivates the
+  intrinsic artifact while preserving its body; `remove` is terminal cleanup
+  that retires the watch and deletes the body. One intrinsic-owned watch may be
+  active per agent.
 - Telegram is only a read-only resident projector for that artifact. Its poller
   reads `taskcard/status` and `taskcard/taskcard.md`; exact `active` plus a
   nonempty body may project under `— WATCH —`. Missing, invalid, inactive, or

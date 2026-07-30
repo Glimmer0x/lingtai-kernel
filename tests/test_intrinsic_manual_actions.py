@@ -232,7 +232,7 @@ def test_shipped_task_card_manuals_only_document_intrinsic_file_contract() -> No
         assert "taskcard/status" in body, name
         assert "taskcard/taskcard.md" in body, name
         assert "nonempty" in lowered, name
-        for action in ("start", "inspect", "retry", "stop", "manual"):
+        for action in ("start", "inspect", "retry", "stop", "remove", "manual"):
             assert action in lowered, (name, action)
         for forbidden in forbidden_active_contracts:
             assert forbidden not in lowered, (name, forbidden)
