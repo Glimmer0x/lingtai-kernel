@@ -2,7 +2,8 @@
 """
 event_summary.py — Summarize a LingTai log.sqlite sidecar file.
 
-Read-only, safe, no network requests, no side effects, no secrets required.
+Reads database contents without modifying them and makes no network requests.
+SQLite may create or update read-support ``-wal``/``-shm`` sidecars. No secrets required.
 Queries the SQLite sidecar to produce a structured summary of runtime events.
 
 Usage:
