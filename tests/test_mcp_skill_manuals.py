@@ -154,6 +154,19 @@ def test_email_manuals_warn_about_external_side_effects():
         assert "side effect" in lowered
 
 
+def test_telegram_manual_warns_that_task_card_churn_still_hits_edit_send_limits():
+    # Diff-only skip only protects UNCHANGED bytes. The manual must say plainly
+    # that real (changed) output still consumes a real Telegram edit/send,
+    # subject to the same flood-control limits, so cadence/churn is a
+    # deliberate choice rather than something the skip makes automatically safe.
+    lowered = telegram_mgr._SKILL_BODY.lower()
+    assert "task card" in lowered
+    assert "rate-limit" in lowered or "flood-control" in lowered or "429" in lowered
+    assert "churn" in lowered
+    assert "deliberately" in lowered or "deliberate" in lowered
+    assert "unchanged" in lowered
+
+
 def test_mcp_skill_package_data_keeps_reference_and_asset_sidecars_packaged():
     """Side files are discovered from SKILL.md text, but must ship in wheels."""
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"

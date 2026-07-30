@@ -8,7 +8,7 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.4
+version: 1.5.5
 last_changed_at: 2026-07-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
@@ -304,6 +304,15 @@ chat-history cardinality. Normative source:
   nonempty body may project under `— WATCH —`. Missing, invalid, inactive, or
   unchanged producer state is a no-op at the Telegram boundary. The automatic
   event-journal slot remains independent and is preserved.
+- Skipping unchanged bytes is not a rate-limit exemption. Every time your
+  renderer's output actually changes, Telegram performs a real message
+  edit/send, subject to the same Bot API flood-control limits as any other
+  send (see [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md)).
+  A renderer that churns its body on every tick can hit HTTP 429 exactly like
+  frequent manual sends, even though a producer with unchanged output would
+  cause zero Telegram traffic. Choose `interval_s` and how often your output
+  actually changes deliberately — cadence and churn are a product choice, not
+  something the diff-only skip makes safe by default.
 
 ## ERROR SURFACING
 

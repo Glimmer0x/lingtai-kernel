@@ -142,7 +142,7 @@ def _start_with_ceiling(agent: _FakeAgent, ceiling: int, *, requested=None):
     return manager, manager.handle(args)
 
 
-def test_intrinsic_start_caps_requested_refresh_limit_at_1000(tmp_path):
+def test_intrinsic_start_caps_requested_refresh_limit_at_configured_default_2000(tmp_path):
     agent = _FakeAgent(tmp_path)
     manager = TaskCardManager(agent)
     result = manager.handle(
@@ -156,7 +156,7 @@ def test_intrinsic_start_caps_requested_refresh_limit_at_1000(tmp_path):
             "reasoning": "cap the requested ceiling",
         }
     )
-    assert result["max_refreshes"] == 1000
+    assert result["max_refreshes"] == 2000
     manager.handle({"action": "stop", "input": {"watch_id": result["watch_id"]}, "reasoning": "cleanup"})
 
 
