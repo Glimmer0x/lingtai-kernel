@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 from datetime import datetime, timezone
@@ -29,12 +30,26 @@ lark: Any = None
 # directly — see ``_ThreadLocalLoop`` and ``_ws_loop`` for why that matters.
 _sdk_ws_client_module: Any = None
 
+_lark_logging_lock = threading.Lock()
+
+
+def _route_lark_stdout_handlers_to_stderr() -> None:
+    """Keep Lark's existing stdout handlers off the MCP protocol stream."""
+    lark_logger = logging.getLogger("Lark")
+    with _lark_logging_lock:
+        for handler in lark_logger.handlers:
+            if not isinstance(handler, logging.StreamHandler):
+                continue
+            if handler.stream is sys.stdout or handler.stream is sys.__stdout__:
+                handler.setStream(sys.stderr)
+
 
 def _import_lark() -> Any:
     global lark
     if lark is None:
         import lark_oapi as _lark
         lark = _lark
+    _route_lark_stdout_handlers_to_stderr()
     return lark
 
 
