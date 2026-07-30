@@ -98,3 +98,39 @@ def test_fallback_push_noop_without_env(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("LINGTAI_AGENT_DIR", raising=False)
     monkeypatch.delenv("LINGTAI_MCP_NAME", raising=False)
     assert _licc_compat.push_inbox_event("s", "subj", "body") is False
+
+
+@pytest.mark.parametrize(
+    ("event_id", "valid"),
+    [
+        ("wechat-local-id", True), ("a" * 128, True), (".", True), ("..", True),
+        ("", False), (" ", False), ("../escape", False), (r"..\escape", False),
+        ("has space", False), ("colon:name", False), ("unicode-λ", False),
+        ("a" * 129, False),
+    ],
+)
+def test_fallback_explicit_event_id_is_safe_and_deterministic(
+    tmp_path: Path, monkeypatch, event_id: str, valid: bool,
+):
+    monkeypatch.setattr(_licc_compat, "_kernel_push_inbox_event", None)
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
+    monkeypatch.setenv("LINGTAI_MCP_NAME", "wechat")
+
+    if not valid:
+        assert _licc_compat.push_inbox_event(
+            "s", "subj", "body", event_id=event_id,
+        ) is False
+        assert not any(tmp_path.rglob("*.json"))
+        return
+
+    assert _licc_compat.push_inbox_event(
+        "s", "subj", "first", event_id=event_id,
+    ) is True
+    assert _licc_compat.push_inbox_event(
+        "s", "subj", "replacement", event_id=event_id,
+    ) is True
+    inbox_dir = tmp_path / _licc_compat.INBOX_DIRNAME / "wechat"
+    events = [p for p in inbox_dir.iterdir() if p.suffix == ".json"]
+    assert [p.name for p in events] == [f"{event_id}.json"]
+    event = json.loads(events[0].read_text(encoding="utf-8"))
+    assert event["body"] == "replacement"
