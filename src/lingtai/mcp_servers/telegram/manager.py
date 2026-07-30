@@ -17,6 +17,7 @@ import math
 import os
 import re
 import tempfile
+import time
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -26,7 +27,10 @@ from uuid import uuid4
 import logging
 import threading
 
+from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel._frontmatter import strip_frontmatter
+from lingtai.kernel.agent_presence import observe_alive
+from lingtai.kernel.state import AgentState
 
 from .. import _skill
 from . import _family
@@ -116,6 +120,12 @@ _TASK_CARD_FOOTER = (
 _TASK_CARD_DEFAULT_NORMAL_ROWS = 1
 _TASK_CARD_METADATA_MAX_CHARS = 150
 _TASK_CARD_METADATA_MAX_LINES = 2
+
+# Canonical AgentState values that render without a /refresh hint; "stuck" is
+# the exact same enum plus the hint, and "offline" is not an AgentState value
+# at all — it is this footer's own name for a stale heartbeat overriding an
+# active/idle/asleep snapshot (see ``_task_card_agent_lifecycle_status``).
+_TASK_CARD_AGENT_STATES = frozenset(state.value for state in AgentState)
 
 # Card-level "last updated" line prefix.  The automatic channel's final
 # standalone line reports when that channel's event-tail snapshot was last
@@ -544,7 +554,8 @@ class TelegramManager:
         # Resident Task Card composition (Jason #7258/#7259): one tracked resident
         # target per account+chat, composed from two fully independent channels —
         # "automatic" (the agent-event-tail broadcast) and "programmable" (the
-        # public task_card renderer output). ``TaskCardResident`` owns the
+        # intrinsic taskcard/ artifact projected read-only by Telegram).
+        # ``TaskCardResident`` owns the
         # frames, per-route locks, and atomic enablement. Updating one channel
         # never reads, advances, or overrides the other's frame.
         self._resident = TaskCardResident(
@@ -572,6 +583,8 @@ class TelegramManager:
         self._task_card_event_lock = threading.Lock()
         self._task_card_tail_thread: threading.Thread | None = None
         self._task_card_tail_stop = threading.Event()
+        self._programmable_task_card_thread: threading.Thread | None = None
+        self._programmable_task_card_stop = threading.Event()
 
     @property
     def _task_card_channels(self) -> dict[str, dict[str, str]]:
@@ -593,6 +606,7 @@ class TelegramManager:
         """Apply one durable setting transition; reproject once when enabled."""
         if self._resident.set_enabled(enabled) and enabled:
             self._broadcast_task_card_event_window()
+            self._broadcast_programmable_task_card_file()
 
     def _account_dir(self, account: str) -> Path:
         return self._working_dir / "telegram" / account
@@ -645,8 +659,10 @@ class TelegramManager:
     def start(self) -> None:
         self._service.start()
         self._start_task_card_tail()
+        self._start_programmable_task_card_poller()
 
     def stop(self) -> None:
+        self._stop_programmable_task_card_poller()
         self._stop_task_card_tail()
         self._service.stop()
 
@@ -683,11 +699,12 @@ class TelegramManager:
         }
 
     def handle(self, args: dict) -> dict:
-        # Keep the standalone manager surface in parity with the public family
-        # while retaining the flat internal boundary used by private reverse
-        # transport and existing manager tests. Family validation occurs before
-        # any manager action I/O; child dispatch re-enters here with a flat
-        # action mapping exactly once.
+        # Keep the standalone manager surface in parity with the public family.
+        # The flat internal boundary also remains for retained legacy private-
+        # reverse compatibility code and existing manager tests; the current
+        # Telegram server exposes no private ``task_card`` route. Family
+        # validation occurs before any manager action I/O; child dispatch
+        # re-enters here with a flat action mapping exactly once.
         if isinstance(args, dict) and {"input", "reasoning"}.issubset(args):
             return _family.handle_telegram(self, args)
         action = args.get("action")
@@ -1967,8 +1984,8 @@ class TelegramManager:
         return outcome == _TASK_CARD_EDIT_OK
 
     # ------------------------------------------------------------------
-    # Private Task Card helpers (internally driven — by the kernel automatic
-    # driver and the Telegram-owned programmable controller — not LLM-exposed)
+    # Private Task Card helpers (internally driven by the automatic event-tail
+    # broadcaster and the intrinsic-artifact projector, not LLM-exposed)
     # ------------------------------------------------------------------
 
     # Reasoning cap (Unicode code points) after secret redaction.
@@ -2136,13 +2153,15 @@ class TelegramManager:
     def _format_programmable_card_text(
         cls, card: dict, *, now: datetime | None = None,
     ) -> str:
-        """Render a validated programmable Task Card JSON object to plain text.
+        """Render retained legacy programmable-card JSON for compatibility tests.
 
-        The manager is the single render owner: the public controller sends only
-        a validated schema object (never code), and this method turns it into the
-        programmable channel frame. Secret redaction runs on every free-text field
-        before the render ceiling is applied, mirroring the automatic path. All
-        copy is English-only (Jason #7175/#7205).
+        The retired Telegram-owned controller supplied this validated schema
+        object. The current public intrinsic instead emits a full text/Markdown
+        body through the agent-local file artifact, and Telegram's read-only file
+        projector does not use this JSON formatter. When retained compatibility
+        code invokes it, secret redaction still runs on every free-text field
+        before the render ceiling is applied. All copy is English-only
+        (Jason #7175/#7205).
 
         A non-empty frame always ends with its own ``Last Updated: ...`` line —
         the instant this programmable frame was accepted/rendered for delivery.
@@ -2214,7 +2233,52 @@ class TelegramManager:
     def _task_card_event_metadata_snapshot(self) -> dict | None:
         with self._task_card_event_lock:
             metadata = self._task_card_event_metadata
-            return dict(metadata) if isinstance(metadata, dict) else None
+            snapshot = dict(metadata) if isinstance(metadata, dict) else {}
+        lifecycle = self._task_card_agent_lifecycle_status()
+        if lifecycle is not None:
+            snapshot["agent_lifecycle"] = lifecycle
+        return snapshot or None
+
+    def _task_card_agent_lifecycle_status(self) -> str | None:
+        """Read this agent's own canonical lifecycle for the footer.
+
+        Sources ``.status.json``'s ``runtime.state`` — the same
+        ``AgentState`` value ``BaseAgent._write_status_snapshot`` writes on
+        every turn — and, only for the non-terminal ``active``/``idle``/
+        ``asleep`` states, falls back to the canonical presence liveness
+        policy (``kernel.agent_presence.observe_alive`` via
+        ``PosixAgentPresenceStoreAdapter``) to catch a process that died
+        without ever writing ``stuck``. ``stuck`` and ``suspended`` are
+        trusted as-is: both are the process explicitly reporting its own
+        state, and a stale heartbeat proves nothing more in either case.
+        Missing, malformed, non-UTF-8, or non-object status data degrades to
+        ``None`` — no line is rendered rather than fabricating a state.
+        """
+        try:
+            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        runtime = data.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        state = runtime.get("state")
+        if state not in _TASK_CARD_AGENT_STATES:
+            return None
+        if state in (AgentState.SUSPENDED.value, AgentState.STUCK.value):
+            return state
+        try:
+            alive = observe_alive(
+                PosixAgentPresenceStoreAdapter(self._working_dir), time.time(),
+            )
+        except Exception:
+            return state
+        return state if alive else "offline"
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:
@@ -2690,6 +2754,63 @@ class TelegramManager:
                 log.debug("Failed to enumerate task card chats for %s: %s", alias, e)
         return targets
 
+    def _taskcard_status_path(self) -> Path:
+        return self._working_dir / "taskcard" / "status"
+
+    def _taskcard_body_path(self) -> Path:
+        return self._working_dir / "taskcard" / "taskcard.md"
+
+    def _read_programmable_task_card_body(self) -> str | None:
+        """Read the intrinsic Task Card body when its status is exactly active."""
+        try:
+            status = self._taskcard_status_path().read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if status != "active":
+            return None
+        try:
+            body = self._taskcard_body_path().read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if not body.strip():
+            return None
+        if len(body) > self._TASK_CARD_TEXT_LIMIT:
+            body = body[: self._TASK_CARD_TEXT_LIMIT]
+        return body
+
+    def _broadcast_programmable_task_card_file(self) -> None:
+        """Project the current intrinsic Task Card body onto every resident.
+
+        The projector is read-only: it consumes the agent-local declarative files
+        and proposes the exact body bytes (bounded only by Telegram's transport
+        ceiling) as the programmable channel frame. Missing/invalid/non-active
+        producer state is a no-op, preserving the last good projected card.
+        """
+        body = self._read_programmable_task_card_body()
+        if body is None:
+            return
+        for account, chat_id in self._resident_task_card_targets():
+            try:
+                current = self._task_card_channels.get(f"{account}:{chat_id}", {}).get(
+                    "programmable"
+                )
+                if current == body:
+                    continue
+                self._deliver_channel_frame(
+                    account,
+                    chat_id,
+                    "programmable",
+                    body,
+                    error="Failed to broadcast programmable task card",
+                )
+            except Exception as e:
+                log.debug(
+                    "Programmable task card broadcast failed for %s:%s: %s",
+                    account,
+                    chat_id,
+                    e,
+                )
+
     def _broadcast_task_card_event_window(self) -> None:
         """Project the current bounded window to every resident Task Card.
 
@@ -2762,9 +2883,41 @@ class TelegramManager:
             thread.join(timeout=5.0)
         self._task_card_tail_thread = None
 
+    def _start_programmable_task_card_poller(self) -> None:
+        if (
+            self._programmable_task_card_thread is not None
+            and self._programmable_task_card_thread.is_alive()
+        ):
+            return
+        self._programmable_task_card_stop.clear()
+
+        def _loop() -> None:
+            while not self._programmable_task_card_stop.is_set():
+                try:
+                    self._broadcast_programmable_task_card_file()
+                except Exception as e:
+                    log.debug("Programmable task card poll failed: %s", e)
+                if self._programmable_task_card_stop.wait(1.0):
+                    return
+
+        thread = threading.Thread(
+            target=_loop,
+            name="telegram-task-card-programmable-poller",
+            daemon=True,
+        )
+        self._programmable_task_card_thread = thread
+        thread.start()
+
+    def _stop_programmable_task_card_poller(self) -> None:
+        self._programmable_task_card_stop.set()
+        thread = self._programmable_task_card_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._programmable_task_card_thread = None
+
     def _handle_task_card_update(self, args: dict) -> dict:
         """Private internal action — internally-driven Task Card projection
-        (the kernel automatic driver and the Telegram-owned programmable controller).
+        (the automatic event tail and the intrinsic-artifact projector).
 
         Sub-actions:
           - create:  Project the resident 📋 TASK CARD for the current batch —
@@ -3082,13 +3235,13 @@ class TelegramManager:
         return {"status": "ok"}
 
     def _task_card_programmable(self, sub_action: str, args: dict) -> dict:
-        """Update or clear the programmable channel of the resident card.
+        """Legacy direct update/clear path for the programmable channel.
 
-        The programmable channel is the public ``task_card`` controller's output.
-        It shares the tracked resident target and composes alongside the automatic
-        channel (Jason #7258/#7259): updating it replaces only the programmable
-        frame; ``finalize`` clears only the programmable frame and leaves the
-        automatic channel — and the message itself — intact.
+        Current runtime projection reads the intrinsic ``task_card`` artifact
+        from ``<workdir>/taskcard/status`` and ``taskcard/taskcard.md`` and calls
+        the shared resident delivery path read-only. This helper is retained for
+        historical compatibility tests and cleanup semantics; it is not a public
+        Telegram-owned Task Card controller endpoint.
 
         Sub-actions:
           - create / update:  render the validated ``card`` object into the
@@ -3103,7 +3256,8 @@ class TelegramManager:
                               committed clear on success.
 
         The caller supplies ``account`` and ``chat_id`` so both channels resolve
-        to the same resident id; Telegram only ever receives validated data.
+        to the same resident id; the current public producer remains
+        ``lingtai.tools.task_card``.
         """
         account = args["account"]
         chat_id = args["chat_id"]
@@ -3233,11 +3387,29 @@ class TelegramManager:
         ):
             context_parts.append(f"{float(usage):.0%}")
 
+        agent_line: str | None = None
+        lifecycle = metadata.get("agent_lifecycle")
+        if lifecycle in (AgentState.STUCK.value, "offline"):
+            agent_line = f"agent · {lifecycle} · try /refresh"
+        elif lifecycle in _TASK_CARD_AGENT_STATES:
+            agent_line = f"agent · {lifecycle}"
+
+        session_line = "session · " + " · ".join(session_parts) if session_parts else None
+        context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
+
+        # Agent health leads within line 1 so stuck/offline's actionable hint
+        # is never the line dropped to the 2-line cap; session shares line 1
+        # with it (rather than displacing ctx to a 3rd, always-dropped line)
+        # so ctx survives whenever both agent and session metadata exist.
         lines: list[str] = []
-        if session_parts:
-            lines.append("session · " + " · ".join(session_parts))
-        if context_parts:
-            lines.append("ctx · " + " · ".join(context_parts))
+        if agent_line and session_line:
+            lines.append(f"{agent_line} · {session_line}")
+        elif agent_line:
+            lines.append(agent_line)
+        elif session_line:
+            lines.append(session_line)
+        if context_line:
+            lines.append(context_line)
         lines = lines[:_TASK_CARD_METADATA_MAX_LINES]
         if not lines:
             return []

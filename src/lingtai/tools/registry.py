@@ -112,6 +112,7 @@ BUILTIN_TOOLS: dict[str, str] = {
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
+    "task_card": "lingtai.tools.task_card",
     # Unified public file capability: one package owning the composed schema,
     # the envelope dispatch, and all five operation implementations. The
     # pre-migration ``read``/``write``/``edit``/``glob``/``grep`` capabilities
@@ -138,6 +139,7 @@ CORE_DEFAULTS: dict[str, dict] = {
     "avatar": {},
     "daemon": {},
     "mcp": {},
+    "task_card": {},
     "file": {},
 }
 
@@ -358,6 +360,7 @@ def get_all_providers() -> dict[str, dict]:
         "vision": "lingtai.tools.vision",
         "avatar": "lingtai.tools.avatar",
         "daemon": "lingtai.tools.daemon",
+        "task_card": "lingtai.tools.task_card",
     }
     result = {}
     for name, module_path in _USER_FACING.items():

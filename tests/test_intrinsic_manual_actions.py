@@ -12,6 +12,9 @@ from lingtai.tools import system as system_tool
 from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
+from lingtai.tools import task_card as task_card_tool
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _StubAgent:
@@ -53,6 +56,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "web",
             "vision",
             "file-manual",
+            "task_card",
         )
     }
 
@@ -66,6 +70,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     daemon_manager._agent = agent
     web_manager = web_tool.setup(agent)
     vision_manager = vision_tool.setup(agent)
+    task_card_manager = task_card_tool.setup(agent)
 
     # ``shell`` is a migrated LTP v2 family: its ``manual`` is the reserved
     # family child dispatched through the registered envelope handler, not an
@@ -89,6 +94,9 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "system": ("system-manual", lambda: system_tool.handle(agent, {"action": "manual", "input": {}})),
         "web": ("web", lambda: web_manager.handle({"action": "manual", "input": {}})),
         "vision": ("vision", lambda: vision_manager.handle({"action": "manual", "input": {}})),
+        "task_card": ("task_card", lambda: task_card_manager.handle(
+            {"action": "manual", "input": {}, "reasoning": "load task card guidance"}
+        )),
         "file": ("file-manual", lambda: agent.handlers["file"](
             {"action": "manual", "input": {}, "reasoning": "load file guidance"}
         )),
@@ -128,6 +136,10 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             assert result["status"] == "ok"
             assert result["content"][0]["text"] == body
             assert result["structuredContent"]["manual_path"] == str(path)
+        elif tool_name == "task_card":
+            assert result["status"] == "ok"
+            assert result["content"][0]["text"] == body
+            assert result["structuredContent"]["manual_path"] == str(path)
         else:
             assert result == {
                 "status": "ok",
@@ -149,6 +161,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
         web_tool,
         file_tool,
         vision_tool,
+        task_card_tool,
     )
     for module in modules:
         schema = module.get_schema()
@@ -167,6 +180,9 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
     assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
+    task_card_schema = task_card_tool.get_schema()
+    assert task_card_schema["required"] == ["action", "input", "reasoning"]
+    assert len(task_card_schema["properties"]["input"]["oneOf"]) == 5
     # ``shell`` is migrated to the same LTP v2 envelope, with four children.
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]
@@ -189,6 +205,68 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert call("glob")["message"] == "pattern is required"
     assert call("grep")["message"] == "pattern is required"
     assert not (tmp_path / "x").exists()
+
+
+def test_shipped_task_card_manuals_only_document_intrinsic_file_contract() -> None:
+    manuals = {
+        "intrinsic": ROOT / "src/lingtai/tools/task_card/manual/SKILL.md",
+        "telegram": ROOT / "src/lingtai/mcp_servers/telegram/SKILL.md",
+        "telegram_retained": ROOT / "src/lingtai/mcp_servers/telegram/task_card/SKILL.md",
+    }
+
+    forbidden_active_contracts = (
+        "prints exactly one json object",
+        "stdout is exactly one task card json object",
+        "title` is a string",
+        "lines` is an array",
+        "footer` is a string",
+        "_lingtai_telegram_task_card",
+        "controller runs",
+        "public telegram-owned `task_card`",
+    )
+
+    for name, path in manuals.items():
+        body = path.read_text(encoding="utf-8")
+        lowered = body.lower()
+        assert "src/lingtai/tools/task_card" in body or "task_card" in lowered, name
+        assert "taskcard/status" in body, name
+        assert "taskcard/taskcard.md" in body, name
+        assert "nonempty" in lowered, name
+        for action in ("start", "inspect", "retry", "stop", "manual"):
+            assert action in lowered, (name, action)
+        for forbidden in forbidden_active_contracts:
+            assert forbidden not in lowered, (name, forbidden)
+
+    telegram_body = manuals["telegram"].read_text(encoding="utf-8").lower()
+    retained_body = manuals["telegram_retained"].read_text(encoding="utf-8").lower()
+    assert "read-only" in telegram_body
+    assert "read-only" in retained_body
+    assert "retained-legacy" in retained_body
+
+    protocol_body = (
+        ROOT
+        / "src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/reference/mcp-protocol.md"
+    ).read_text(encoding="utf-8")
+    normalized_protocol = " ".join(protocol_body.lower().split())
+    assert "telegram has no hidden `task_card` route" in normalized_protocol
+    assert "intrinsic capability owns that tool-specific contract" in normalized_protocol
+
+    base_agent_body = (ROOT / "src/lingtai/kernel/base_agent/__init__.py").read_text(
+        encoding="utf-8"
+    )
+    lifecycle_body = (ROOT / "src/lingtai/kernel/base_agent/lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+    manager_body = (ROOT / "src/lingtai/mcp_servers/telegram/manager.py").read_text(
+        encoding="utf-8"
+    )
+    assert "Retained legacy Telegram Task Card turn-local route bookkeeping" in base_agent_body
+    assert "intrinsic ``task_card`` producer does not consume it" in base_agent_body
+    assert "Maintain retained legacy Telegram route-capture bookkeeping" in lifecycle_body
+    assert "does not consume this context" in lifecycle_body
+    assert "retained legacy private-" in manager_body
+    assert "Render retained legacy programmable-card JSON for compatibility tests" in manager_body
+    assert "current public intrinsic instead emits a full text/Markdown" in manager_body
 
 
 def test_missing_installed_manual_degrades_without_side_effects(tmp_path: Path) -> None:

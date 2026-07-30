@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/snapshot/CONTRACT.md

@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/task_card/CONTRACT.md
+  - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
@@ -585,6 +587,15 @@ full-body/`manual_path` result with no double wrap and no soul operation, and
 — specific to this family — that the opt-in `flow` env gate stays the only
 enable path and that a disabled `flow` is a stable status rather than an
 error.
+
+`task_card` is a migrated intrinsic family as well, but with a narrower
+producer-first boundary than the channel adapters that may consume it. Its local
+evidence (`tests/test_task_card_controller.py`,
+`tests/test_telegram_toolfamily_ltpv2.py`,
+`tests/test_telegram_task_card_programmable.py`) covers the closed family root,
+the exact agent-local file contract, activation/deactivation ordering, and the
+fact that transport-specific projection semantics belong to the consuming
+adapter rather than the intrinsic producer.
 
 ## Maintenance
 

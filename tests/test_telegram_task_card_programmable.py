@@ -1,11 +1,4 @@
-"""Tests for the resident Task Card's two-slot composition (Jason #7258/#7259).
-
-One resident message per account+chat carries two independent slots — the
-``automatic`` tool-row channel and the ``programmable`` renderer channel.
-Updating one slot preserves the other; programmable ``finalize`` clears only its
-slot and leaves the automatic channel and the message intact. The manager
-renders only validated card objects, redacting secrets.
-"""
+"""Tests for Telegram's read-only projection of the intrinsic Task Card files."""
 
 from __future__ import annotations
 
@@ -21,40 +14,49 @@ class FakeAccount:
     def __init__(self):
         self.calls: list = []
         self.sent: dict[int, str] = {}
-        self._resident: dict[int, str] = {}  # chat_id -> compound id
-        self.fail_edit = False  # raise on edit -> update_progress_message False
-        self.fail_send = False  # raise on send -> send_progress_message None
+        self._resident: dict[int, str] = {}
 
     def send_message(self, chat_id, text, reply_to_message_id=None, **kwargs):
-        if self.fail_send:
-            raise RuntimeError("simulated send failure")
         msg_id = len(self.calls) + 100
         self.sent[msg_id] = text
         self.calls.append(("send", chat_id, text))
         return {"message_id": msg_id}
 
     def edit_message(self, chat_id, message_id, text, **kwargs):
-        if self.fail_edit:
-            raise RuntimeError("simulated edit failure")
         self.sent[message_id] = text
         self.calls.append(("edit", chat_id, message_id, text))
         return {"ok": True}
 
-    # Resident-card persistence (in-memory) so both slots share one message.
     def get_task_card(self, chat_id):
         return self._resident.get(chat_id)
 
     def set_task_card(self, chat_id, compound_id):
         self._resident[chat_id] = compound_id
 
+    def list_task_card_chats(self):
+        return sorted(self._resident)
+
 
 class FakeService:
     def __init__(self):
         self.default_account = FakeAccount()
+        self._enabled = True
 
     def get_account(self, alias):
         assert alias == "mybot"
         return self.default_account
+
+    def list_accounts(self):
+        return ["mybot"]
+
+    def taskcard_enabled(self):
+        return self._enabled
+
+    def set_taskcard_enabled(self, enabled):
+        self._enabled = enabled
+
+    def taskcard_normal_rows(self):
+        return 1
 
 
 def _manager(tmp_path):
@@ -65,277 +67,116 @@ def _manager(tmp_path):
         on_inbound=lambda _: None,
         notification_store=notification_store_for(Path(tmp_path)),
     )
-    return manager, service.default_account
+    return manager, service.default_account, service
 
 
-def _prog(manager, sub_action, card=None):
-    args = {
-        "sub_action": sub_action,
-        "channel": "programmable",
-        "account": "mybot",
-        "chat_id": 55,
-    }
-    if card is not None:
-        args["card"] = card
-    return manager._handle_task_card_update(args)
-
-
-def _auto(manager, tool="bash", reasoning="build"):
+def _auto(manager, reasoning="build"):
     return manager._handle_task_card_update(
         {
             "sub_action": "create",
             "account": "mybot",
             "chat_id": 55,
-            "tool": tool,
+            "tool": "bash",
             "tool_action": "run",
             "reasoning": reasoning,
         }
     )
 
 
+def _write_intrinsic_taskcard(tmp_path: Path, *, status: str, body: str | None) -> None:
+    taskcard_dir = tmp_path / "taskcard"
+    taskcard_dir.mkdir(parents=True, exist_ok=True)
+    (taskcard_dir / "status").write_text(status, encoding="utf-8")
+    body_path = taskcard_dir / "taskcard.md"
+    if body is None:
+        if body_path.exists():
+            body_path.unlink()
+    else:
+        body_path.write_text(body, encoding="utf-8")
+
+
 def _current(account: FakeAccount) -> str:
     return account.sent[max(account.sent)]
 
 
-# -- programmable slot alone -----------------------------------------------
-
-
-def test_programmable_first_frame_sends_and_persists_resident(tmp_path):
-    manager, acct = _manager(tmp_path)
-    result = _prog(manager, "create", {"title": "Watch", "lines": ["x"]})
-    assert result["status"] == "ok"
-    assert acct.calls[0][0] == "send"  # no resident yet -> first send
-    text = _current(acct)
-    assert "— WATCH —" in text
-    assert "Watch" in text and "• x" in text
-    # Resident persisted: a second programmable update edits, never re-sends.
-    _prog(manager, "update", {"lines": ["y"]})
-    assert acct.calls[-1][0] == "edit"
-
-
-def test_programmable_edit_failure_surfaces_safe_provider_reason(tmp_path):
-    manager, acct = _manager(tmp_path)
-    _prog(manager, "create", {"title": "Watch", "lines": ["x"]})
-
-    def rejected_edit(*_args, **_kwargs):
-        raise RuntimeError(
-            "Telegram API error: Forbidden: bot was blocked by the user"
-        )
-
-    acct.edit_message = rejected_edit
-    result = _prog(manager, "update", {"lines": ["y"]})
-    assert result == {
-        "status": "error",
-        "error": "Forbidden: bot was blocked by the user",
-    }
-
-
-# -- two-slot composition + update isolation -------------------------------
-
-
-def test_automatic_and_programmable_compose_into_one_message(tmp_path):
-    manager, acct = _manager(tmp_path)
+def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
     _auto(manager, reasoning="compiling")
-    _prog(manager, "update", {"lines": ["watch line"]})
+    _write_intrinsic_taskcard(tmp_path, status="active", body="# Task Card\n\n- first\n")
+
+    manager._broadcast_programmable_task_card_file()
+
     text = _current(acct)
-    assert "compiling" in text  # automatic slot present
-    assert "— WATCH —" in text  # programmable slot present
-    assert "• watch line" in text
-    # Only one resident message was ever sent.
-    assert sum(1 for c in acct.calls if c[0] == "send") == 1
+    assert "compiling" in text
+    assert "— WATCH —" in text
+    assert "# Task Card" in text
+    assert "- first" in text
 
 
-def test_automatic_update_preserves_programmable_slot(tmp_path):
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="first")
-    _prog(manager, "update", {"lines": ["live watch"]})
-    # A fresh automatic turn edits its own slot; the programmable slot survives.
+def test_projection_is_diff_only_against_last_programmable_frame(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager)
+    _write_intrinsic_taskcard(tmp_path, status="active", body="same body\n")
+
+    manager._broadcast_programmable_task_card_file()
+    calls_after_first = len(acct.calls)
+    manager._broadcast_programmable_task_card_file()
+
+    assert len(acct.calls) == calls_after_first
+    assert manager._task_card_channels["mybot:55"]["programmable"] == "same body\n"
+
+
+def test_inactive_or_invalid_state_is_noop_and_preserves_last_good_projection(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager)
+    _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
+    manager._broadcast_programmable_task_card_file()
+    calls_after_good = len(acct.calls)
+
+    _write_intrinsic_taskcard(tmp_path, status="inactive", body="v2\n")
+    manager._broadcast_programmable_task_card_file()
+    assert len(acct.calls) == calls_after_good
+    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
+
+    _write_intrinsic_taskcard(tmp_path, status="active", body="   ")
+    manager._broadcast_programmable_task_card_file()
+    assert len(acct.calls) == calls_after_good
+    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
+
+
+def test_missing_body_after_active_status_is_noop_and_keeps_last_good_projection(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager)
+    _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
+    manager._broadcast_programmable_task_card_file()
+    calls_after_good = len(acct.calls)
+
+    _write_intrinsic_taskcard(tmp_path, status="active", body=None)
+    manager._broadcast_programmable_task_card_file()
+
+    assert len(acct.calls) == calls_after_good
+    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
+
+
+def test_existing_automatic_channel_behavior_is_preserved_by_programmable_file_updates(tmp_path):
+    manager, acct, _service = _manager(tmp_path)
+    _auto(manager, reasoning="stay put")
+    automatic_only = _current(acct)
+    _write_intrinsic_taskcard(tmp_path, status="active", body="watch body\n")
+
+    manager._broadcast_programmable_task_card_file()
+    assert "stay put" in _current(acct)
+    assert "watch body" in _current(acct)
+
     manager._handle_task_card_update(
         {
             "sub_action": "update",
             "card_message_id": "mybot:55:100",
             "tool": "read",
             "tool_action": "open",
-            "reasoning": "second",
+            "reasoning": "next step",
         }
     )
-    text = _current(acct)
-    assert "second" in text
-    assert "• live watch" in text  # programmable untouched by automatic edit
-
-
-def test_programmable_update_preserves_automatic_slot(tmp_path):
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="stay put")
-    _prog(manager, "update", {"lines": ["v1"]})
-    _prog(manager, "update", {"lines": ["v2"]})
-    text = _current(acct)
-    assert "stay put" in text  # automatic untouched by programmable edit
-    assert "• v2" in text
-    assert "• v1" not in text  # programmable slot replaced, not appended
-
-
-def test_programmable_finalize_clears_only_its_slot(tmp_path):
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="keep me")
-    _prog(manager, "update", {"lines": ["temporary"]})
-    assert "— WATCH —" in _current(acct)
-    result = _prog(manager, "finalize")
-    assert result["status"] == "ok"
-    text = _current(acct)
-    assert "— WATCH —" not in text  # programmable slot gone
-    assert "temporary" not in text
-    assert "keep me" in text  # automatic slot — and the message — remain
-
-
-# -- validation + redaction ------------------------------------------------
-
-
-def test_unknown_channel_is_rejected(tmp_path):
-    manager, _ = _manager(tmp_path)
-    result = manager._handle_task_card_update(
-        {"sub_action": "update", "channel": "bogus", "account": "mybot", "chat_id": 55}
-    )
-    assert result["status"] == "error"
-
-
-def test_programmable_card_must_be_object(tmp_path):
-    manager, _ = _manager(tmp_path)
-    # card omitted -> update with no card object is an error, not a crash.
-    assert _prog(manager, "update")["status"] == "error"
-    result = manager._handle_task_card_update(
-        {
-            "sub_action": "update",
-            "channel": "programmable",
-            "account": "mybot",
-            "chat_id": 55,
-            "card": "not-an-object",
-        }
-    )
-    assert result["status"] == "error"
-
-
-def test_programmable_render_redacts_secrets(tmp_path):
-    manager, acct = _manager(tmp_path)
-    _prog(manager, "create", {"lines": ["deploy key AKIAIOSFODNN7EXAMPLE now"]})
-    text = _current(acct)
-    assert "AKIAIOSFODNN7EXAMPLE" not in text
-    assert "REDACTED" in text
-
-
-# -- state ordering: commit channel frame only after successful transport ---
-
-
-def test_failed_edit_does_not_poison_channel_state(tmp_path):
-    """A programmable update whose transient edit fails must not replace or
-    commit; a later automatic update must not resurrect the unsent frame."""
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="base")
-    _prog(manager, "update", {"lines": ["v1"]})  # delivered + committed
-    assert "• v1" in _current(acct)
-    committed = manager._task_card_channels["mybot:55"]["programmable"]
-
-    # An unknown/transient edit failure is not proof that replacement is safe:
-    # fail loud without a send and do not commit the proposed frame.
-    acct.fail_edit = True
-    sends_before = sum(1 for call in acct.calls if call[0] == "send")
-    result = _prog(manager, "update", {"lines": ["UNSENT"]})
-    assert result["status"] == "error"
-    assert sum(1 for call in acct.calls if call[0] == "send") == sends_before
-    assert manager._task_card_channels["mybot:55"]["programmable"] == committed
-    assert "UNSENT" not in committed
-
-    # A later successful automatic update composes only the last delivered
-    # programmable frame — the unsent "UNSENT" frame can never be resurrected.
-    acct.fail_edit = False
-    manager._handle_task_card_update(
-        {
-            "sub_action": "update",
-            "card_message_id": manager._get_resident_task_card("mybot", 55),
-            "tool": "read",
-            "tool_action": "open",
-            "reasoning": "later",
-        }
-    )
-    text = _current(acct)
-    assert "later" in text
-    assert "• v1" in text
-    assert "UNSENT" not in text
-
-
-def test_failed_automatic_edit_does_not_poison_channel_state(tmp_path):
-    """Same discipline on the automatic slot: a transient failed edit neither
-    replaces nor commits, so a later programmable compose stays clean."""
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="delivered")  # resident created + committed
-    acct.fail_edit = True
-    sends_before = sum(1 for call in acct.calls if call[0] == "send")
-    res = _auto(manager, reasoning="POISON")
-    assert res["status"] == "error"
-    assert sum(1 for call in acct.calls if call[0] == "send") == sends_before
-    assert manager._task_card_channels["mybot:55"]["automatic"] != ""
-    assert "POISON" not in manager._task_card_channels["mybot:55"]["automatic"]
-    acct.fail_edit = False
-    _prog(manager, "update", {"lines": ["w"]})  # succeeds, composes clean
-    text = _current(acct)
-    assert "delivered" in text and "• w" in text
-    assert "POISON" not in text
-
-
-# -- programmable-only finalize: nonempty terminal marker, reusable resident ---
-
-
-def test_programmable_only_finalize_shows_watch_stopped_marker(tmp_path):
-    """Finalizing a programmable-ONLY resident must never edit to empty text; it
-    delivers a stable nonempty terminal marker and leaves the resident reusable."""
-    manager, acct = _manager(tmp_path)
-    _prog(manager, "create", {"lines": ["watch content"]})  # programmable-only send
-    result = _prog(manager, "finalize")
-    assert result["status"] == "ok"
-    text = _current(acct)
-    assert text.strip() != ""  # never an empty Telegram edit
-    assert "— WATCH STOPPED —" in text
-    assert "watch content" not in text  # the watch frame is gone
-    # The committed slot is really cleared, and the marker is NOT stored state.
-    assert "programmable" not in manager._task_card_channels.get("mybot:55", {})
-    # Resident reusable: a later automatic create composes clean over the marker,
-    # editing the SAME message (no resend).
-    _auto(manager, reasoning="fresh work")
-    text2 = _current(acct)
-    assert "fresh work" in text2
-    assert "WATCH STOPPED" not in text2
-    assert sum(1 for c in acct.calls if c[0] == "send") == 1
-
-
-def test_programmable_only_finalize_transient_failure_is_retryable_no_resend(tmp_path):
-    """A transient edit failure during a programmable-only finalize must not resend
-    or commit the clear; the slot is preserved and a retry clears it to the marker."""
-    manager, acct = _manager(tmp_path)
-    _prog(manager, "create", {"lines": ["live"]})
-    committed = manager._task_card_channels["mybot:55"]["programmable"]
-    acct.fail_edit = True
-    sends_before = sum(1 for c in acct.calls if c[0] == "send")
-    result = _prog(manager, "finalize")
-    assert result["status"] == "error"
-    assert sum(1 for c in acct.calls if c[0] == "send") == sends_before  # no resend
-    assert manager._task_card_channels["mybot:55"]["programmable"] == committed  # preserved
-    # Retry after recovery clears the slot and shows the terminal marker.
-    acct.fail_edit = False
-    retry = _prog(manager, "finalize")
-    assert retry["status"] == "ok"
-    assert "programmable" not in manager._task_card_channels.get("mybot:55", {})
-    assert "— WATCH STOPPED —" in _current(acct)
-
-
-def test_programmable_finalize_with_automatic_leaves_automatic_byte_for_byte(tmp_path):
-    """When an automatic slot exists, a successful programmable finalize leaves the
-    automatic text byte-for-byte as the composed resident (never the marker)."""
-    manager, acct = _manager(tmp_path)
-    _auto(manager, reasoning="keep exactly")
-    automatic_text = _current(acct)  # automatic-only composed content
-    _prog(manager, "update", {"lines": ["temp"]})
-    assert "— WATCH —" in _current(acct)
-    result = _prog(manager, "finalize")
-    assert result["status"] == "ok"
-    assert _current(acct) == automatic_text  # byte-for-byte automatic
-    assert "— WATCH STOPPED —" not in _current(acct)  # marker is programmable-only
+    assert "next step" in _current(acct)
+    assert "watch body" in _current(acct)
+    assert automatic_only != _current(acct)

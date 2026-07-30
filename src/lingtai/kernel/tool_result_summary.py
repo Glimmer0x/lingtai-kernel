@@ -157,6 +157,7 @@ _LTP_V2_MIGRATED_FAMILIES = frozenset(
     {
         "web", "mcp", "file", "vision", "avatar", "soul",
         "shell", "notification", "system", "daemon", "email",
+        "task_card",
         "context",
         # One public root for the four durable domains
         # (``pad + lingtai + knowledge + skills = psyche``). It replaced the

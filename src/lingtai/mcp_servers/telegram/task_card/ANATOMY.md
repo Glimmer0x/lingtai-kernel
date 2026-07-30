@@ -1,230 +1,72 @@
 ---
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
-  - src/lingtai/mcp_servers/ANATOMY.md
-  - src/lingtai/kernel/base_agent/ANATOMY.md
-  - src/lingtai/mcp_servers/telegram/task_card/__init__.py
-  - src/lingtai/mcp_servers/telegram/task_card/interface.py
-  - src/lingtai/mcp_servers/telegram/task_card/controller.py
-  - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
   - src/lingtai/mcp_servers/telegram/manager.py
-  - src/lingtai/agent.py
+  - src/lingtai/mcp_servers/telegram/service.py
+  - src/lingtai/mcp_servers/ANATOMY.md
+  - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/tools/task_card/ANATOMY.md
+  - tests/test_telegram_task_card_programmable.py
+  - tests/test_telegram_task_card_toggle.py
+  - tests/test_telegram_task_card_event_tail.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
-  Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
-  parent/child anatomy links bidirectional. Code is the structural source of
-  truth: update this anatomy in the same change that moves files, symbols,
-  connections, composition, or state. Verify every changed citation and run the
-  architecture-document validation before merge.
-  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
+  Keep this Anatomy reciprocal with its paired CONTRACT.md and packaged manual.
+  Update it when resident ownership, programmable projection, or the relation to
+  the intrinsic producer changes.
 ---
-# Telegram Programmable Task Card Anatomy
+# Telegram Task Card Projection Anatomy
 
-The Telegram-owned Task Card unit drives the programmable slot and names the
-resident boundary shared with the automatic event projection. `TaskCardResident`
-owns channel frames, per-account+chat locks, compose, atomic enablement, and
-the deterministic project/ensure boundary; `TelegramManager` remains the
-Telegram transport adapter for the hard-at-most-one / last-message transaction.
-The model-facing `task_card` tool runs an agent-supplied Python renderer and
-projects only validated data onto that same resident target. The co-located manual
-teaches agents to inspect each task and producer, choose truthful evidence, and
-adapt a watcher after meaningful use; it does not prescribe a renderer layout or
-data source. Normative promises live in the paired [`CONTRACT.md`](CONTRACT.md).
+This package now owns Telegram-side resident composition and programmable
+projection only. The public model-facing `task_card` capability has moved to
+[`src/lingtai/tools/task_card/`](../../../tools/task_card/ANATOMY.md), which
+produces the agent-local artifact. Telegram reads that artifact and projects it
+onto its one tracked resident Task Card target per account+chat.
 
 ## Components
 
-- `get_schema` / `get_description` — the `task_card` tool schema (`start` /
-  `inspect` / `retry` / `stop`) and the description that routes to the manual
-  (`controller.py:59`, `controller.py:100`).
-- `TaskCardResident` — resident owner for channel frames, route locks, atomic
-  enablement, and `ensure`/`project` (`resident.py:9`).
-- `TaskCardController` — thin Core: dispatch, synchronous first frame, watch
-  registry, fail-loud/recovery wakes (`controller.py:179`). Key methods:
-  `handle` (`controller.py:188`), `_start` (`controller.py:213`), `_inspect`
-  (`controller.py:281`), `_run_renderer` (`controller.py:597`), `_validate_frame`
-  (`controller.py:623`), `_project` (`controller.py:670`),
-  `_validate_renderer_path` (`controller.py:746`), `_resolve_route`
-  (`controller.py:785`), `shutdown_for_agent_stop` (`controller.py:810`).
-  `_start` (`controller.py:213`) also keeps the watch addressable on a validated
-  initial persistence-partial (`resident_persist_failed` with a route-matching id)
-  rather than discarding it, and discards on any other first-frame error.
-- Stop lifecycle (never finalize/remove/`stopped` while the watcher thread is
-  alive): `_stop` (`controller.py:301`), the post-projection late-`update` guard
-  and compensation in `_tick` (`controller.py:426`), and
-  `_compensate_stop_finalize` (`controller.py:477`) with the `finalized`
-  watcher↔public-stop handshake.
-- Outcome validation: `_project` (`controller.py:670`) normalizes the manager's
-  `resident_persist_failed` (→ observable partial surfacing the validated
-  `message_id`) and treats pre-send `stale_delete_failed` / `indeterminate_send` /
-  any malformed id as a plain error (no adopted id). `_route_matched_message_id`
-  (`controller.py:720`) independently validates every returned compound id — route
-  match to `watch.account`/`watch.chat_id` plus a positive-integer terminal id —
-  for both clean and partial outcomes.
-- `_Watch` — per-watch in-memory state: thread, last-valid frame + timestamp,
-  sticky `stopping`, `finalized` handshake flag, deduped error/epoch bookkeeping
-  (`controller.py:118`).
-- `setup(agent, controller=...)` — registers the controller-bound `task_card`
-  handler and its schema with `glossary_package=None`, reusing an existing
-  controller when a full Agent refresh rebuilds the public tool registries
-  (`controller.py:821`).
-- `TelegramTaskCardAgent` — the narrow host Protocol the controller depends on
-  instead of the concrete `Agent` (`interface.py:23`).
+- `resident.py` — `TaskCardResident`, the owner of channel frames, route locks,
+  composition, enablement, and serialized per-route delivery.
+- `manager.py` — the Telegram adapter that renders, transports, persists, and
+  reprojects both the automatic event-tail channel and the programmable file
+  channel.
+- `SKILL.md` — packaged Telegram-facing manual/procedure material for this
+  component.
+- Retained legacy files in this package (`controller.py`, `_family.py`,
+  `interface.py`, `__init__.py`) are no longer the public ownership path for
+  `task_card` in this slice. They remain on disk because this migration does not
+  delete or rename pre-existing paths.
 
 ## Connections
 
-- Composition root: `Agent._maybe_setup_task_card_controller`
-  (`src/lingtai/agent.py:1023-1064`; `setup` call at
-  `src/lingtai/agent.py:1064`) calls `setup` only after the newly rebuilt
-  reverse-route map contains Telegram; it re-registers the same controller after a
-  full refresh clears the public tool surface or a colliding MCP overwrites it,
-  verifying the handler binding and owned schema rather than a name/count alone. It
-  runs at the end of each MCP-connect path that may add the Telegram route
-  (`src/lingtai/agent.py:1020`, `src/lingtai/agent.py:1121`).
-- Renderer: `_run_renderer` runs `sys.executable <renderer>` with the agent
-  workdir as `cwd`; `_validate_renderer_path` confines the path to that workdir.
-- Reverse channel: `_project` calls the private `_lingtai_telegram_task_card`
-  tool with `channel="programmable"` on the `telegram` MCP client from
-  `agent._mcp_clients_by_tool`, consumed by
-  `TelegramManager._handle_task_card_update` (`src/lingtai/mcp_servers/telegram/manager.py`).
-- Route: `_resolve_route` reads the programmable controller's turn-local
-  `agent._telegram_task_card_context` so its frames resolve to the one tracked
-  resident target for that account+chat; the automatic event-tail broadcast is
-  manager-owned and does not use this route.
-- Transport ownership: the manager (`_deliver_channel_frame_locked`,
-  `_rotate_task_card_to_latest`, `_replace_task_card_after_probe`) owns the
-  hard-at-most-one / last-message resident transport; `_project` only reads its
-  normalized `{status}`/`partial`/`resident_persist_failed`/`stale_delete_failed`/
-  `indeterminate_send` outcome. The manager's `send_progress_message` forms a
-  compound id only after `_sent_message_id_or_none` confirms a real positive `int`,
-  else returns `indeterminate_send` so cold-send/old-first replacement fail closed.
-- Fail-loud: after-handle failures call `agent._enqueue_system_notification`.
-
-## Automatic event-tail projection paths
-
-- **Rows/timestamps:** after validating `type == "tool_call"`,
-  `_project_tool_call_row` reads only `tool_name`, a non-empty string
-  `tool_args.action` projected as `tool_action`, redacted/bounded
-  `tool_args._reasoning`, and top-level Unix-epoch `ts`; all other raw arguments
-  are excluded. `_format_task_card_row_timestamp` projects a valid value as optional
-  `started_at` in `HH:MM:SS UTC±HH`; missing, boolean, non-numeric, non-finite,
-  or out-of-range values omit it. `_meta`, row arguments, notifications, and
-  render time are never timestamp sources. Navigation:
-  `manager.py:_project_tool_call_row` (`:1934`), `_format_task_card_row_timestamp`
-  (`:2005`), and `_format_rows_task_card_text` (`:2864`).
-- **Current telemetry:** `_project_final_carrier_metadata` accepts only a
-  final-carrier `type == "notification_block_injected"` event's latest whole
-  `_meta.agent_meta`, then projects
-  `_meta.agent_meta.agent_state.token_usage.session` fields
-  `session_cache_rate`, `cache_miss_tokens`, `cache_miss_budget`, `api_calls`,
-  `context_tokens`, `context_window`, and `context_usage`. The tail stores no
-  historical holders and passes this bounded projection to the existing
-  `_format_task_card_metadata` two-line/150-character formatter through
-  `_broadcast_task_card_event_window`; malformed or missing values omit safely.
-  It never reads retired `tool_meta.token_usage`, row args, notifications, or
-  render time. Navigation: `manager.py:_project_final_carrier_metadata`
-  (`:1966`), `_reverse_tail_latest_rows` (`:2073`), `_append_new_lines`
-  (`:2226`), and `_broadcast_task_card_event_window` (`:2305`).
-- **Two independent channels, each following only its own update path.** The
-  automatic channel is updated ONLY by `_poll_event_tail` (`manager.py:2176`) →
-  `_broadcast_task_card_event_window` (`manager.py:2305`); its footer line is
-  `Last Updated: HH:MM:SS UTC±HH` (`_TASK_CARD_TIME_PREFIX`, `manager.py:111`),
-  meaning when that event-tail snapshot was last rendered — not a wall clock
-  tied to unrelated programmable edits. The programmable channel is updated
-  ONLY by `_task_card_programmable` (`manager.py:2694`) →
-  `_format_programmable_card_text` (`manager.py:1774`), which appends its own
-  `Last Updated` line to every non-empty frame, meaning when that programmable
-  frame itself was accepted/rendered for delivery. `_deliver_channel_frame_locked`
-  (`manager.py:1668`) composes and commits exactly the one `channel` it was
-  called for via `_compose_channels`/`_set_channel_frame` (`manager.py:1644`,
-  `:1638`) — it never reads or mutates the other channel's stored frame, the
-  event-tail offset/metadata/groups, or session state. So an automatic update
-  always leaves the committed programmable frame byte-for-byte unchanged, and a
-  programmable update always leaves the committed automatic frame and session
-  footer byte-for-byte unchanged. Navigation: `manager.py:_poll_event_tail`,
-  `_broadcast_task_card_event_window`, `_deliver_channel_frame_locked`,
-  `_compose_channels`, `_set_channel_frame`, `_task_card_programmable`,
-  `_format_programmable_card_text`; `resident.py:TaskCardResident.set_frame`,
-  `.compose`.
-- **Regression/drift triggers:** the event-to-final-render coverage is
-  `tests/test_telegram_task_card_event_tail.py:test_event_log_final_carrier_projects_session_telemetry_into_final_render`
-  plus `test_malformed_current_telemetry_carrier_clears_previous_snapshot` and
-  the adjacent timestamp/malformed-input cases. Two-channel independence
-  coverage is `test_automatic_footer_label_is_last_updated`,
-  `test_programmable_frame_includes_its_own_last_updated_line`,
-  `test_programmable_update_leaves_automatic_frame_unchanged`, and
-  `test_automatic_update_leaves_programmable_frame_unchanged`. Update this
-  anatomy and the paired contract/tests together if event types, the
-  final-carrier metadata path, supported session fields, the two-line
-  formatter budget, or timestamp provenance changes; do not broaden the
-  automatic source without revisiting the authoritative-event rule, and do not
-  reintroduce any cross-channel read/refresh — the two channels' update paths
-  must stay fully independent.
+- The intrinsic producer writes `<workdir>/taskcard/status` and
+  `<workdir>/taskcard/taskcard.md`.
+- `TelegramManager._read_programmable_task_card_body()` reads those files only
+  when status is exactly `active`.
+- `TelegramManager._broadcast_programmable_task_card_file()` compares the new
+  body against the last committed programmable frame and only projects when the
+  bytes differ.
+- `TaskCardResident` composes the programmable frame with the existing
+  automatic frame under one tracked resident message.
 
 ## Composition
 
-- **Parent:** [`src/lingtai/mcp_servers/ANATOMY.md`](../../ANATOMY.md).
-- **Paired contract:** [`CONTRACT.md`](CONTRACT.md).
-- **Automatic slot owner:** `TelegramManager`'s `logs/events.jsonl` tail
-  worker and broadcast in `src/lingtai/mcp_servers/telegram/manager.py` (see
-  `src/lingtai/mcp_servers/ANATOMY.md`); BaseAgent no longer builds or renders
-  automatic rows.
-- **Programmable route host:** the kernel Task Card hooks in
-  [`src/lingtai/kernel/base_agent/ANATOMY.md`](../../../kernel/base_agent/ANATOMY.md)
-  capture only the turn-local `{account, chat_id}` route this controller
-  reads; render/compose/persistence for both channels stays in
-  `src/lingtai/mcp_servers/telegram/manager.py`.
-- **Manual:** [`SKILL.md`](SKILL.md). It is the task-specific procedure: inspect
-  the producer evidence, design a truthful frame for purpose/time/activity/tokens/
-  state-gate-blocker, use the retained controller lifecycle, and ask for feedback
-  after meaningful use before extracting a reusable skill. It includes a safe
-  runnable custom-renderer example, but does not define a fixed layout or source.
+- Parent: [`src/lingtai/mcp_servers/ANATOMY.md`](../../ANATOMY.md)
+- Paired contract: [`CONTRACT.md`](CONTRACT.md)
+- Producer owner: [`src/lingtai/tools/task_card/ANATOMY.md`](../../../tools/task_card/ANATOMY.md)
 
 ## State
 
-The resident module holds only in-memory channel frames, route locks, and the
-observed enablement transition. Resident message ids remain in the existing
-TelegramAccount `task_cards` state map; event history remains `events.jsonl`.
-The controller holds only in-memory per-watch state (`_watches`, threads,
-last-valid frames, error epochs). It writes no files and deletes none — renderer
-files are agent-owned working-directory copies selected for the current task and
-are never deleted by the controller.
-Durable Task Card state (resident message id per account+chat, composed slots,
-the `/taskcard` delivery boolean) is owned by the Telegram adapter, not here
-(see `src/lingtai/mcp_servers/ANATOMY.md`).
+- In-memory resident channel frames and per-route delivery locks
+- Durable Telegram resident message ids in each account's `task_cards` map
+- No programmable renderer state of its own; producer state lives under
+  `<workdir>/taskcard/`
 
 ## Notes
 
-- Telegram never executes agent code: the controller forwards only a validated
-  card object, never the renderer, over the reverse channel.
-- The first frame is synchronous, so a failing renderer yields a tool error and
-  no watch handle; after-handle failures preserve the last valid frame and emit
-  one deduped, per-episode wake plus one recovery wake.
-- `_TASK_CARD_TOOL` here mirrors `lingtai.kernel.base_agent._TASK_CARD_TOOL` and
-  `telegram/server.py:_PRIVATE_TASK_CARD_TOOL`; the three must stay in sync.
-
-## Public family boundary and refresh-count state
-
-`task_card/_family.py` is the independent public LTP-v2 family adapter. It owns
-only the strict closed envelope, action-owned input schemas, pre-I/O validation,
-and package-owned `manual`; `controller.py` owns the lifecycle behind that
-boundary. The raw Telegram server registers exactly `telegram`, then `task_card`,
-while `_lingtai_telegram_task_card` remains an unlisted private reverse route.
-The old generic Agent/`lingtai.tools` Task Card registration is not a second
-owner: `Agent._maybe_setup_task_card_controller` is only the host composition
-hook that binds the Telegram-owned controller when the reverse route exists.
-This is the future split boundary: Task Card enum/schema/handler/controller/watch
-lifecycle can move packages without changing Telegram's independent family or
-private transport contract.
-
-`TelegramService` persists the agent-wide positive non-bool `max_refreshes` fuse
-in `<workdir>/telegram/taskcard.json` with atomic/fsynced writes. The controller
-receives a narrow getter and applies `min(requested, configured)` for a positive
-per-start lower ceiling. Initial create is excluded; each later interval/manual
-retry `_tick` consumes one permit before renderer/backend execution, including
-failure. Exhaustion sets `stop_reason=max_refreshes`, quiesces through the normal
-programmable-only finalize path, and emits exactly one content-safe normal
-`task_card.limit` wake keyed by watch and limit. A failed finalize retains a
-retryable `stop_failed` handle; the automatic slot and renderer files are
-untouched. Counter fields are part of start/inspect/retry/stop results.
+- Missing, blank, invalid, or inactive producer state is a Telegram no-op that
+  preserves the last good projected programmable frame.
+- Telegram-specific transport, diff-only updates, and toggle behavior belong
+  here, not in the intrinsic producer contract.

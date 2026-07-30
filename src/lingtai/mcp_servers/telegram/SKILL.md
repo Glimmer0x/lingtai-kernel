@@ -8,7 +8,7 @@ description: |
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
-version: 1.5.4
+version: 1.5.5
 last_changed_at: 2026-07-29T00:00:00Z
 related_files:
 - src/lingtai/mcp_servers/ANATOMY.md
@@ -282,35 +282,37 @@ chat-history cardinality. Normative source:
 - When answering whether Task Cards are on or how many normal rows they keep, use
   the explicit current `/taskcard` status rather than inferring from a visible card.
 
-## PROGRAMMABLE TASK CARD (`task_card` tool)
+## PROGRAMMABLE TASK CARD (`task_card` intrinsic tool)
 
-- **When to reach for it:** during a Telegram-originated turn, when you launch
-  meaningful long-running work and then wait for its producer, inspect the actual
-  task and producer evidence and design a human-visible watcher if it will
-  prevent a silent gap. Record a truthful snapshot after launch, after meaningful
-  polls/checks, and at the terminal result. Skip it for quick or invisible work;
-  do not treat a watcher as a fixed layout or an autonomous live feed.
-- The resident Task Card has two independent slots: the **automatic**
-  event-journal slot described above (manager-owned) and a **programmable** slot
-  you drive with the separate public `task_card` tool. With both present, the
-  programmable block appears under a `— WATCH —` header; updating one slot never
-  disturbs the other.
-- You drive the programmable slot by supplying a small **Python renderer** file
-  inside your working directory whose stdout is exactly one Task Card JSON
-  object. Telegram never runs your code — the controller runs the renderer as a
-  subprocess and forwards only the validated data.
-- Actions are `start | inspect | retry | stop`. `start` validates and runs the
-  renderer once synchronously, so a bad first run is an immediate error that
-  starts no watch; later failures keep the last valid frame and raise a deduped
-  fail-loud system wake. `stop` clears only the programmable frame; renderer
-  files are never deleted.
-- Starting a watch drives the programmable slot of the `TelegramManager`-owned
-  single resident card, reusing the tracked resident or creating its one resident
-  if none exists yet; it does not start another manager or a second card.
-- **Read [`task_card/SKILL.md`](task_card/SKILL.md) before authoring a
-  renderer.** It owns evidence selection, the required watcher facts, a safe
-  runnable custom-renderer example, the renderer contract, the full
-  `start|inspect|retry|stop` walkthrough, and terminal/fail-loud cleanup.
+- The public model-facing `task_card` capability is intrinsic and
+  channel-neutral. Read the canonical producer manual at
+  [`../../tools/task_card/manual/SKILL.md`](../../tools/task_card/manual/SKILL.md)
+  before authoring a watcher. Telegram does not own that tool, does not run
+  renderers, and does not accept Task Card JSON/controller instructions.
+- Use a Python renderer file inside the agent working directory. Each successful
+  run must exit `0` and print a nonempty full Markdown/text body to stdout. The
+  intrinsic producer writes that body atomically to
+  `<workdir>/taskcard/taskcard.md`, then writes exact `active` to
+  `<workdir>/taskcard/status`. `stop` and agent shutdown write exact `inactive`;
+  the last body remains on disk.
+- Actions are `start | inspect | retry | stop | manual`. `start` performs the
+  first render synchronously and starts no watch on failure. `retry` updates only
+  the body for the active watch. `stop` deactivates the intrinsic artifact. One
+  intrinsic-owned watch may be active per agent.
+- Telegram is only a read-only resident projector for that artifact. Its poller
+  reads `taskcard/status` and `taskcard/taskcard.md`; exact `active` plus a
+  nonempty body may project under `— WATCH —`. Missing, invalid, inactive, or
+  unchanged producer state is a no-op at the Telegram boundary. The automatic
+  event-journal slot remains independent and is preserved.
+- Skipping unchanged bytes is not a rate-limit exemption. Every time your
+  renderer's output actually changes, Telegram performs a real message
+  edit/send, subject to the same Bot API flood-control limits as any other
+  send (see [`reference/rate-limits/SKILL.md`](reference/rate-limits/SKILL.md)).
+  A renderer that churns its body on every tick can hit HTTP 429 exactly like
+  frequent manual sends, even though a producer with unchanged output would
+  cause zero Telegram traffic. Choose `interval_s` and how often your output
+  actually changes deliberately — cadence and churn are a product choice, not
+  something the diff-only skip makes safe by default.
 
 ## ERROR SURFACING
 
@@ -340,21 +342,18 @@ chat-history cardinality. Normative source:
 - A duplicate identical send returns `{'status': 'blocked'}`; treat that as
   'already sent', not as a transient error to retry.
 
-## PUBLIC TOOL FAMILIES: strict LTP-v2
+## PUBLIC TOOL FAMILY: strict LTP-v2
 
-Raw MCP discovery exposes exactly two public tools in stable order: `telegram`,
-then `task_card`. Each is an independent strict LTP-v2 family with the closed
-root `{action, input, reasoning, summarize?}` (`action`, `input`, and `reasoning`
-required) and a closed action-owned input branch. `telegram` actions are exactly
-`send`, `check`, `read`, `reply`, `search`, `delete`, `edit`, `contacts`,
-`add_contact`, `remove_contact`, `accounts`, and `manual`; `task_card` actions are
-exactly `start`, `inspect`, `retry`, `stop`, and `manual`. The family-owned
-`manual` actions are the discovery path for these packaged docs. Do not use the
-retired flat/legacy shape, `_reasoning`, aliases, or a generic dispatcher.
+Raw MCP discovery exposes exactly one public tool: `telegram`. It is a strict
+LTP-v2 family with the closed root `{action, input, reasoning, summarize?}`
+(`action`, `input`, and `reasoning` required) and a closed action-owned input
+branch. `telegram` actions are exactly `send`, `check`, `read`, `reply`,
+`search`, `delete`, `edit`, `contacts`, `add_contact`, `remove_contact`,
+`accounts`, and `manual`. The family-owned `manual` action is the discovery path
+for these packaged docs. Do not use the retired flat/legacy shape, `_reasoning`,
+aliases, or a generic dispatcher.
 
-The private `_lingtai_telegram_task_card` route is intentionally hidden from
-`list_tools` and is only the reverse programmable-slot transport. The automatic
-slot remains manager-owned and independent of the programmable controller; both
-compose into the same resident without one refreshing or clearing the other.
-For the Task Card renderer/count lifecycle, read
-[`task_card/SKILL.md`](task_card/SKILL.md).
+The public `task_card` tool is now intrinsic (`lingtai.tools.task_card`) and
+produces `<workdir>/taskcard/status` plus `<workdir>/taskcard/taskcard.md`.
+Telegram only projects that artifact read-only into its resident Task Card. For
+Telegram projection details, read [`task_card/SKILL.md`](task_card/SKILL.md).

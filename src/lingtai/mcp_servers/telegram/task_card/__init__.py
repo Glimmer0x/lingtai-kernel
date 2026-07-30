@@ -1,27 +1,18 @@
-"""Telegram-owned programmable Task Card unit.
+"""Retained legacy Telegram Task Card package.
 
-The model-facing ``task_card`` tool drives the *programmable* slot of Telegram's
-one tracked resident Task Card target, composed alongside the automatic
-tool-activity slot into that one tracked resident owned by ``TelegramManager``
-(Jason #7258/#7259). This capability is Telegram MCP-owned: registration is gated
-by the Telegram reverse route, projection targets ``_lingtai_telegram_task_card``,
-and rendering, in-place edits, the ``/taskcard`` toggle, persistence, and the
-hard-at-most-one / last-message transport all live in the Telegram
-manager/server/service. There is no cross-channel port and no second
-implementation.
+The current public model-facing ``task_card`` capability is owned by
+``lingtai.tools.task_card``. It produces the channel-neutral
+``<workdir>/taskcard/status`` and ``<workdir>/taskcard/taskcard.md`` artifact,
+with one intrinsic-owned watch per agent. Telegram only reads that artifact and
+projects active, nonempty bodies into its resident programmable slot.
 
-Public surface (intentionally small):
+This package remains shipped for historical compatibility and for the
+Telegram-side resident/projection Anatomy/Contract. The old controller,
+interface, schema helpers, and reverse-channel names are not the active public
+ownership path and must not be documented as an endpoint to use.
 
-- ``setup(agent)`` — the composition-root helper that binds the host controller
-  handler after the raw Telegram MCP has registered the sole public family schema.
-- ``TaskCardController`` / ``TaskCardControllerError`` — the controller and its
-  synchronous user-visible error.
-- ``get_schema`` / ``get_description`` — the tool schema and description.
-- ``TelegramTaskCardAgent`` — the narrow host-agent Protocol the controller
-  depends on instead of the concrete ``Agent`` class.
-
-See ``SKILL.md`` for the manual (what/how/why), ``CONTRACT.md`` for the interface
-promise, and ``ANATOMY.md`` for the structure.
+See ``SKILL.md`` for the retained-legacy/projection notice, ``CONTRACT.md`` for
+the Telegram projection promise, and ``ANATOMY.md`` for the current structure.
 """
 
 from __future__ import annotations

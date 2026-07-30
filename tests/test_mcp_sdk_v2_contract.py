@@ -91,13 +91,10 @@ async def test_server_negotiates_2026_protocol_and_lists_its_tool(build, tool_na
         result = await client.list_tools()
 
         # A single page: the pagination loop in the service boundary must be
-        # able to terminate on this listing. #1081 split Telegram and Task Card
-        # into two public families in a stable order; every other curated server
-        # still advertises exactly its one named family.
+        # able to terminate on this listing. Telegram now advertises only its
+        # own public family; the public Task Card root is intrinsic.
         assert result.next_cursor is None
-        expected_names = (
-            ["telegram", "task_card"] if tool_name == "telegram" else [tool_name]
-        )
+        expected_names = [tool_name]
         assert [tool.name for tool in result.tools] == expected_names
         assert isinstance(result.tools[0].input_schema, dict)
 
@@ -117,9 +114,7 @@ async def test_server_still_serves_a_legacy_handshake_client(build, tool_name):
 
         tools = (await client.list_tools()).tools
 
-        expected_names = (
-            ["telegram", "task_card"] if tool_name == "telegram" else [tool_name]
-        )
+        expected_names = [tool_name]
         assert [tool.name for tool in tools] == expected_names
 
 
@@ -254,19 +249,18 @@ async def test_unknown_resource_uri_is_invalid_params(build, tool_name):
     assert raised.value.data == {"uri": "lingtai://definitely-not-a-resource"}
 
 
-async def test_telegram_private_task_card_route_is_unlisted_but_callable():
-    """The reverse channel stays hidden from the catalog and still dispatches."""
-    from lingtai.mcp_servers.telegram.server import _PRIVATE_TASK_CARD_TOOL
-
+async def test_telegram_task_card_route_is_unknown_after_intrinsic_migration():
+    """Telegram no longer owns a public or hidden MCP ``task_card`` route."""
     async with Client(build_telegram(None)) as client:
         listed = {tool.name for tool in (await client.list_tools()).tools}
-        assert _PRIVATE_TASK_CARD_TOOL not in listed
+        assert "task_card" not in listed
 
-        # Reaches the manager-is-None branch rather than the unknown-tool raise.
-        result = await client.call_tool(_PRIVATE_TASK_CARD_TOOL, {})
+        with pytest.raises(MCPError) as raised:
+            await client.call_tool("task_card", {})
 
-    assert result.is_error is True
-    assert "Telegram manager unavailable" in result.structured_content["error"]
+    assert raised.value.code == INVALID_PARAMS
+    assert raised.value.message == "Unknown tool: task_card"
+    assert raised.value.data == {"requested": "task_card"}
 
 
 # ---------------------------------------------------------------------------

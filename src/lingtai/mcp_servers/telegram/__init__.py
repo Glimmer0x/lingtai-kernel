@@ -11,7 +11,15 @@ from .account import (
     inline_keyboard_yes_no,
 )
 from .licc import push_inbox_event
-from .server import serve, build_server, build_manager, load_config
+
+
+def __getattr__(name: str):
+    if name in {"serve", "build_server", "build_manager", "load_config"}:
+        from importlib import import_module
+
+        server = import_module(f"{__name__}.server")
+        return getattr(server, name)
+    raise AttributeError(name)
 
 __all__ = [
     "serve",
