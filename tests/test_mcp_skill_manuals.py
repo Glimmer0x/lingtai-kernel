@@ -173,7 +173,7 @@ def test_mcp_skill_package_data_keeps_reference_and_asset_sidecars_packaged():
 
 
 def test_telegram_task_card_subpackage_ships_manual_and_architecture_docs():
-    """The Telegram-owned programmable Task Card is its own subpackage, so the
+    """The Telegram resident/projection Task Card docs live in a subpackage, so the
     parent ``lingtai.mcp_servers.telegram`` glob does NOT recurse into it. Its
     manual and architecture documents need an explicit package-data key or the
     wheel/sdist would install the code and silently drop them."""

@@ -68,13 +68,10 @@ from ..runtime_identity import runtime_identity_event_fields
 
 logger = get_logger()
 
-# Private MCP tool name for the kernel-driven Telegram Task Card reverse channel.
-# It is intentionally unlisted by the Telegram server's ``list_tools`` so the
-# model can neither see nor call it, and the server forces the task-card action
-# server-side — the kernel therefore sends no ``action`` here. Mirrors
-# ``_PRIVATE_TASK_CARD_TOOL`` in ``lingtai.mcp_servers.telegram.server``; it is a
-# literal (not an import) because the kernel must not depend on ``mcp_servers``.
-# Keep the two in sync.
+# Retained legacy literal for the retired kernel-driven Telegram Task Card
+# reverse channel. The current public ``task_card`` capability is intrinsic in
+# ``lingtai.tools.task_card``; Telegram only projects its artifact read-only.
+# Keep this only while legacy cleanup paths still reference the historical name.
 _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
 
 def _block_type_name(block: object) -> str:
@@ -670,9 +667,10 @@ class BaseAgent:
         self._notification_persistent_feishu_message_ids: list[str] = []
         self._notification_persistent_feishu_last_tool_id: str | None = None
 
-        # Telegram Task Card turn-local context (kernel-driven route B).
-        # Set when a Telegram notification wakes the agent; cleared at turn end.
-        # None → no-op for non-Telegram turns.
+        # Retained legacy Telegram Task Card turn-local route bookkeeping.
+        # It may still be captured/cleared for compatibility, but the current
+        # intrinsic ``task_card`` producer does not consume it; channel consumers
+        # discover and project the agent-local file artifact independently.
         self._telegram_task_card_context: dict | None = None
 
         # Provider-visible tool result currently carrying the latest whole
@@ -2381,17 +2379,15 @@ class BaseAgent:
         return None
 
     def _setup_telegram_task_card(self) -> None:
-        """Capture the current Telegram inbound route for this turn.
+        """Maintain retained legacy Telegram route-capture bookkeeping.
 
-        Reads the high-attention notification payload and derives
-        ``(account, chat_id)`` from the first preview's ``message_ref``
-        compound id. This route is the only state the programmable Task Card
-        controller needs (``TaskCardController._resolve_route``) to attach its
-        watch to the same tracked resident target the automatic broadcast
-        writes to; it carries no rows, clock, or heartbeat state — the
-        automatic slot is driven entirely by ``TelegramManager``'s own event
-        tail, not by this turn-local context. Dedup guard prevents re-deriving
-        the route on every notification-sync poll for an unchanged fingerprint.
+        This compatibility hook derives ``(account, chat_id)`` from the first
+        Telegram preview's ``message_ref`` and keeps the historical turn-local
+        field stable across unchanged notification fingerprints. The retired
+        Telegram-owned controller consumed that field; the current intrinsic
+        ``task_card`` producer does not. It writes an agent-local file artifact,
+        and Telegram independently projects that artifact read-only while its
+        automatic slot remains manager-owned.
         """
         from ..notifications import is_channel_allowed
 

@@ -1,4 +1,4 @@
-"""Focused Telegram/Task Card LTP-v2 family and refresh-fuse invariants."""
+"""Focused Telegram family and intrinsic Task Card LTP-v2 invariants."""
 from __future__ import annotations
 
 import copy
@@ -14,7 +14,7 @@ from lingtai.mcp_servers.telegram._family import (
     handle_telegram,
 )
 from lingtai.mcp_servers.telegram.service import TelegramService
-from lingtai.mcp_servers.telegram.task_card.controller import TaskCardController
+from lingtai.tools.task_card import TaskCardManager, get_schema as task_card_schema
 
 from .test_task_card_controller import _FakeAgent, _OK_BODY, _write_renderer
 
@@ -113,135 +113,92 @@ def test_taskcard_refresh_setting_positive_value_round_trips(tmp_path):
     assert json.loads(path.read_text())["max_refreshes"] == 4
 
 
+def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
+    schema = task_card_schema()
+    names = schema["properties"]["action"]["enum"]
+    branches = schema["properties"]["input"]["oneOf"]
+
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+    assert schema["additionalProperties"] is False
+    assert names == ["start", "inspect", "retry", "stop", "manual"]
+    assert len(schema["allOf"]) == len(names) == len(branches)
+    for action, branch, condition in zip(names, branches, schema["allOf"]):
+        assert branch["title"] == f"{action} input"
+        assert condition["if"]["properties"]["action"]["const"] == action
+
+
 def _start_with_ceiling(agent: _FakeAgent, ceiling: int, *, requested=None):
-    controller = TaskCardController(agent, max_refreshes_getter=lambda: ceiling)
+    manager = TaskCardManager(agent)
     args = {
         "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
+        "input": {
+            "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
+            "interval_s": 3600,
+            "max_refreshes": ceiling if requested is None else requested,
+        },
+        "reasoning": "start a task card",
     }
-    if requested is not None:
-        args["max_refreshes"] = requested
-    return controller, controller.handle(args)
+    return manager, manager.handle(args)
 
 
-def test_controller_defensively_caps_malformed_host_ceiling_at_1000(tmp_path):
+def test_intrinsic_start_caps_requested_refresh_limit_at_1000(tmp_path):
     agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 1001)
-    assert start["max_refreshes"] == 1000
-    controller.handle({"action": "stop", "watch_id": start["watch_id"]})
+    manager = TaskCardManager(agent)
+    result = manager.handle(
+        {
+            "action": "start",
+            "input": {
+                "renderer_path": _write_renderer(tmp_path, _OK_BODY),
+                "interval_s": 3600,
+                "max_refreshes": 5000,
+            },
+            "reasoning": "cap the requested ceiling",
+        }
+    )
+    assert result["max_refreshes"] == 1000
+    manager.handle({"action": "stop", "input": {"watch_id": result["watch_id"]}, "reasoning": "cleanup"})
 
 
-@pytest.mark.parametrize("mode", ["success", "renderer_failure", "backend_failure"])
-def test_refresh_count_ceiling_counts_later_attempts_and_emits_safe_limit_once(
-    mode, tmp_path
-):
+@pytest.mark.parametrize("requested", [0, -1, True, "2"])
+def test_intrinsic_start_rejects_invalid_refresh_limits(requested, tmp_path):
     agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 2)
-    assert start["refreshes_used"] == 0
-    assert start["max_refreshes"] == 2
-    assert start["refreshes_remaining"] == 2
-    watch = controller._watches[start["watch_id"]]
-    renderer = Path(watch.renderer_path)
-    if mode == "renderer_failure":
-        renderer.write_text("import sys; sys.exit(1)")
-    elif mode == "backend_failure":
-        agent._client.fail = True
+    manager = TaskCardManager(agent)
+    result = manager.handle(
+        {
+            "action": "start",
+            "input": {
+                "renderer_path": _write_renderer(tmp_path, _OK_BODY),
+                "max_refreshes": requested,
+            },
+            "reasoning": "reject malformed max_refreshes",
+        }
+    )
+    assert result["status"] == "failed"
+    assert manager._watch is None
 
-    # The initial create is excluded; two later attempts consume exactly two
-    # permits regardless of renderer/backend success or failure.
-    controller._tick(watch)
-    controller._tick(watch)
-    inspected = controller._inspect(watch)
-    assert inspected["refreshes_used"] == 2
-    assert inspected["max_refreshes"] == 2
-    assert inspected["refreshes_remaining"] == 0
-    assert inspected["stop_reason"] == "max_refreshes"
-    assert inspected["state"] in {"stopped", "stop_failed"}
 
-    limit_wakes = [w for w in agent.wakes if w["source"] == "task_card.limit"]
+@pytest.mark.parametrize("body", [_OK_BODY, "import sys; sys.exit(1)"])
+def test_intrinsic_refresh_limit_counts_later_attempts_and_notifies_once(body, tmp_path):
+    agent = _FakeAgent(tmp_path)
+    manager, start = _start_with_ceiling(agent, 1)
+    watch = manager._watch
+    assert watch is not None
+    Path(watch.renderer_path).write_text(body, encoding="utf-8")
+
+    manager._tick(watch)
+
+    assert watch.refreshes_used == 1
+    assert watch.stop_reason == "max_refreshes"
+    assert (tmp_path / "taskcard" / "status").read_text(encoding="utf-8") == "inactive"
+    limit_wakes = [wake for wake in agent.wakes if wake["source"] == "task_card.limit"]
     assert len(limit_wakes) == 1
-    wake = limit_wakes[0]
-    assert wake["priority"] == "normal"
-    assert wake["skip_if_idempotency_key_exists"] is True
-    assert wake["idempotency_key"] == "task_card.limit:tc_1:2"
-    assert wake["extra"] == {
-        "watch_id": "tc_1",
-        "state": "stopped",
-        "reason": "max_refreshes",
-        "used": 2,
-        "max": 2,
-        "last_valid_frame_at": inspected["last_valid_frame_at"],
-    }
-    assert "renderer" not in wake["body"].lower()
-    assert str(renderer) not in wake["body"]
-    assert all(secret not in wake["body"] for secret in ("acct", "42"))
-
-    # A third attempt cannot begin and does not produce another backend call or
-    # limit wake, even when the stop/finalize path retained a retryable handle.
-    calls = len(agent._client.calls)
-    controller._tick(watch)
-    assert len(agent._client.calls) == calls
-    assert len([w for w in agent.wakes if w["source"] == "task_card.limit"]) == 1
+    assert limit_wakes[0]["idempotency_key"] == "task_card.limit:tc_1:1"
+    manager._tick(watch)
+    assert len([wake for wake in agent.wakes if wake["source"] == "task_card.limit"]) == 1
 
 
-@pytest.mark.parametrize("mode", ["renderer_failure", "backend_failure"])
-def test_terminal_failed_refresh_emits_only_limit_notification(mode, tmp_path):
-    agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 1)
-    watch = controller._watches[start["watch_id"]]
-    if mode == "renderer_failure":
-        Path(watch.renderer_path).write_text("import sys; sys.exit(1)")
-    else:
-        agent._client.fail = True
-
-    controller._tick(watch)
-
-    assert [wake["source"] for wake in agent.wakes] == ["task_card.limit"]
-    assert agent.wakes[0]["extra"]["reason"] == "max_refreshes"
-
-
-def test_start_ceiling_is_global_hard_cap_and_requested_value_only_lowers(tmp_path):
-    agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 3, requested=99)
-    assert start["max_refreshes"] == 3
-    controller.handle({"action": "stop", "watch_id": start["watch_id"]})
-    for requested in (0, -1, True, "2"):
-        fresh = _FakeAgent(tmp_path)
-        ctrl = TaskCardController(fresh, max_refreshes_getter=lambda: 3)
-        args = {"action": "start", "renderer_path": _write_renderer(tmp_path, _OK_BODY)}
-        args["max_refreshes"] = requested
-        result = ctrl.handle(args)
-        assert result["status"] == "error"
-        assert fresh._client.calls == []
-
-
-def test_limit_finalize_failure_retains_retryable_stop_state_without_restart(tmp_path):
-    agent = _FakeAgent(tmp_path)
-    controller, start = _start_with_ceiling(agent, 1)
-    watch = controller._watches[start["watch_id"]]
-    agent._client.fail = True
-    controller._tick(watch)
-    failed = controller._inspect(watch)
-    assert failed["state"] == "stop_failed"
-    assert failed["stop_reason"] == "max_refreshes"
-    assert failed["error"]["code"] == "stop_finalize_failed"
-    assert watch.stop_event.is_set()
-    assert start["watch_id"] in controller._watches
-    assert len([w for w in agent.wakes if w["source"] == "task_card.limit"]) == 1
-
-    # Recovery retries only finalize: no new renderer/update is allowed and the
-    # retained handle is removed once the safe clear is accepted.
-    calls = len(agent._client.calls)
-    agent._client.fail = False
-    result = controller.handle({"action": "retry", "watch_id": start["watch_id"]})
-    assert result["state"] == "stopped"
-    assert start["watch_id"] not in controller._watches
-    assert len(agent._client.calls) == calls + 1
-    assert agent._client.calls[-1][1]["sub_action"] == "finalize"
-
-
-def test_openai_responses_scrub_preserves_family_root_and_action_branches():
+def test_openai_responses_scrub_preserves_telegram_family_root_and_action_branches():
     from lingtai.llm.openai.adapter import _scrub_responses_schema
 
     wire = _scrub_responses_schema(copy.deepcopy(TELEGRAM_SCHEMA), is_root=True)

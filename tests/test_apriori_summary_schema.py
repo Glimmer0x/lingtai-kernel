@@ -17,12 +17,20 @@ from __future__ import annotations
 
 from lingtai.kernel.tool_result_summary import summary_requested
 from lingtai.tools.daemon import get_schema as daemon_schema
+from lingtai.tools.task_card import get_schema as task_card_schema
 
 
 def test_daemon_no_longer_advertises_the_legacy_flat_summary_option() -> None:
     """The migrated public ``daemon`` schema exposes the canonical root
     ``summarize``; the pre-migration flat ``summary`` field is gone from it."""
     schema = daemon_schema()
+
+    assert "summary" not in schema["properties"]
+    assert schema["properties"]["summarize"]["type"] == "boolean"
+
+
+def test_task_card_no_longer_advertises_the_legacy_flat_summary_option() -> None:
+    schema = task_card_schema()
 
     assert "summary" not in schema["properties"]
     assert schema["properties"]["summarize"]["type"] == "boolean"
@@ -41,4 +49,5 @@ def test_canonical_summarize_spelling_is_scoped_to_migrated_families() -> None:
     """``summarize`` is recognized only for a migrated family, so an unmigrated
     tool's own domain field named ``summarize`` is never reinterpreted."""
     assert summary_requested({"summarize": True}, "daemon") is True
+    assert summary_requested({"summarize": True}, "task_card") is True
     assert summary_requested({"summarize": True}, "some-unmigrated-tool") is False

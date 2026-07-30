@@ -1,9 +1,7 @@
 """LingTai Telegram MCP server.
 
-Exposes exactly two independent public LTP-v2 families, ``telegram`` and
-``task_card``. Telegram actions dispatch to ``TelegramManager``; the host binds
-the Telegram-owned programmable Task Card controller while the private reverse
-projection route remains unlisted. Inbound updates flow into the host agent's
+Exposes exactly one public LTP-v2 family, ``telegram``. Telegram actions
+dispatch to ``TelegramManager``. Inbound updates flow into the host agent's
 inbox via LICC.
 
 Configuration:
@@ -55,29 +53,9 @@ from .. import _config
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
-from .task_card._family import TASK_CARD_SCHEMA, handle_task_card
-from .task_card.controller import get_description as task_card_description
 from .service import TelegramService
 
 log = logging.getLogger("lingtai.mcp_servers.telegram")
-
-# Kernel-driven reverse channel for the live Telegram Task Card. The kernel
-# reverse-calls a *private tool name* that ``list_tools`` never returns. When
-# the private name arrives, the handler forces
-# ``action=_PRIVATE_TASK_CARD_ACTION`` before ``manager.handle``, so the hidden
-# route can only ever project the card.
-#
-# The public ``telegram`` name must not reach that action. Official SDK v2's
-# low-level ``Server`` validates the typed MCP request envelope but not the
-# advertised per-tool ``input_schema``, which is published and never applied —
-# so the public ``SCHEMA`` enum that used to block a guessed
-# ``_PRIVATE_TASK_CARD_ACTION`` no longer stops anything on its own. The handler
-# therefore rejects the private action on the public name explicitly.
-# BaseAgent mirrors this name literally (see ``_TASK_CARD_TOOL`` in
-# ``kernel.base_agent``); keep the two in sync.
-_PRIVATE_TASK_CARD_TOOL = "_lingtai_telegram_task_card"
-_PRIVATE_TASK_CARD_ACTION = "_task_card_update"
-
 
 _SERVER_INSTRUCTIONS = (
     "lingtai-telegram: Telegram bot client. "
@@ -261,11 +239,6 @@ def _profile_manifest(manager: TelegramManager | None) -> dict[str, Any]:
                     "send", "check", "read", "reply", "search", "delete", "edit",
                     "contacts", "add_contact", "remove_contact", "accounts", "manual",
                 ],
-            },
-            {
-                "name": "task_card",
-                "description": "Independent strict Task Card LTP-v2 family.",
-                "actions": ["start", "inspect", "retry", "stop", "manual"],
             },
         ],
         "agent_entrypoints": {
@@ -700,19 +673,12 @@ def build_manager() -> tuple[TelegramManager, Path]:
 # MCP server
 # ---------------------------------------------------------------------------
 
-def build_server(
-    manager: TelegramManager | None,
-    *,
-    task_card_handler: Any | None = None,
-) -> Server:
+def build_server(manager: TelegramManager | None) -> Server:
     """Construct the MCP server.
 
     ``manager`` is None when eager start failed; in that case every tool call
     returns an error explaining why.
 
-    ``task_card_handler`` is an optional host-bound controller seam. The raw
-    server owns the public schema/name; the Agent host may bind the independent
-    lifecycle controller without registering a second public schema.
     """
     async def _list_resources(
         _ctx: ServerRequestContext,
@@ -745,8 +711,7 @@ def build_server(
         _ctx: ServerRequestContext,
         _params: types.PaginatedRequestParams | None,
     ) -> types.ListToolsResult:
-        # Stable order is part of the raw MCP contract. The private reverse
-        # route is intentionally absent.
+        # Stable order is part of the raw MCP contract.
         return types.ListToolsResult(
             tools=[
                 types.Tool(
@@ -754,86 +719,41 @@ def build_server(
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
-                types.Tool(
-                    name="task_card",
-                    description=task_card_description(),
-                    input_schema=TASK_CARD_SCHEMA,
-                ),
             ],
         )
 
     # The SDK has already validated the typed request envelope (``params.name``
     # is a ``str``, ``params.arguments`` a ``dict | None``), but it never applies
-    # either advertised per-tool ``input_schema``. Both public families and the
-    # unlisted private task-card route therefore arrive here without per-tool
-    # argument checking, and this handler owns every routing decision (see
-    # ``_PRIVATE_TASK_CARD_TOOL`` above).
+    # the advertised per-tool ``input_schema``. The listed family therefore
+    # arrives here without per-tool argument checking, and this handler owns the
+    # routing decision.
     async def _call_tool(
         _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
         arguments = params.arguments or {}
-        if params.name == _PRIVATE_TASK_CARD_TOOL:
-            # Reverse channel. Force the private action so a caller cannot
-            # repurpose the hidden route for any public Telegram action, then
-            # dispatch through the same ``manager.handle`` path as the public
-            # families.
-            arguments = {**arguments, "action": _PRIVATE_TASK_CARD_ACTION}
-        elif params.name not in {"telegram", "task_card"}:
+        if params.name != "telegram":
             # A lookup miss is a caller-fixable parameter error (-32602), never
             # a wrapped success payload.
             raise _unknown_tool(params.name)
-        elif (
-            params.name == "telegram"
-            and arguments.get("action") == _PRIVATE_TASK_CARD_ACTION
-        ):
-            # The public family must never reach the reverse channel. v2 does
-            # not apply the advertised schema, so the enum that used to reject
-            # this is not a gate any more — this branch is.
-            return _tool_result({
-                "status": "error",
-                "error": f"unknown telegram action: {_PRIVATE_TASK_CARD_ACTION}",
-            })
 
         try:
-            if params.name == _PRIVATE_TASK_CARD_TOOL:
-                if manager is None:
+            if manager is None:
+                result = handle_telegram(None, arguments)
+                if not result:
                     result = {
                         "status": "error",
-                        "error": "Telegram manager unavailable",
+                        "error": (
+                            "Telegram manager not initialized — server boot "
+                            "failed. Check stderr for the underlying "
+                            "exception (most often missing "
+                            "LINGTAI_TELEGRAM_CONFIG or invalid bot token)."
+                        ),
                     }
-                else:
-                    result = await asyncio.to_thread(manager.handle, arguments)
-            elif params.name == "telegram":
-                if manager is None:
-                    result = handle_telegram(None, arguments)
-                    if not result:
-                        result = {
-                            "status": "error",
-                            "error": (
-                                "Telegram manager not initialized — server boot "
-                                "failed. Check stderr for the underlying "
-                                "exception (most often missing "
-                                "LINGTAI_TELEGRAM_CONFIG or invalid bot token)."
-                            ),
-                        }
-                else:
-                    result = await asyncio.to_thread(
-                        handle_telegram, manager, arguments
-                    )
-            else:  # task_card
-                if task_card_handler is not None:
-                    result = await asyncio.to_thread(task_card_handler, arguments)
-                else:
-                    result = handle_task_card(None, arguments)
-                    if not result:
-                        result = {
-                            "status": "error",
-                            "error": (
-                                "Task Card controller is host-bound and "
-                                "unavailable"
-                            ),
-                        }
+            else:
+                result = await asyncio.to_thread(
+                    handle_telegram, manager, arguments
+                )
         except Exception as e:
             # A listed family owning a domain failure keeps it as a readable
             # tool result; only lookup misses above are protocol errors.

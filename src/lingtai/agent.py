@@ -1218,7 +1218,7 @@ class Agent(BaseAgent):
         self._mcp_clients_by_tool[name] = client
 
     def _fail_closed_task_card_binding(self) -> None:
-        """Remove only a host controller bind when package ownership is not exact."""
+        """Retired Telegram-controller cleanup hook kept for refresh compatibility."""
         controller = getattr(self, "_task_card_controller", None)
         if controller is None:
             return
@@ -1304,62 +1304,12 @@ class Agent(BaseAgent):
         return deepcopy(stored) if stored is not None else None
 
     def _maybe_setup_task_card_controller(self) -> None:
-        """Bind the host controller only to one exact, collision-free raw pair.
+        """Retired hook.
 
-        The Telegram package remains the sole public schema/description owner.
-        Agent composition may replace only the ``task_card`` handler, and only
-        when both exact package families came from the same client without any
-        same-surface MCP name collision.  Every failed ownership check restores
-        ordinary raw MCP dispatch instead of leaving a prior host bind active.
-        A full refresh clears client/collision provenance, retains watch state,
-        and may rebind the same controller after a clean raw pair reconnects.
+        ``task_card`` is now owned by the intrinsic tools registry. Telegram MCP
+        connections no longer install or replace a host-bound controller here.
         """
-        clients_by_tool = getattr(self, "_mcp_clients_by_tool", {})
-        pair = {"telegram", "task_card"}
-        if pair & getattr(self, "_mcp_tool_collisions", set()):
-            Agent._fail_closed_task_card_binding(self)
-            return
-        if not pair.issubset(clients_by_tool):
-            Agent._fail_closed_task_card_binding(self)
-            return
-        if clients_by_tool["task_card"] is not clients_by_tool["telegram"]:
-            Agent._fail_closed_task_card_binding(self)
-            return
-
-        from .mcp_servers.telegram.manager import (
-            DESCRIPTION as _telegram_description,
-            SCHEMA as _telegram_schema,
-        )
-        from .mcp_servers.telegram.task_card import (
-            TaskCardController as _TaskCardController,
-            get_description as _get_task_card_description,
-            get_schema as _get_task_card_schema,
-        )
-
-        telegram_schemas = [
-            schema for schema in self._tool_schemas if schema.name == "telegram"
-        ]
-        task_card_schemas = [
-            schema for schema in self._tool_schemas if schema.name == "task_card"
-        ]
-        if not (
-            len(telegram_schemas) == 1
-            and telegram_schemas[0].description == _telegram_description
-            and telegram_schemas[0].parameters == _telegram_schema
-            and len(task_card_schemas) == 1
-            and task_card_schemas[0].description == _get_task_card_description()
-            and task_card_schemas[0].parameters == _get_task_card_schema()
-        ):
-            Agent._fail_closed_task_card_binding(self)
-            return
-
-        controller = getattr(self, "_task_card_controller", None)
-        handler = self._tool_handlers.get("task_card")
-        if controller is not None and getattr(handler, "__self__", None) is controller:
-            return
-        controller = controller or _TaskCardController(self)
-        self.add_tool("task_card", handler=controller.handle_family)
-        self._task_card_controller = controller
+        Agent._fail_closed_task_card_binding(self)
 
     def connect_mcp_http(
         self,

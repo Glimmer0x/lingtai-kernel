@@ -1,22 +1,15 @@
-"""Public ``task_card`` controller — programmable Telegram Task Card watches.
+"""Retained legacy Telegram ``task_card`` controller source.
 
-Model-facing controller for the *programmable* slot of Telegram's one tracked
-resident Task Card target (Jason #7258/#7259). Telegram never executes code: the agent
-writes a Python renderer file under its own workdir whose stdout is exactly one
-schema-valid Task Card JSON object; the controller runs it with the runtime
-interpreter under a strict timeout, validates the JSON, and forwards only
-validated data to the private ``_lingtai_telegram_task_card`` reverse channel.
-``TelegramManager`` stays the single render/compose/persistence owner (no
-competing system). Fail-loud is the kernel notification wake
-(``_enqueue_system_notification``); all model-facing copy is English-only.
+The active public ``task_card`` capability is now
+``lingtai.tools.task_card``. It runs the renderer, writes
+``<workdir>/taskcard/taskcard.md`` and ``<workdir>/taskcard/status``, and owns
+the one-watch lifecycle. Telegram reads that intrinsic artifact and projects it
+read-only into the resident programmable slot.
 
-This unit is Telegram MCP-owned: registration is gated by the Telegram reverse
-route, projection targets ``_lingtai_telegram_task_card``, and the Telegram
-manager/server/service own the resident slots, in-place edits, toggle,
-persistence, transport, and rendering destination. The controller depends only
-on the narrow :class:`~.interface.TelegramTaskCardAgent` host surface, never on
-the concrete ``Agent`` class. See the co-located ``CONTRACT.md`` for the
-interface promise and ``SKILL.md`` for the model-facing manual.
+This controller is retained historical compatibility code from the retired
+Telegram-owned reverse-channel design. Its JSON-card renderer contract,
+``_lingtai_telegram_task_card`` forwarding path, schema helpers, and setup
+function are not the current public ownership path.
 """
 
 from __future__ import annotations
@@ -44,8 +37,9 @@ def _utc_now_iso() -> str:
     """
     return datetime.now(timezone.utc).isoformat()
 
-# Private, unlisted Telegram reverse-channel tool name — identical to
-# ``base_agent._TASK_CARD_TOOL`` and ``telegram/server.py:_PRIVATE_TASK_CARD_TOOL``.
+# Retained legacy reverse-channel tool name from the retired Telegram
+# controller path. The current Telegram server no longer exposes this as the
+# public Task Card route; the intrinsic owner is ``lingtai.tools.task_card``.
 _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
 _DEFAULT_TIMEOUT_S = 10.0
 _DEFAULT_INTERVAL_S = 5.0
@@ -156,7 +150,7 @@ class _Watch:
 
 
 class TaskCardController:
-    """Public controller for programmable Task Card watches (thin Core)."""
+    """Retained historical controller for the retired Telegram-owned watch path."""
 
     def __init__(
         self,
@@ -984,15 +978,14 @@ def setup(
     *,
     controller: TaskCardController | None = None,
 ) -> TaskCardController:
-    """Register the public ``task_card`` controller tool on *agent*.
+    """Historical setup hook for the retired Telegram controller.
 
-    Telegram MCP-owned (it drives the Telegram-owned reverse channel), so it adds
-    no ``lingtai.tools`` package and no glossary obligation (``glossary_package=None``).
-    A refresh may retain an active controller while rebuilding the sealed public
-    tool surface; in that case the Composition Root supplies it for re-registration.
+    The active composition path registers ``lingtai.tools.task_card`` instead.
+    This helper is retained with the legacy source but is not called by the
+    current Telegram server/Agent ownership path.
     """
     mgr = controller if controller is not None else TaskCardController(agent)
-    # The raw Telegram MCP server owns the sole public schema/description.
-    # Composition may bind only the host-local controller handler.
+    # Retained legacy registration only; current Task Card registration is
+    # intrinsic in ``lingtai.tools.task_card``.
     agent.add_tool("task_card", handler=mgr.handle_family)
     return mgr

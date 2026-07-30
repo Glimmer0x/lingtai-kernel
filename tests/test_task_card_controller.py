@@ -1,11 +1,4 @@
-"""Unit tests for the public Telegram-owned ``task_card`` controller (Jason #7258/#7259).
-
-Covers registration, exact-one schema-valid JSON, path containment, synchronous
-initial errors (timeout/nonzero/invalid-frame), the async watch lifecycle,
-inspect/retry/stop (including the truthful, retryable failed-stop path and the
-last-valid timestamp), and the deduped fail-loud LICC error/recovery wakes. No
-real Telegram or network — the reverse channel is a fake MCP client.
-"""
+"""Focused coverage for the intrinsic declarative ``task_card`` capability."""
 
 from __future__ import annotations
 
@@ -14,45 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from lingtai.kernel.base_agent import _TASK_CARD_TOOL
-from lingtai.mcp_servers.telegram.task_card import (
-    TaskCardController,
-    get_description,
-    get_schema,
-    setup,
-)
-
-
-class _FakeClient:
-    """Records reverse calls; ``fail`` flips the backend to an error result."""
-
-    def __init__(self) -> None:
-        self.calls: list = []
-        self.fail = False
-        self.result = None
-
-    def call_tool(self, name, args, timeout=None):
-        self.calls.append((name, dict(args), timeout))
-        assert name == _TASK_CARD_TOOL
-        assert "action" not in args  # server forces the private action
-        assert args.get("channel") == "programmable"
-        assert "automatic" not in args
-        if self.fail:
-            return {"status": "error", "error": "backend down"}
-        if self.result is not None:
-            return dict(self.result)
-        return {"status": "ok", "message_id": "acct:42:100"}
+from lingtai.tools.task_card import TaskCardManager, get_description, get_schema, setup
 
 
 class _FakeAgent:
     def __init__(self, working_dir: Path) -> None:
         self._working_dir = working_dir
-        self._client = _FakeClient()
-        self._mcp_clients_by_tool = {"telegram": self._client}
-        self._telegram_task_card_context = {"account": "acct", "chat_id": 42}
         self._shutdown = threading.Event()
-        self.wakes: list = []
-        self.added_tools: list = []
+        self.wakes: list[dict] = []
+        self.added_tools: list[tuple] = []
 
     def _enqueue_system_notification(self, **kwargs):
         self.wakes.append(kwargs)
@@ -71,13 +34,13 @@ class _FakeAgent:
         self.added_tools.append((name, schema, handler, description, glossary_package))
 
 
-def _write_renderer(workdir: Path, body: str, name: str = "r.py") -> str:
+def _write_renderer(workdir: Path, body: str, name: str = "renderer.py") -> str:
     path = workdir / name
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     return str(path)
 
 
-_OK_BODY = "import json; print(json.dumps({'title': 'T', 'lines': ['a', 'b']}))"
+_OK_BODY = "print('# Task Card\\n\\n- first\\n- second')"
 
 
 @pytest.fixture
@@ -86,957 +49,220 @@ def agent(tmp_path):
 
 
 @pytest.fixture
-def controller(agent):
-    ctrl = TaskCardController(agent)
-    yield ctrl
-    ctrl.shutdown_for_agent_stop()
+def manager(agent):
+    value = TaskCardManager(agent)
+    yield value
+    value.shutdown_for_agent_stop()
 
 
-# -- registration ----------------------------------------------------------
-
-
-def test_setup_binds_handler_only(agent):
+def test_setup_registers_the_intrinsic_task_card_tool(agent):
     mgr = setup(agent)
-    assert isinstance(mgr, TaskCardController)
+    assert isinstance(mgr, TaskCardManager)
     name, schema, handler, description, glossary = agent.added_tools[0]
     assert name == "task_card"
-    assert schema is None
-    assert description == ""
-    assert glossary == "__unset__"
+    assert schema == get_schema()
+    assert description == get_description()
+    assert glossary is None
     assert callable(handler)
 
 
-def test_description_routes_to_the_telegram_manual():
-    """The public tool description must discoverably route the model to the
-    Telegram manual and onward to the co-located Task Card manual."""
+def test_description_routes_to_manual_and_file_contract():
     desc = get_description()
+    assert "taskcard/status" in desc
+    assert "taskcard/taskcard.md" in desc
     assert "manual" in desc.lower()
-    assert "refresh-count fuse" in desc
-    # It still advertises the concrete action surface.
-    for action in ("start", "inspect", "retry", "stop", "manual"):
-        assert action in desc
 
 
-def test_wiring_fails_closed_without_same_client_raw_family():
-    """The retired Agent owner never recreates a missing or foreign schema."""
-    from lingtai.agent import Agent
+def test_start_writes_body_before_active_and_reports_exact_paths(agent, manager, monkeypatch):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    order: list[str] = []
+    real_write_body = manager._write_body
+    real_write_status = manager._write_status
 
-    class _Stub:
-        def __init__(self, clients):
-            self._mcp_clients_by_tool = clients
-            self._tool_handlers: dict = {}
-            self._tool_schemas: list = []
-            self.added: list = []
+    def record_body(body: str) -> None:
+        order.append("body")
+        real_write_body(body)
 
-        def add_tool(self, name, **kwargs):
-            self.added.append((name, kwargs))
+    def record_status(value: str) -> None:
+        order.append(f"status:{value}")
+        real_write_status(value)
 
-    for clients in (
-        {},
-        {"telegram": object()},
-        {"telegram": object(), "task_card": object()},
-    ):
-        stub = _Stub(clients)
-        Agent._maybe_setup_task_card_controller(stub)
-        assert stub.added == []
-        assert not hasattr(stub, "_task_card_controller")
+    monkeypatch.setattr(manager, "_write_body", record_body)
+    monkeypatch.setattr(manager, "_write_status", record_status)
 
-
-def test_wiring_binds_handler_only_when_raw_mount_already_matches():
-    """When the generic MCP mount already registered ``task_card`` from the
-    SAME client as ``telegram``, with the exact family schema/description, the
-    composition root must swap only the handler — never re-register or replace
-    that raw schema object."""
-    from types import SimpleNamespace
-
-    from lingtai.agent import Agent
-    from lingtai.mcp_servers.telegram.manager import (
-        DESCRIPTION as telegram_description,
-        SCHEMA as telegram_schema,
-    )
-
-    same_client = object()
-
-    class _Stub:
-        def __init__(self):
-            self._mcp_clients_by_tool = {
-                "telegram": same_client, "task_card": same_client,
-            }
-            raw_schema = get_schema()
-            self._tool_handlers: dict = {"task_card": lambda args: {}}
-            self._tool_schemas: list = [
-                SimpleNamespace(
-                    name="telegram",
-                    description=telegram_description,
-                    parameters=telegram_schema,
-                    system_prompt="",
-                    glossary_package=None,
-                ),
-                SimpleNamespace(
-                    name="task_card",
-                    description=get_description(),
-                    parameters=raw_schema,
-                    system_prompt="",
-                    glossary_package=None,
-                ),
-            ]
-            self.added: list = []
-
-        def add_tool(self, name, **kwargs):
-            self.added.append(name)
-            if "handler" in kwargs:
-                self._tool_handlers[name] = kwargs["handler"]
-            if "schema" in kwargs:
-                self._tool_schemas = [s for s in self._tool_schemas if s.name != name]
-                self._tool_schemas.append(
-                    SimpleNamespace(
-                        name=name,
-                        description=kwargs.get("description", ""),
-                        parameters=kwargs["schema"],
-                        system_prompt=kwargs.get("system_prompt", ""),
-                        glossary_package=kwargs.get("glossary_package"),
-                    )
-                )
-
-    stub = _Stub()
-    raw_schema_objects = tuple(stub._tool_schemas)
-    Agent._maybe_setup_task_card_controller(stub)
-    assert stub.added == ["task_card"]
-    # The exact same schema object survives — no re-registration/replacement.
-    assert tuple(stub._tool_schemas) == raw_schema_objects
-    assert all(
-        actual is expected
-        for actual, expected in zip(stub._tool_schemas, raw_schema_objects)
-    )
-    controller = stub._task_card_controller
-    assert getattr(stub._tool_handlers["task_card"], "__self__", None) is controller
-
-    # A refresh rebind is idempotent: same controller, no further add_tool call.
-    Agent._maybe_setup_task_card_controller(stub)
-    assert stub.added == ["task_card"]
-    assert stub._task_card_controller is controller
-
-
-# -- start: happy path + projection ---------------------------------------
-
-
-def test_start_projects_first_frame_and_returns_watch(agent, controller):
-    body = _OK_BODY
-    result = controller.handle(
+    result = manager.handle(
         {
             "action": "start",
-            "renderer_path": _write_renderer(agent._working_dir, body),
-            "interval_s": 3600,
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
         }
     )
+
     assert result["status"] == "ok"
     assert result["state"] == "watching"
-    wid = result["watch_id"]
-    # First frame was projected synchronously with sub_action="create".
-    sub_actions = [c[1]["sub_action"] for c in agent._client.calls]
-    assert sub_actions == ["create"]
-    frame = agent._client.calls[0][1]["card"]
-    assert frame == {"lines": ["a", "b"], "title": "T"}
-    inspect = controller.handle({"action": "inspect", "watch_id": wid})
-    assert inspect["state"] == "watching"
-    assert inspect["last_valid_frame"] == frame
-    controller.handle({"action": "stop", "watch_id": wid})
+    assert result["status_value"] == "active"
+    assert order == ["body", "status:active"]
+    assert Path(result["status_path"]).read_text(encoding="utf-8") == "active"
+    assert Path(result["body_path"]).read_text(encoding="utf-8") == "# Task Card\n\n- first\n- second\n"
+    manager.handle({"action": "stop", "input": {"watch_id": result["watch_id"]}, "reasoning": "cleanup"})
 
 
-# -- synchronous initial errors -------------------------------------------
+def test_retry_replaces_only_the_body_and_preserves_active_status(agent, manager, monkeypatch):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    Path(renderer).write_text("print('# Updated\\n\\n- replacement')", encoding="utf-8")
+    writes: list[str] = []
+    real_write_body = manager._write_body
+    real_write_status = manager._write_status
+
+    def record_body(body: str) -> None:
+        writes.append("body")
+        real_write_body(body)
+
+    def record_status(value: str) -> None:
+        writes.append(f"status:{value}")
+        real_write_status(value)
+
+    monkeypatch.setattr(manager, "_write_body", record_body)
+    monkeypatch.setattr(manager, "_write_status", record_status)
+
+    result = manager.handle(
+        {
+            "action": "retry",
+            "input": {"watch_id": started["watch_id"]},
+            "reasoning": "refresh now",
+        }
+    )
+
+    assert result["status"] == "ok"
+    assert result["last_valid_body"] == "# Updated\n\n- replacement\n"
+    assert Path(result["status_path"]).read_text(encoding="utf-8") == "active"
+    assert Path(result["body_path"]).read_text(encoding="utf-8") == "# Updated\n\n- replacement\n"
+    assert writes == ["body"]
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})
 
 
-def test_start_rejects_path_outside_workdir(agent, controller):
-    result = controller.handle({"action": "start", "renderer_path": "../../etc/passwd"})
-    assert result["status"] == "error"
+def test_stop_writes_inactive_before_removing_the_watch(agent, manager, monkeypatch):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    writes: list[str] = []
+    real_write_status = manager._write_status
+
+    def record_status(value: str) -> None:
+        writes.append(value)
+        real_write_status(value)
+
+    monkeypatch.setattr(manager, "_write_status", record_status)
+    result = manager.handle(
+        {
+            "action": "stop",
+            "input": {"watch_id": started["watch_id"]},
+            "reasoning": "deactivate",
+        }
+    )
+
+    assert result["status"] == "ok"
+    assert result["state"] == "stopped"
+    assert result["status_value"] == "inactive"
+    assert Path(result["status_path"]).read_text(encoding="utf-8") == "inactive"
+    assert writes == ["inactive"]
+
+
+def test_only_one_watch_may_be_active_per_agent(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "first watch",
+        }
+    )
+    blocked = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "second watch",
+        }
+    )
+
+    assert started["status"] == "ok"
+    assert blocked["status"] == "failed"
+    assert "only one Task Card watch" in blocked["message"]
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})
+
+
+def test_start_rejects_renderer_path_outside_workdir(agent, manager):
+    result = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": "../../etc/passwd"},
+            "reasoning": "probe path escape",
+        }
+    )
+    assert result["status"] == "failed"
     assert "working directory" in result["message"]
-    assert agent._client.calls == []  # nothing projected
 
 
 @pytest.mark.parametrize(
-    "body,kwargs,name",
+    "body,kwargs",
     [
-        ("import json; print('{}\\n{}')", {}, "two.py"),  # multi-object
-        ("print('[1,2,3]')", {}, "arr.py"),  # non-object
-        ("import json; print(json.dumps({'lines': [1]}))", {}, "badlines.py"),
-        ("pass", {}, "empty.py"),  # empty stdout
-        ("import sys; sys.exit(3)", {}, "boom.py"),  # nonzero exit
-        ("import time; time.sleep(5)", {"timeout_s": 0.3}, "slow.py"),  # timeout
+        ("pass", {}),
+        ("import sys; sys.exit(3)", {}),
+        ("import time; time.sleep(5)", {"timeout_s": 0.2}),
     ],
 )
-def test_start_synchronous_frame_errors_create_no_watch(
-    agent, controller, body, kwargs, name
-):
-    args = {
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, body, name),
-    }
-    args.update(kwargs)
-    assert controller.handle(args)["status"] == "error"
-    assert controller._watches == {}  # no bogus watch handle survives
-
-
-def test_start_rejects_missing_renderer(agent, controller):
-    assert (
-        controller.handle({"action": "start", "renderer_path": "nope.py"})["status"]
-        == "error"
-    )
-
-
-def test_start_discards_watch_when_backend_rejects_first_frame(agent, controller):
-    agent._client.fail = True
-    result = controller.handle(
+def test_start_failures_create_no_watch(agent, manager, body, kwargs):
+    result = manager.handle(
         {
             "action": "start",
-            "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-            "interval_s": 3600,
+            "input": {
+                "renderer_path": _write_renderer(agent._working_dir, body, "bad.py"),
+                **kwargs,
+            },
+            "reasoning": "probe failure",
         }
     )
-    assert result["status"] == "error"
-    # No watch handle survives a failed first projection.
-    assert controller._watches == {}
+    assert result["status"] == "failed"
+    assert manager._watch is None
 
 
-# -- watch requires a Telegram route --------------------------------------
-
-
-def test_start_without_route_errors(tmp_path):
-    agent = _FakeAgent(tmp_path)
-    agent._telegram_task_card_context = None
-    controller = TaskCardController(agent)
-    result = controller.handle(
-        {"action": "start", "renderer_path": _write_renderer(tmp_path, _OK_BODY)}
-    )
-    assert result["status"] == "error"
-
-
-
-
-def test_project_surfaces_partial_telegram_failure(agent, controller):
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    watch = controller._watches[start["watch_id"]]
-    agent._client.result = {
-        "status": "ok",
-        "message_id": "acct:42:101",
-        "resident_persist_failed": True,
-    }
-
-    result = controller._project(watch, "update", {"title": "T"})
-
-    # The validated, route-matching new id is surfaced so ``_start`` can keep the
-    # partial watch handle addressable (initial-partial correction).
-    assert result == {
-        "status": "error",
-        "partial": True,
-        "resident_persist_failed": True,
-        "message_id": "acct:42:101",
-    }
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": watch.watch_id})
-
-
-def test_project_rejects_impossible_stale_delete_success_payload(agent, controller):
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    watch = controller._watches[start["watch_id"]]
-    agent._client.result = {
-        "status": "ok",
-        "message_id": "acct:42:101",
-        "stale_delete_failed": True,
-    }
-
-    result = controller._project(watch, "update", {"title": "T"})
-
-    assert result == {"status": "error"}
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": watch.watch_id})
-
-
-# -- _project independent message_id validation (route + positive int) -----
-
-# The fixture route is account="acct", chat_id=42 (see _FakeAgent).
-_BAD_MESSAGE_IDS = [
-    "not-a-compound-id",  # unparseable
-    "other:42:101",       # cross account
-    "acct:99:101",        # cross chat
-    "acct:42:0",          # zero terminal
-    "acct:42:-5",         # negative terminal
-    "acct:42:abc",        # non-int terminal
-    "acct:42",            # too few parts
-    "acct:42:101:extra",  # (rsplit keeps 'acct:42' as account -> account mismatch)
-    "",                   # empty
-    123,                  # non-string
-    None,                 # missing
-]
-
-
-@pytest.mark.parametrize("bad_id", _BAD_MESSAGE_IDS)
-def test_project_rejects_malformed_or_cross_route_partial_id(agent, controller, bad_id):
-    """A ``resident_persist_failed`` partial REQUIRES a validated route-matching
-    positive-int id; a malformed/cross-route/absent id is a plain error, never a
-    partial (an unknown card is never adopted)."""
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    watch = controller._watches[start["watch_id"]]
-    agent._client.result = {
-        "status": "ok",
-        "message_id": bad_id,
-        "resident_persist_failed": True,
-    }
-    assert controller._project(watch, "update", {"title": "T"}) == {"status": "error"}
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": watch.watch_id})
-
-
-# A clean ``ok`` legitimately omits the id (suppressed/no-op), so ``None`` is not a
-# malformed clean id — only a PRESENT id must be route-validated.
-_BAD_PRESENT_MESSAGE_IDS = [i for i in _BAD_MESSAGE_IDS if i is not None]
-
-
-@pytest.mark.parametrize("bad_id", _BAD_PRESENT_MESSAGE_IDS)
-def test_project_rejects_malformed_or_cross_route_clean_id(agent, controller, bad_id):
-    """A clean ``ok`` that carries a message_id must also be route-validated
-    (defense in depth); a cross-route/malformed present clean id becomes an error."""
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    watch = controller._watches[start["watch_id"]]
-    agent._client.result = {"status": "ok", "message_id": bad_id}
-    assert controller._project(watch, "update", {"title": "T"}) == {"status": "error"}
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": watch.watch_id})
-
-
-def test_project_suppressed_ok_without_id_is_accepted(agent, controller):
-    """A suppressed/no-op ``ok`` legitimately carries no message_id and stays ok."""
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    watch = controller._watches[start["watch_id"]]
-    agent._client.result = {"status": "ok", "suppressed": True, "taskcard": False}
-    assert controller._project(watch, "update", {"title": "T"}) == {"status": "ok"}
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": watch.watch_id})
-
-
-# -- initial successful-partial keeps the watch handle (Blocker 2) ----------
-
-
-def test_start_initial_persistence_partial_keeps_watch_and_stops(agent, controller):
-    """A validated-new-id persistence failure on the FIRST frame keeps the watch
-    addressable (does not collapse to generic rejection): the card was sent and is
-    visible, the partial is observable, the accepted frame/timestamp are committed,
-    and ``stop`` finalizes it without rerendering or losing the handle."""
-    agent._client.result = {
-        "status": "ok",
-        "message_id": "acct:42:101",  # route-matching, positive terminal
-        "resident_persist_failed": True,
-    }
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    # Documented initial-partial shape: a started watch (status ok) with explicit
-    # partial flags, the validated id, a watch_id handle, and truthful error state.
-    assert start["status"] == "ok"
-    assert start["partial"] is True
-    assert start["resident_persist_failed"] is True
-    assert start["message_id"] == "acct:42:101"
-    assert start["state"] == "error"
-    assert start["error"]["code"] == "resident_persist_failed"
-    assert start["error"]["retryable"] is True
-    wid = start["watch_id"]
-    assert wid in controller._watches  # handle retained, not popped
-
-    # inspect: truthful retryable error + committed accepted frame/timestamp.
-    inspect = controller.handle({"action": "inspect", "watch_id": wid})
-    assert inspect["state"] == "error"
-    assert inspect["error"]["code"] == "resident_persist_failed"
-    assert inspect["last_valid_frame"] == {"lines": ["a", "b"], "title": "T"}
-    assert inspect["last_valid_frame_at"]
-    # A fail-loud wake surfaced the durability gap.
-    assert any(w["extra"].get("code") == "resident_persist_failed" for w in agent.wakes)
-
-    # stop finalizes and removes the handle without rerendering.
-    agent._client.result = None  # later projections are clean ok
-    stop = controller.handle({"action": "stop", "watch_id": wid})
-    assert stop["status"] == "ok"
-    assert stop["state"] == "stopped"
-    assert wid not in controller._watches
-    assert agent._client.calls[-1][1]["sub_action"] == "finalize"
-
-
-def test_start_partial_error_clears_only_on_accepted_recovery(agent, controller):
-    """The initial persistence error is retryable and clears only after a real
-    accepted projection (an ok result), never on a failing one."""
-    agent._client.result = {
-        "status": "ok",
-        "message_id": "acct:42:101",
-        "resident_persist_failed": True,
-    }
-    start = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    wid = start["watch_id"]
-    watch = controller._watches[wid]
-
-    # A failing projection does NOT clear the error.
-    agent._client.fail = True
-    controller._tick(watch)
-    assert controller.handle({"action": "inspect", "watch_id": wid})["state"] == "error"
-
-    # A genuinely accepted projection clears it -> watching.
-    agent._client.fail = False
-    agent._client.result = None  # clean ok with a route-matching default id
-    controller._tick(watch)
-    assert controller.handle({"action": "inspect", "watch_id": wid})["state"] == "watching"
-    controller.handle({"action": "stop", "watch_id": wid})
-
-
-def test_start_malformed_partial_id_discards_watch(agent, controller):
-    """A malformed/cross-route id on the initial partial is a HARD error (not a
-    partial): the watch is discarded and no unknown card is adopted."""
-    agent._client.result = {
-        "status": "ok",
-        "message_id": "not-a-compound-id",
-        "resident_persist_failed": True,
-    }
-    result = controller.handle({
-        "action": "start",
-        "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-        "interval_s": 3600,
-    })
-    assert result["status"] == "error"
-    assert "partial" not in result
-    assert "watch_id" not in result
-    assert controller._watches == {}
-
-
-# -- unknown action / watch -----------------------------------------------
-
-
-def test_unknown_action_and_watch(agent, controller):
-    assert controller.handle({"action": "bogus"})["status"] == "error"
-    assert (
-        controller.handle({"action": "inspect", "watch_id": "missing"})["status"]
-        == "error"
-    )
-
-
-# -- retry + fail-loud dedup + recovery -----------------------------------
-
-
-def test_tick_error_recovery_emits_deduped_wakes(agent, controller):
-    renderer = agent._working_dir / "flip.py"
-    renderer.write_text(_OK_BODY)
-    start = controller.handle(
-        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
-    )
-    wid = start["watch_id"]
-    watch = controller._watches[wid]
-    accepted_at = watch.last_valid_at  # UTC timestamp of the accepted first frame
-    assert accepted_at is not None
-
-    # Flip the renderer to a failing one and tick twice: identical failure state
-    # emits exactly one fail-loud wake (deduped by error code).
-    renderer.write_text("import sys; sys.exit(1)")
-    controller._tick(watch)
-    controller._tick(watch)
-    err_wakes = [w for w in agent.wakes if w["extra"]["state"] == "error"]
-    assert len(err_wakes) == 1
-    assert err_wakes[0]["source"] == "task_card.error"
-    assert err_wakes[0]["priority"] == "high"
-    assert err_wakes[0]["skip_if_idempotency_key_exists"] is True
-    # The fail-loud wake carries the real accepted-frame timestamp.
-    assert err_wakes[0]["extra"]["last_valid_frame_at"] == accepted_at
-    assert controller.handle({"action": "inspect", "watch_id": wid})["state"] == "error"
-
-    # Recover: a good frame clears the error and emits one recovery wake.
-    renderer.write_text(_OK_BODY)
-    controller._tick(watch)
-    rec_wakes = [w for w in agent.wakes if w["extra"]["state"] == "recovered"]
-    assert len(rec_wakes) == 1
-    assert (
-        controller.handle({"action": "inspect", "watch_id": wid})["state"] == "watching"
-    )
-    controller.handle({"action": "stop", "watch_id": wid})
-
-
-def test_same_code_refails_after_recovery_emits_new_durable_wake(agent, controller):
-    """Back-to-back identical failures dedupe within one episode, but the SAME
-    code re-failing AFTER a recovery must emit a fresh durable wake with a
-    distinct (per-episode) idempotency key — never suppressed by the prior
-    episode's still-stored notification."""
-    renderer = agent._working_dir / "flip.py"
-    renderer.write_text(_OK_BODY)
-    wid = controller.handle(
-        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
-    )["watch_id"]
-    watch = controller._watches[wid]
-
-    renderer.write_text("import sys; sys.exit(1)")
-    controller._tick(watch)  # episode 1: error
-    controller._tick(watch)  # identical -> deduped within the episode
-    renderer.write_text(_OK_BODY)
-    controller._tick(watch)  # recovery
-    renderer.write_text("import sys; sys.exit(1)")
-    controller._tick(watch)  # episode 2: SAME code, must re-fire
-
-    err_wakes = [w for w in agent.wakes if w["extra"]["state"] == "error"]
-    assert len(err_wakes) == 2
-    assert {w["extra"]["code"] for w in err_wakes} == {"renderer_nonzero_exit"}
-    keys = [w["idempotency_key"] for w in err_wakes]
-    assert keys[0] != keys[1]  # distinct per-episode idempotency keys
-    assert any(w["extra"]["state"] == "recovered" for w in agent.wakes)
-    controller.handle({"action": "stop", "watch_id": wid})
-
-
-def test_join_timeout_is_truthful_against_reverse_call_timeout():
-    """Stop/shutdown must be able to actually join a tick blocked in the reverse
-    call, so the join budget must exceed the reverse-call timeout."""
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    assert tc._JOIN_TIMEOUT_S > tc._REVERSE_CALL_TIMEOUT_S
-
-
-def test_retry_action_reruns_now(agent, controller):
-    renderer = agent._working_dir / "retry.py"
-    renderer.write_text("import sys; sys.exit(1)")
-    # Seed a watch by driving start with a good frame, then break the renderer.
-    renderer.write_text(_OK_BODY)
-    wid = controller.handle(
-        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
-    )["watch_id"]
-    renderer.write_text("import sys; sys.exit(1)")
-    out = controller.handle({"action": "retry", "watch_id": wid})
-    assert out["state"] == "error"
-    controller.handle({"action": "stop", "watch_id": wid})
-
-
-def test_backend_reason_reaches_retry_inspect_and_notification(agent, controller):
-    renderer = agent._working_dir / "backend.py"
-    renderer.write_text(_OK_BODY)
-    wid = controller.handle(
-        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
-    )["watch_id"]
-
-    reason = "Forbidden: bot was blocked by the user"
-    agent._client.result = {"status": "error", "error": reason}
-    retry = controller.handle({"action": "retry", "watch_id": wid})
-    assert retry["state"] == "error"
-    assert retry["error"]["code"] == "backend_edit_failed"
-    assert retry["error"]["backend_error"] == reason
-    assert reason in retry["error"]["message"]
-
-    inspect = controller.handle({"action": "inspect", "watch_id": wid})
-    assert inspect["error"]["backend_error"] == reason
-    wake = [w for w in agent.wakes if w["extra"]["state"] == "error"][-1]
-    assert wake["extra"]["backend_error"] == reason
-    assert reason in wake["body"]
-
-    agent._client.result = None
-    controller.handle({"action": "stop", "watch_id": wid})
-
-
-# -- stop finalizes only the programmable slot ----------------------------
-
-
-def test_stop_finalizes_and_forgets_watch(agent, controller):
-    wid = controller.handle(
+def test_renderer_failure_preserves_last_valid_body_and_emits_error_then_recovery(agent, manager):
+    renderer = Path(_write_renderer(agent._working_dir, _OK_BODY))
+    started = manager.handle(
         {
             "action": "start",
-            "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-            "interval_s": 3600,
+            "input": {"renderer_path": str(renderer), "interval_s": 3600},
+            "reasoning": "publish a task card",
         }
-    )["watch_id"]
-    result = controller.handle({"action": "stop", "watch_id": wid})
-    assert result["state"] == "stopped"
-    assert wid not in controller._watches
-    # A finalize (card=None) cleared only the programmable slot.
-    last = agent._client.calls[-1][1]
-    assert last["sub_action"] == "finalize"
-    assert "card" not in last
-    # The watch is gone; a second stop is a clean error, not a crash.
-    assert controller.handle({"action": "stop", "watch_id": wid})["status"] == "error"
+    )
+    watch = manager._watch
+    assert watch is not None
 
-
-def test_failed_stop_is_truthful_retryable_and_retains_watch(agent, controller):
-    """A failed programmable ``finalize`` must not report ``stopped`` or drop the
-    watch — the resident may still show the frame, so ``stop`` stays retryable."""
-    wid = controller.handle(
+    renderer.write_text("import sys; sys.exit(1)", encoding="utf-8")
+    manager._tick(watch)
+    inspected = manager.handle(
         {
-            "action": "start",
-            "renderer_path": _write_renderer(agent._working_dir, _OK_BODY),
-            "interval_s": 3600,
+            "action": "inspect",
+            "input": {"watch_id": started["watch_id"]},
+            "reasoning": "inspect failure",
         }
-    )["watch_id"]
-    watch = controller._watches[wid]
-
-    # Backend rejects the finalize projection.
-    agent._client.fail = True
-    result = controller.handle({"action": "stop", "watch_id": wid})
-    assert result["status"] == "error"
-    assert result["state"] == "stop_failed"
-    assert result["error"]["code"] == "stop_finalize_failed"
-    assert result["error"]["retryable"] is True
-    assert result["error"]["backend_error"] == "backend down"
-    assert "backend down" in result["error"]["message"]
-    # The watch is retained so stop can be retried...
-    assert wid in controller._watches
-    # ...but the renderer thread is already stopped (not "watching" with a live thread).
-    assert watch.thread is None or not watch.thread.is_alive()
-    inspect = controller.handle({"action": "inspect", "watch_id": wid})
-    assert inspect["state"] == "stop_failed"
-    assert inspect["error"]["code"] == "stop_finalize_failed"
-    assert inspect["error"]["backend_error"] == "backend down"
-
-    # Retry only re-attempts finalization; on an accepted clear the watch is
-    # removed and ``stopped`` is returned.
-    agent._client.fail = False
-    retry = controller.handle({"action": "stop", "watch_id": wid})
-    assert retry["status"] == "ok"
-    assert retry["state"] == "stopped"
-    assert wid not in controller._watches
-    last = agent._client.calls[-1][1]
-    assert last["sub_action"] == "finalize"
-    assert "card" not in last
-
-
-def test_stop_with_in_flight_renderer_never_finalizes_while_alive(
-    agent, controller, monkeypatch
-):
-    """A renderer still running past the join budget must not let ``stop``
-    finalize/remove/report ``stopped``; the late frame must not project an
-    ``update``; and ``inspect`` must stay ``stop_failed`` (never fall back to a
-    non-error ``stopping``) until the thread is actually quiescent. Deterministic:
-    the join budget is shrunk and the renderer blocks on an Event (no real wait)."""
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    monkeypatch.setattr(tc, "_JOIN_TIMEOUT_S", 0.05)
-
-    # Seed a started-like watch with an accepted first frame.
-    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 0.01, 1.0, "acct", 42)
-    with watch.lock:
-        watch.last_valid_frame = {"lines": ["ok"]}
-        watch.last_valid_at = "2020-01-01T00:00:00+00:00"
-    controller._watches["tc_1"] = watch
-
-    entered = threading.Event()
-    release = threading.Event()
-
-    def _blocking_render(*_args, **_kwargs):
-        entered.set()
-        assert release.wait(5)  # blocks well past the shrunk join budget
-        return {"lines": ["LATE"]}
-
-    monkeypatch.setattr(controller, "_run_renderer", _blocking_render)
-    watch.thread = threading.Thread(
-        target=controller._tick, args=(watch,), daemon=True
     )
-    watch.thread.start()
-    assert entered.wait(2)  # the renderer is now in-flight
+    assert inspected["state"] == "error"
+    assert inspected["last_valid_body"] == "# Task Card\n\n- first\n- second\n"
+    assert any(wake["source"] == "task_card.error" for wake in agent.wakes)
 
-    calls_before = len(agent._client.calls)
-    result = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    # Truthful while the thread is alive: no finalize, no removal, no ``stopped``.
-    assert result["status"] == "error"
-    assert result["state"] == "stop_failed"
-    assert result["error"]["code"] == "stop_thread_alive"
-    assert result["error"]["retryable"] is True
-    assert "tc_1" in controller._watches
-    assert watch.thread.is_alive()
-    assert not any(
-        c[1]["sub_action"] == "finalize" for c in agent._client.calls[calls_before:]
-    )
-    assert (
-        controller.handle({"action": "inspect", "watch_id": "tc_1"})["state"]
-        == "stop_failed"
-    )
-
-    # Release the blocked renderer: it must NOT project a late ``update``, and
-    # ``inspect`` must remain ``stop_failed`` (no stop_failed -> stopping regress).
-    release.set()
-    watch.thread.join(2)
-    assert not watch.thread.is_alive()
-    subs_after_stop = [c[1]["sub_action"] for c in agent._client.calls[calls_before:]]
-    assert "update" not in subs_after_stop
-    inspect_after = controller.handle({"action": "inspect", "watch_id": "tc_1"})
-    assert inspect_after["state"] == "stop_failed"
-    # The seeded last-valid frame/timestamp and the stop error code are preserved
-    # verbatim after the dropped renderer returns (Contract's three explicit
-    # post-render claims, not inferred from "no projection" alone).
-    assert inspect_after["error"]["code"] == "stop_thread_alive"
-    assert inspect_after["last_valid_frame"] == {"lines": ["ok"]}
-    assert inspect_after["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
-
-    # A later stop retry now finds the thread quiescent, finalizes exactly once,
-    # and removes the watch.
-    retry = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    assert retry["status"] == "ok"
-    assert retry["state"] == "stopped"
-    assert "tc_1" not in controller._watches
-    assert agent._client.calls[-1][1]["sub_action"] == "finalize"
-
-
-def test_public_retry_after_failed_stop_continues_stop_only(
-    agent, controller, monkeypatch
-):
-    """A public ``retry`` after a failed stop must continue the stop path only —
-    never re-run the renderer or project a fresh ``update`` — and a later
-    successful retry finalizes once and removes the watch."""
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    # Quiescent watch (no thread) with an accepted frame, already in the failed
-    # stop state via a rejected finalize.
-    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 3600, 1.0, "acct", 42)
-    with watch.lock:
-        watch.last_valid_frame = {"lines": ["ok"]}
-    controller._watches["tc_1"] = watch
-
-    agent._client.fail = True
-    stop_result = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    assert stop_result["state"] == "stop_failed"
-    assert stop_result["error"]["code"] == "stop_finalize_failed"
-    assert "tc_1" in controller._watches
-
-    ran = {"count": 0}
-
-    def _forbidden_render(*_args, **_kwargs):
-        ran["count"] += 1
-        return {"lines": ["RESURRECTED"]}
-
-    monkeypatch.setattr(controller, "_run_renderer", _forbidden_render)
-
-    # Public ``retry`` while finalize still fails: renderer never runs, no
-    # ``update`` is projected, only ``finalize`` is retried, watch retained.
-    calls_before = len(agent._client.calls)
-    retry_failed = controller.handle({"action": "retry", "watch_id": "tc_1"})
-    assert ran["count"] == 0
-    assert retry_failed["state"] == "stop_failed"
-    subs = [c[1]["sub_action"] for c in agent._client.calls[calls_before:]]
-    assert "update" not in subs
-    assert subs == ["finalize"]
-    assert "tc_1" in controller._watches
-
-    # A later successful retry finalizes once and removes the watch — still no
-    # renderer execution.
-    agent._client.fail = False
-    retry_ok = controller.handle({"action": "retry", "watch_id": "tc_1"})
-    assert ran["count"] == 0
-    assert retry_ok["state"] == "stopped"
-    assert "tc_1" not in controller._watches
-    assert agent._client.calls[-1][1]["sub_action"] == "finalize"
-
-
-def test_late_update_after_stop_timeout_is_dropped_and_compensated(
-    agent, controller, monkeypatch
-):
-    """Post-guard/in-flight-``update`` race: an ``update`` authorized just before
-    stop blocks past the join budget (the reverse call has no total-time bound).
-    Stop returns retained ``stop_failed``/``stop_thread_alive`` with OLD
-    frame/timestamp preserved and no finalize while alive. When the update finally
-    returns, its state mutation is dropped and the live watcher thread compensates
-    by clearing the slot; ``inspect`` never regresses to ``stopping``/error-null/
-    LATE, and a later retry removes the watch without rerunning the renderer or a
-    duplicate reverse clear. Deterministic: shrunk join budget + Event-blocked
-    projection (no multi-second success path)."""
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    monkeypatch.setattr(tc, "_JOIN_TIMEOUT_S", 0.05)
-
-    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 0.01, 1.0, "acct", 42)
-    with watch.lock:
-        watch.last_valid_frame = {"lines": ["OLD"]}
-        watch.last_valid_at = "2020-01-01T00:00:00+00:00"
-    controller._watches["tc_1"] = watch
-
-    monkeypatch.setattr(
-        controller, "_run_renderer", lambda *_a, **_k: {"lines": ["LATE"]}
-    )
-
-    projected: list[str] = []
-    update_entered = threading.Event()
-    update_release = threading.Event()
-
-    def _fake_project(_w, sub_action, _frame):
-        projected.append(sub_action)
-        if sub_action == "update":
-            update_entered.set()
-            assert update_release.wait(5)  # blocks AFTER the pre-projection guard
-            return {"status": "ok"}  # the late update lands
-        return {"status": "ok"}
-
-    monkeypatch.setattr(controller, "_project", _fake_project)
-
-    watch.thread = threading.Thread(target=controller._tick, args=(watch,), daemon=True)
-    watch.thread.start()
-    assert update_entered.wait(2)  # the update projection is in flight
-
-    # Stop times out with the update in flight: retained stop_failed, no finalize.
-    result = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    assert result["state"] == "stop_failed"
-    assert result["error"]["code"] == "stop_thread_alive"
-    assert "tc_1" in controller._watches
-    assert watch.thread.is_alive()
-    assert "finalize" not in projected
-    before = controller.handle({"action": "inspect", "watch_id": "tc_1"})
-    assert before["last_valid_frame"] == {"lines": ["OLD"]}
-    assert before["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
-    assert before["error"]["code"] == "stop_thread_alive"
-
-    # Release the late update: it lands, the tick drops its state mutation, and the
-    # live thread compensates by finalizing (clearing the late frame).
-    update_release.set()
-    watch.thread.join(2)
-    assert not watch.thread.is_alive()
-    assert projected == ["update", "finalize"]  # exactly one compensating clear
-    after = controller.handle({"action": "inspect", "watch_id": "tc_1"})
-    assert after["state"] == "stop_failed"  # never stopping/error-null
-    assert after["error"]["code"] == "stop_thread_alive"
-    assert after["last_valid_frame"] == {"lines": ["OLD"]}  # never overwritten to LATE
-    assert after["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
-
-    # A later retry removes the watch without rerunning the renderer or a second
-    # reverse clear (the slot was already compensated).
-    retry = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    assert retry["state"] == "stopped"
-    assert "tc_1" not in controller._watches
-    assert projected == ["update", "finalize"]  # no duplicate finalize on retry
-
-
-def test_late_update_compensating_finalize_failure_is_retryable(
-    agent, controller, monkeypatch
-):
-    """Same post-guard interleaving, but the compensating finalize fails/unknown:
-    the watch stays a precise retryable ``stop_finalize_failed`` with OLD state
-    preserved, and a later retry (clear now accepted) removes it truthfully
-    without rerunning the renderer."""
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    monkeypatch.setattr(tc, "_JOIN_TIMEOUT_S", 0.05)
-
-    watch = tc._Watch("tc_1", agent._working_dir / "r.py", 0.01, 1.0, "acct", 42)
-    with watch.lock:
-        watch.last_valid_frame = {"lines": ["OLD"]}
-        watch.last_valid_at = "2020-01-01T00:00:00+00:00"
-    controller._watches["tc_1"] = watch
-
-    ran = {"count": 0}
-
-    def _render(*_a, **_k):
-        ran["count"] += 1
-        return {"lines": ["LATE"]}
-
-    monkeypatch.setattr(controller, "_run_renderer", _render)
-
-    projected: list[str] = []
-    update_entered = threading.Event()
-    update_release = threading.Event()
-    finalize_fail = {"on": True}
-
-    def _fake_project(_w, sub_action, _frame):
-        projected.append(sub_action)
-        if sub_action == "update":
-            update_entered.set()
-            assert update_release.wait(5)
-            return {"status": "ok"}
-        if sub_action == "finalize" and finalize_fail["on"]:
-            return {"status": "error"}  # compensating clear rejected/unknown
-        return {"status": "ok"}
-
-    monkeypatch.setattr(controller, "_project", _fake_project)
-
-    watch.thread = threading.Thread(target=controller._tick, args=(watch,), daemon=True)
-    watch.thread.start()
-    assert update_entered.wait(2)
-    ran_after_render = ran["count"]
-
-    assert (
-        controller.handle({"action": "stop", "watch_id": "tc_1"})["state"]
-        == "stop_failed"
-    )
-
-    # Release: the compensating finalize is rejected -> precise retryable state.
-    update_release.set()
-    watch.thread.join(2)
-    assert not watch.thread.is_alive()
-    failed = controller.handle({"action": "inspect", "watch_id": "tc_1"})
-    assert failed["state"] == "stop_failed"
-    assert failed["error"]["code"] == "stop_finalize_failed"
-    assert failed["last_valid_frame"] == {"lines": ["OLD"]}
-    assert failed["last_valid_frame_at"] == "2020-01-01T00:00:00+00:00"
-    assert "tc_1" in controller._watches
-
-    # A later retry (clear now accepted) finalizes and removes — no renderer rerun.
-    finalize_fail["on"] = False
-    retry = controller.handle({"action": "stop", "watch_id": "tc_1"})
-    assert retry["state"] == "stopped"
-    assert "tc_1" not in controller._watches
-    assert ran["count"] == ran_after_render  # renderer never rerun after stop
-
-
-def test_last_valid_frame_at_recorded_preserved_and_updated(agent, controller, monkeypatch):
-    """``last_valid_frame_at`` is a real UTC ISO-8601 timestamp: set on the first
-    accepted frame, unchanged across failures, and updated on recovery."""
-    from datetime import datetime
-
-    from lingtai.mcp_servers.telegram.task_card import controller as tc
-
-    stamps = [
-        "2020-01-01T00:00:00+00:00",
-        "2020-01-01T00:00:05+00:00",
-        "2020-01-01T00:00:09+00:00",
-    ]
-    box = {"i": 0}
-
-    def _fake_now() -> str:
-        value = stamps[min(box["i"], len(stamps) - 1)]
-        box["i"] += 1
-        return value
-
-    monkeypatch.setattr(tc, "_utc_now_iso", _fake_now)
-
-    renderer = agent._working_dir / "ts.py"
-    renderer.write_text(_OK_BODY)
-    wid = controller.handle(
-        {"action": "start", "renderer_path": str(renderer), "interval_s": 3600}
-    )["watch_id"]
-    watch = controller._watches[wid]
-
-    # Initial accepted frame stamped, and it is a real UTC ISO-8601 value.
-    first = controller.handle({"action": "inspect", "watch_id": wid})["last_valid_frame_at"]
-    assert first == "2020-01-01T00:00:00+00:00"
-    assert datetime.fromisoformat(first).tzinfo is not None
-
-    # A failed renderer attempt must NOT change it (and stamps nothing).
-    renderer.write_text("import sys; sys.exit(1)")
-    controller._tick(watch)
-    after_fail = controller.handle({"action": "inspect", "watch_id": wid})
-    assert after_fail["state"] == "error"
-    assert after_fail["last_valid_frame_at"] == first
-
-    # A recovered frame updates it to a strictly later stamp.
-    renderer.write_text(_OK_BODY)
-    controller._tick(watch)
-    after_recovery = controller.handle({"action": "inspect", "watch_id": wid})
-    assert after_recovery["state"] == "watching"
-    assert after_recovery["last_valid_frame_at"] == "2020-01-01T00:00:05+00:00"
-
-    controller.handle({"action": "stop", "watch_id": wid})
+    renderer.write_text("print('# Recovered')", encoding="utf-8")
+    manager._tick(watch)
+    assert any(wake["source"] == "task_card.error" and wake["extra"]["state"] == "recovered" for wake in agent.wakes)
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})

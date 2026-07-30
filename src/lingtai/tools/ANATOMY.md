@@ -7,6 +7,8 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/task_card/ANATOMY.md
+  - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/vision/ANATOMY.md
@@ -59,6 +61,9 @@ capability names and lazy adapters.
   (`src/lingtai/tools/registry.py:39-344`).
 - `web_search/` — public `web` composition owner for search, browse, settings,
   and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
+- `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
+  public `task_card` family, one agent-local artifact under `taskcard/`, and
+  no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
 - `file/` — sole owner of the public `file` capability: the composed schema,
   the envelope dispatch, and all five operation implementations in
   `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`
@@ -148,6 +153,11 @@ migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
 `grep` are unknown capability names that fail loudly. Capability groups no
 longer exist at all — `file` was `_GROUPS`' only entry, so the map,
 `expand_groups`, and every consumer were deleted rather than left empty.
+
+The public `task_card` row imports `lingtai.tools.task_card` lazily and owns
+the artifact writer entirely within `lingtai.tools`. It writes only
+`taskcard/status` and `taskcard/taskcard.md`; consumer-specific reading,
+polling, and projection stay outside this package.
 
 ## Composition
 

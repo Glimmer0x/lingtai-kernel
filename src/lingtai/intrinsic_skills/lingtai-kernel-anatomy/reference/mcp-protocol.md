@@ -119,9 +119,10 @@ All seven bundled servers are low-level `Server` instances over stdio:
   Pydantic-validates the registered request params before your handler runs, so
   `params.name` is a `str` and `params.arguments` is a `dict | None`. It never
   applies the `input_schema`/`output_schema` a tool advertises. Handlers that
-  need per-tool argument validation do it themselves — this is why Telegram
-  gates its hidden task-card route and its `chat_id` shape in the handler and
-  manager rather than relying on the published schema.
+  need per-tool argument validation do it themselves. Telegram has no hidden
+  `task_card` route; the intrinsic capability owns that tool-specific contract.
+  Telegram's public handler still validates its `chat_id` shape in the handler
+  and manager rather than relying on the published schema.
 * A provider/domain failure stays a model-readable
   `CallToolResult(is_error=True)`. A **lookup** failure is different: the
   2026-07-28 schema classifies an unknown tool name or unknown resource URI as

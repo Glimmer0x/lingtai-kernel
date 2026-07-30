@@ -6,12 +6,10 @@ import logging
 import threading
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from lingtai.kernel.base_agent import _TASK_CARD_TOOL
 from lingtai.mcp_servers.telegram.account import DEFAULT_COMMANDS
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from lingtai.mcp_servers.telegram.service import TelegramService
@@ -436,11 +434,6 @@ def test_manager_treats_suppression_as_success_without_transport(
 def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reenable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from lingtai.mcp_servers.telegram.task_card.controller import (
-        TaskCardController,
-        _Watch,
-    )
-
     service = _service(tmp_path, "main")
     manager = _manager(tmp_path, service)
     account = service.get_account("main")
@@ -450,33 +443,25 @@ def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reen
         "send_message",
         lambda _chat_id, text, **_kwargs: sends.append(text) or {"message_id": 91},
     )
-
-    class Client:
-        def call_tool(self, tool_name, args, timeout=None):
-            assert tool_name == _TASK_CARD_TOOL
-            return manager.handle({**args, "action": "_task_card_update"})
-
-    events: list[dict[str, Any]] = []
-    agent = SimpleNamespace(
-        _working_dir=tmp_path,
-        _mcp_clients_by_tool={"telegram": Client()},
-        _enqueue_system_notification=lambda **event: events.append(event),
+    monkeypatch.setattr(
+        account,
+        "edit_message",
+        lambda _chat_id, _message_id, text, **_kwargs: sends.append(text) or {"ok": True},
     )
-    controller = TaskCardController(agent)
-    watch = _Watch("tc_1", tmp_path / "renderer.py", 5.0, 1.0, "main", 123)
-    frames = iter(({"lines": ["hidden latest"]}, {"lines": ["visible latest"]}))
-    monkeypatch.setattr(controller, "_run_renderer", lambda *_args: next(frames))
+    account.set_task_card(123, "main:123:91")
 
+    taskcard_dir = tmp_path / "taskcard"
+    taskcard_dir.mkdir()
+    (taskcard_dir / "status").write_text("active", encoding="utf-8")
     service.set_taskcard_enabled(False)
-    controller._tick(watch)
-    assert watch.last_valid_frame == {"lines": ["hidden latest"]}
-    assert watch.error is None and events == [] and sends == []
+    (taskcard_dir / "taskcard.md").write_text("hidden latest", encoding="utf-8")
+    manager._broadcast_programmable_task_card_file()
+    assert sends == []
 
     service.set_taskcard_enabled(True)
-    controller._tick(watch)
-    assert watch.last_valid_frame == {"lines": ["visible latest"]}
-    assert watch.error is None and events == []
-    assert len(sends) == 1 and "visible latest" in sends[0]
+    (taskcard_dir / "taskcard.md").write_text("visible latest", encoding="utf-8")
+    manager._broadcast_programmable_task_card_file()
+    assert any("visible latest" in text for text in sends)
 
 
 def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(

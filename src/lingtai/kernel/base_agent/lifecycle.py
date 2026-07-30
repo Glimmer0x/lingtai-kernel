@@ -268,13 +268,19 @@ def _stop(agent, timeout: float = 5.0) -> None:
     if inbox is not None:
         from ..message import _make_message, MSG_TC_WAKE
         inbox.put(_make_message(MSG_TC_WAKE, "system", ""))
-    # Stop any programmable Task Card watcher threads deterministically. The
-    # loops also observe ``_shutdown`` (daemon threads), but this joins and
-    # clears them without any filesystem deletion (Jason #7258/#7259).
+    # Stop any Task Card watcher threads deterministically. The loops also
+    # observe ``_shutdown`` (daemon threads), but this joins and clears them
+    # without any filesystem deletion.
     _task_card_controller = getattr(agent, "_task_card_controller", None)
     if _task_card_controller is not None:
         try:
             _task_card_controller.shutdown_for_agent_stop(reason="agent_stop")
+        except Exception:
+            pass
+    _task_card_manager = getattr(agent, "_task_card_manager", None)
+    if _task_card_manager is not None and _task_card_manager is not _task_card_controller:
+        try:
+            _task_card_manager.shutdown_for_agent_stop(reason="agent_stop")
         except Exception:
             pass
     if agent._thread:
@@ -572,8 +578,9 @@ def _heartbeat_loop(agent) -> None:
         # the notification filesystem design rationale.
         try:
             agent._sync_notifications()
-            # After sync, if a Telegram notification just arrived, set up
-            # the automatic Task Card context for this turn.
+            # Maintain retained legacy Telegram route-capture bookkeeping after
+            # notification sync. The current intrinsic ``task_card`` producer
+            # does not consume this context; consumers project its file artifact.
             agent._setup_telegram_task_card()
         except Exception as notif_err:
             from ..logging import get_logger
