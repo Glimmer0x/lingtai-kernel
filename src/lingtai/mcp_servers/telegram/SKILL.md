@@ -301,11 +301,14 @@ chat-history cardinality. Normative source:
   intrinsic artifact while preserving its body; `remove` is terminal cleanup
   that retires the watch and deletes the body. One intrinsic-owned watch may be
   active per agent.
-- Telegram is only a read-only resident projector for that artifact. Its poller
-  reads `taskcard/status` and `taskcard/taskcard.md`; exact `active` plus a
-  nonempty body may project under `— WATCH —`. Missing, invalid, inactive, or
-  unchanged producer state is a no-op at the Telegram boundary. The automatic
-  event-journal slot remains independent and is preserved.
+- Telegram owns the resident message, automatic/mechanical event-journal slot,
+  composition, persistence, and message updates. It reads
+  `taskcard/status` and `taskcard/taskcard.md` only for the agent-owned
+  programmable frame: exact `active` plus a nonempty body includes or updates
+  `— WATCH —`; exact `inactive` idempotently excludes only that programmable
+  frame while preserving the resident, automatic content, and local body.
+  Missing/unreadable/other status, active with a missing/blank body, or
+  unchanged bytes remain a no-op at the Telegram boundary.
 - Skipping unchanged bytes is not a rate-limit exemption. Every time your
   renderer's output actually changes, Telegram performs a real message
   edit/send, subject to the same Bot API flood-control limits as any other

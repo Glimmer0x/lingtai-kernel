@@ -130,17 +130,15 @@ def test_projection_is_diff_only_against_last_programmable_frame(tmp_path):
     assert manager._task_card_channels["mybot:55"]["programmable"] == "same body\n"
 
 
-def test_inactive_or_invalid_state_is_noop_and_preserves_last_good_projection(tmp_path):
+def test_active_with_blank_body_is_noop_and_preserves_last_good_projection(tmp_path):
+    """Only exact ``inactive`` clears the programmable frame; any other
+    non-active-with-valid-body state (blank body while still ``active``, here)
+    stays the unchanged preserve-last-good no-op."""
     manager, acct, _service = _manager(tmp_path)
     _auto(manager)
     _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
     manager._broadcast_programmable_task_card_file()
     calls_after_good = len(acct.calls)
-
-    _write_intrinsic_taskcard(tmp_path, status="inactive", body="v2\n")
-    manager._broadcast_programmable_task_card_file()
-    assert len(acct.calls) == calls_after_good
-    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
 
     _write_intrinsic_taskcard(tmp_path, status="active", body="   ")
     manager._broadcast_programmable_task_card_file()
@@ -186,44 +184,71 @@ def test_existing_automatic_channel_behavior_is_preserved_by_programmable_file_u
     assert automatic_only != _current(acct)
 
 
-def test_inactive_stops_rendering_without_deleting_or_hiding_existing_resident(tmp_path):
-    """`stop`/`remove`-style inactive must gate the render loop only.
+def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic(tmp_path):
+    """`stop`/`remove`-style inactive excludes only the programmable frame.
 
-    The existing Telegram message and its tracked slot must survive untouched,
-    even once the local body file itself is later deleted (as `task_card.remove`
-    does) while status stays `inactive`.
+    Telegram owns the resident message and its automatic content: inactive
+    must update the same resident (never delete/send-new), drop the
+    programmable ``— WATCH —`` section while keeping the automatic content
+    intact, and never touch automatic updates going forward. Repeated
+    inactive handling must be idempotent, and it must never delete the local
+    body file either.
     """
     manager, acct, _service = _manager(tmp_path)
-    _auto(manager)
+    _auto(manager, reasoning="stay put")
     _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
     manager._broadcast_programmable_task_card_file()
 
     resident_before = acct.get_task_card(55)
-    calls_before = list(acct.calls)
     assert resident_before is not None
     assert "v1" in _current(acct)
+    assert "— WATCH —" in _current(acct)
+    assert (tmp_path / "taskcard" / "taskcard.md").exists()
 
     # `stop` writes inactive but leaves the last body on disk (possibly stale).
+    calls_before_inactive = list(acct.calls)
     _write_intrinsic_taskcard(tmp_path, status="inactive", body="v2 (must not render)\n")
     manager._broadcast_programmable_task_card_file()
-    manager._broadcast_programmable_task_card_file()
 
-    assert acct.calls == calls_before
-    assert not any(call[0] == "delete" for call in acct.calls)
-    assert acct.get_task_card(55) == resident_before
+    new_calls = acct.calls[len(calls_before_inactive):]
+    assert not any(call[0] in ("send", "delete") for call in new_calls)
+    assert any(call[0] == "edit" for call in new_calls)  # resident updated in place
+    assert acct.get_task_card(55) == resident_before  # same resident, not a new/deleted one
     assert 55 in acct.list_task_card_chats()
-    assert "v1" in _current(acct)
-    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
+    assert (tmp_path / "taskcard" / "taskcard.md").exists()  # local body never deleted
+    text = _current(acct)
+    assert "stay put" in text  # Telegram-owned automatic content preserved
+    assert "v1" not in text and "v2" not in text  # programmable frame excluded
+    assert "— WATCH —" not in text
+    assert manager._task_card_channels["mybot:55"].get("programmable") is None
+
+    # Repeated inactive handling (e.g. every 1s poll tick) is idempotent: no
+    # further transport calls once the programmable frame is already cleared.
+    calls_after_clear = list(acct.calls)
+    manager._broadcast_programmable_task_card_file()
+    manager._broadcast_programmable_task_card_file()
+    assert acct.calls == calls_after_clear
+
+    # Automatic updates keep flowing normally while inactive.
+    manager._handle_task_card_update(
+        {
+            "sub_action": "update",
+            "card_message_id": resident_before,
+            "tool": "read",
+            "tool_action": "open",
+            "reasoning": "still going",
+        }
+    )
+    assert "still going" in _current(acct)
+    assert acct.get_task_card(55) == resident_before
 
     # `remove` additionally deletes the local body once inactive is durable;
-    # Telegram must remain a pure no-op rather than deleting/hiding anything.
+    # Telegram must remain idempotent rather than deleting/hiding anything.
     (tmp_path / "taskcard" / "taskcard.md").unlink()
+    calls_before_remove = list(acct.calls)
     manager._broadcast_programmable_task_card_file()
-
-    assert acct.calls == calls_before
-    assert not any(call[0] == "delete" for call in acct.calls)
+    assert acct.calls == calls_before_remove
     assert acct.get_task_card(55) == resident_before
-    assert "v1" in _current(acct)
 
 
 def test_new_active_watch_after_inactive_renders_without_stale_state_corruption(tmp_path):
@@ -238,7 +263,8 @@ def test_new_active_watch_after_inactive_renders_without_stale_state_corruption(
     # Old watch retires and its body is removed, exactly as `task_card.remove` does.
     _write_intrinsic_taskcard(tmp_path, status="inactive", body=None)
     manager._broadcast_programmable_task_card_file()
-    assert manager._task_card_channels["mybot:55"]["programmable"] == "v1\n"
+    assert manager._task_card_channels["mybot:55"].get("programmable") is None
+    assert "v1" not in _current(acct)
 
     # A brand-new watch starts: body written first, then status flips to active.
     _write_intrinsic_taskcard(tmp_path, status="active", body="v2 fresh\n")

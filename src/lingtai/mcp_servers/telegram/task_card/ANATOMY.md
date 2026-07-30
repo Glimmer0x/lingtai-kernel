@@ -43,11 +43,12 @@ onto its one tracked resident Task Card target per account+chat.
 
 - The intrinsic producer writes `<workdir>/taskcard/status` and
   `<workdir>/taskcard/taskcard.md`.
-- `TelegramManager._read_programmable_task_card_body()` reads those files only
-  when status is exactly `active`.
-- `TelegramManager._broadcast_programmable_task_card_file()` compares the new
-  body against the last committed programmable frame and only projects when the
-  bytes differ.
+- `TelegramManager._broadcast_programmable_task_card_file()` reads
+  `taskcard/status` first: exact `active` reads the body and projects it
+  (diff-only against the last committed programmable frame); exact `inactive`
+  calls `_clear_programmable_task_card_frame()` to exclude only the
+  programmable frame from the resident, idempotently; any other status is
+  unchanged.
 - `TaskCardResident` composes the programmable frame with the existing
   automatic frame under one tracked resident message.
 
@@ -66,7 +67,10 @@ onto its one tracked resident Task Card target per account+chat.
 
 ## Notes
 
-- Missing, blank, invalid, or inactive producer state is a Telegram no-op that
-  preserves the last good projected programmable frame.
+- Missing, unreadable, or `active`-with-blank/missing-body producer state is a
+  Telegram no-op that preserves the last good projected programmable frame.
+- Exact `inactive` producer state instead excludes only the programmable frame
+  from the resident (idempotently); it never touches the resident message, the
+  automatic frame, or the local producer body.
 - Telegram-specific transport, diff-only updates, and toggle behavior belong
   here, not in the intrinsic producer contract.
