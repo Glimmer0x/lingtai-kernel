@@ -74,6 +74,29 @@ def test_description_routes_to_manual_and_file_contract():
     assert "manual" in desc.lower()
 
 
+def test_description_manual_and_contract_encourage_proactive_use():
+    """The schema, manual, and Contract Behavior all teach when to (not) use it."""
+    use_fragments = ["long-running", "multi-step", "parallel"]
+    skip_fragments = ["single-step", "ritual", "truthful"]
+
+    desc = get_description()
+    for fragment in use_fragments + skip_fragments:
+        assert fragment in desc, f"{fragment!r} missing from get_description()"
+
+    root = Path(__file__).resolve().parents[1]
+    manual_body = (root / "src/lingtai/tools/task_card/manual/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    for fragment in use_fragments + skip_fragments:
+        assert fragment in manual_body, f"{fragment!r} missing from manual/SKILL.md"
+
+    contract_body = (root / "src/lingtai/tools/task_card/CONTRACT.md").read_text(
+        encoding="utf-8"
+    )
+    for fragment in use_fragments + skip_fragments:
+        assert fragment in contract_body, f"{fragment!r} missing from CONTRACT.md"
+
+
 def test_start_writes_body_before_active_and_reports_exact_paths(agent, manager, monkeypatch):
     renderer = _write_renderer(agent._working_dir, _OK_BODY)
     order: list[str] = []
