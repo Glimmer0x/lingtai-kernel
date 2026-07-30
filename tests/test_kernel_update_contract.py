@@ -37,7 +37,7 @@ def test_kernel_update_guidance_uses_only_the_installer_route():
         text = path.read_text(encoding="utf-8")
         assert "https://lingtai.ai/install.sh" in text
         assert "--help" in text
-        assert "update --help" in text
+        assert "update --help" not in text
         assert "explicit human/config-owner" in text
         assert "https://lingtai.ai/skill.md" not in text
 
@@ -52,6 +52,7 @@ def test_repository_kernel_version_guidance_cannot_restore_obsolete_routes():
         "https://lingtai.ai/skill.md",
         "normal install/update commands remain TUI-managed",
         "normal installation/update commands remain TUI-managed",
+        "update --help",
     )
     for path in ROOT.rglob("*.md"):
         if ".git" in path.parts or "scratch" in path.parts:

@@ -46,10 +46,13 @@ Kernel-local read-only diagnosis and refresh mechanics
 
 For a `kernel_version` nudge, use the release-manifest facts for diagnosis.
 When a newer release exists, let Shell execute the official installer at
-`https://lingtai.ai/install.sh` with `--help` and then `update --help`; do not
-read or paste the large script source into agent context. A `source_drift` nudge
-stays local to these mechanics and never enters release-migration routing. This
-is operational guidance, not permission to download, install, change
+`https://lingtai.ai/install.sh` with `--help`; do not read or paste the large
+script source into agent context. Follow whatever the installer's own concise
+help output currently instructs rather than assuming or hardcoding a specific
+child command or subcommand name — the installer's own help is the current
+source of truth, not this reference. A `source_drift` nudge stays local to
+these mechanics and never enters release-migration routing. This is
+operational guidance, not permission to download, install, change
 configuration, or relaunch a runtime.
 
 ## The lifecycle and its owners
@@ -103,9 +106,9 @@ The end-to-end path is:
    Treat the payload as kernel-synchronized facts, not a human command. Compare
    `running`, `installed`, `latest`, and `source`; inspect the runtime when
    ambiguous. For a real update, let Shell execute the installer's concise
-   `--help` and then `update --help`; the installer owns release-interval
-   migration navigation while this reference owns local diagnosis and refresh
-   mechanics.
+   `--help` and follow whatever it currently instructs; the installer owns
+   release-interval migration navigation and the exact child command shape
+   while this reference owns local diagnosis and refresh mechanics.
 8. **Confirm — the human/config-owner.** After the installer has displayed the
    applicable release-interval migrations, obtain explicit human/config-owner
    authorization for every migration/config write and for refresh. Apply only
