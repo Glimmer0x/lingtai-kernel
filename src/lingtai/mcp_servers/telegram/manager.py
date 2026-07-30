@@ -728,14 +728,18 @@ class TelegramManager:
                 "status": "error",
                 "error": str(exc),
                 "error_code": exc.error_code,
-                "retryable": False,
-                "guidance": "Do not retry this Telegram action automatically.",
+                "auto_retry": False,
+                "guidance": (
+                    "Do not retry this Telegram action automatically; Telegram "
+                    "did not supply a valid retry_after."
+                ),
             }
             if exc.retry_after is not None:
+                result["retryable"] = True
                 result["retry_after"] = exc.retry_after
                 result["guidance"] = (
-                    "Do not retry this Telegram action for at least "
-                    f"{exc.retry_after} seconds."
+                    f"Wait at least {exc.retry_after} seconds before starting a new "
+                    "Telegram action; do not retry it automatically."
                 )
             return result
         except Exception as e:
@@ -3596,6 +3600,8 @@ class TelegramManager:
                 acct._request("sendChatAction", json={
                     "chat_id": chat_id, "action": "typing",
                 })
+            except TelegramRateLimitError:
+                raise
             except Exception as e:
                 log.warning(
                     "sendChatAction (placeholder typing) failed for %s:%s: %s",

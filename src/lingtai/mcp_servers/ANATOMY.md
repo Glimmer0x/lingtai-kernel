@@ -26,6 +26,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/telegram/SKILL.md
+  - src/lingtai/mcp_servers/telegram/reference/rate-limits/SKILL.md
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/adapters/posix/notification_store.py
