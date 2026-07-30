@@ -69,6 +69,7 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 # guard never forgets a message inside the replay window, while keeping the
 # state file bounded.
 SEEN_KEYS_MAX = 5000
+_PENDING_PUBLICATION_KEY = "pending_publication"
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
 # remains the internal flat action boundary after family validation.
@@ -105,7 +106,7 @@ class WechatManager:
         poll_interval: float = 1.0,
         allowed_users: list[str] | None = None,
         working_dir: Path,
-        on_inbound: Callable[[dict], None],
+        on_inbound: Callable[[dict], bool | None],
         config_source: str | None = None,
         credentials_source: str | None = None,
     ) -> None:
@@ -153,7 +154,8 @@ class WechatManager:
         # so two pollers for the same bot_token race over inbound messages.
         self._account_lock = AccountLock(token)
 
-        # Load persisted state
+        # Load persisted state. Pending producer callbacks are drained only by
+        # start(), after this manager owns the per-account poller lock.
         self._load_state()
 
     def start(self) -> None:
@@ -177,16 +179,38 @@ class WechatManager:
             )
             raise
 
-        self._last_verified_at = datetime.now(timezone.utc).isoformat()
-        self._running = True
-        self._loop = asyncio.new_event_loop()
-        self._poll_thread = threading.Thread(
-            target=self._loop.run_until_complete,
-            args=(self._poll_loop(),),
-            daemon=True,
-            name="wechat-poll",
-        )
-        self._poll_thread.start()
+        # Recovery is producer work, so it must run while this manager owns
+        # the account lock and before any new upstream poll starts. Keep all
+        # post-lock setup transactional: a loop/thread construction failure
+        # must not leave ownership or partial runtime state behind.
+        loop: asyncio.AbstractEventLoop | None = None
+        poll_coro = None
+        previous_verified_at = self._last_verified_at
+        try:
+            self._drain_pending_callbacks()
+            self._last_verified_at = datetime.now(timezone.utc).isoformat()
+            loop = asyncio.new_event_loop()
+            self._loop = loop
+            poll_coro = self._poll_loop()
+            self._poll_thread = threading.Thread(
+                target=loop.run_until_complete,
+                args=(poll_coro,),
+                daemon=True,
+                name="wechat-poll",
+            )
+            self._running = True
+            self._poll_thread.start()
+        except Exception:
+            self._running = False
+            self._poll_thread = None
+            self._loop = None
+            self._last_verified_at = previous_verified_at
+            if poll_coro is not None:
+                poll_coro.close()
+            if loop is not None and not loop.is_closed():
+                loop.close()
+            self._account_lock.release()
+            raise
         try:
             path = self.write_identity_file()
             log.info("Wrote WeChat MCP identity metadata to %s", path)
@@ -368,10 +392,12 @@ class WechatManager:
         if self._is_replay(stable_key):
             with self._lock:
                 first_id = self._seen_keys.get(stable_key)
+            self._retry_pending_for_key(stable_key)
             log.info(
-                "WeChat inbound replay suppressed: stable_key=%s "
-                "first_local_id=%s from=%s (skipped duplicate landing)",
-                stable_key, first_id, from_user,
+                "WeChat inbound replay suppressed: stable_key_hash=%s "
+                "first_local_id=%s event_id=%s",
+                self._stable_key_hash(stable_key), first_id,
+                self._event_id_for_local_id(first_id),
             )
             return
 
@@ -392,56 +418,66 @@ class WechatManager:
             "upstream_message_id": msg.message_id,
             "upstream_create_time_ms": msg.create_time_ms,
         }
-        (msg_dir / "message.json").write_text(
-            json.dumps(msg_data, ensure_ascii=False, indent=2), encoding="utf-8",
-        )
-        # Record the signature only after the inbox write has succeeded, so a
-        # crash mid-write cannot mark a message as seen without landing it.
-        self._record_seen(stable_key, msg_id)
+        msg_file = msg_dir / "message.json"
 
-        # Forward to host via LICC. Body is a conversation preview with
+        # Build the complete callback event before the first durable message
+        # record so a crash cannot leave a valid orphan that lacks publication
+        # state. Forward to host via LICC. Body is a conversation preview with
         # guidance directing the agent to react only to the latest
         # unresponded incoming message — older lines are background only.
         # Metadata carries generic routing keys (platform/conversation_ref/
         # message_ref) plus structured recent_messages/latest_incoming so the
         # kernel can build _meta.agent_meta.notifications.persistent.mcp.wechat and keep
         # the transient _meta.agent_meta.notifications.attention lane a compact identity hook.
+        contact = self._find_contact_by_user_id(from_user)
+        display = contact.get("alias", from_user) if contact else from_user
+        preview_metadata: dict[str, Any] = {}
         try:
-            contact = self._find_contact_by_user_id(from_user)
-            display = contact.get("alias", from_user) if contact else from_user
-            preview_metadata: dict[str, Any] = {}
-            try:
-                preview, preview_metadata = (
-                    self._build_conversation_preview_and_metadata(from_user, msg_id)
+            # Include the current in-memory record in the preview window before
+            # it is durable; this preserves the existing preview/metadata shape
+            # without requiring an incomplete first write.
+            preview, preview_metadata = (
+                self._build_conversation_preview_and_metadata(
+                    from_user, msg_id, current_record=msg_data,
                 )
-            except Exception as exc:
-                log.warning(
-                    "_build_conversation_preview_and_metadata failed: %s", exc
-                )
-                preview = body[:300].replace("\n", " ")
-                if len(body) > 300:
-                    preview += "..."
-            self._on_inbound({
-                "from": display,
-                "subject": f"wechat message from {display}",
-                "body": preview,
-                "metadata": {
-                    "message_id": msg_id,
-                    "from_user_id": from_user,
-                    "preview_truncated": len(body) > 300,
-                    "full_length": len(body),
-                    "item_types": msg_data["raw_item_types"],
-                    # Generic LICC chat routing keys, copied by the kernel
-                    # inbox into .notification/mcp.wechat.json previews.
-                    "platform": "wechat",
-                    "conversation_ref": from_user,
-                    "message_ref": msg_id,
-                    **preview_metadata,
-                },
-                "wake": True,
-            })
-        except Exception as e:
-            log.error("Failed to forward inbound to LICC: %s", e)
+            )
+        except Exception as exc:
+            log.warning(
+                "_build_conversation_preview_and_metadata failed: %s",
+                type(exc).__name__,
+            )
+            preview = body[:300].replace("\n", " ")
+            if len(body) > 300:
+                preview += "..."
+        event = {
+            "from": display,
+            "subject": f"wechat message from {display}",
+            "body": preview,
+            "metadata": {
+                "message_id": msg_id,
+                "from_user_id": from_user,
+                "preview_truncated": len(body) > 300,
+                "full_length": len(body),
+                "item_types": msg_data["raw_item_types"],
+                # Generic LICC chat routing keys, copied by the kernel
+                # inbox into .notification/mcp.wechat.json previews.
+                "platform": "wechat",
+                "conversation_ref": from_user,
+                "message_ref": msg_id,
+                **preview_metadata,
+            },
+            "wake": True,
+        }
+        msg_data[_PENDING_PUBLICATION_KEY] = event
+        # This is the first durable message-record write for callback-enabled
+        # messages and already contains the exact callback event.
+        self._atomic_write(
+            msg_file, json.dumps(msg_data, ensure_ascii=False, indent=2)
+        )
+        # Record only after the complete inbox landing and exact pending
+        # callback payload are durable. A False/exception leaves that marker.
+        self._record_seen(stable_key, msg_id)
+        self._deliver_pending_callback(msg_file, msg_data)
 
     # ── Tool handler dispatch ──────────────────────────────────
 
@@ -832,11 +868,14 @@ class WechatManager:
         user_id: str,
         current_message_id: str,
         max_messages: int = _CONVERSATION_PREVIEW_MESSAGES,
+        *,
+        current_record: dict | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Build the markdown preview plus structured WeChat context metadata.
 
-        The preview merges inbox + sent records filtered to *user_id*, takes
-        the last *max_messages* by date ascending, and formats each line as
+        The preview merges inbox + sent records filtered to *user_id*, plus an
+        optional in-memory current inbound record, takes the last
+        *max_messages* by date ascending, and formats each line as
         ``[relative_time] #id sender: text`` under a guidance header telling
         the agent to react only to the latest unresponded incoming message.
 
@@ -858,6 +897,11 @@ class WechatManager:
             if m.get("to_user_id") == user_id
         ]
         messages = inbox + sent
+        if (
+            isinstance(current_record, dict)
+            and current_record.get("from_user_id") == user_id
+        ):
+            messages.append({**current_record, "_direction": "incoming"})
         messages.sort(key=lambda m: m.get("date") or "")
         messages = messages[-max_messages:]
 
@@ -921,16 +965,199 @@ class WechatManager:
         if not folder.is_dir():
             return messages
         for msg_dir in folder.iterdir():
+            if msg_dir.is_symlink() or not msg_dir.is_dir():
+                continue
             msg_file = msg_dir / "message.json"
-            if not msg_file.is_file():
+            if msg_file.is_symlink() or not msg_file.is_file():
                 continue
             try:
                 data = json.loads(msg_file.read_text(encoding="utf-8"))
-                messages.append(data)
+                if isinstance(data, dict):
+                    data.pop(_PENDING_PUBLICATION_KEY, None)
+                    messages.append(data)
             except (json.JSONDecodeError, OSError):
                 continue
         messages.sort(key=lambda m: m.get("date", ""), reverse=True)
         return messages
+
+    @staticmethod
+    def _stable_key_hash(stable_key: str) -> str:
+        return hashlib.sha256(stable_key.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _event_id_for_local_id(local_id: str | None) -> str:
+        if isinstance(local_id, str) and local_id:
+            return f"wechat-{local_id}"
+        return "wechat-unknown"
+
+    @staticmethod
+    def _safe_local_id(local_id: object, *, containing_dir: str | None = None) -> bool:
+        """Return whether a local ID is safe and names its containing inbox dir."""
+        if not isinstance(local_id, str) or not local_id:
+            return False
+        if local_id in {".", ".."} or "\x00" in local_id:
+            return False
+        if "/" in local_id or "\\" in local_id or Path(local_id).name != local_id:
+            return False
+        return containing_dir is None or local_id == containing_dir
+
+    @classmethod
+    def _pending_event_from_record(
+        cls, data: dict, *, containing_dir: str | None = None,
+    ) -> dict | None:
+        """Return a valid self-generated pending callback, else ignore it.
+
+        Pending state is trusted only when it is internally bound to the
+        containing local inbox directory and record. This keeps malformed or
+        hand-edited markers from widening into callback publication or path
+        traversal.
+        """
+        if not isinstance(data, dict):
+            return None
+        local_id = data.get("id")
+        if not cls._safe_local_id(local_id, containing_dir=containing_dir):
+            return None
+        stable_key = data.get("stable_key")
+        if not isinstance(stable_key, str) or not stable_key.strip():
+            return None
+        event = data.get(_PENDING_PUBLICATION_KEY)
+        if not isinstance(event, dict):
+            return None
+        if not all(
+            isinstance(event.get(key), str)
+            for key in ("from", "subject", "body")
+        ):
+            return None
+        metadata = event.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        if metadata.get("message_id") != local_id:
+            return None
+        if metadata.get("message_ref") != local_id:
+            return None
+        if metadata.get("platform") != "wechat":
+            return None
+        record_from = data.get("from_user_id")
+        if not isinstance(record_from, str):
+            return None
+        for key in ("from_user_id", "conversation_ref"):
+            value = metadata.get(key)
+            if value is not None and value != record_from:
+                return None
+        if not isinstance(event.get("wake"), bool):
+            return None
+        return event
+
+    def _deliver_pending_callback(self, msg_file: Path, data: dict) -> bool:
+        """Retry one pending callback and clear only an accepted publication."""
+        if (
+            msg_file.name != "message.json"
+            or msg_file.is_symlink()
+            or msg_file.parent.is_symlink()
+        ):
+            return False
+        local_id = data.get("id")
+        event = self._pending_event_from_record(
+            data, containing_dir=msg_file.parent.name,
+        )
+        stable_key = data.get("stable_key")
+        if event is None or not isinstance(stable_key, str):
+            return False
+        stable_hash = self._stable_key_hash(stable_key)
+        event_id = self._event_id_for_local_id(local_id)
+        try:
+            result = self._on_inbound(event)
+        except Exception as exc:
+            log.warning(
+                "WeChat callback pending: stable_key_hash=%s local_id=%s "
+                "event_id=%s status=exception error=%s",
+                stable_hash, local_id, event_id, type(exc).__name__,
+            )
+            return False
+        if result is False:
+            log.info(
+                "WeChat callback pending: stable_key_hash=%s local_id=%s "
+                "event_id=%s status=false",
+                stable_hash, local_id, event_id,
+            )
+            return False
+
+        cleared = dict(data)
+        cleared.pop(_PENDING_PUBLICATION_KEY, None)
+        try:
+            self._atomic_write(
+                msg_file, json.dumps(cleared, ensure_ascii=False, indent=2)
+            )
+        except Exception as exc:
+            log.warning(
+                "WeChat callback accepted but pending marker remains: "
+                "stable_key_hash=%s local_id=%s event_id=%s error=%s",
+                stable_hash, local_id, event_id, type(exc).__name__,
+            )
+            return True
+        data.pop(_PENDING_PUBLICATION_KEY, None)
+        log.info(
+            "WeChat callback pending: stable_key_hash=%s local_id=%s "
+            "event_id=%s status=accepted",
+            stable_hash, local_id, event_id,
+        )
+        return True
+
+    def _retry_pending_for_key(self, stable_key: str) -> bool:
+        """Recover an existing local landing when a replay hits its stable key."""
+        with self._lock:
+            local_id = self._seen_keys.get(stable_key)
+        if not self._safe_local_id(local_id):
+            return False
+        msg_dir = self._inbox_dir / local_id
+        if not msg_dir.is_dir() or msg_dir.is_symlink():
+            return False
+        msg_file = msg_dir / "message.json"
+        if not msg_file.is_file() or msg_file.is_symlink():
+            return False
+        try:
+            data = json.loads(msg_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return False
+        if not isinstance(data, dict) or data.get("stable_key") != stable_key:
+            return False
+        return self._deliver_pending_callback(msg_file, data)
+
+    def _drain_pending_callbacks(self) -> None:
+        """Retry self-generated pending WeChat publications at manager startup."""
+        if not self._inbox_dir.is_dir():
+            return
+        for msg_dir in sorted(self._inbox_dir.iterdir(), key=lambda path: path.name):
+            if not msg_dir.is_dir() or msg_dir.is_symlink():
+                continue
+            msg_file = msg_dir / "message.json"
+            if not msg_file.is_file() or msg_file.is_symlink():
+                continue
+            try:
+                data = json.loads(msg_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if self._pending_event_from_record(
+                data, containing_dir=msg_dir.name,
+            ) is None:
+                continue
+            local_id = data["id"]
+            stable_key = data["stable_key"]
+            with self._lock:
+                existing_id = self._seen_keys.get(stable_key)
+            if existing_id is not None and existing_id != local_id:
+                continue
+            if existing_id is None:
+                try:
+                    self._record_seen(stable_key, local_id)
+                except Exception as exc:
+                    log.warning(
+                        "WeChat pending recovery could not record seen: "
+                        "stable_key_hash=%s local_id=%s error=%s",
+                        self._stable_key_hash(stable_key), local_id, type(exc).__name__,
+                    )
+                    continue
+            self._deliver_pending_callback(msg_file, data)
 
     # ── State persistence ──────────────────────────────────────
 
@@ -1066,6 +1293,8 @@ class WechatManager:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, path)
         except BaseException:
             try:

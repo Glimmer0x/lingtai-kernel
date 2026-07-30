@@ -800,13 +800,21 @@ def build_manager() -> tuple[WechatManager, Path]:
     working_dir = Path(agent_dir_raw) if agent_dir_raw else Path.cwd()
     working_dir.mkdir(parents=True, exist_ok=True)
 
-    def _on_inbound(event: dict) -> None:
-        push_inbox_event(
+    def _on_inbound(event: dict) -> bool | None:
+        metadata = event.get("metadata") or {}
+        local_id = metadata.get("message_id")
+        event_id = (
+            f"wechat-{local_id}"
+            if isinstance(local_id, str) and local_id
+            else None
+        )
+        return push_inbox_event(
             sender=event["from"],
             subject=event["subject"],
             body=event["body"],
-            metadata=event.get("metadata"),
+            metadata=metadata,
             wake=event.get("wake", True),
+            event_id=event_id,
         )
 
     mgr = WechatManager(

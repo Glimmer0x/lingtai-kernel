@@ -19,6 +19,8 @@ import json
 import uuid
 from pathlib import Path
 
+from lingtai.mcp_servers import _licc_compat
+from lingtai.mcp_servers.wechat import server as wechat_server
 from lingtai.mcp_servers.wechat.manager import (
     WechatManager,
     _CONVERSATION_PREVIEW_MESSAGES,
@@ -202,3 +204,50 @@ def test_latest_incoming_falls_back_to_newest_incoming(tmp_path):
 
     assert metadata["latest_incoming"]["id"] == in1
     assert all("is_current" not in m for m in metadata["recent_messages"])
+
+
+def test_server_closure_uses_real_licc_binding_and_propagates_result(
+    tmp_path, monkeypatch,
+):
+    """The production closure reaches the shared wrapper with stable IDs."""
+    monkeypatch.setenv("LINGTAI_AGENT_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        wechat_server,
+        "load_config_and_credentials",
+        lambda: ({}, {"bot_token": "test-token", "user_id": "test-bot"}, tmp_path),
+    )
+    calls: list[dict] = []
+    outcomes = iter((False, True))
+
+    def fake_kernel_push(sender, subject, body, *, metadata=None, wake=True, event_id=None):
+        calls.append({
+            "sender": sender,
+            "subject": subject,
+            "body": body,
+            "metadata": metadata,
+            "wake": wake,
+            "event_id": event_id,
+        })
+        return next(outcomes)
+
+    # Keep the real server binding and shared wrapper; capture only the
+    # wrapper's canonical branch.
+    monkeypatch.setattr(
+        _licc_compat, "_kernel_push_inbox_event", fake_kernel_push,
+    )
+    assert wechat_server.push_inbox_event is _licc_compat.push_inbox_event
+    mgr, _working_dir = wechat_server.build_manager()
+
+    event = {
+        "from": "wxid_server@im.wechat",
+        "subject": "wechat message",
+        "body": "fixture body",
+        "metadata": {"message_id": "local-message-1", "platform": "wechat"},
+        "wake": True,
+    }
+    assert mgr._on_inbound(event) is False
+    assert mgr._on_inbound(event) is True
+    assert [call["event_id"] for call in calls] == [
+        "wechat-local-message-1", "wechat-local-message-1",
+    ]
+    assert [call["wake"] for call in calls] == [True, True]

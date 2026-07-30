@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ LICC_VERSION = 1
 INBOX_DIRNAME = ".mcp_inbox"
 TMP_SUFFIX = ".json.tmp"
 EVENT_SUFFIX = ".json"
+_EVENT_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 
 def push_inbox_event(
@@ -39,12 +41,14 @@ def push_inbox_event(
     *,
     metadata: dict | None = None,
     wake: bool = True,
+    event_id: str | None = None,
 ) -> bool:
     """Write a LICC event into the host agent's inbox.
 
     In a current LingTai runtime, delegate to the canonical kernel helper.
     If the helper is unavailable, use the local compatibility fallback so
-    older hosts and standalone development remain functional.
+    older hosts and standalone development remain functional. ``event_id``
+    optionally selects a deterministic safe filename for idempotent delivery.
     """
     if _kernel_push_inbox_event is not None:
         return _kernel_push_inbox_event(
@@ -53,6 +57,7 @@ def push_inbox_event(
             body,
             metadata=metadata,
             wake=wake,
+            event_id=event_id,
         )
     return _fallback_push_inbox_event(
         sender,
@@ -60,6 +65,7 @@ def push_inbox_event(
         body,
         metadata=metadata,
         wake=wake,
+        event_id=event_id,
     )
 
 
@@ -70,6 +76,7 @@ def _fallback_push_inbox_event(
     *,
     metadata: dict | None = None,
     wake: bool = True,
+    event_id: str | None = None,
 ) -> bool:
     """Local LICC v1 writer used only when the kernel helper is unavailable."""
     agent_dir = os.environ.get("LINGTAI_AGENT_DIR")
@@ -93,11 +100,17 @@ def _fallback_push_inbox_event(
     }
 
     try:
+        if event_id is None:
+            stem = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+        elif not isinstance(event_id, str) or not _EVENT_ID_RE.fullmatch(event_id):
+            return False
+        else:
+            stem = event_id
+
         target_dir = Path(agent_dir) / INBOX_DIRNAME / mcp_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        event_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
-        tmp = target_dir / f"{event_id}{TMP_SUFFIX}"
-        final = target_dir / f"{event_id}{EVENT_SUFFIX}"
+        tmp = target_dir / f"{stem}{TMP_SUFFIX}"
+        final = target_dir / f"{stem}{EVENT_SUFFIX}"
         # Write + fsync + atomic replace so the host poller never sees a
         # half-written file.
         text = json.dumps(event, ensure_ascii=False)
