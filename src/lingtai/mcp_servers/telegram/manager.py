@@ -2813,14 +2813,14 @@ class TelegramManager:
     def _taskcard_body_path(self) -> Path:
         return self._working_dir / "taskcard" / "taskcard.md"
 
-    def _read_programmable_task_card_body(self) -> str | None:
-        """Read the intrinsic Task Card body when its status is exactly active."""
+    def _read_taskcard_status(self) -> str | None:
         try:
-            status = self._taskcard_status_path().read_text(encoding="utf-8")
+            return self._taskcard_status_path().read_text(encoding="utf-8")
         except OSError:
             return None
-        if status != "active":
-            return None
+
+    def _read_programmable_task_card_body(self) -> str | None:
+        """Read the intrinsic Task Card body (caller has already gated status)."""
         try:
             body = self._taskcard_body_path().read_text(encoding="utf-8")
         except OSError:
@@ -2832,13 +2832,25 @@ class TelegramManager:
         return body
 
     def _broadcast_programmable_task_card_file(self) -> None:
-        """Project the current intrinsic Task Card body onto every resident.
+        """Project the current intrinsic Task Card intent onto every resident.
 
-        The projector is read-only: it consumes the agent-local declarative files
-        and proposes the exact body bytes (bounded only by Telegram's transport
-        ceiling) as the programmable channel frame. Missing/invalid/non-active
-        producer state is a no-op, preserving the last good projected card.
+        Telegram owns the resident message, its automatic/mechanical content,
+        and delivery; the agent owns only the programmable frame plus its
+        ``status`` intent. Exact ``active`` with a nonempty body composes/
+        updates the programmable frame. Exact ``inactive`` excludes only the
+        programmable frame from composition and updates the same resident with
+        its Telegram-owned automatic content intact -- it never deletes/hides
+        the resident message, never deletes the local body, and never pauses
+        automatic updates. Missing, unreadable, or any other status/body state
+        is unchanged: a no-op that preserves whatever programmable frame is
+        already committed.
         """
+        status = self._read_taskcard_status()
+        if status == "inactive":
+            self._clear_programmable_task_card_frame()
+            return
+        if status != "active":
+            return
         body = self._read_programmable_task_card_body()
         if body is None:
             return
@@ -2859,6 +2871,38 @@ class TelegramManager:
             except Exception as e:
                 log.debug(
                     "Programmable task card broadcast failed for %s:%s: %s",
+                    account,
+                    chat_id,
+                    e,
+                )
+
+    def _clear_programmable_task_card_frame(self) -> None:
+        """Exclude the programmable frame from every resident, idempotently.
+
+        Only the programmable slot is cleared; the automatic/mechanical
+        content Telegram owns is untouched and still gets recomposed into the
+        same resident message (never deleted/hidden). A resident with no
+        committed programmable frame is already the target state, so repeated
+        ``inactive`` handling delivers nothing further.
+        """
+        for account, chat_id in self._resident_task_card_targets():
+            try:
+                current = self._task_card_channels.get(f"{account}:{chat_id}", {}).get(
+                    "programmable"
+                )
+                if current is None:
+                    continue
+                self._deliver_channel_frame(
+                    account,
+                    chat_id,
+                    "programmable",
+                    None,
+                    error="Failed to clear programmable task card",
+                    empty_fallback=self._TASK_CARD_WATCH_STOPPED,
+                )
+            except Exception as e:
+                log.debug(
+                    "Programmable task card clear failed for %s:%s: %s",
                     account,
                     chat_id,
                     e,
