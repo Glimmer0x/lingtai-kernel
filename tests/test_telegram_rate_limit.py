@@ -147,6 +147,79 @@ def test_manager_serializes_rate_limit_without_persisting_a_send(
     assert not (tmp_path / "telegram" / "bot" / "sent").exists()
 
 
+class _PlaceholderRateLimitedAccount:
+    alias = "bot"
+
+    def __init__(self, retry_after: int | None) -> None:
+        self.retry_after = retry_after
+        self.calls: list[str] = []
+
+    def _request(self, method: str, **_kwargs: object) -> dict:
+        self.calls.append(method)
+        raise TelegramRateLimitError(self.retry_after)
+
+    def send_message(self, *_args: object, **_kwargs: object) -> dict:
+        self.calls.append("sendMessage")
+        return {"message_id": 777}
+
+
+class _PlaceholderService:
+    def __init__(self, retry_after: int | None) -> None:
+        self.default_account = _PlaceholderRateLimitedAccount(retry_after)
+
+    def get_account(self, alias: str) -> _PlaceholderRateLimitedAccount:
+        assert alias == "bot"
+        return self.default_account
+
+
+@pytest.mark.parametrize("retry_after", [17, None])
+def test_placeholder_preflight_429_stops_before_send_and_persistence(
+    tmp_path: Path,
+    retry_after: int | None,
+) -> None:
+    service = _PlaceholderService(retry_after)
+    manager = TelegramManager(
+        service,
+        working_dir=tmp_path,
+        on_inbound=lambda _: None,
+        notification_store=notification_store_for(tmp_path),
+    )
+
+    result = manager.handle({
+        "action": "send",
+        "account": "bot",
+        "chat_id": 123,
+        "text": "hello",
+        "placeholder": True,
+    })
+
+    expected = {
+        "status": "error",
+        "error": "Telegram API rate limited",
+        "error_code": 429,
+        "auto_retry": False,
+        "guidance": (
+            "Do not retry this Telegram action automatically; Telegram "
+            "did not supply a valid retry_after."
+        ),
+    }
+    if retry_after is not None:
+        expected.update({
+            "error": f"Telegram API rate limited; retry after {retry_after} seconds",
+            "retryable": True,
+            "retry_after": retry_after,
+            "guidance": (
+                f"Wait at least {retry_after} seconds before starting a new "
+                "Telegram action; do not retry it automatically."
+            ),
+        })
+
+    assert result == expected
+    assert service.default_account.calls == ["sendChatAction"]
+    assert not (tmp_path / "telegram" / "bot" / "sent").exists()
+
+
+
 def test_manual_progressively_routes_current_rate_limit_reference() -> None:
     package = resources.files("lingtai.mcp_servers.telegram")
     manual = package.joinpath("SKILL.md").read_text(encoding="utf-8")

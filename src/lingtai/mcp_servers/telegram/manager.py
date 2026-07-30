@@ -3600,6 +3600,8 @@ class TelegramManager:
                 acct._request("sendChatAction", json={
                     "chat_id": chat_id, "action": "typing",
                 })
+            except TelegramRateLimitError:
+                raise
             except Exception as e:
                 log.warning(
                     "sendChatAction (placeholder typing) failed for %s:%s: %s",
