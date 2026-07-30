@@ -41,7 +41,9 @@ declarative artifact and one active watch per agent.
 3. `retry` reruns the renderer for the active watch. On success it atomically
    replaces only `taskcard/taskcard.md`; `status` remains `active`.
 4. `stop` and agent shutdown write exact `inactive` before stopping the updater.
-   The last body remains on disk.
+   The last body remains on disk. `stop` is non-terminal: it pauses/preserves
+   the artifact for a possible later `retry`/inspection, it does not clean it
+   up.
 5. At most one watch may be active per agent. A second `start` fails closed.
 6. The capability is channel-neutral. It MUST NOT own transport-specific
    concepts such as Telegram chat/message IDs, API retries, or consumer
@@ -97,17 +99,36 @@ declarative artifact and one active watch per agent.
     one for quick single-step work, as ritual, or when they cannot keep the
     rendered body truthful and current. This is agent usage guidance, not a
     runtime-enforced precondition.
+13. `remove` is the terminal lifecycle cleanup, distinct from `stop`. It first
+    retires any active watch exactly as `stop` does — write `inactive`, then
+    join the updater thread — so the updater cannot race a deleted body back
+    into existence; only once that retirement is confirmed does it delete
+    `taskcard/taskcard.md`. If the watch will not quiesce (the same failure
+    `stop` can report), `remove` reports that failure and does not delete the
+    body, leaving the watch retryable exactly as an unsuccessful `stop` would.
+    `remove` takes no `watch_id`: it targets this agent's one artifact, not a
+    specific in-memory watch, so it stays useful after a restart lost the
+    watch handle. It is idempotent — calling it again after a successful
+    removal, or when no watch was ever started, still leaves `status` at
+    exact `inactive` and reports no body removed, never an error. Agents
+    SHOULD call `remove` once the underlying work is completed, cancelled, or
+    abandoned, so a consumer such as `/taskcard` cannot keep exposing a stale
+    card; agents MUST NOT reach around this capability with a shell/file-tool
+    delete of `taskcard/taskcard.md`.
 
 ## Port
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
-`stop`, and `manual`.
+`stop`, `remove`, and `manual`.
 
 ## Adapters
 
 - Renderer subprocess: `sys.executable <renderer>` with `cwd` set to the agent
   working directory.
-- Filesystem artifact writer: atomic temp-file write + `fsync` + `os.replace`.
+- Filesystem artifact writer: atomic temp-file write + `fsync` + `os.replace`
+  for `start`/`retry`/`stop`; `remove` additionally unlinks `taskcard/
+  taskcard.md` (tolerating an already-missing file) after the watch is
+  retired.
 - Filesystem config reader: plain read of `taskcard/taskcard.json` (no fsync;
   read-only in the steady state) plus the one-way legacy-migration writer
   described in Behavior rule 11.
@@ -121,16 +142,19 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 2. `taskcard/taskcard.md` must never be partially visible to a consumer.
 3. Activation order is strict: body first, then `active`.
 4. Deactivation order is strict: write `inactive` before stopping the updater.
-5. The tool result for `start`/`inspect`/`retry`/`stop` must report the exact
-   artifact paths and current `status_value`.
+5. The tool result for `start`/`inspect`/`retry`/`stop`/`remove` must report the
+   exact artifact paths and current `status_value`.
 6. `manual` must remain discoverable from both this contract and the paired
    Anatomy.
 7. Configuration is resolved fresh from `taskcard/taskcard.json` on every
-   `start`; `inspect`/`retry`/`stop` act only on values already fixed onto the
-   existing watch and never re-resolve configuration.
+   `start`; `inspect`/`retry`/`stop`/`remove` act only on values already fixed
+   onto the existing watch and never re-resolve configuration.
 8. The legacy migration in Behavior rule 11 MUST NOT become an ongoing read
    path: it is gated strictly on `taskcard/taskcard.json` not yet existing, not
    on its content being valid.
+9. Removal order is strict: retire the watch (write `inactive`, then confirm
+   the updater has quiesced) before deleting `taskcard/taskcard.md`. `remove`
+   MUST NOT delete the body while a watch might still be running.
 
 ## Tests
 
@@ -138,8 +162,11 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
   exact paths, atomic ordering, one-watch enforcement, failure/recovery, stop
   semantics, configured defaults/ceilings (including the omitted-value and
   lower-not-bypass cases), per-field config validation, the one-way
-  legacy-migration fallback, and the proactive-use guidance carried in the
-  description, manual, and this contract's Behavior rule 12.
+  legacy-migration fallback, the proactive-use guidance carried in the
+  description, manual, and this contract's Behavior rule 12, and `remove`'s
+  terminal cleanup: removal after a stopped watch, removal of an active watch
+  with no body-recreation race, blocking (without deleting) on a watch that
+  will not quiesce, and idempotence when already removed or never started.
 - `tests/test_telegram_toolfamily_ltpv2.py` covers the strict public family
   schema plus intrinsic refresh-limit behavior.
 - `tests/test_telegram_task_card_programmable.py` covers Telegram's read-only

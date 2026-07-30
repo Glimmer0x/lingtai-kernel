@@ -121,7 +121,7 @@ def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
     assert schema["required"] == ["action", "input", "reasoning"]
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
     assert schema["additionalProperties"] is False
-    assert names == ["start", "inspect", "retry", "stop", "manual"]
+    assert names == ["start", "inspect", "retry", "stop", "remove", "manual"]
     assert len(schema["allOf"]) == len(names) == len(branches)
     for action, branch, condition in zip(names, branches, schema["allOf"]):
         assert branch["title"] == f"{action} input"

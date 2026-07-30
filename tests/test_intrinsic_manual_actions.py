@@ -182,7 +182,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
-    assert len(task_card_schema["properties"]["input"]["oneOf"]) == 5
+    assert len(task_card_schema["properties"]["input"]["oneOf"]) == 6
     # ``shell`` is migrated to the same LTP v2 envelope, with four children.
     shell_schema = shell_tool.get_schema()
     assert shell_schema["required"] == ["action", "input", "reasoning"]

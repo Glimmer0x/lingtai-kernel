@@ -188,6 +188,17 @@ When there is nothing to do, go idle rather than using timed sleep. ASLEEP agent
 wake by mail; SUSPENDED agents need CPR. Use `system-manual` for lifecycle
 operations, preset swaps, notification handling, and karma actions.
 
+### Task Card Lifecycle
+
+Start a `task_card` watch only for meaningful ongoing work a human is
+following; skip it for quick single-step work or ritual updates. Keep the
+rendered body truthful and current while it runs, and optionally `retry` once
+more to publish a final state before winding down. Use `stop` to pause a watch
+while preserving its last body; use `remove` once the work is completed,
+cancelled, or abandoned so `/taskcard` and other consumers cannot keep
+exposing a stale card — never reach around it with a shell/file-tool delete.
+Read `task_card(action='manual')` for the full contract.
+
 ### Molt and Durable Stores
 
 **If you are about to molt, first read `context-manual`.** It owns the molt
