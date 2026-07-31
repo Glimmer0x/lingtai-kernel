@@ -55,6 +55,23 @@ def _setup_failure(provider: str, exc: BaseException) -> str:
     )
 
 
+def _consent_guidance() -> str:
+    """Build the setup-with-human-consent guidance for a vision failure.
+
+    Installing a local vision server, pulling a model, or editing
+    settings/vision.json / the capability manifest are external side effects:
+    the agent must obtain explicit human consent before performing them. The
+    full steps live in the vision manual skill.
+    """
+    return (
+        "To enable vision, load the vision manual skill for the setup steps: "
+        "vision(action='manual', input={}, reasoning='vision is not set up, "
+        "load the setup steps'); then ask the human for consent before "
+        "installing a local vision server, pulling a model, or editing "
+        "settings/vision.json / the capability manifest."
+    )
+
+
 _CODEX_POOL_ALIASES = {"codex-pool", "codex_pool"}
 _CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
 
@@ -239,13 +256,14 @@ class VisionManager:
         default prompt, and success/failure result shapes.
         """
         if self._vision_service is None:
+            reason = self._manual_reason or (
+                "Direct vision is unavailable; call vision(action='manual', "
+                "input={}, reasoning='no direct vision route, load the "
+                "manual alternatives')."
+            )
             return {
                 "status": "error",
-                "message": self._manual_reason or (
-                    "Direct vision is unavailable; call vision(action='manual', "
-                    "input={}, reasoning='no direct vision route, load the "
-                    "manual alternatives')."
-                ),
+                "message": f"{reason} {_consent_guidance()}",
             }
         image_path = action_input.get("image_path") or ""
         question = action_input.get("question")
@@ -274,10 +292,16 @@ class VisionManager:
             return {
                 "status": "error",
                 "message": (
-                    f"Vision analysis failed ({type(e).__name__}). Call "
-                    "vision(action='manual', input={}, reasoning='the direct "
-                    "vision request failed, load the explicit manual route') "
-                    "for the explicit manual route."
+                    f"Vision analysis failed on the default vision route "
+                    f"({type(e).__name__}). The default route is the current "
+                    "provider's Responses-API vision, which may not support "
+                    "images. Alternative vision may be available: the current "
+                    "provider's MCP, or a local OpenAI-compatible vision "
+                    "server via provider='local'. Load the vision manual skill "
+                    "for the setup alternatives: vision(action='manual', "
+                    "input={}, reasoning='default vision failed, load the "
+                    "setup alternatives'); then ask the human for consent "
+                    "before setting one up."
                 ),
             }
 
@@ -407,12 +431,10 @@ def setup(
                 local_model = kwargs.get("model") or local_settings.model
                 if not local_model:
                     manual_reason = (
-                        "Local vision needs an explicit model: install a local "
-                        "OpenAI-compatible vision server, pull a vision model, "
-                        "then set base_url+model in settings/vision.json or "
-                        "pass provider='local' with model=...; see "
-                        "vision(action='manual', input={}, "
-                        "reasoning='local vision setup')."
+                        "Local vision needs an explicit model. Load the vision "
+                        "manual skill: vision(action='manual', input={}, "
+                        "reasoning='local vision setup'); then ask the human "
+                        "for consent before setting it up."
                     )
                 else:
                     local_key = api_key or local_settings.api_key or "local"
