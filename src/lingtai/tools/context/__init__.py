@@ -99,7 +99,7 @@ _MOLT_INPUT_SCHEMA: dict[str, Any] = {
         },
         "keep_last": {
             "type": ["integer", "null"],
-            "description": 'Optional number of recent conversation entries to replay into the fresh session (default: 20 when null). Pass 0 to archive everything. Overlapping entries with keep_tool_calls are deduplicated. See context-manual.',
+            "description": 'Optional requested minimum number of recent conversation entries to replay into the fresh session (default: 20 when null). The retained suffix may contain more entries when needed to preserve one adjacent assistant tool-call/result batch whole. Pass 0 to archive everything. Overlapping entries with keep_tool_calls are deduplicated. See context-manual.',
         },
     },
     "required": ["summary", "session_journal_path", "keep_tool_calls", "keep_last"],

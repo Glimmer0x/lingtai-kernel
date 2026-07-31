@@ -51,6 +51,81 @@ from lingtai.kernel.token_counter import count_tokens
 logger = get_logger()
 
 
+class _OpenAIToolPairingError(ValueError):
+    """Sanitized structural failure at the Chat Completions wire boundary."""
+
+    def __init__(self, reason: str, *, phase: str = "wire_validation"):
+        self.reason = reason
+        self.phase = phase
+        super().__init__(f"tool pairing rejected: reason={reason} phase={phase}")
+
+
+def _validate_openai_tool_pairing(messages: list[dict]) -> None:
+    """Fail closed unless every Chat Completions tool batch is positional.
+
+    A role=tool run is valid only immediately after one assistant tool-call
+    batch and only when its IDs cover that batch exactly once.  The final
+    assistant tool-call entry may remain as the intentional live tail; the
+    existing local placeholder guard normally closes it before this check.
+    """
+    if not isinstance(messages, list):
+        raise _OpenAIToolPairingError("invalid_message_list")
+
+    known_call_ids: set[str] = set()
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        if not isinstance(message, dict):
+            raise _OpenAIToolPairingError("invalid_message")
+        role = message.get("role")
+        if role == "tool":
+            result_id = message.get("tool_call_id")
+            if not isinstance(result_id, str) or not result_id:
+                raise _OpenAIToolPairingError("idless")
+            reason = "non_contiguous" if result_id in known_call_ids else "standalone"
+            raise _OpenAIToolPairingError(reason)
+        if role != "assistant" or not message.get("tool_calls"):
+            index += 1
+            continue
+
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list) or not calls:
+            raise _OpenAIToolPairingError("invalid_call_batch")
+        expected: list[str] = []
+        for call in calls:
+            call_id = call.get("id") if isinstance(call, dict) else None
+            if not isinstance(call_id, str) or not call_id:
+                raise _OpenAIToolPairingError("idless_call")
+            if call_id in expected:
+                raise _OpenAIToolPairingError("duplicate_call")
+            expected.append(call_id)
+        known_call_ids.update(expected)
+
+        result_index = index + 1
+        if result_index == len(messages):
+            # This is the intentional final live tail before closure.
+            index = result_index
+            continue
+        if not isinstance(messages[result_index], dict) or messages[result_index].get("role") != "tool":
+            raise _OpenAIToolPairingError("non_contiguous")
+
+        actual: list[str] = []
+        while result_index < len(messages):
+            result = messages[result_index]
+            if not isinstance(result, dict) or result.get("role") != "tool":
+                break
+            result_id = result.get("tool_call_id")
+            if not isinstance(result_id, str) or not result_id:
+                raise _OpenAIToolPairingError("idless")
+            if result_id in actual:
+                raise _OpenAIToolPairingError("duplicate")
+            actual.append(result_id)
+            result_index += 1
+        if set(actual) != set(expected):
+            raise _OpenAIToolPairingError("wrong_batch")
+        index = result_index
+
+
 _CODEX_RESPONSES_TRACE_ENV = "LINGTAI_CODEX_RESPONSES_TRACE"
 _CODEX_RESPONSES_TRACE_PATH_ENV = "LINGTAI_CODEX_RESPONSES_TRACE_PATH"
 _CODEX_RESPONSES_TRACE_FILE = "codex_responses_trace.jsonl"
@@ -1405,16 +1480,22 @@ class OpenAIChatSession(ChatSession):
         serialization sees it naturally and no synthesis fires — implicit
         dedup without any stateful replace step.
 
-        Each synthesis logs a warning with the tool_call_id and tool name
-        so we can track how often this fires and fix the root cause if it
-        becomes common.
+        Each synthesis logs only the structural missing-result reason and
+        phase. The following shared validator rejects any remaining malformed
+        row before the SDK call.
         """
         patched: list[dict] = []
         for i, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                raise _OpenAIToolPairingError("invalid_message", phase="wire_pairing")
             patched.append(msg)
             if msg.get("role") != "assistant":
                 continue
-            tool_calls = msg.get("tool_calls") or []
+            if "tool_calls" not in msg:
+                continue
+            tool_calls = msg["tool_calls"]
+            if not isinstance(tool_calls, list):
+                raise _OpenAIToolPairingError("invalid_call_batch", phase="wire_pairing")
             if not tool_calls:
                 continue
             # Look ahead in the ORIGINAL input list for role=tool entries
@@ -1422,23 +1503,27 @@ class OpenAIChatSession(ChatSession):
             # placeholders for any tool_call_id not covered.
             seen_ids: set[str] = set()
             j = i + 1
-            while j < len(messages) and messages[j].get("role") == "tool":
-                tcid = messages[j].get("tool_call_id")
+            while j < len(messages):
+                result = messages[j]
+                if not isinstance(result, dict):
+                    raise _OpenAIToolPairingError("invalid_message", phase="wire_pairing")
+                if result.get("role") != "tool":
+                    break
+                tcid = result.get("tool_call_id")
                 if tcid:
                     seen_ids.add(tcid)
                 j += 1
             # For each tool_call without a matching tool message, emit a
             # synthesized placeholder immediately after the assistant turn.
             for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    raise _OpenAIToolPairingError("invalid_call", phase="wire_pairing")
                 tcid = tc.get("id")
-                name = (tc.get("function") or {}).get("name", "?")
                 if not tcid or tcid in seen_ids:
                     continue
                 logger.warning(
-                    "[wire-guard] synthesizing placeholder tool_result for "
-                    "orphan tool_call id=%s name=%s — real result was not "
-                    "in context at send time. Investigate if this recurs.",
-                    tcid, name,
+                    "[wire-guard] synthesized missing tool result "
+                    "placeholder (reason=missing_result phase=wire_pairing)"
                 )
                 patched.append({
                     "role": "tool",
@@ -1492,6 +1577,7 @@ class OpenAIChatSession(ChatSession):
             # any orphan assistant[tool_calls] that aren't immediately followed
             # by matching role=tool entries. Canonical interface untouched.
             candidate = self._pair_orphan_tool_calls(candidate)
+            _validate_openai_tool_pairing(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
                 "messages": candidate,
@@ -1665,6 +1751,7 @@ class OpenAIChatSession(ChatSession):
             candidate = self._build_messages()
             # Final wire-layer guard — same as non-streaming send().
             candidate = self._pair_orphan_tool_calls(candidate)
+            _validate_openai_tool_pairing(candidate)
             kw: dict[str, Any] = {
                 "model": self._model,
                 "messages": candidate,

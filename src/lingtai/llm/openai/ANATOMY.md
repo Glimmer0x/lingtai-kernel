@@ -99,10 +99,10 @@ Both paths return sessions wrapped via `_wrap_with_gate()` for rate limiting. Ca
 
 `generate()` follows the same wire selection as `create_chat()` via `_should_use_responses()`: Chat Completions by default/legacy, or Responses API when `wire_api="responses"` (or legacy `use_responses=True` without a custom base URL / with `force_responses=True`). This keeps service-level one-shot calls consistent with multi-turn sessions. `CodexOpenAIAdapter.generate` is the native exception to the generic Responses helper: it creates a context-owned `CodexResponsesSession` and sends one real streamed request, preserving `service_tier`, `store=false`, Codex identity/cache/account headers, normal temperature/output/schema arguments, and safe pool selection metadata.
 
-### Chat Completions session flow (`OpenAIChatSession.send`, `adapter.py:1424`)
+### Chat Completions session flow (`OpenAIChatSession.send`, `adapter.py:1523`)
 
 1. Record user input into `ChatInterface` (str → `add_user_message`; list → `add_tool_results`)
-2. `_build_kwargs()`: enforce tool pairing → serialize via `_build_messages()` → `_pair_orphan_tool_calls()` wire guard
+2. `_build_kwargs()`: enforce tool pairing → serialize via `_build_messages()` → `_pair_orphan_tool_calls()` preserves only known-call placeholders → `_validate_openai_tool_pairing()` rejects standalone, non-contiguous, wrong-batch, duplicate, or id-less role=tool rows with sanitized structural reason/phase
 3. `_run_with_overflow_recovery(_do_call)` — retries with context trimming on 400 context-length errors
 4. On success: record assistant response into interface via `_record_assistant_response()`
 
@@ -465,7 +465,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 
 ### Wire-layer orphan guard
 
-`_pair_orphan_tool_calls()` (`adapter.py:1362`) scans the serialized message list for `assistant.tool_calls` without matching `role=tool` messages. Synthesizes placeholder tool results with `[synthesized placeholder — real result was not in context at send time]`. Logs warnings for investigation. Does NOT mutate canonical interface.
+`_pair_orphan_tool_calls()` (`adapter.py:1464`) scans the serialized message list for `assistant.tool_calls` without matching `role=tool` messages. Synthesizes placeholder tool results with `[synthesized placeholder — real result was not in context at send time]`. Logs only sanitized structural warnings. The shared `_validate_openai_tool_pairing()` immediately follows it in both `send()` and `send_stream()`, rejecting malformed standalone, non-contiguous, wrong-batch, duplicate, or id-less rows before SDK dispatch. Neither guard mutates the canonical interface.
 
 The Codex / Responses path has the same invariant: `to_responses_input` ends with `_pair_responses_orphan_function_calls` (`../interface_converters.py:190-250`) which synthesizes a `function_call_output` for any `function_call` without a matching output anywhere in the items list. Same placeholder string, same non-mutating semantics. Without this guard the provider returns `400 No tool output found for function call …` when a continuation request is built from a half-committed tool loop (issue #170).
 
@@ -483,7 +483,7 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 
 ### Streaming
 
-- **CC streaming** (`adapter.py:1612`) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content`. Overflow recovery wraps stream open + first chunk in the Chat Completions send-stream path.
+- **CC streaming** (`adapter.py:1712`) — `stream=True, stream_options={include_usage: True}`. Uses `StreamingAccumulator` for text + tool deltas. Reasoning deltas captured from `delta.reasoning` or `delta.reasoning_content`. The post-build pairing validator runs before stream open, matching the non-streaming path. Overflow recovery wraps stream open + first chunk in the Chat Completions send-stream path.
 - **Responses streaming** (`adapter.py:1995`) — event types: `response.reasoning_summary_text.delta/done` (summary thoughts only), `response.output_text.delta`, `response.function_call_arguments.delta`, `response.output_item.added/done`, `response.completed`. Custom/stateless mode snapshots before staging, replays full canonical history, records the finalized assistant turn, and restores the pre-send snapshot on enforce, serialization, stream-open, iteration, callback, finalize, or record failure (`adapter.py:2002-2089`).
 - **Codex streaming** — forces `stream=True` even on `send()`. Runs the `full`/`incremental` planner per request over the selected transport (REST default / WebSocket opt-in): REST carries the whole converted interface in both modes; WebSocket carries the whole interface for `full` and delta + `previous_response_id` for `incremental`. Captured summary thoughts and raw encrypted reasoning items are persisted as ThinkingBlocks so `to_responses_input` replays reasoning items before function calls; if Codex later rejects a raw encrypted item as unverifiable, the adapter strips only that opaque replay state and retries once with summary/plain transcript. Optional diagnostics (`LINGTAI_CODEX_RESPONSES_TRACE=1`) append safe per-event metadata to `logs/codex_responses_trace.jsonl` without changing accumulator/persistence behavior.
 
