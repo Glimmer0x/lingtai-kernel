@@ -328,6 +328,53 @@ def test_local_vision_is_hidden_but_explicitly_constructible(tmp_path):
     agent.add_tool.assert_called_once()
 
 
+def test_ollama_vision_is_advertised_and_needs_no_key(tmp_path):
+    """Ollama is a first-class local provider with defaults and no key needed."""
+    assert "ollama" in PROVIDERS["providers"]
+
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_svc_cls.return_value = mock_svc
+        agent = make_mock_agent(tmp_path)
+
+        # Minimal config: provider only. base_url/model default, key synthesized.
+        mgr = setup(agent, provider="ollama")
+
+    mock_svc_cls.assert_called_once_with(
+        api_key="ollama",
+        model="moondream",
+        base_url="http://localhost:11434/v1",
+        wire_api="chat_completions",
+    )
+    assert mgr._vision_service is mock_svc
+    agent.add_tool.assert_called_once()
+
+
+def test_ollama_vision_respects_explicit_override(tmp_path):
+    """Explicit ollama kwargs win over local defaults."""
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_svc_cls.return_value = mock_svc
+        agent = make_mock_agent(tmp_path)
+
+        setup(
+            agent,
+            provider="ollama",
+            api_key="real-key",
+            model="llava",
+            base_url="http://127.0.0.1:9999/v1",
+            max_tokens=256,
+        )
+
+    mock_svc_cls.assert_called_once_with(
+        api_key="real-key",
+        model="llava",
+        base_url="http://127.0.0.1:9999/v1",
+        wire_api="chat_completions",
+        max_tokens=256,
+    )
+
+
 def test_minimax_vision_preserves_active_default_headers(tmp_path):
     headers = {"X-Preset": "active"}
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
