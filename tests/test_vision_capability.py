@@ -1,6 +1,7 @@
 """Tests for vision capability and VisionService."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -300,9 +301,9 @@ def test_vision_setup_with_provider_and_key(tmp_path):
         assert isinstance(mgr, VisionManager)
 
 
-def test_local_vision_is_hidden_but_explicitly_constructible(tmp_path):
-    """The local pseudo-provider stays out of discovery yet keeps its opt-in path."""
-    assert "local" not in PROVIDERS["providers"]
+def test_mlx_vision_is_hidden_but_explicitly_constructible(tmp_path):
+    """The mlx pseudo-provider stays out of discovery yet keeps its opt-in path."""
+    assert "mlx" not in PROVIDERS["providers"]
 
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         mock_svc = MagicMock(spec=VisionService)
@@ -311,7 +312,7 @@ def test_local_vision_is_hidden_but_explicitly_constructible(tmp_path):
 
         mgr = setup(
             agent,
-            provider="local",
+            provider="mlx",
             model="mlx-community/local-test-model",
             max_tokens=128,
             api_compat="openai",
@@ -319,7 +320,7 @@ def test_local_vision_is_hidden_but_explicitly_constructible(tmp_path):
         )
 
     mock_factory.assert_called_once_with(
-        "local",
+        "mlx",
         api_key=None,
         model="mlx-community/local-test-model",
         max_tokens=128,
@@ -328,21 +329,36 @@ def test_local_vision_is_hidden_but_explicitly_constructible(tmp_path):
     agent.add_tool.assert_called_once()
 
 
-def test_ollama_vision_is_advertised_and_needs_no_key(tmp_path):
-    """Ollama is a first-class local provider with defaults and no key needed."""
-    assert "ollama" in PROVIDERS["providers"]
+def test_local_vision_is_advertised_and_requires_model(tmp_path):
+    """Local is advertised but refuses a silent model default with guidance."""
+    assert "local" in PROVIDERS["providers"]
+    assert "ollama" not in PROVIDERS["providers"]
 
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        agent = make_mock_agent(tmp_path)
+
+        # Minimal config: provider only. No model anywhere -> guided failure.
+        mgr = setup(agent, provider="local")
+
+    mock_svc_cls.assert_not_called()
+    assert mgr._vision_service is None
+    assert "model" in mgr._manual_reason
+    assert "settings/vision.json" in mgr._manual_reason
+    agent.add_tool.assert_called_once()
+
+
+def test_local_vision_uses_default_base_url_with_explicit_model(tmp_path):
+    """Local with an explicit model synthesizes a placeholder key and default URL."""
     with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
         mock_svc = MagicMock(spec=VisionService)
         mock_svc_cls.return_value = mock_svc
         agent = make_mock_agent(tmp_path)
 
-        # Minimal config: provider only. base_url/model default, key synthesized.
-        mgr = setup(agent, provider="ollama")
+        mgr = setup(agent, provider="local", model="llava")
 
     mock_svc_cls.assert_called_once_with(
-        api_key="ollama",
-        model="moondream",
+        api_key="local",
+        model="llava",
         base_url="http://localhost:11434/v1",
         wire_api="chat_completions",
     )
@@ -350,8 +366,8 @@ def test_ollama_vision_is_advertised_and_needs_no_key(tmp_path):
     agent.add_tool.assert_called_once()
 
 
-def test_ollama_vision_respects_explicit_override(tmp_path):
-    """Explicit ollama kwargs win over local defaults."""
+def test_local_vision_respects_explicit_override(tmp_path):
+    """Explicit local kwargs win over defaults."""
     with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
         mock_svc = MagicMock(spec=VisionService)
         mock_svc_cls.return_value = mock_svc
@@ -359,7 +375,7 @@ def test_ollama_vision_respects_explicit_override(tmp_path):
 
         setup(
             agent,
-            provider="ollama",
+            provider="local",
             api_key="real-key",
             model="llava",
             base_url="http://127.0.0.1:9999/v1",
@@ -372,6 +388,70 @@ def test_ollama_vision_respects_explicit_override(tmp_path):
         base_url="http://127.0.0.1:9999/v1",
         wire_api="chat_completions",
         max_tokens=256,
+    )
+
+
+def test_local_vision_reads_settings_json(tmp_path):
+    """settings/vision.json supplies the local endpoint when kwargs are absent."""
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "vision.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "base_url": "http://127.0.0.1:8080/v1",
+                "model": "moondream",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_svc_cls.return_value = mock_svc
+        agent = make_mock_agent(tmp_path)
+
+        mgr = setup(agent, provider="local")
+
+    mock_svc_cls.assert_called_once_with(
+        api_key="local",
+        model="moondream",
+        base_url="http://127.0.0.1:8080/v1",
+        wire_api="chat_completions",
+    )
+    assert mgr._vision_service is mock_svc
+
+
+def test_local_vision_kwargs_override_settings_json(tmp_path):
+    """Capability kwargs override settings/vision.json file values."""
+    settings_dir = tmp_path / "settings"
+    settings_dir.mkdir()
+    (settings_dir / "vision.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "base_url": "http://127.0.0.1:8080/v1",
+                "model": "moondream",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        mock_svc = MagicMock(spec=VisionService)
+        mock_svc_cls.return_value = mock_svc
+        agent = make_mock_agent(tmp_path)
+
+        setup(
+            agent,
+            provider="local",
+            model="llava",
+            base_url="http://127.0.0.1:9999/v1",
+        )
+
+    mock_svc_cls.assert_called_once_with(
+        api_key="local",
+        model="llava",
+        base_url="http://127.0.0.1:9999/v1",
+        wire_api="chat_completions",
     )
 
 

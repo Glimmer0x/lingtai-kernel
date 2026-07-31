@@ -84,7 +84,8 @@ def _require_api_key(api_key: object, provider: str) -> str:
     if not isinstance(api_key, str) or not api_key.strip():
         raise ValueError(
             f"api_key is required for provider {provider!r}. "
-            f"Use provider='local' for on-device vision without an API key."
+            f"Use provider='mlx' for on-device MLX vision or provider='local' "
+            f"for a local OpenAI-compatible server without an API key."
         )
     return api_key
 
@@ -93,7 +94,7 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     """Factory — create a VisionService for the given provider.
 
     Args:
-        provider: Provider name ("anthropic", "openai", "gemini", "mimo", "codex", "local").
+        provider: Provider name ("anthropic", "openai", "gemini", "mimo", "codex", "mlx").
         api_key: API key for the provider (not required for "codex" or "local").
         **kwargs: Additional provider-specific kwargs (e.g., model, base_url).
 
@@ -103,7 +104,7 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     Raises:
         ValueError: If the provider is not supported or api_key missing for API providers.
     """
-    if provider == "local":
+    if provider == "mlx":
         from .local import LocalVisionService
         return LocalVisionService(**kwargs)
     elif provider == "codex":
@@ -130,5 +131,5 @@ def create_vision_service(provider: str, *, api_key: str | None = None, **kwargs
     else:
         raise ValueError(
             f"Unsupported vision provider: {provider!r}. "
-            f"Supported: anthropic, openai, gemini, mimo, codex, local."
+            f"Supported: anthropic, openai, gemini, mimo, codex, mlx."
         )

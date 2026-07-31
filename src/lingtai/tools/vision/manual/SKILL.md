@@ -66,47 +66,75 @@ Never request or print API keys, OAuth tokens, environment values, headers, or
 full unsanitized URLs. Missing provider, model, or endpoint fields are simply
 unknown; do not fill them with guesses.
 
-## Local vision with Ollama (first-class provider)
+## Local vision (generic OpenAI-compatible provider)
 
-`provider="ollama"` is a built-in local route: it needs no API key, defaults to
-`http://localhost:11434/v1`, and uses a small vision model (`moondream`) unless
-one is configured. It is the fastest way to get private, offline image
-understanding on a machine that already runs Ollama.
+`provider="local"` points the `vision` capability at any local
+OpenAI-compatible vision server (Ollama, LM Studio, vLLM, llama.cpp server, ...)
+by URL. It needs no API key (a placeholder is synthesized; local servers ignore
+it), defaults `base_url` to `http://localhost:11434/v1`, and requires an
+explicit `model` - there is no hidden default model, because a silently assumed
+model masks misconfiguration.
 
-### 1. Install and pull a vision model
+The endpoint is operator-owned. Configure it in `settings/vision.json` (the
+family-owned file, like `settings/web.json`), in the capability manifest, or
+both (capability kwargs override the file).
 
-Install [Ollama](https://ollama.com) for your platform, then pull a vision-capable
-model. `moondream` is the recommended default: it is tiny (~1.7 GB), runs on
-CPU or a small GPU, and is sufficient for OCR and basic image description.
+### 1. Pick and install a server + pull a vision model
 
-    ollama pull moondream
+Any server that speaks the OpenAI Chat Completions API with image support
+works. Examples:
 
-Other vision-capable Ollama models exist (for example the `llava` family or
-`qwen2.5vl`); pull whichever fits your hardware. The model must be a vision
-model — a text-only model will fail at request time with a "does not support
-images" style error.
+- **Ollama** (easiest): install from <https://ollama.com>, then pull a
+  vision-capable model. `moondream` is a good small default (~1.7 GB, runs on
+  CPU or a small GPU, fine for OCR and basic description):
 
-### 2. Configure the capability
+      ollama pull moondream
 
-In `init.json` (or the active preset's `manifest.capabilities`), declare the
-vision capability with provider `ollama`. Both of these work:
+  Other vision-capable Ollama models exist (`llava`, `qwen2.5vl`, ...). The
+  model must be a vision model - a text-only model fails at request time with a
+  "does not support images" style error.
+
+- **LM Studio**: start a local server with an image-capable model, note the
+  port (default `http://localhost:1234/v1`).
+- **vLLM / llama.cpp server**: serve a multimodal model and point `base_url` at
+  its `/v1` endpoint.
+
+### 2. Configure the endpoint
+
+Two equivalent ways; capability kwargs win over the file.
+
+**`settings/vision.json`** (agent working dir, applies on next refresh):
+
+    {
+      "schema_version": 1,
+      "base_url": "http://localhost:11434/v1",
+      "model": "moondream",
+      "max_tokens": 1024
+    }
+
+`api_key` is optional and omitted here. Only `schema_version` plus the
+documented fields are allowed; an invalid file is a hard setup error surfaced
+as manual guidance.
+
+**Capability manifest** (`init.json` or the active preset's
+`manifest.capabilities`):
 
     "vision": {
-      "provider": "ollama",
+      "provider": "local",
       "model": "moondream"
     }
 
     "vision": {
-      "provider": "ollama",
+      "provider": "local",
       "model": "moondream",
       "base_url": "http://localhost:11434/v1",
       "max_tokens": 1024
     }
 
-`model` must name a model you actually pulled. `base_url` defaults to
-`http://localhost:11434/v1`; change it only when Ollama runs elsewhere or on a
+`model` is required and must name a model the server actually serves. `base_url`
+defaults to `http://localhost:11434/v1`; change it when the server runs on a
 non-default port (the `/v1` OpenAI-compatible suffix is required). `api_key` is
-optional — Ollama ignores its value, so the kernel synthesizes a placeholder.
+optional - local servers ignore it, so a placeholder is synthesized.
 
 > **Preset note.** If your agent uses an active preset (a `manifest.preset`
 > block), the preset's `manifest.capabilities` replace `init.json`'s for
@@ -123,33 +151,23 @@ After configuring and refreshing, the `vision` tool is available:
 A successful call returns `{"status": "ok", "analysis": "..."}`. If you get a
 sanitized setup failure instead, check the troubleshooting table below.
 
-### 4. Troubleshooting local Ollama vision
+### 4. Troubleshooting local vision
 
 | Symptom | Likely cause / fix |
 |---|---|
 | "No direct vision provider was configured" | The `vision` capability is not in the effective manifest. Add it to the preset (see the preset note above), then refresh. |
-| Connection refused on `localhost:11434` | Ollama is not running. Start it (`ollama serve` or the desktop app) and retry. |
-| "model 'moondream' not found" | The model was never pulled or has a different name. Run `ollama list` and `ollama pull <name>`, then set `model` to the exact pulled name. |
-| "does not support images" / vision request rejected | The configured model is text-only. Pull a vision model (e.g. `moondream`) and point `model` at it. |
-| "...missing the '/v1' suffix..." (from the service) | `base_url` is missing the OpenAI-compatible suffix. Use `http://localhost:11434/v1`. |
-| HTML/JSON parse failure on the response | Ollama returned a non-ChatCompletion body — usually the route is wrong (see previous row) or an old Ollama version. Upgrade Ollama and use `/v1`. |
-| GPU not used / slow | Ollama offloads to the GPU only when the model fits VRAM. `moondream` fits most GPUs; larger models fall back to CPU. Use `ollama ps` to confirm. |
+| "Local vision needs an explicit model" | No `model` is set in `settings/vision.json` or the capability manifest. Set `model` to a pulled/served vision model name, then refresh. |
+| "Local vision settings are invalid" | `settings/vision.json` has an unknown field, bad type, or a schema_version other than 1. Fix the file and refresh. |
+| Connection refused on the endpoint | The local server is not running. Start it (`ollama serve` or the desktop app) and retry. |
+| "model '<name>' not found" | The model was never pulled or has a different name. Run `ollama list` (or your server's model list) and set `model` to the exact name. |
+| "does not support images" / vision request rejected | The configured model is text-only. Pull/serve a vision model (e.g. `moondream`) and point `model` at it. |
+| "...missing the '/v1' suffix..." (from the service) | `base_url` is missing the OpenAI-compatible suffix. Use e.g. `http://localhost:11434/v1`. |
+| HTML/JSON parse failure on the response | The server returned a non-ChatCompletion body - usually the route is wrong (see previous row) or the server is too old. Upgrade and use `/v1`. |
+| GPU not used / slow | The server offloads to the GPU only when the model fits VRAM. `moondream` fits most GPUs; larger models fall back to CPU. |
 
-## Other local OpenAI-compatible servers
+### 5. Apple MLX (macOS only)
 
-Any local server that speaks the OpenAI Chat Completions API with image support
-(LM Studio, vLLM, llama.cpp server, etc.) can be wired through the generic
-custom relay with an explicit OpenAI-compatible shape:
-
-    "vision": {
-      "provider": "custom",
-      "api_compat": "openai",
-      "model": "<vision-model-name>",
-      "base_url": "http://localhost:1234/v1",
-      "api_key": "local-placeholder"
-    }
-
-Unlike `ollama`, the generic custom relay still requires a non-blank `api_key`
-string (many local servers accept any value); supply a placeholder. The manual
-above stays provider-neutral: the concrete server name and port are operator
-configuration, not something this manual auto-discovers.
+The native on-device MLX pseudo-provider (`provider="mlx"`) is available as an
+explicit opt-in for Apple Silicon. It is not advertised in check-caps; pass
+`model` (an `mlx-community/...` vision model) and `max_tokens`. It requires no
+API key.
