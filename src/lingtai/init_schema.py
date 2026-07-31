@@ -388,15 +388,16 @@ def validate_init(data: dict) -> list[str]:
                 f"{', '.join(sorted(allowed_wire_api))}, got {wire_api!r}"
             )
         # The wire_api field is scoped to OpenAI-compatible wire semantics.
-        # Non-auto values are allowed only for the official OpenAI provider, or
-        # for a custom OpenAI-compatible endpoint (api_compat omitted/openai).
+        # Non-auto values are allowed only for the official OpenAI provider,
+        # DeepSeek (whose adapter now supports both wires), or a custom
+        # OpenAI-compatible endpoint (api_compat omitted/openai).
         # Every other provider/compat is rejected — including Codex, which is
         # forcibly on Responses and out of scope here — so misuse fails loudly.
         # ``auto`` is harmless everywhere and is left through unchanged.
         if wire_api != "auto":
             provider = str(llm.get("provider", "")).lower()
             api_compat = str(llm.get("api_compat", "openai")).lower() or "openai"
-            allowed_scope = provider == "openai" or (
+            allowed_scope = provider in {"openai", "deepseek"} or (
                 provider == "custom" and api_compat == "openai"
             )
             if not allowed_scope:

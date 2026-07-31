@@ -22,7 +22,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.llm.deepseek.adapter import DeepSeekAdapter, DeepSeekChatSession
+from lingtai.llm.deepseek.adapter import (
+    DeepSeekAdapter,
+    DeepSeekChatSession,
+    _inject_responses_reasoning_fallback,
+)
 from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
@@ -330,3 +334,72 @@ def test_deepseek_inherits_shared_tool_pairing_rejection_after_reasoning_hook():
     assert "tool pairing" in str(exc_info.value)
     assert "provider-secret" not in str(exc_info.value)
     assert client.chat.completions.create.call_count == 0
+
+
+def test_deepseek_responses_wire_selection():
+    """DeepSeekAdapter can opt into the Responses wire via wire_api/use_responses."""
+    chat = DeepSeekAdapter(api_key="x")
+    assert chat._should_use_responses() is False
+
+    responses = DeepSeekAdapter(api_key="x", wire_api="responses")
+    assert responses._should_use_responses() is True
+
+    explicit_chat = DeepSeekAdapter(api_key="x", wire_api="chat_completions", use_responses=True)
+    assert explicit_chat._should_use_responses() is False
+
+    legacy = DeepSeekAdapter(api_key="x", use_responses=True, force_responses=True)
+    assert legacy._should_use_responses() is True
+
+
+def test_deepseek_responses_defaults_are_stateless_no_compaction():
+    """Responses opt-in defaults to stateless replay and no context_management."""
+    adapter = DeepSeekAdapter(api_key="x", wire_api="responses")
+    assert adapter._responses_stateless_replay is True
+    assert adapter._compact_threshold is None
+
+
+def test_deepseek_responses_reasoning_fallback_injection():
+    """Fallback reasoning item is injected after first function_call in Responses items."""
+    items = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "pre-tool reply"},
+        {"type": "function_call", "call_id": "c1", "name": "f1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        {"role": "assistant", "content": "post-tool reply"},
+    ]
+    out = _inject_responses_reasoning_fallback(items)
+    assert out[1]["role"] == "assistant" and out[1].get("content") == "pre-tool reply"
+    assert out[-2]["type"] == "reasoning"
+    assert out[-2]["summary"][0]["type"] == "summary_text"
+    assert "post-tool reply" in out[-2]["summary"][0]["text"]
+    assert out[-1]["role"] == "assistant" and out[-1]["content"] == "post-tool reply"
+
+
+def test_deepseek_responses_keeps_existing_reasoning():
+    """Real preserved reasoning items are not duplicated by the fallback."""
+    items = [
+        {"type": "function_call", "call_id": "c1", "name": "f1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "ok"},
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "real thinking"}]},
+        {"role": "assistant", "content": "answer"},
+    ]
+    out = _inject_responses_reasoning_fallback(items)
+    reasoning_items = [i for i in out if i.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["summary"][0]["text"] == "real thinking"
+
+
+def test_deepseek_responses_create_responses_session_uses_deepseek_session():
+    """_create_responses_session builds a DeepSeekResponsesSession (stateless)."""
+    from lingtai.llm.deepseek.adapter import DeepSeekResponsesSession
+    from lingtai.kernel.llm.interface import ChatInterface
+
+    adapter = DeepSeekAdapter(api_key="x", wire_api="responses")
+    iface = ChatInterface()
+    iface.add_system("sys")
+    session = adapter._create_responses_session(
+        model="deepseek-v4-flash", system_prompt="sys", interface=iface
+    )
+    assert isinstance(session, DeepSeekResponsesSession)
+    assert session._stateless_replay is True
+
