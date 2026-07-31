@@ -39,8 +39,9 @@ model-visible notification lane.
 `nudge` is the formal channel for mechanical, throttled checks. Runtime update
 checks publish `data.nudges[]` entries with `kind: kernel_version`; the sole
 normal install/update route is `https://lingtai.ai/install.sh`. Let Shell execute
-its concise `--help`, then `update --help`, without reading or pasting the script
-source. The installer owns exact-tag migration navigation; real update, mutation,
+its concise `--help`, without reading or pasting the script source, and follow
+whatever it currently instructs rather than assuming a specific child command.
+The installer owns exact-tag migration navigation; real update, mutation,
 configuration writes, and refresh require explicit human/config-owner authority.
 The bundled `runtime-update-checks` reference is limited to local read-only
 diagnosis and refresh mechanics. Source-freshness checks may publish

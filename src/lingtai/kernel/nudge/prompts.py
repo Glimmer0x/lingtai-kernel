@@ -113,10 +113,12 @@ def _render_package_update(facts: NudgeFacts) -> dict[str, Any]:
             "The official LingTai release manifest reports a newer kernel. "
             f"Use Shell to execute the official installer at {INSTALL_ROUTE} "
             "with --help; do not read or paste the script source into context. "
-            "Then execute its update --help mode to inspect the exact runtime, "
-            "migration, mirror, hash, and refresh contract. Before the real "
-            "update, the agent must obtain explicit human/config-owner "
-            "authorization; this nudge and help output are not authorization."
+            "Follow whatever the installer's own concise help output currently "
+            "instructs for inspecting the exact runtime, migration, mirror, "
+            "hash, and refresh contract; do not assume or hardcode a specific "
+            "child command or subcommand name. Before the real update, the "
+            "agent must obtain explicit human/config-owner authorization; this "
+            "nudge and help output are not authorization."
         ),
         "running": facts.running,
         "installed": facts.installed,

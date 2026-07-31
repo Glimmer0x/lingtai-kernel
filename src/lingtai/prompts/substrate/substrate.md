@@ -57,8 +57,9 @@ when available and confirm the module files it imports (`lingtai.__file__`,
 `python`, conda env, or checkout; `refresh` reloads the current on-disk/runtime
 surface but does not fetch or switch code by itself. For a `kernel_version` nudge,
 the sole normal install/update route is `https://lingtai.ai/install.sh`: let
-Shell execute its concise `--help`, then `update --help`, without reading or
-pasting the script source. The installer owns exact-tag migration navigation.
+Shell execute its concise `--help`, without reading or pasting the script
+source, and follow whatever it currently instructs rather than assuming a
+specific child command. The installer owns exact-tag migration navigation.
 Obtain explicit human/config-owner authority before any real update, migration,
 configuration write, or refresh, and refresh only after authorized validation.
 The bundled `runtime-update-checks` manual is only for local read-only diagnosis

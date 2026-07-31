@@ -63,7 +63,9 @@ def test_package_update_points_to_installer_and_requires_authorization():
     assert "Use Shell to execute" in detail
     assert "with --help" in detail
     assert "do not read or paste the script source into context" in detail
-    assert "update --help" in detail
+    assert "Follow whatever the installer's own concise help output currently" in detail
+    assert "do not assume or hardcode a specific" in detail
+    assert "update --help" not in detail
     assert "must obtain explicit human/config-owner authorization" in detail
     assert "this nudge and help output are not authorization" in detail
     assert "skill.md" not in detail
