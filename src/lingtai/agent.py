@@ -1138,6 +1138,8 @@ class Agent(BaseAgent):
         """
         from .services import mcp as mcp_service
         from .services.mcp import MCPClient
+        from lingtai.kernel.logging import get_logger as _get_logger
+        logger = _get_logger()
 
         # Expand per-agent placeholders (e.g. {agent_id}) so a shared registry
         # template gives each agent its own scope. See _expand_agent_placeholders.
@@ -1146,6 +1148,23 @@ class Agent(BaseAgent):
             args = [self._expand_agent_placeholders(a) for a in args]
         if env:
             env = {k: self._expand_agent_placeholders(v) for k, v in env.items()}
+
+        # Dedupe by identity: if an identical server is already connected,
+        # reuse it instead of spawning a duplicate subprocess. Without this,
+        # every boot/refresh/molt respawn adds another stdio pair that close()
+        # cannot reliably terminate on Windows (venv shim -> interpreter).
+        identity = None
+        default_name = getattr(MCPClient, "_default_name", None)
+        if default_name is not None:
+            identity = default_name(command, args or [])
+        if identity is not None:
+            for existing in getattr(self, "_mcp_clients", []) or []:
+                if (
+                    getattr(existing, "name", None) == identity
+                    and existing.is_connected()
+                ):
+                    logger.info("MCP %s already connected; reusing client", identity)
+                    return []
 
         client = MCPClient(command=command, args=args, env=env)
         client.start()
@@ -1334,6 +1353,16 @@ class Agent(BaseAgent):
                 name: self._expand_agent_placeholders(value)
                 for name, value in headers.items()
             }
+
+        # Dedupe by endpoint: an identical HTTP server already connected must
+        # not get a second connection (same accumulation class as stdio).
+        for existing in getattr(self, "_mcp_clients", []) or []:
+            if (
+                getattr(existing, "url", None) == url
+                and existing.is_connected()
+            ):
+                logger.info("HTTP MCP %s already connected; reusing client", url)
+                return []
 
         client = HTTPMCPClient(url=url, headers=headers)
         client.start()

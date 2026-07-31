@@ -18,6 +18,7 @@ kernel-facing projection of typed results.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -223,6 +224,132 @@ async def _list_all_tools(client: Any) -> list[dict[str, Any]]:
 _STALE_RETRY_POLICIES = frozenset({"never", "safe"})
 
 
+def _snapshot_process_table() -> list[dict]:
+    """Return [{pid, ppid, cmdline}] for every visible process.
+
+    stdlib-only, cross-platform. The MCP server may be a wrapper that spawns
+    a real interpreter child (Windows venv shim -> base python), so callers
+    that need to kill a server must walk the whole descendant tree, not just
+    direct children.
+    """
+    rows: list[dict] = []
+    try:
+        if os.name == "nt":
+            import json
+            import subprocess
+
+            script = (
+                "Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId,ParentProcessId,CommandLine | "
+                "ConvertTo-Json -Compress"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                text=True,
+                timeout=20,
+                errors="replace",
+            ).strip()
+            if not out:
+                return rows
+            data = json.loads(out)
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                rows.append(
+                    {
+                        "pid": int(item.get("ProcessId") or 0),
+                        "ppid": int(item.get("ParentProcessId") or 0),
+                        "cmdline": (item.get("CommandLine") or "").lower(),
+                    }
+                )
+        else:
+            import subprocess
+
+            out = subprocess.check_output(
+                ["ps", "-axo", "pid=,ppid=,command="],
+                text=True,
+                timeout=20,
+                errors="replace",
+            )
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(None, 2)
+                if len(parts) < 2:
+                    continue
+                try:
+                    pid = int(parts[0])
+                    ppid = int(parts[1])
+                except ValueError:
+                    continue
+                cmdline = (parts[2] if len(parts) > 2 else "").lower()
+                rows.append({"pid": pid, "ppid": ppid, "cmdline": cmdline})
+    except Exception:
+        # Best effort: if the snapshot fails we simply cannot clean up by pid.
+        return rows
+    return rows
+
+
+def _descendant_pids(root_pid: int, table: list[dict]) -> list[int]:
+    """Return every pid in the descendant closure of ``root_pid``."""
+    children: dict[int, list[int]] = {}
+    for row in table:
+        children.setdefault(row["ppid"], []).append(row["pid"])
+    found: list[int] = []
+    stack = list(children.get(root_pid, []))
+    while stack:
+        pid = stack.pop()
+        found.append(pid)
+        stack.extend(children.get(pid, []))
+    return found
+
+
+def _kill_process_tree(pid: int, timeout: float = 3.0) -> bool:
+    """Terminate a process and all its descendants; return True if gone."""
+    try:
+        if os.name == "nt":
+            import subprocess
+
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=timeout + 2,
+            )
+        else:
+            import signal
+
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            import time
+
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    return True
+                except PermissionError:
+                    return False
+                time.sleep(0.05)
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+    except Exception:
+        return False
+    return True
+
+
 class MCPClient:
     """Async-to-sync bridge for any MCP stdio server.
 
@@ -238,10 +365,17 @@ class MCPClient:
         command: str,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
+        name: str | None = None,
     ):
         self._command = command
         self._args = args or []
         self._env = env
+        self._name = name or self._default_name(command, self._args)
+
+        # Child process tree owned by this client (captured after start so
+        # close() can terminate it even on platforms where EOF does not exit
+        # the child, e.g. Windows venv shim -> real interpreter).
+        self._child_pids: list[int] = []
 
         self._session: Any = None
         self._read_stream: Any = None
@@ -262,6 +396,48 @@ class MCPClient:
         # Activity log for debugging — last 50 calls
         self._activity_log: list[dict[str, Any]] = []
         self._activity_lock = threading.Lock()
+
+    @staticmethod
+    def _default_name(command: str, args: list[str]) -> str:
+        """Derive a stable identity from the spawn command for dedup."""
+        base = os.path.basename(command).lower()
+        tokens = [base]
+        for a in args:
+            tok = a.lower().strip()
+            if len(tok) >= 5 and not tok.startswith("-"):
+                tokens.append(tok)
+        return "|".join(tokens)
+
+    @property
+    def name(self) -> str:
+        """Stable identity for dedup (explicit name or derived from command)."""
+        return self._name
+
+    def _capture_child_pids(self) -> None:
+        """Record descendant PIDs matching this server's command signature."""
+        try:
+            signature_tokens = [t for t in self._name.split("|") if t]
+            table = _snapshot_process_table()
+            matches = []
+            for pid in _descendant_pids(os.getpid(), table):
+                row = next((r for r in table if r["pid"] == pid), None)
+                if row and row["cmdline"]:
+                    if any(tok in row["cmdline"] for tok in signature_tokens):
+                        matches.append(pid)
+            if matches:
+                self._child_pids = matches
+        except Exception:
+            pass
+
+    def _kill_children(self) -> None:
+        """Terminate the captured child process tree (best effort)."""
+        if not self._child_pids:
+            return
+        for pid in self._child_pids:
+            try:
+                _kill_process_tree(pid)
+            except Exception:
+                continue
 
     # ------------------------------------------------------------------
     # Exception helpers — never surface a blank error (issue #104)
@@ -340,9 +516,20 @@ class MCPClient:
         self._ready.wait(timeout=30)
         if self._error:
             raise RuntimeError(f"MCP server failed to start: {self._error}")
+        # The subprocess is now alive; record its tree so close() can
+        # terminate it on platforms where closing stdio does not exit it.
+        self._capture_child_pids()
 
     def close(self) -> None:
-        """Shut down the MCP session and background thread."""
+        """Shut down the MCP session, background thread, and subprocess tree.
+
+        Stopping the asyncio loop and joining the thread is enough on POSIX,
+        where closing the stdio pipes delivers EOF and the child exits. On
+        Windows that is not reliable (a venv launcher shim spawns a real
+        interpreter as a child that survives), so we additionally terminate
+        the captured subprocess tree. Harmless on POSIX, where the tree is
+        already gone.
+        """
         if self._closed:
             return
         self._closed = True
@@ -350,6 +537,7 @@ class MCPClient:
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
             self._thread.join(timeout=5)
+        self._kill_children()
 
     def restart(self) -> None:
         """Tear down a (possibly stale) session and reconnect from scratch.
