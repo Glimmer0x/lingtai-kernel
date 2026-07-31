@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai.llm.deepseek.adapter import DeepSeekAdapter, DeepSeekChatSession
 from lingtai.kernel.llm.interface import (
     ChatInterface,
@@ -289,3 +291,42 @@ class TestDeepSeekAdapterWiring:
     def test_base_url_override(self):
         adapter = DeepSeekAdapter(api_key="stub", base_url="https://alt.example/v1")
         assert adapter.base_url == "https://alt.example/v1"
+
+
+
+def test_deepseek_inherits_shared_tool_pairing_rejection_after_reasoning_hook():
+    """DeepSeek's reasoning hook runs, then the shared validator blocks dispatch."""
+    class _MalformedDeepSeekSession(DeepSeekChatSession):
+        def _build_messages(self):
+            messages = super()._build_messages()
+            messages.append({
+                "role": "tool",
+                "tool_call_id": "unknown-after-hook",
+                "content": "provider-secret",
+            })
+            return messages
+
+    iface = ChatInterface()
+    iface.add_assistant_message([
+        ToolCallBlock(id="known-call", name="lookup", args={}),
+    ])
+    iface.add_tool_results([
+        ToolResultBlock(id="known-call", name="lookup", content="known-result"),
+    ])
+    client = MagicMock()
+    session = _MalformedDeepSeekSession(
+        client=client,
+        model="deepseek-v4-pro",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        client_kwargs={},
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        session.send(None)
+
+    assert "tool pairing" in str(exc_info.value)
+    assert "provider-secret" not in str(exc_info.value)
+    assert client.chat.completions.create.call_count == 0

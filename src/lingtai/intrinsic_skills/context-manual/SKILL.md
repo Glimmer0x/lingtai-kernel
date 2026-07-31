@@ -200,7 +200,7 @@ Before you call `context(action="molt", ...)`, always verify at minimum:
 
 **`keep_tool_calls`** — optional list of tool-call IDs to preserve across molt. Each named pair (tool_use + tool_result) is replayed into the fresh session right after the summary, in the order you list them. If any ID is not found, the molt is refused. Keep this list short — the durable stores are the primary persistence.
 
-**`keep_last`** — optional integer (default: 20). Number of recent conversation entries to preserve. These entries are replayed so the post-molt self retains recent context. Pass 0 to explicitly disable (archive everything). Overlapping entries with `keep_tool_calls` are deduplicated.
+**`keep_last`** — optional integer (default: 20). Requested minimum number of recent conversation entries to preserve. The retained suffix may expand backward to include one adjacent assistant tool-call/result batch whole, so it can contain more entries when needed to avoid splitting that batch. These entries are replayed so the post-molt self retains recent context. Pass 0 to explicitly disable (archive everything). Overlapping entries with `keep_tool_calls` are deduplicated.
 
 ## 7. Context Pressure Reminder
 

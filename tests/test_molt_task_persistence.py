@@ -13,7 +13,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lingtai.kernel.llm.interface import ChatInterface, TextBlock, ToolCallBlock
+from lingtai.kernel.llm.interface import (
+    ChatInterface,
+    TextBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+)
 
 
 from tests._molt_helpers import write_session_journal as _write_session_journal
@@ -515,3 +520,124 @@ class TestContextForgetKeepLast:
             assert "task_snapshot_saved" not in result
         finally:
             agent.stop()
+
+
+# ---------------------------------------------------------------------------
+# Atomic keep_last batch selection regressions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("keep_last", "expected_indices"),
+    [
+        (6, [1, 2, 3, 4, 5, 6]),  # cut before the single-call batch
+        (5, [1, 2, 3, 4, 5, 6]),  # cut between its call and result
+        (4, [3, 4, 5, 6]),        # cut after the single-call batch
+        (3, [4, 5, 6]),            # cut before the parallel batch
+        (2, [4, 5, 6]),            # cut between its calls and results
+        (1, [6]),                  # cut after the parallel batch
+    ],
+)
+def test_keep_last_suffix_retains_tool_batches_atomically(keep_last, expected_indices):
+    """A suffix cut never retains only part of a single or parallel tool batch."""
+    from lingtai.tools.context._molt import _select_keep_last_entries
+
+    iface = ChatInterface()
+    iface.add_system("system")
+    iface.add_user_message("old")                         # 0
+    iface.add_assistant_message([                         # 1
+        ToolCallBlock(id="single-call", name="lookup", args={}),
+    ])
+    iface.add_tool_results([                               # 2
+        ToolResultBlock(id="single-call", name="lookup", content="single-result"),
+    ])
+    iface.add_user_message("between")                     # 3
+    iface.add_assistant_message([                         # 4
+        ToolCallBlock(id="parallel-a", name="lookup", args={}),
+        ToolCallBlock(id="parallel-b", name="lookup", args={}),
+    ])
+    iface.add_tool_results([                               # 5
+        ToolResultBlock(id="parallel-b", name="lookup", content="parallel-b-result"),
+        ToolResultBlock(id="parallel-a", name="lookup", content="parallel-a-result"),
+    ])
+    iface.add_user_message("after")                       # 6
+
+    entries = [entry for entry in iface.entries if entry.role != "system"]
+    selected = _select_keep_last_entries(entries, keep_last)
+    assert [entry.id for entry in selected] == [entries[i].id for i in expected_indices]
+
+
+def test_ordinary_molt_replays_atomic_keep_last_batch(tmp_path):
+    """The ordinary molt call site uses the shared atomic suffix selector."""
+    from lingtai.tools.context._molt import _context_molt
+
+    agent = _make_agent(tmp_path)
+    agent.start()
+    try:
+        _ensure_session(agent)
+        iface = agent._chat.interface
+        iface.add_user_message("before")
+        iface.add_assistant_message([
+            ToolCallBlock(id="ordinary-call", name="lookup", args={}),
+        ])
+        iface.add_tool_results([
+            ToolResultBlock(id="ordinary-call", name="lookup", content="result"),
+        ])
+        iface.add_user_message("after")
+        tc_id = _add_molt_call(agent)
+
+        result = _context_molt(agent, {
+            "summary": "summary",
+            "_tc_id": tc_id,
+            "keep_last": 2,
+            "session_journal_path": _write_session_journal(agent),
+        })
+
+        assert result["status"] == "ok"
+        assert result["kept_last"] == 3
+        replayed = agent._chat.interface
+        assert sum(
+            isinstance(block, ToolCallBlock) and block.id == "ordinary-call"
+            for entry in replayed.entries for block in entry.content
+        ) == 1
+        assert sum(
+            isinstance(block, ToolResultBlock) and block.id == "ordinary-call"
+            for entry in replayed.entries for block in entry.content
+        ) == 1
+    finally:
+        agent.stop()
+
+
+def test_forced_context_forget_replays_atomic_keep_last_batch(tmp_path):
+    """Forced context_forget shares the same atomic suffix selector."""
+    from lingtai.tools.context._molt import context_forget
+
+    agent = _make_agent(tmp_path)
+    agent.start()
+    try:
+        _ensure_session(agent)
+        iface = agent._chat.interface
+        iface.add_user_message("before")
+        iface.add_assistant_message([
+            ToolCallBlock(id="forced-call", name="lookup", args={}),
+        ])
+        iface.add_tool_results([
+            ToolResultBlock(id="forced-call", name="lookup", content="result"),
+        ])
+        iface.add_user_message("after")
+
+        result = context_forget(agent, source="admin", keep_last=2)
+
+        assert result["status"] == "ok"
+        assert result["kept_last"] == 3
+        replayed = agent._chat.interface
+        assert sum(
+            isinstance(block, ToolCallBlock) and block.id == "forced-call"
+            for entry in replayed.entries for block in entry.content
+        ) == 1
+        assert sum(
+            isinstance(block, ToolResultBlock) and block.id == "forced-call"
+            for entry in replayed.entries for block in entry.content
+        ) == 1
+    finally:
+        agent.stop()

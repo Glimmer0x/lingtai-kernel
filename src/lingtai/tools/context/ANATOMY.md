@@ -43,7 +43,9 @@ passive lifecycle scenarios.
 - `../system/summarize.py` — private history-summary engine. It records pending
   marker replacements, marks the applied set done, persists history, and only
   then calls `chat.request_history_rebuild`. It is not a public `system` action.
-- `_molt.py` — agent and system molt implementations, replay selection,
+- `_molt.py` — agent and system molt implementations; shared
+  `_select_keep_last_entries` atomically selects suffixes around complete
+  single/parallel assistant tool-result batches; replay selection,
   archive/wipe, post-molt hook invocation before fresh-session creation, and
   post-molt notification publishing.
 - `_session_journal.py` — fail-closed journal-path/frontmatter gate.

@@ -35,6 +35,55 @@ SYSTEM_FORCED_MOLT_REASONING = (
 )
 
 
+def _select_keep_last_entries(
+    entries: list,
+    keep_last: int | None,
+    *,
+    exclude_tool_call_id: str | None = None,
+) -> list:
+    """Select a suffix without splitting an assistant tool-result batch."""
+    if keep_last is None or keep_last <= 0:
+        return []
+    candidates = [entry for entry in entries if entry.role != "system"]
+    if exclude_tool_call_id is not None:
+        candidates = [
+            entry for entry in candidates
+            if not any(
+                isinstance(block, ToolCallBlock) and block.id == exclude_tool_call_id
+                for block in entry.content
+            )
+        ]
+    if not candidates:
+        return []
+    start = max(0, len(candidates) - keep_last)
+
+    index = 0
+    while index < len(candidates):
+        entry = candidates[index]
+        is_call_batch = (
+            entry.role == "assistant"
+            and any(isinstance(block, ToolCallBlock) for block in entry.content)
+        )
+        if not is_call_batch:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(candidates):
+            result_entry = candidates[end]
+            if (
+                result_entry.role != "user"
+                or not result_entry.content
+                or not all(isinstance(block, ToolResultBlock) for block in result_entry.content)
+            ):
+                break
+            end += 1
+        if index < start < end:
+            start = index
+            break
+        index = end
+    return candidates[start:]
+
+
 def _first_nonempty_line(text: str | None) -> str:
     if not text:
         return ""
@@ -313,20 +362,13 @@ def _context_molt(agent, args: dict) -> dict:
 
     before_tokens = iface_pre.estimate_context_tokens()
 
-    # Capture keep_last entries from the pre-molt interface BEFORE the
-    # snapshot (which mutates iface_pre by closing orphan tool calls) and
-    # BEFORE the wipe. These are the last N non-system entries that will
-    # be replayed into the fresh session so the post-molt self retains
-    # recent conversational context.
-    # Exclude the molt call's own entry — it is replayed separately.
-    keep_last_entries: list = []
-    if keep_last is not None:
-        non_system = [
-            e for e in iface_pre.entries
-            if e.role != "system"
-            and not any(isinstance(b, ToolCallBlock) and b.id == tc_id for b in e.content)
-        ]
-        keep_last_entries = non_system[-keep_last:] if keep_last <= len(non_system) else non_system[:]
+    # Capture keep_last entries before the snapshot and wipe. The shared
+    # selector excludes the molt call, then keeps tool batches atomic.
+    keep_last_entries = _select_keep_last_entries(
+        iface_pre.entries,
+        keep_last,
+        exclude_tool_call_id=tc_id,
+    )
 
     # Deduplicate: when both keep_last and keep_tool_calls are used, remove
     # any keep_last entries whose ToolCallBlocks or ToolResultBlocks are
@@ -617,11 +659,9 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     iface_pre = agent._chat.interface
     before_tokens = iface_pre.estimate_context_tokens()
 
-    # Capture keep_last entries from the pre-molt interface BEFORE wiping.
-    keep_last_entries: list = []
-    if keep_last is not None and keep_last > 0:
-        non_system = [e for e in iface_pre.entries if e.role != "system"]
-        keep_last_entries = non_system[-keep_last:] if keep_last <= len(non_system) else non_system[:]
+    # Capture keep_last entries before wiping; the shared selector preserves
+    # complete assistant tool-call/result batches atomically.
+    keep_last_entries = _select_keep_last_entries(iface_pre.entries, keep_last)
 
     from . import _write_molt_snapshot
     _write_molt_snapshot(

@@ -13,20 +13,28 @@ naturally on the next send (implicit dedup).
 """
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
+import pytest
+
 from lingtai.llm.openai.adapter import OpenAIChatSession
-from lingtai.kernel.llm.interface import ChatInterface
+from lingtai.kernel.llm.interface import (
+    ChatInterface,
+    ToolCallBlock,
+    ToolResultBlock,
+)
+from tests._chat_completion_helpers import make_raw_response
 
 
 _SYNTH_MARKER = "[synthesized placeholder"
 
 
-def _make_session() -> OpenAIChatSession:
+def _make_session(client=None) -> OpenAIChatSession:
     """Build an isolated session with no real state; we only call
     _pair_orphan_tool_calls directly with hand-crafted message lists."""
     return OpenAIChatSession(
-        client=MagicMock(),
+        client=client or MagicMock(),
         model="test",
         interface=ChatInterface(),
         tools=None,
@@ -227,3 +235,161 @@ def test_tool_call_with_missing_id_is_skipped():
     tool_msgs = [m for m in out if m.get("role") == "tool"]
     assert len(tool_msgs) == 1
     assert tool_msgs[0]["tool_call_id"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# Shared post-build/pre-SDK validator regressions
+# ---------------------------------------------------------------------------
+
+
+_VALID_TOOL_CALL = {
+    "id": "call-known",
+    "type": "function",
+    "function": {"name": "lookup", "arguments": '{"secret":"do-not-leak"}'},
+}
+
+
+@pytest.mark.parametrize(
+    ("label", "messages"),
+    [
+        (
+            "standalone",
+            [{"role": "tool", "tool_call_id": "old-call", "content": "secret-result"}],
+        ),
+        (
+            "non_contiguous",
+            [
+                {"role": "assistant", "tool_calls": [_VALID_TOOL_CALL]},
+                {"role": "user", "content": "separator"},
+                {"role": "tool", "tool_call_id": "call-known", "content": "secret-result"},
+            ],
+        ),
+        (
+            "wrong_batch",
+            [
+                {"role": "assistant", "tool_calls": [_VALID_TOOL_CALL]},
+                {"role": "tool", "tool_call_id": "other-call", "content": "secret-result"},
+            ],
+        ),
+        (
+            "duplicate",
+            [
+                {"role": "assistant", "tool_calls": [_VALID_TOOL_CALL]},
+                {"role": "tool", "tool_call_id": "call-known", "content": "first-secret"},
+                {"role": "tool", "tool_call_id": "call-known", "content": "second-secret"},
+            ],
+        ),
+        (
+            "idless",
+            [
+                {"role": "assistant", "tool_calls": [_VALID_TOOL_CALL]},
+                {"role": "tool", "content": "secret-result"},
+            ],
+        ),
+    ],
+)
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "send_stream"])
+def test_malformed_tool_rows_fail_closed_before_client_call(label, messages, streaming):
+    """Every malformed row is rejected after post-build pairing and before SDK dispatch."""
+    client = MagicMock()
+    session = _make_session(client)
+    session._build_messages = lambda: messages
+
+    with pytest.raises(ValueError) as exc_info:
+        if streaming:
+            session.send_stream(None)
+        else:
+            session.send(None)
+
+    error = str(exc_info.value)
+    assert "tool pairing" in error
+    assert "phase=" in error
+    assert "secret" not in error
+    assert "call-known" not in error
+    assert label in error
+    assert client.chat.completions.create.call_count == 0
+
+
+_MIXED_OBJECT_SENTINEL = "mixed-tool-call-secret-do-not-leak"
+
+
+class _NonDictToolCall:
+    def __repr__(self):
+        return f"<non-dict-tool-call {_MIXED_OBJECT_SENTINEL}>"
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["send", "send_stream"])
+def test_mixed_non_dict_tool_call_fails_closed_before_client_call(streaming, caplog):
+    """A mixed call batch gets a sanitized structural error before dispatch."""
+    client = MagicMock()
+    session = _make_session(client)
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [_VALID_TOOL_CALL, _NonDictToolCall()],
+        },
+    ]
+    session._build_messages = lambda: messages
+
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(ValueError) as exc_info:
+        if streaming:
+            session.send_stream(None)
+        else:
+            session.send(None)
+
+    error = exc_info.value
+    assert str(error) == "tool pairing rejected: reason=invalid_call phase=wire_pairing"
+    assert error.reason == "invalid_call"
+    assert error.phase == "wire_pairing"
+    assert _MIXED_OBJECT_SENTINEL not in str(error)
+    assert _MIXED_OBJECT_SENTINEL not in caplog.text
+    assert client.chat.completions.create.call_count == 0
+
+
+def test_valid_single_and_parallel_batches_reach_sdk_unchanged():
+    """Single and parallel result batches remain ordered/content-preserving."""
+    client = MagicMock()
+    client.chat.completions.create.return_value = make_raw_response(content="done")
+    iface = ChatInterface()
+    iface.add_assistant_message(
+        [
+            ToolCallBlock(id="single", name="lookup", args={}),
+        ]
+    )
+    iface.add_tool_results([
+        ToolResultBlock(id="single", name="lookup", content="single-result"),
+    ])
+    iface.add_assistant_message(
+        [
+            ToolCallBlock(id="parallel-a", name="lookup", args={}),
+            ToolCallBlock(id="parallel-b", name="lookup", args={}),
+        ]
+    )
+    # Parallel result order is intentionally not call order.
+    iface.add_tool_results([
+        ToolResultBlock(id="parallel-b", name="lookup", content="parallel-b-result"),
+        ToolResultBlock(id="parallel-a", name="lookup", content="parallel-a-result"),
+    ])
+    session = OpenAIChatSession(
+        client=client,
+        model="test",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        client_kwargs={},
+    )
+
+    session.send(None)
+
+    sent = client.chat.completions.create.call_args.kwargs["messages"]
+    assert [m["role"] for m in sent] == [
+        "assistant", "tool", "assistant", "tool", "tool",
+    ]
+    assert [m.get("tool_call_id") for m in sent if m["role"] == "tool"] == [
+        "single", "parallel-b", "parallel-a",
+    ]
+    assert [m["content"] for m in sent if m["role"] == "tool"] == [
+        "single-result", "parallel-b-result", "parallel-a-result",
+    ]
