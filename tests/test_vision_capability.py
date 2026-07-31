@@ -358,6 +358,8 @@ def test_local_vision_missing_model_result_guides_with_consent(tmp_path):
     assert result["status"] == "error"
     assert "ask the human for consent" in result["message"]
     assert "vision(action='manual'" in result["message"]
+    # Skill load comes before the consent ask.
+    assert result["message"].index("vision(action='manual'") < result["message"].index("consent")
 
 
 def test_default_vision_failure_informs_agent_of_alternatives(tmp_path):

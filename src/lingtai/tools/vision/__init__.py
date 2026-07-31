@@ -64,9 +64,11 @@ def _consent_guidance() -> str:
     full steps live in the vision manual skill.
     """
     return (
-        "To enable vision, ask the human for consent to set it up, then load "
-        "the vision manual skill: vision(action='manual', input={}, "
-        "reasoning='vision is not set up, load the setup steps')."
+        "To enable vision, load the vision manual skill for the setup steps: "
+        "vision(action='manual', input={}, reasoning='vision is not set up, "
+        "load the setup steps'); then ask the human for consent before "
+        "installing a local vision server, pulling a model, or editing "
+        "settings/vision.json / the capability manifest."
     )
 
 
@@ -295,11 +297,11 @@ class VisionManager:
                     "provider's Responses-API vision, which may not support "
                     "images. Alternative vision may be available: the current "
                     "provider's MCP, or a local OpenAI-compatible vision "
-                    "server via provider='local'. Ask the human for consent "
-                    "to set one up, then load the vision manual skill for the "
-                    "steps: vision(action='manual', input={}, "
-                    "reasoning='default vision failed, load the setup "
-                    "alternatives')."
+                    "server via provider='local'. Load the vision manual skill "
+                    "for the setup alternatives: vision(action='manual', "
+                    "input={}, reasoning='default vision failed, load the "
+                    "setup alternatives'); then ask the human for consent "
+                    "before setting one up."
                 ),
             }
 
@@ -429,10 +431,10 @@ def setup(
                 local_model = kwargs.get("model") or local_settings.model
                 if not local_model:
                     manual_reason = (
-                        "Local vision needs an explicit model. Ask the human "
-                        "for consent to set it up, then load the vision manual "
-                        "skill: vision(action='manual', input={}, "
-                        "reasoning='local vision setup')."
+                        "Local vision needs an explicit model. Load the vision "
+                        "manual skill: vision(action='manual', input={}, "
+                        "reasoning='local vision setup'); then ask the human "
+                        "for consent before setting it up."
                     )
                 else:
                     local_key = api_key or local_settings.api_key or "local"
