@@ -11,6 +11,12 @@ The local mlx-vlm pseudo-provider remains available through explicit
 ``add_capability(..., provider="local")`` opt-in, but it is intentionally not
 advertised in ``PROVIDERS`` or first-run/check-caps surfaces yet.
 
+``ollama`` is a first-class local OpenAI-compatible provider: it defaults to
+``http://localhost:11434/v1``, a small vision model (``moondream``), and a
+placeholder key (Ollama ignores the value). Configure it with
+``add_capability("vision", provider="ollama", model="<pulled-model>")`` or via
+``manifest.capabilities.vision``; no API key is required.
+
 ``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
 (``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
 children are ``analyze`` and the family-owned reserved ``manual``, composed and
@@ -122,6 +128,7 @@ PROVIDERS = {
         "gemini", "anthropic", "openai", "openrouter", "custom", "deepseek",
         "minimax", "mimo", "glm", "zhipu", "grok", "qwen", "kimi",
         "codex", "codex-pool", "codex_pool", "claude-code", "claude_code",
+        "ollama",
     ],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
@@ -358,6 +365,37 @@ def setup(
                     api_key=None,
                     **local_kwargs,
                 )
+            except Exception as exc:
+                manual_reason = _setup_failure(provider, exc)
+        elif provider_key == "ollama":
+            # Ollama is a local OpenAI-compatible server (default
+            # http://localhost:11434/v1). It accepts any non-blank API key and
+            # serves the Chat Completions wire only. Unlike the generic custom
+            # relay below, a missing api_key is NOT a hard failure: Ollama
+            # ignores the value, so we synthesize a placeholder that satisfies
+            # the OpenAI SDK's non-blank requirement. base_url/model default to
+            # the standard local endpoint and a sensible small vision model.
+            from lingtai.services.vision.openai import OpenAIVisionService
+            ollama_base_url = kwargs.get("base_url") or "http://localhost:11434/v1"
+            ollama_model = kwargs.get("model") or "moondream"
+            ollama_key = api_key or "ollama"  # placeholder; Ollama ignores value
+            ollama_wire = _effective_openai_wire(
+                kwargs.get("wire_api"),
+                use_responses_api=False,
+                base_url=ollama_base_url,
+            )
+            svc_kwargs: dict = {
+                "api_key": ollama_key,
+                "model": ollama_model,
+                "base_url": ollama_base_url,
+            }
+            if ollama_wire and ollama_wire != "auto":
+                svc_kwargs["wire_api"] = ollama_wire
+            cap_max_tokens = kwargs.get("max_tokens")
+            if cap_max_tokens is not None:
+                svc_kwargs["max_tokens"] = cap_max_tokens
+            try:
+                vision_service = OpenAIVisionService(**svc_kwargs)
             except Exception as exc:
                 manual_reason = _setup_failure(provider, exc)
         elif provider_key not in PROVIDERS["providers"]:
