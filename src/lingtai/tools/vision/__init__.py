@@ -7,15 +7,21 @@ Usage:
     agent.add_capability("vision", vision_service=my_svc)
     agent.add_capability("vision", provider="anthropic", api_key="sk-...")
 
-The local mlx-vlm pseudo-provider remains available through explicit
-``add_capability(..., provider="local")`` opt-in, but it is intentionally not
-advertised in ``PROVIDERS`` or first-run/check-caps surfaces yet.
+The native mlx pseudo-provider (Apple MLX, on-device) remains available
+through explicit ``add_capability(..., provider="mlx")`` opt-in, but it is
+intentionally not advertised in ``PROVIDERS`` or first-run/check-caps
+surfaces: it is macOS-only and requires an on-device model.
 
-``ollama`` is a first-class local OpenAI-compatible provider: it defaults to
-``http://localhost:11434/v1``, a small vision model (``moondream``), and a
-placeholder key (Ollama ignores the value). Configure it with
-``add_capability("vision", provider="ollama", model="<pulled-model>")`` or via
-``manifest.capabilities.vision``; no API key is required.
+``local`` is a first-class generic local OpenAI-compatible provider: it
+points at any OpenAI-compatible vision server on your machine (Ollama, LM
+Studio, vLLM, llama.cpp, …) via ``base_url`` (default
+``http://localhost:11434/v1``) and requires an explicit ``model``. The
+operator-owned endpoint configuration lives in ``settings/vision.json``
+(``base_url``, ``model``, optional ``api_key``/``max_tokens``); capability
+kwargs override the file. No API key is required — local servers ignore the
+value, so a placeholder is synthesized. Configure it with
+``add_capability("vision", provider="local", model="<pulled-model>")``, via
+``manifest.capabilities.vision``, or via ``settings/vision.json``.
 
 ``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
 (``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
@@ -128,7 +134,7 @@ PROVIDERS = {
         "gemini", "anthropic", "openai", "openrouter", "custom", "deepseek",
         "minimax", "mimo", "glm", "zhipu", "grok", "qwen", "kimi",
         "codex", "codex-pool", "codex_pool", "claude-code", "claude_code",
-        "ollama",
+        "local",
     ],
     "default": None,
     "fallback_on_inherit": None,  # no agnostic fallback for vision
@@ -349,11 +355,12 @@ def setup(
         active_model = getattr(active_service, "_model", None) if same_provider else None
         active_base_url = getattr(active_service, "_base_url", None) if same_provider else None
         active_api_key = getattr(active_service, "api_key", None) if same_provider else None
-        if provider_key == "local":
-            # Local vision is an explicit pseudo-provider: keep it out of
-            # PROVIDERS/check-caps, but preserve the documented opt-in route.
-            # Its constructor accepts only model/max_tokens and needs no key.
-            local_kwargs = {
+        if provider_key == "mlx":
+            # Native Apple-MLX on-device vision is an explicit pseudo-provider:
+            # keep it out of PROVIDERS/check-caps, but preserve the documented
+            # opt-in route. Its constructor accepts only model/max_tokens and
+            # needs no key.
+            mlx_kwargs = {
                 key: kwargs[key]
                 for key in ("model", "max_tokens")
                 if key in kwargs and kwargs[key] is not None
@@ -361,43 +368,75 @@ def setup(
             from lingtai.services.vision import create_vision_service
             try:
                 vision_service = create_vision_service(
-                    "local",
+                    "mlx",
                     api_key=None,
-                    **local_kwargs,
+                    **mlx_kwargs,
                 )
             except Exception as exc:
                 manual_reason = _setup_failure(provider, exc)
-        elif provider_key == "ollama":
-            # Ollama is a local OpenAI-compatible server (default
-            # http://localhost:11434/v1). It accepts any non-blank API key and
-            # serves the Chat Completions wire only. Unlike the generic custom
-            # relay below, a missing api_key is NOT a hard failure: Ollama
-            # ignores the value, so we synthesize a placeholder that satisfies
-            # the OpenAI SDK's non-blank requirement. base_url/model default to
-            # the standard local endpoint and a sensible small vision model.
+        elif provider_key == "local":
+            # Local is a generic OpenAI-compatible vision server on this
+            # machine (Ollama, LM Studio, vLLM, llama.cpp, ...). The endpoint
+            # is operator-owned and configured in settings/vision.json
+            # (base_url/model/api_key/max_tokens); capability kwargs override
+            # the file. base_url defaults to the standard local port. model is
+            # REQUIRED — no hardcoded default, because a silently assumed
+            # model masks misconfiguration; when it is missing we surface
+            # guided setup steps instead. api_key is optional: local servers
+            # ignore it, so a placeholder satisfies the OpenAI SDK.
             from lingtai.services.vision.openai import OpenAIVisionService
-            ollama_base_url = kwargs.get("base_url") or "http://localhost:11434/v1"
-            ollama_model = kwargs.get("model") or "moondream"
-            ollama_key = api_key or "ollama"  # placeholder; Ollama ignores value
-            ollama_wire = _effective_openai_wire(
-                kwargs.get("wire_api"),
-                use_responses_api=False,
-                base_url=ollama_base_url,
+            from .settings import (
+                DEFAULT_LOCAL_BASE_URL,
+                SettingsError,
+                read_local_settings,
             )
-            svc_kwargs: dict = {
-                "api_key": ollama_key,
-                "model": ollama_model,
-                "base_url": ollama_base_url,
-            }
-            if ollama_wire and ollama_wire != "auto":
-                svc_kwargs["wire_api"] = ollama_wire
-            cap_max_tokens = kwargs.get("max_tokens")
-            if cap_max_tokens is not None:
-                svc_kwargs["max_tokens"] = cap_max_tokens
             try:
-                vision_service = OpenAIVisionService(**svc_kwargs)
-            except Exception as exc:
-                manual_reason = _setup_failure(provider, exc)
+                local_settings = read_local_settings(agent)
+            except SettingsError as exc:
+                manual_reason = (
+                    f"Local vision settings are invalid: {exc}; fix "
+                    "settings/vision.json or pass provider='local' with "
+                    "base_url/model kwargs; see vision(action='manual')."
+                )
+            else:
+                local_base_url = (
+                    kwargs.get("base_url")
+                    or local_settings.base_url
+                    or DEFAULT_LOCAL_BASE_URL
+                )
+                local_model = kwargs.get("model") or local_settings.model
+                if not local_model:
+                    manual_reason = (
+                        "Local vision needs an explicit model: install a local "
+                        "OpenAI-compatible vision server, pull a vision model, "
+                        "then set base_url+model in settings/vision.json or "
+                        "pass provider='local' with model=...; see "
+                        "vision(action='manual', input={}, "
+                        "reasoning='local vision setup')."
+                    )
+                else:
+                    local_key = api_key or local_settings.api_key or "local"
+                    local_wire = _effective_openai_wire(
+                        kwargs.get("wire_api"),
+                        use_responses_api=False,
+                        base_url=local_base_url,
+                    )
+                    svc_kwargs: dict = {
+                        "api_key": local_key,
+                        "model": local_model,
+                        "base_url": local_base_url,
+                    }
+                    if local_wire and local_wire != "auto":
+                        svc_kwargs["wire_api"] = local_wire
+                    cap_max_tokens = kwargs.get("max_tokens")
+                    if cap_max_tokens is None:
+                        cap_max_tokens = local_settings.max_tokens
+                    if cap_max_tokens is not None:
+                        svc_kwargs["max_tokens"] = cap_max_tokens
+                    try:
+                        vision_service = OpenAIVisionService(**svc_kwargs)
+                    except Exception as exc:
+                        manual_reason = _setup_failure(provider, exc)
         elif provider_key not in PROVIDERS["providers"]:
             # No dedicated VisionService for this provider (custom relay,
             # OpenRouter, an anthropic-compat local proxy, ...). Route vision
