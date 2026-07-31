@@ -76,16 +76,90 @@ def test_publish_mode_step_executes_on_explicit_manual_publish_true():
 
 def test_publish_step_conditionally_passes_execute_flag():
     job = _release_manifest_job(_load_workflow())
-    step = _step(job, "Publish manifest")
+    step = _step(job, "Publish manifest/wheels/sdist to GitHub")
     script = step["run"]
     assert "publish_mode.outputs.execute" in script
     assert "--execute" in script
     assert "publish_release_assets.py" in script
+    assert "--skip-gitee" in script, (
+        "the GitHub publish step must not also attempt Gitee inline — Gitee "
+        "publication is a separately bounded step so a slow Gitee API can "
+        "never block or fail an already-successful GitHub publish"
+    )
     # The flag must be conditional, not unconditionally omitted (the prior
     # defect) or unconditionally present (which would always try to publish,
     # even on ordinary workflow_dispatch shape-checks).
     assert 'execute_flag="--execute"' in script
     assert 'execute_flag=""' in script
+
+
+def test_github_publish_step_has_no_gitee_token_and_is_not_continue_on_error():
+    job = _release_manifest_job(_load_workflow())
+    step = _step(job, "Publish manifest/wheels/sdist to GitHub")
+    assert "GITEE_ACCESS_TOKEN" not in step.get("env", {}), (
+        "the GitHub-only publish step has no business holding the Gitee "
+        "token; it must be able to succeed or fail purely on GitHub state"
+    )
+    assert step.get("continue-on-error") is not True, (
+        "GitHub publication is the primary, authoritative publish signal "
+        "and must surface its own real failures"
+    )
+
+
+def test_release_manifest_job_timeout_outlives_the_gitee_retry_budget():
+    job = _release_manifest_job(_load_workflow())
+    assert job["timeout-minutes"] > 15, (
+        "the original 15-minute release-manifest ceiling coupled manifest "
+        "generation, Gitee mirror sync, GitHub publish, and Gitee publish "
+        "into one budget; exact-tag run 30600070105 was cancelled here "
+        "while GitHub had already published successfully and only Gitee's "
+        "asset upload was still slow — the job must be widened to give the "
+        "now-separately-bounded Gitee retry loop real room"
+    )
+
+
+def test_gitee_publish_step_is_split_from_github_bounded_and_non_blocking():
+    job = _release_manifest_job(_load_workflow())
+    step = _step(job, "Publish manifest/wheels/sdist to Gitee")
+    assert step.get("if") == "steps.publish_mode.outputs.execute == '1'", (
+        "Gitee publish must only run when actually publishing, not on every "
+        "dry-run shape check"
+    )
+    assert step.get("continue-on-error") is True, (
+        "a stalled/slow Gitee upload must never flip the job's reported "
+        "conclusion to failure now that GitHub has already published "
+        "successfully in the step above"
+    )
+    script = step["run"]
+    assert "publish_release_assets.py" in script
+    assert "--skip-github" in script
+    assert "--execute" in script
+    assert "GITEE_ACCESS_TOKEN" in step.get("env", {})
+    # Separately bounded: the job's own timeout-minutes must be able to fit
+    # the *entire* retry budget (max_attempts * per-attempt minutes), not
+    # just one attempt. This is the actual fix for the
+    # 15-minute-job-kills-slow-Gitee-upload defect (exact-tag run
+    # 30600070105): the prior single coupled `timeout-minutes: 15` for
+    # manifest+sync+GitHub+Gitee could cancel the whole job — including the
+    # already-succeeded GitHub publish step above — mid-retry, misreporting
+    # a successful release as incomplete just because Gitee was slow.
+    job_timeout = job["timeout-minutes"]
+    assert "timeout --foreground" in script
+    assert "10m" in script
+    per_attempt_minutes = 10
+    assert "max_attempts=" in script
+    max_attempts = int(script.split("max_attempts=")[1].splitlines()[0])
+    assert max_attempts > 1, "must actually retry, not just bound a single attempt"
+    assert max_attempts * per_attempt_minutes < job_timeout, (
+        "the job's timeout-minutes must be large enough to let the Gitee "
+        "retry loop actually exhaust its own attempt budget rather than "
+        "being killed by the job-level ceiling first (the original defect)"
+    )
+    assert "status == 124 || status == 137" in script
+    assert "::warning::" in script and "gitee_only_recovery" in script, (
+        "an exhausted retry budget must fail loud with a pointer to the "
+        "manual recovery path, not silently disappear"
+    )
 
 
 def test_gitee_sync_step_is_gated_on_publish_mode_and_never_forces():

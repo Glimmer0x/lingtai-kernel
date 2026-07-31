@@ -89,7 +89,8 @@ also attaches both files alongside the wheels/sdist.
 `wheels.yml`'s `release-manifest` job actually publishes on the real trigger:
 
 - **`release: {types: [published]}`** — a real kernel GitHub Release always
-  publishes (syncs Gitee, then uploads to GitHub + Gitee).
+  publishes: syncs Gitee, uploads to GitHub, then (separately, see Step 3)
+  uploads to Gitee.
 - **`workflow_dispatch`** — dry-run by default (the `publish` boolean input
   defaults `false`); pass `publish: true` to deliberately publish from a
   manual run too (for example to republish after a partial failure).
@@ -110,18 +111,34 @@ travels via a short-lived, owner-only-permission `GIT_ASKPASS` helper file
 (deleted after use) — never in argv, a URL, or a log line. Skips cleanly
 (prints why, exits 0) when `GITEE_ACCESS_TOKEN` is unset.
 
-### Step 2 — publish manifest/wheels/sdist
+### Step 2 — publish manifest/wheels/sdist to GitHub
 
-[`scripts/publish_release_assets.py`](scripts/publish_release_assets.py)
-uploads the exact manifest + asset bytes to:
+[`scripts/publish_release_assets.py --skip-gitee`](scripts/publish_release_assets.py)
+uploads the exact manifest + asset bytes to GitHub Releases via the `gh` CLI
+(`gh release create` / `gh release upload`), attaching the manifest and
+`SHA256SUMS` alongside the wheels/sdist. This step is fast (no retry loop)
+and is reported as its own step status: GitHub publication succeeding must
+never depend on how long Gitee's leg takes.
 
-- **GitHub Releases**, via the `gh` CLI (`gh release create` / `gh release
-  upload`), attaching the manifest and `SHA256SUMS` alongside the wheels/sdist.
-- **Gitee Releases** (`huangzesen1997/lingtai-kernel`), via the Gitee v5 REST
-  API, gated entirely on the `GITEE_ACCESS_TOKEN` secret. When that secret is
-  unset the Gitee leg is skipped with a printed reason — it is never a hard
-  failure, since Gitee credentials/configuration are a separate authorization
-  step from having the workflow code in place.
+### Step 3 — publish manifest/wheels/sdist to Gitee (separately bounded, non-blocking)
+
+The same script, invoked again with `--skip-github --execute`, uploads the
+identical bytes to Gitee Releases (`huangzesen1997/lingtai-kernel`) via the
+Gitee v5 REST API. This step is gated on `GITEE_ACCESS_TOKEN` being
+configured (prints why and exits 0 when it is unset — never a hard failure,
+since Gitee credentials are a separate authorization step from having the
+workflow code in place) and wraps the call in the same idempotent
+bounded-retry loop (`timeout --foreground ... 10m`, up to 5 attempts) already
+used by the manual `gitee-only-recovery` job below, so a slow Gitee API can be
+retried without ever hanging the job past its own ceiling.
+
+The workflow step itself carries `continue-on-error: true`: a Gitee stall or
+exhausted retry budget still sets *this step's own outcome* to failure (with
+a `::warning::`/`::error::` annotation pointing at `gitee-only-recovery` for
+manual resume, visible in the step's detail view), but `continue-on-error`
+makes the job's and run's overall *conclusion* stay success — the top-level
+badge stays green because GitHub publication from Step 2 already succeeded,
+and that must be reported truthfully regardless of how slow Gitee is.
 
 Every mutating action requires the explicit `--execute` flag; the workflow
 passes it only when the trigger is a real release (or an explicit
@@ -184,4 +201,7 @@ case (see `test_sync_fast_forwards_empty_remote`).
   dependency resolution is unaffected and continues to use PyPI or a
   configured mirror.
 - No offline wheelhouse / vendored third-party dependency bundle.
-- No automatic Gitee mirror synchronization from this repository or workflow.
+- No force-push or history mutation of the Gitee mirror from this workflow —
+  sync is fast-forward-only and release assets are uploaded, never replaced.
+  (Automatic non-force Gitee mirror sync + asset publish on every real
+  release IS in scope — see "Publish" above.)

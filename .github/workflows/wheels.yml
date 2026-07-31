@@ -250,7 +250,17 @@ jobs:
     # `needs: [build-wheels, build-sdist]` makes it wait for every matrix leg,
     # so a partial/failed platform build fails this job loud via `needs`
     # rather than silently shipping an incomplete manifest.
-    timeout-minutes: 15
+    #
+    # 120 minutes (not 15): manifest generation + GitHub publish are fast,
+    # but the Gitee publish step below now runs its own bounded retry loop
+    # (up to 5 attempts, 10 minutes each — the same primitive as the
+    # gitee-only-recovery job's 120-minute ceiling). The job-level timeout
+    # must outlive that retry budget, or GitHub Actions cancels the whole
+    # job — including the already-succeeded "Publish ... to GitHub" step —
+    # partway through a slow-but-healthy Gitee retry, which is exactly the
+    # defect this change fixes (exact-tag run 30600070105 was cancelled
+    # here after GitHub publication had already completed).
+    timeout-minutes: 120
     permissions:
       # write is required only for the actual publish path (gh release
       # upload / create); the dry-run path never mutates anything regardless
@@ -377,10 +387,9 @@ jobs:
             --branch main \
             --execute
 
-      - name: Publish manifest/wheels/sdist
+      - name: Publish manifest/wheels/sdist to GitHub
         env:
           GH_TOKEN: ${{ github.token }}
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
@@ -389,18 +398,65 @@ jobs:
           execute_flag=""
           if [[ "${{ steps.publish_mode.outputs.execute }}" == "1" ]]; then
             execute_flag="--execute"
-            echo "Publishing $tag for real (event=${{ github.event_name }})."
+            echo "Publishing $tag to GitHub for real (event=${{ github.event_name }})."
           else
             echo "Manifest ready for $tag. Dry run only (event=${{ github.event_name }}, publish input=${{ inputs.publish }})."
           fi
           # publish_release_assets.py is idempotent (skips already-attached
           # same-name assets) and never force-syncs/deletes — safe to run
-          # repeatedly. Gitee leg is skipped internally when
-          # GITEE_ACCESS_TOKEN is unset, regardless of execute_flag.
+          # repeatedly. --skip-gitee here: GitHub publication must be able to
+          # succeed and be reported on its own, independent of Gitee's
+          # separately bounded retry step below.
           python scripts/publish_release_assets.py \
             --manifest release-assets/lingtai-kernel-release-manifest.json \
             --assets-dir release-assets \
+            --skip-gitee \
             $execute_flag
+
+      - name: Publish manifest/wheels/sdist to Gitee (bounded retry, non-blocking)
+        if: steps.publish_mode.outputs.execute == '1'
+        # continue-on-error: a slow or flaky Gitee upload must never turn an
+        # already-successful GitHub publish (the step above) into a reported
+        # job/run failure. The retry loop below is the same idempotent
+        # bounded pattern proven in the gitee-only-recovery job; if every
+        # attempt times out, this step's own outcome is still "failure" (the
+        # step detail view shows it failed, and a warning annotation is
+        # printed) even though continue-on-error makes the job's overall
+        # conclusion "success" — recovery via the manual gitee-only-recovery
+        # dispatch stays available, and no state is silently marked complete.
+        continue-on-error: true
+        env:
+          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GITEE_ACCESS_TOKEN:-}" ]]; then
+            echo "Gitee publish skipped: GITEE_ACCESS_TOKEN is not configured."
+            exit 0
+          fi
+          max_attempts=5
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            echo "Gitee publish attempt ${attempt}/${max_attempts} (10-minute timeout)."
+            set +e
+            PYTHONUNBUFFERED=1 timeout --foreground --signal=TERM --kill-after=30s 10m \
+              python scripts/publish_release_assets.py \
+                --manifest release-assets/lingtai-kernel-release-manifest.json \
+                --assets-dir release-assets \
+                --skip-github \
+                --execute
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              exit 0
+            fi
+            if (( status == 124 || status == 137 )); then
+              echo "::warning::Gitee publish attempt ${attempt} timed out (exit ${status}); retrying so remote completion can be rediscovered."
+              continue
+            fi
+            echo "::error::Gitee publish failed with non-timeout exit ${status}."
+            exit "$status"
+          done
+          echo "::warning::Gitee publish did not complete after ${max_attempts} bounded attempts. GitHub publication above already succeeded; start a new manual workflow_dispatch run of this workflow with gitee_only_recovery=true, publish=true, and this release's tag to resume Gitee only."
+          exit 124
 
       - name: Upload release manifest artifact
         uses: actions/upload-artifact@v4
