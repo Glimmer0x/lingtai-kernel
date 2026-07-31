@@ -55,6 +55,21 @@ def _setup_failure(provider: str, exc: BaseException) -> str:
     )
 
 
+def _consent_guidance() -> str:
+    """Build the setup-with-human-consent guidance for a vision failure.
+
+    Installing a local vision server, pulling a model, or editing
+    settings/vision.json / the capability manifest are external side effects:
+    the agent must obtain explicit human consent before performing them. The
+    full steps live in the vision manual skill.
+    """
+    return (
+        "To enable vision, ask the human for consent to set it up, then load "
+        "the vision manual skill: vision(action='manual', input={}, "
+        "reasoning='vision is not set up, load the setup steps')."
+    )
+
+
 _CODEX_POOL_ALIASES = {"codex-pool", "codex_pool"}
 _CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
 
@@ -239,13 +254,14 @@ class VisionManager:
         default prompt, and success/failure result shapes.
         """
         if self._vision_service is None:
+            reason = self._manual_reason or (
+                "Direct vision is unavailable; call vision(action='manual', "
+                "input={}, reasoning='no direct vision route, load the "
+                "manual alternatives')."
+            )
             return {
                 "status": "error",
-                "message": self._manual_reason or (
-                    "Direct vision is unavailable; call vision(action='manual', "
-                    "input={}, reasoning='no direct vision route, load the "
-                    "manual alternatives')."
-                ),
+                "message": f"{reason} {_consent_guidance()}",
             }
         image_path = action_input.get("image_path") or ""
         question = action_input.get("question")
@@ -277,7 +293,8 @@ class VisionManager:
                     f"Vision analysis failed ({type(e).__name__}). Call "
                     "vision(action='manual', input={}, reasoning='the direct "
                     "vision request failed, load the explicit manual route') "
-                    "for the explicit manual route."
+                    "for the explicit manual route. "
+                    f"{_consent_guidance()}"
                 ),
             }
 
@@ -407,11 +424,9 @@ def setup(
                 local_model = kwargs.get("model") or local_settings.model
                 if not local_model:
                     manual_reason = (
-                        "Local vision needs an explicit model: install a local "
-                        "OpenAI-compatible vision server, pull a vision model, "
-                        "then set base_url+model in settings/vision.json or "
-                        "pass provider='local' with model=...; see "
-                        "vision(action='manual', input={}, "
+                        "Local vision needs an explicit model. Ask the human "
+                        "for consent to set it up, then load the vision manual "
+                        "skill: vision(action='manual', input={}, "
                         "reasoning='local vision setup')."
                     )
                 else:

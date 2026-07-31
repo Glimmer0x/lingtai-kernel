@@ -343,8 +343,21 @@ def test_local_vision_is_advertised_and_requires_model(tmp_path):
     mock_svc_cls.assert_not_called()
     assert mgr._vision_service is None
     assert "model" in mgr._manual_reason
-    assert "settings/vision.json" in mgr._manual_reason
+    assert "consent" in mgr._manual_reason
     agent.add_tool.assert_called_once()
+
+
+def test_local_vision_missing_model_result_guides_with_consent(tmp_path):
+    """The analyze result on a missing-service setup failure guides setup with consent."""
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+        agent = make_mock_agent(tmp_path)
+        mgr = setup(agent, provider="local")
+
+    result = mgr._dispatch_analyze({"image_path": "x.png", "question": None})
+
+    assert result["status"] == "error"
+    assert "ask the human for consent" in result["message"]
+    assert "vision(action='manual'" in result["message"]
 
 
 def test_local_vision_uses_default_base_url_with_explicit_model(tmp_path):
