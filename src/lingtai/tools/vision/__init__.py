@@ -290,11 +290,16 @@ class VisionManager:
             return {
                 "status": "error",
                 "message": (
-                    f"Vision analysis failed ({type(e).__name__}). Call "
-                    "vision(action='manual', input={}, reasoning='the direct "
-                    "vision request failed, load the explicit manual route') "
-                    "for the explicit manual route. "
-                    f"{_consent_guidance()}"
+                    f"Vision analysis failed on the default vision route "
+                    f"({type(e).__name__}). The default route is the current "
+                    "provider's Responses-API vision, which may not support "
+                    "images. Alternative vision may be available: the current "
+                    "provider's MCP, or a local OpenAI-compatible vision "
+                    "server via provider='local'. Ask the human for consent "
+                    "to set one up, then load the vision manual skill for the "
+                    "steps: vision(action='manual', input={}, "
+                    "reasoning='default vision failed, load the setup "
+                    "alternatives')."
                 ),
             }
 
