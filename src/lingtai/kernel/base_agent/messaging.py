@@ -51,7 +51,7 @@ def _on_normal_mail(agent, payload: dict) -> None:
     subject = payload.get("subject") or "(no subject)"
 
     agent._wake_nap("mail_arrived")
-    agent._log("mail_received", address=address, subject=subject,
+    agent._log("mail_received", sender_address=address, subject=subject,
                message=payload.get("message", ""))
 
     # The unread-digest producer is email-domain logic and lives with the email
