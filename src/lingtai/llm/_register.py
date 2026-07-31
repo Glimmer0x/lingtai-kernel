@@ -216,7 +216,19 @@ def register_all_adapters() -> None:
     def _deepseek(*, model=None, defaults=None, **kw):
         from .deepseek.adapter import DeepSeekAdapter
         kw.pop("model", None)
-        return DeepSeekAdapter(**{k: v for k, v in kw.items() if v is not None})
+        adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        d = defaults or {}
+        # Honor Responses-API wiring from provider defaults, mirroring the
+        # _openai/_custom factories: wire_api selects the wire, and the
+        # legacy use_responses_api preference may coexist with it.
+        if "wire_api" in d:
+            adapter_kw["wire_api"] = d["wire_api"]
+        if "use_responses_api" in d:
+            adapter_kw["use_responses"] = d["use_responses_api"]
+        if "compact_threshold" in d:
+            # Preserve explicit None after the general None-pruning pass above.
+            adapter_kw["compact_threshold"] = d["compact_threshold"]
+        return DeepSeekAdapter(**adapter_kw)
 
     LLMService.register_adapter("deepseek", _deepseek)
 

@@ -797,3 +797,14 @@ def test_legacy_prompt_is_not_reintroduced_as_lingtai_alias() -> None:
     warnings = validate_init(data)
 
     assert "unknown top-level field: prompt" in warnings
+
+
+def test_deepseek_wire_api_responses_allowed():
+    """wire_api=responses is accepted for the deepseek provider (Responses opt-in)."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "deepseek"
+    data["manifest"]["llm"]["model"] = "deepseek-v4-flash"
+    data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
+    data["manifest"]["llm"]["wire_api"] = "responses"
+    validate_init(data)  # should not raise
+

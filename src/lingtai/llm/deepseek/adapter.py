@@ -1,5 +1,9 @@
-"""DeepSeek adapter — thin OpenAI-compat wrapper that satisfies the
-reasoning_content round-trip contract for thinking mode.
+"""DeepSeek adapter — OpenAI-compat wrapper that satisfies the
+reasoning_content round-trip contract for thinking mode, on both the
+Chat Completions and Responses wires.
+
+Chat Completions
+----------------
 
 DeepSeek V4 thinking mode rejects requests missing ``reasoning_content``
 on assistant turns once thinking has been triggered. Omitting it returns
@@ -34,14 +38,35 @@ entries where the provider returned no reasoning text at all), inject a
 per-turn-unique stub so DeepSeek's field-presence validator is satisfied
 without re-introducing the cache-collapse pattern.
 
-Everything else inherits from ``OpenAIAdapter`` / ``OpenAIChatSession``
-unchanged via the ``_build_messages`` and ``_session_class`` hook points
-on the parent.
+Responses API
+-------------
+
+``DeepSeekAdapter`` now forwards the same wire-selection flags as the
+OpenAI-compatible family (``wire_api`` / ``use_responses`` /
+``force_responses`` / ``compact_threshold`` /
+``responses_stateless_replay``), so a DeepSeek endpoint that serves
+``/responses`` (native or via an OpenAI-compatible gateway) can be
+opted in. The Responses wire has no ``reasoning_content`` field; its
+equivalent is the ``reasoning`` input item:
+
+    {"type": "reasoning", "summary": [{"type": "summary_text", "text": ...}]}
+
+``to_responses_input`` already emits those from captured ThinkingBlocks.
+``DeepSeekResponsesSession`` adds the fallback: after the first
+``function_call`` item, any later assistant turn that has no reasoning
+item gets a per-turn-unique ``reasoning`` item injected — the Responses
+analogue of ``DeepSeekChatSession._build_messages``. Sessions are
+stateless (no ``previous_response_id``) and never send generic
+``context_management`` (``compact_threshold=None`` default), matching
+the MiMo pattern for endpoints without server-side response storage.
+
+Everything else inherits from ``OpenAIAdapter`` unchanged via the
+``_build_messages`` and ``_session_class`` hook points on the parent.
 """
 
 from __future__ import annotations
 
-from ..openai.adapter import OpenAIAdapter, OpenAIChatSession
+from ..openai.adapter import OpenAIAdapter, OpenAIChatSession, OpenAIResponsesSession
 
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
@@ -74,6 +99,58 @@ def _fallback_reasoning_for(msg: dict, turn_idx: int) -> str:
     return f"reply [{snippet}] (turn {turn_idx})"
 
 
+def _fallback_responses_reasoning_item(role_text: str, turn_idx: int) -> dict:
+    """Build a per-turn-unique Responses ``reasoning`` input item.
+
+    ``role_text`` is the assistant plain-text content for the turn being
+    repaired (empty for a tool-call turn). The stub is inline-suffixed
+    with the turn index so consecutive missing turns stay byte-different.
+    """
+    snippet = (role_text or "")[:64].replace("\n", " ")
+    label = f"reply [{snippet}]" if snippet else "call"
+    return {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": f"{label} (turn {turn_idx})"}],
+    }
+
+
+def _inject_responses_reasoning_fallback(items: list[dict]) -> list[dict]:
+    """Inject DeepSeek reasoning-item fallbacks into a Responses input list.
+
+    Responses items are a flat list; a single assistant turn can span
+    multiple items (reasoning, text, function_call). After the first
+    ``function_call`` item we must ensure every later assistant turn
+    carries a ``reasoning`` item — the Responses analogue of
+    ``DeepSeekChatSession._build_messages``. We walk the list, track
+    whether a ``function_call`` has been seen, and for each ``assistant``
+    text item that follows a call without an immediately-preceding
+    reasoning item, insert one before it.
+    """
+    seen_function_call = False
+    turn_idx = 0
+    out: list[dict] = []
+    for item in items:
+        if item.get("type") == "function_call":
+            seen_function_call = True
+            out.append(item)
+            continue
+        if seen_function_call and item.get("role") == "assistant":
+            turn_idx += 1
+            # Insert a fallback reasoning item before this assistant text
+            # item unless the immediately preceding item already carries
+            # reasoning (real thinking was preserved).
+            if not (out and out[-1].get("type") == "reasoning"):
+                out.append(
+                    _fallback_responses_reasoning_item(
+                        item.get("content") or "", turn_idx
+                    )
+                )
+            out.append(item)
+            continue
+        out.append(item)
+    return out
+
+
 class DeepSeekChatSession(OpenAIChatSession):
     """Chat session that satisfies DeepSeek's reasoning_content round-trip contract.
 
@@ -103,8 +180,29 @@ class DeepSeekChatSession(OpenAIChatSession):
         return messages
 
 
+class DeepSeekResponsesSession(OpenAIResponsesSession):
+    """Stateless Responses session that satisfies DeepSeek's reasoning round-trip.
+
+    Replays the full canonical interface as Responses input items every
+    turn (no ``previous_response_id``, no server-side store) and injects a
+    per-turn-unique ``reasoning`` item fallback on assistant turns after
+    the first ``function_call`` that lack preserved thinking — the
+    Responses analogue of ``DeepSeekChatSession._build_messages``.
+    """
+
+    def _replay_input_items(self) -> list[dict]:
+        items = super()._replay_input_items()
+        return _inject_responses_reasoning_fallback(items)
+
+
 class DeepSeekAdapter(OpenAIAdapter):
-    """OpenAI-compat adapter pinned to DeepSeek with reasoning_content round-trip."""
+    """OpenAI-compat adapter pinned to DeepSeek with reasoning_content round-trip.
+
+    Wire selection is configurable: by default Chat Completions
+    (``DeepSeekChatSession``); set ``wire_api="responses"`` (or the legacy
+    ``use_responses``/``force_responses`` flags) to use the Responses wire
+    via ``DeepSeekResponsesSession`` for endpoints that serve ``/responses``.
+    """
 
     _session_class = DeepSeekChatSession
 
@@ -123,11 +221,84 @@ class DeepSeekAdapter(OpenAIAdapter):
         timeout_ms: int = 300_000,
         max_rpm: int = 0,
         default_headers: dict | None = None,
+        wire_api: str | None = None,
+        use_responses: bool | None = None,
+        force_responses: bool | None = None,
+        compact_threshold: int | None = None,
+        responses_stateless_replay: bool = True,
     ):
+        # Forward wire-selection flags so ``_should_use_responses()`` can
+        # opt DeepSeek into the Responses API. Defaults preserve today's
+        # Chat Completions behavior (no flags). ``compact_threshold``
+        # defaults to None on the Responses wire (no generic
+        # ``context_management`` — MiMo/Codex precedent) and is only
+        # non-None when explicitly configured; Chat Completions ignores
+        # it entirely.
+        kwargs: dict = {}
+        if wire_api is not None:
+            kwargs["wire_api"] = wire_api
+        if use_responses is not None:
+            kwargs["use_responses"] = use_responses
+        if force_responses is not None:
+            kwargs["force_responses"] = force_responses
+        kwargs["compact_threshold"] = compact_threshold
+        kwargs["responses_stateless_replay"] = responses_stateless_replay
         super().__init__(
             api_key=api_key,
             base_url=base_url or _DEEPSEEK_BASE_URL,
             timeout_ms=timeout_ms,
             max_rpm=max_rpm,
             default_headers=default_headers,
+            **kwargs,
+        )
+
+    def _create_responses_session(
+        self,
+        model: str,
+        system_prompt: str,
+        tools=None,
+        json_schema: dict | None = None,
+        force_tool_call: bool = False,
+        interface=None,
+        thinking: str = "default",
+        context_window: int = 0,
+    ) -> DeepSeekResponsesSession:
+        from ..openai.adapter import _build_responses_tools, _responses_reasoning_kwargs
+
+        if interface is None:
+            from lingtai.kernel.llm.interface import ChatInterface
+            interface = ChatInterface()
+            from lingtai.kernel.llm.base import FunctionSchema
+            interface.add_system(system_prompt, tools=FunctionSchema.list_to_dicts(tools))
+
+        ds_tools = _build_responses_tools(tools)
+        tool_choice: str | None = None
+        if force_tool_call and ds_tools:
+            tool_choice = "required"
+
+        extra_kwargs: dict = {}
+        if json_schema is not None:
+            extra_kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": json_schema.get("title", "response"),
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            }
+        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+
+        return DeepSeekResponsesSession(
+            client=self._client,
+            model=model,
+            instructions=system_prompt,
+            tools=ds_tools,
+            tool_choice=tool_choice,
+            extra_kwargs=extra_kwargs,
+            previous_response_id=None,
+            compact_threshold=self._compact_threshold,
+            interface=interface,
+            prompt_cache_key=self._resolve_prompt_cache_key(model),
+            context_window=context_window,
+            stateless_replay=self._responses_stateless_replay,
         )
