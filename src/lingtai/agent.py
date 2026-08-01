@@ -372,7 +372,8 @@ class Agent(BaseAgent):
             llm_dir = self._working_dir / "system"
             llm_dir.mkdir(exist_ok=True)
             (llm_dir / "llm.json").write_text(
-                _json.dumps(llm_config, ensure_ascii=False)
+                _json.dumps(llm_config, ensure_ascii=False),
+                encoding="utf-8",
             )
         except (TypeError, AttributeError, OSError):
             pass  # LLM config not available (e.g., mock service in tests)
@@ -1909,7 +1910,7 @@ class Agent(BaseAgent):
         base_prompt = data.get("base_prompt", "")
         base_prompt_file = system_dir / "base_prompt.md"
         if base_prompt:
-            base_prompt_file.write_text(base_prompt)
+            base_prompt_file.write_text(base_prompt, encoding="utf-8")
         elif base_prompt_file.is_file():
             base_prompt = base_prompt_file.read_text(encoding="utf-8")
         self._base_prompt = base_prompt or ""
@@ -1918,7 +1919,7 @@ class Agent(BaseAgent):
         covenant = data.get("covenant", "")
         covenant_file = system_dir / "covenant.md"
         if covenant:
-            covenant_file.write_text(covenant)
+            covenant_file.write_text(covenant, encoding="utf-8")
         elif covenant_file.is_file():
             covenant = covenant_file.read_text(encoding="utf-8")
         if covenant:
@@ -1939,7 +1940,7 @@ class Agent(BaseAgent):
         # legacy alias.)
         lingtai_seed = data.get("lingtai", "")
         if lingtai_seed:
-            (system_dir / "lingtai.md").write_text(lingtai_seed)
+            (system_dir / "lingtai.md").write_text(lingtai_seed, encoding="utf-8")
         # Delegate to the single canonical composer so boot/refresh/molt all
         # produce byte-identical `character` content and no longer depend on
         # post-molt hook ordering.
@@ -1974,7 +1975,7 @@ class Agent(BaseAgent):
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("substrate/substrate.md").read_text(encoding="utf-8")
-            substrate_file.write_text(packaged)
+            substrate_file.write_text(packaged, encoding="utf-8")
             substrate = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if substrate_file.is_file():
@@ -2059,7 +2060,7 @@ class Agent(BaseAgent):
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("principle/principle.md").read_text(encoding="utf-8")
-            principle_file.write_text(packaged)
+            principle_file.write_text(packaged, encoding="utf-8")
             principle = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if principle_file.is_file():
@@ -2083,7 +2084,7 @@ class Agent(BaseAgent):
         try:
             from importlib.resources import files
             packaged = files("lingtai.prompts").joinpath("procedures/procedures.md").read_text(encoding="utf-8")
-            procedures_file.write_text(packaged)
+            procedures_file.write_text(packaged, encoding="utf-8")
             procedures = _strip_frontmatter(packaged)
         except (FileNotFoundError, ModuleNotFoundError, OSError):
             if procedures_file.is_file():

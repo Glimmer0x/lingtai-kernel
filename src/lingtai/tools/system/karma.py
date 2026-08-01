@@ -127,7 +127,7 @@ def _lull(agent, args: dict) -> dict:
     resolved = args["_resolved_address"]
     if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running — already asleep?"}
-    (resolved / ".sleep").write_text("")
+    (resolved / ".sleep").write_text("", encoding="utf-8")
     agent._log("karma_lull", target=address)
     return {"status": "asleep", "address": address}
 
@@ -141,7 +141,7 @@ def _suspend(agent, args: dict) -> dict:
     resolved = args["_resolved_address"]
     if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running — already suspended?"}
-    (resolved / ".suspend").write_text("")
+    (resolved / ".suspend").write_text("", encoding="utf-8")
     agent._log("karma_suspend", target=address)
     return {"status": "suspended", "address": address}
 
@@ -175,7 +175,7 @@ def _interrupt(agent, args: dict) -> dict:
     resolved = args["_resolved_address"]
     if not _is_alive(resolved):
         return {"error": True, "message": f"Agent at {address} is not running"}
-    (resolved / ".interrupt").write_text("")
+    (resolved / ".interrupt").write_text("", encoding="utf-8")
     agent._log("karma_interrupt", target=address)
     return {"status": "interrupted", "address": address}
 
@@ -197,7 +197,7 @@ def _clear(agent, args: dict) -> dict:
     # Content of .clear becomes the `source` tag in the recovery summary.
     # Default to the calling agent's name so targets can see who forced it.
     source = (args.get("reason") or "").strip() or agent.agent_name or "admin"
-    (resolved / ".clear").write_text(source)
+    (resolved / ".clear").write_text(source, encoding="utf-8")
     agent._log("karma_clear", target=address, source=source)
     return {"status": "cleared", "address": address, "source": source}
 
@@ -214,7 +214,7 @@ def _nirvana(agent, args: dict) -> dict:
         # .sleep sets _asleep — heartbeat continues, is_alive() stays True,
         # and the wait loop below would always time out.
         # .suspend sets _shutdown — process terminates, heartbeat stops.
-        (resolved / ".suspend").write_text("")
+        (resolved / ".suspend").write_text("", encoding="utf-8")
         import time as _time
         deadline = _time.time() + 10.0
         while _time.time() < deadline:

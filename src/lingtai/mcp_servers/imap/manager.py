@@ -616,7 +616,8 @@ class IMAPMailManager:
                 "attachments": saved_attachments or data.get("attachments", []),
             }
             (persist_dir / "message.json").write_text(
-                json.dumps(record, indent=2, default=str)
+                json.dumps(record, indent=2, default=str),
+                encoding="utf-8",
             )
 
             results.append(record)

@@ -71,7 +71,7 @@ def _pad_load(agent, args: dict, *, publish: bool = True) -> dict:
     system_dir.mkdir(exist_ok=True)
     pad_path = system_dir / "pad.md"
     if not pad_path.is_file():
-        pad_path.write_text("")
+        pad_path.write_text("", encoding="utf-8")
 
     content = pad_path.read_text(encoding="utf-8")
     size_bytes = len(content.encode("utf-8"))

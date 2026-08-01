@@ -113,7 +113,7 @@ def _save_read_ids(agent, ids: set[str]) -> None:
     path = _read_ids_path(agent)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sorted(ids)))
+    tmp.write_text(json.dumps(sorted(ids)), encoding="utf-8")
     os.replace(str(tmp), str(path))
 
 
@@ -200,7 +200,8 @@ def _persist_to_inbox(agent, payload: dict) -> str:
     payload["_mailbox_id"] = msg_id
     payload["received_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     (msg_dir / "message.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
     )
     return msg_id
 
@@ -216,7 +217,8 @@ def _persist_to_outbox(agent, payload: dict, deliver_at: datetime) -> str:
     payload["_mailbox_id"] = msg_id
     payload["deliver_at"] = deliver_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     (msg_dir / "message.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
     )
     return msg_id
 
@@ -236,7 +238,7 @@ def _move_to_sent(agent, msg_id: str, sent_at: str, status: str) -> None:
             data = {}
         data["sent_at"] = sent_at
         data["status"] = status
-        msg_file.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+        msg_file.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     shutil.move(str(src), str(dst))
 
 
