@@ -382,7 +382,7 @@ def test_business_and_guest_slash_commands_stay_local(tmp_path: Path) -> None:
         seen: list[dict] = []
         acct = _account(tmp_path / branch, [1], seen)
         handled: list[int] = []
-        acct._cmd_kanban = lambda chat_id: handled.append(chat_id)
+        acct._cmd_kanban = lambda chat_id, text="": handled.append(chat_id)
 
         obj = _msg(400 + i, text="/kanban")
         if branch == "business_message":
@@ -408,7 +408,7 @@ def test_disallowed_user_business_command_rejected_before_local_handling(
     seen: list[dict] = []
     acct = _account(tmp_path, [1], seen)
     handled: list[int] = []
-    acct._cmd_kanban = lambda chat_id: handled.append(chat_id)
+    acct._cmd_kanban = lambda chat_id, text="": handled.append(chat_id)
     acct._process_update({"update_id": 70, "business_message": _msg(
         401, frm=USER_B, text="/kanban", business_connection_id="bc1",
     )})
@@ -420,7 +420,7 @@ def test_channel_post_slash_command_is_not_intercepted(tmp_path: Path) -> None:
     seen: list[dict] = []
     acct = _account(tmp_path, [1], seen)
     handled: list[int] = []
-    acct._cmd_kanban = lambda chat_id: handled.append(chat_id)
+    acct._cmd_kanban = lambda chat_id, text="": handled.append(chat_id)
     channel = {"id": -1002, "type": "channel", "title": "ann"}
     acct._process_update({"update_id": 80, "channel_post": {
         "message_id": 7, "sender_chat": channel, "chat": channel,
@@ -802,3 +802,4 @@ def test_outbound_paths_still_reject_synthetic_bucket(tmp_path: Path) -> None:
         "message_id": f"main:{tg_updates.SYNTHETIC_EVENTS_CHAT_ID}:5100",
     })
     assert "synthetic events-bucket" in result["error"]
+
