@@ -4,7 +4,7 @@ description: |
   Progressive-disclosure usage manual for the Telegram MCP tool. Read this when
   you need detail beyond the one-line action descriptions: media.type='document'
   vs 'photo' for charts/reports/generated artifacts, placeholder/live-status
-  messages, reply vs send, read/check/search, parse_mode/entities, chat_action, dynamic slash commands,
+  messages, reply vs send, read/check/search, rendering_mode/entities, chat_action, dynamic slash commands,
   the programmable Task Card (task_card tool) — including task-specific watcher
   design for meaningful long-running work — and error surfacing. Pulled on demand
   via action='manual'; you do not need to call it before every send.
@@ -122,13 +122,20 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
   non-numeric value the schema accepts) to `read`/`search` to recover them;
   `send`/`reply` still require a real numeric chat ID.
 
-## RICH TEXT: parse_mode / entities
+## RENDERING MODE: explicit per-message choice
 
-- `parse_mode` accepts `'HTML'`, `'MarkdownV2'`, or `'Markdown'` for
-  send/reply/edit and media captions; omit it or pass `''` for plain text.
-- `entities` sets `MessageEntity[]` for message text; `caption_entities` does the
-  same for media captions. If `caption_entities` is omitted on a media send,
-  `entities` is reused as the caption entities.
+- Every content-bearing `send`, `reply`, and `edit` must include
+  `rendering_mode`; there is no default. Choose exactly one of `plain_text`,
+  `HTML`, `Markdown`, `MarkdownV2`, or `entities`.
+- `plain_text` maps to an omitted Bot API `parse_mode`; the other three named
+  formats map to Telegram `parse_mode`. The agent must still provide the label
+  even when no formatting is wanted.
+- `entities` selects explicit `MessageEntity[]` formatting. Pass `entities` for
+  message text or `caption_entities` for media captions; do not combine entity
+  fields with a parse-mode rendering choice.
+- For `send` with only `chat_action` and no text/media, use `plain_text` because
+  no message body is rendered. `rendering_mode` is still required by the strict
+  public branch.
 
 ## CHAT ACTION
 
@@ -322,7 +329,7 @@ chat-history cardinality. Normative source:
 ## ERROR SURFACING
 
 - Actions return `{'status': ...}` on success or `{'error': <message>}` on
-  failure (e.g. missing `chat_id`, unreadable `media.path`, bad `parse_mode`).
+  failure (e.g. missing `chat_id`, unreadable `media.path`, bad `rendering_mode`).
   Check for the `'error'` key and surface or act on it rather than assuming the
   message was delivered.
 - Telegram HTTP 429 responses fail fast with `status: 'error'`,

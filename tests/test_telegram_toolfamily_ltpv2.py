@@ -58,20 +58,30 @@ def test_family_dispatch_rejects_root_and_cross_branch_before_manager_io():
     assert len(manager.calls) == 1
 
 
-def test_telegram_send_schema_preserves_text_media_chat_action_alternatives():
-    send = _branches(TELEGRAM_SCHEMA)["send"]
-    assert send["anyOf"] == [
-        {"required": ["text"]},
-        {"required": ["media"]},
-        {"required": ["chat_action"]},
-    ]
-    assert _basic_validate({"chat_id": 3, "text": "hello"}, send)
-    assert _basic_validate({"chat_id": 3, "media": {"type": "photo", "path": "x"}}, send)
-    assert _basic_validate({"chat_id": 3, "chat_action": "typing"}, send)
-    assert not _basic_validate({"chat_id": 3}, send)
-    assert not _basic_validate({"text": "missing chat"}, send)
-    assert not _basic_validate({"chat_id": 3, "text": 17}, send)
+def test_telegram_send_requires_rendering_mode_before_manager_io():
+    manager = _CountingManager()
+    for input_ in (
+        {"chat_id": 2, "text": "x"},
+        {"chat_id": 2, "text": "x", "parse_mode": "HTML"},
+        {"chat_id": 2, "chat_action": "typing"},
+    ):
+        result = handle_telegram(manager, {"action": "send", "input": input_, "reasoning": "schema probe"})
+        assert result["status"] == "failed", input_
+        assert result["error_code"] == "INVALID_ARGUMENT"
+        assert manager.calls == []
 
+def test_telegram_send_schema_requires_rendering_mode_and_preserves_content_alternatives():
+    send = _branches(TELEGRAM_SCHEMA)["send"]
+    assert "rendering_mode" in send["required"]
+    assert send["properties"]["rendering_mode"]["enum"] == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"]
+    assert send["anyOf"] == [{"required": ["text"]}, {"required": ["media"]}, {"required": ["chat_action"]}]
+    assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "text": "hello"}, send)
+    assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "media": {"type": "photo", "path": "x"}}, send)
+    assert _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "chat_action": "typing"}, send)
+    assert not _basic_validate({"chat_id": 3, "text": "hello"}, send)
+    assert not _basic_validate({"chat_id": 3, "rendering_mode": "plain_text"}, send)
+    assert not _basic_validate({"text": "missing chat", "rendering_mode": "plain_text"}, send)
+    assert not _basic_validate({"chat_id": 3, "rendering_mode": "plain_text", "text": 17}, send)
 
 def test_taskcard_refresh_setting_defaults_invalid_values_preserves_valid_siblings(
     tmp_path, caplog

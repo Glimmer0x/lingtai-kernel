@@ -373,16 +373,16 @@ SCHEMA = {
                 "accounts", "manual",
             ],
             "description": (
-                "send: send message to a chat (chat_id, text; optional media, reply_markup, placeholder, chat_action, parse_mode/entities). "
+                "send: send message to a chat (chat_id, text, rendering_mode; optional media, reply_markup, placeholder, chat_action, entities). "
                 "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
                 "check: list recent conversations with unread counts (optional account). "
                 "read: read messages from a chat (chat_id; optional limit). "
-                "reply: reply to a specific message (message_id from read results, text; optional parse_mode/entities). "
+                "reply: reply to a specific message (message_id from read results, text, rendering_mode; optional entities). "
                 "search: search messages (query; optional account, chat_id). "
                 "delete: delete a bot message (message_id). "
-                "edit: edit a bot message (message_id, text; optional reply_markup, parse_mode/entities). "
+                "edit: edit a bot message (message_id, text, rendering_mode; optional reply_markup, entities). "
                 "contacts: list saved contacts. "
                 "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
@@ -436,12 +436,14 @@ SCHEMA = {
             "type": "object",
             "description": "Inline keyboard markup",
         },
-        "parse_mode": {
+        "rendering_mode": {
             "type": "string",
-            "enum": ["HTML", "MarkdownV2", "Markdown", ""],
+            "enum": ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"],
             "description": (
-                "Telegram Bot API parse_mode for rich text (send/reply/edit, "
-                "and media captions). Omit or pass an empty string for plain text."
+                "Required for every content-bearing send/reply/edit. Choose "
+                "plain_text, HTML, Markdown, MarkdownV2, or entities; there is no "
+                "default. The runtime maps the choice to Telegram parse_mode or "
+                "MessageEntity data."
             ),
         },
         "entities": {
@@ -3838,18 +3840,7 @@ class TelegramManager:
     # ------------------------------------------------------------------
 
     _PARSE_MODES = {"HTML", "MarkdownV2", "Markdown"}
-
-    @staticmethod
-    def _normalize_parse_mode(value: Any) -> Any:
-        """Treat an empty parse_mode as omitted/plain text.
-
-        Some tool callers serialize absent optional string fields as ``""``.
-        Telegram Bot API itself omits parse_mode for plain text, so normalize
-        the empty string before validation and payload persistence.
-        """
-        if value == "":
-            return None
-        return value
+    _RENDERING_MODES = _PARSE_MODES | {"plain_text", "entities"}
 
     @staticmethod
     def _normalize_chat_action(value: Any) -> Any:
@@ -3863,21 +3854,57 @@ class TelegramManager:
             return None
         return value
 
-    def _rich_text_options(self, args: dict) -> tuple[dict[str, Any], str | None]:
-        """Extract Bot API rich text options for text messages from tool args.
+    @classmethod
+    def _rendering_mode(cls, args: dict) -> str:
+        """Return the explicit rendering choice, with an internal plain fallback.
 
-        Returns (options, error). When nothing relevant is supplied the
-        options dict is empty, so existing plain-text callers behave exactly
-        as before.
+        The public ToolFamily requires ``rendering_mode``.  Manager internals
+        also send text (for example automatic progress) without passing through
+        that model-facing schema, so those internal calls retain plain-text
+        behavior without creating a public default.
+        """
+        value = args.get("rendering_mode")
+        return "plain_text" if value is None else value
+
+    @classmethod
+    def _bot_parse_mode(cls, args: dict) -> str | None:
+        mode = cls._rendering_mode(args)
+        return mode if mode in cls._PARSE_MODES else None
+
+    @classmethod
+    def _rendering_error(cls, mode: str, *, has_entities: bool) -> str | None:
+        if mode not in cls._RENDERING_MODES:
+            return (
+                "rendering_mode must be one of: plain_text, HTML, MarkdownV2, "
+                "Markdown, entities"
+            )
+        if mode == "entities" and not has_entities:
+            return "rendering_mode='entities' requires entities or caption_entities"
+        if mode != "entities" and has_entities:
+            return (
+                f"rendering_mode='{mode}' cannot be combined with entities; "
+                "choose rendering_mode='entities'"
+            )
+        return None
+
+    def _rich_text_options(self, args: dict) -> tuple[dict[str, Any], str | None]:
+        """Extract Bot API options for a text message from rendering_mode.
+
+        ``rendering_mode`` is required at the public family boundary.  Missing
+        values here are only for manager-owned internal sends and mean plain
+        text; the model-facing schema never relies on that fallback.
         """
         opts: dict[str, Any] = {}
-        parse_mode = self._normalize_parse_mode(args.get("parse_mode"))
-        if parse_mode is not None:
-            if parse_mode not in self._PARSE_MODES:
-                return {}, "parse_mode must be one of: HTML, MarkdownV2, Markdown"
-            opts["parse_mode"] = parse_mode
-        if args.get("entities") is not None:
-            opts["entities"] = args.get("entities")
+        entities = args.get("entities")
+        has_entities = entities is not None or args.get("caption_entities") is not None
+        mode = self._rendering_mode(args)
+        error = self._rendering_error(mode, has_entities=has_entities)
+        if error:
+            return {}, error
+        if mode == "entities":
+            opts["entities"] = entities
+        elif mode in self._PARSE_MODES:
+            opts["parse_mode"] = mode
         if args.get("link_preview_options") is not None:
             opts["link_preview_options"] = args.get("link_preview_options")
         if args.get("disable_web_page_preview") is not None:
@@ -3885,22 +3912,19 @@ class TelegramManager:
         return opts, None
 
     def _caption_options(self, args: dict) -> tuple[dict[str, Any], str | None]:
-        """Extract Bot API rich caption options for media sends from tool args.
-
-        If ``caption_entities`` is omitted but ``entities`` is supplied, the
-        latter is treated as caption entities for convenience.
-        """
+        """Extract Bot API options for a media caption from rendering_mode."""
         opts: dict[str, Any] = {}
-        parse_mode = self._normalize_parse_mode(args.get("parse_mode"))
-        if parse_mode is not None:
-            if parse_mode not in self._PARSE_MODES:
-                return {}, "parse_mode must be one of: HTML, MarkdownV2, Markdown"
-            opts["parse_mode"] = parse_mode
         caption_entities = args.get("caption_entities")
         if caption_entities is None:
             caption_entities = args.get("entities")
-        if caption_entities is not None:
+        mode = self._rendering_mode(args)
+        error = self._rendering_error(mode, has_entities=caption_entities is not None)
+        if error:
+            return {}, error
+        if mode == "entities":
             opts["caption_entities"] = caption_entities
+        elif mode in self._PARSE_MODES:
+            opts["parse_mode"] = mode
         return opts, None
 
     def _send(self, args: dict) -> dict:
@@ -4035,7 +4059,8 @@ class TelegramManager:
             "media": media,
             "reply_markup": reply_markup,
             "reply_to_message_id": reply_to,
-            "parse_mode": self._normalize_parse_mode(args.get("parse_mode")),
+            "rendering_mode": self._rendering_mode(args),
+            "parse_mode": self._bot_parse_mode(args),
             "entities": args.get("entities"),
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
@@ -4193,7 +4218,7 @@ class TelegramManager:
             "text": text,
             "media": args.get("media"),
             "reply_markup": args.get("reply_markup"),
-            "parse_mode": self._normalize_parse_mode(args.get("parse_mode")),
+            "rendering_mode": self._rendering_mode(args),
             "entities": args.get("entities"),
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
@@ -4272,10 +4297,6 @@ class TelegramManager:
             return {"error": "text is required"}
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
         reply_markup = args.get("reply_markup")
-        rich_text_options, rich_text_error = self._rich_text_options(args)
-        caption_options, caption_error = self._caption_options(args)
-        if rich_text_error or caption_error:
-            return {"error": rich_text_error or caption_error}
         acct = self._service.get_account(account)
 
         # Detect if original message had media (caption edit vs text edit)
@@ -4293,7 +4314,13 @@ class TelegramManager:
                     except (json.JSONDecodeError, OSError):
                         continue
 
-        edit_options = caption_options if is_caption else rich_text_options
+        if is_caption:
+            edit_options, rendering_error = self._caption_options(args)
+        else:
+            edit_options, rendering_error = self._rich_text_options(args)
+        if rendering_error:
+            return {"error": rendering_error}
+
         acct.edit_message(
             chat_id=chat_id, message_id=tg_msg_id, text=text,
             reply_markup=reply_markup, is_caption=is_caption,

@@ -1,7 +1,7 @@
 """Tests for Telegram MCP rich-formatting pass-through (issue #301).
 
 Proves that the in-kernel Telegram MCP manager forwards Bot API
-formatting options (parse_mode / entities / caption_entities /
+formatting options (rendering_mode / entities / caption_entities /
 link_preview_options / disable_web_page_preview) through to the account
 wrapper for send / reply / edit / media-caption paths, and that callers
 who supply none of these options get exactly the previous behaviour.
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pytest
 
 from lingtai.mcp_servers.telegram.account import TelegramAccount
 from lingtai.mcp_servers.telegram.manager import SCHEMA, TelegramManager
@@ -117,19 +119,13 @@ def _schema_description(schema):
     return " ".join(branch.get("description", "") for branch in schema.get("anyOf", []))
 
 
-def test_schema_exposes_rich_formatting_fields():
+def test_schema_exposes_explicit_rendering_fields():
     props = _send_schema()["properties"]
-    for field in (
-        "parse_mode",
-        "entities",
-        "caption_entities",
-        "link_preview_options",
-        "disable_web_page_preview",
-    ):
+    for field in ("rendering_mode", "entities", "caption_entities", "link_preview_options", "disable_web_page_preview"):
         assert field in props
-
-    assert "" in _schema_enum(props["parse_mode"])
-    assert "plain text" in _schema_description(props["parse_mode"])
+    assert _schema_enum(props["rendering_mode"]) == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"]
+    assert "no default" in _schema_description(props["rendering_mode"])
+    assert "parse_mode" not in props
 
 
 def test_schema_allows_empty_chat_action():
@@ -227,46 +223,31 @@ def test_manual_action_returns_usage_guidance(tmp_path):
     # the other facets the manual should cover
     assert "placeholder" in lowered
     assert "reply" in lowered
-    assert "parse_mode" in manual
+    assert "rendering_mode" in manual
+    assert "parse_mode" in manual  # Bot API mapping remains documented.
     assert "chat_action" in manual
     assert "error" in lowered
 
 
 # ---------------------------------------------------------------------------
-# Manager pass-through (the acceptance-critical parse_mode path lives here)
+# Manager pass-through (the acceptance-critical rendering path lives here)
 # ---------------------------------------------------------------------------
 
 
-def test_send_passes_parse_mode_entities_and_link_preview(tmp_path):
+@pytest.mark.parametrize(
+    ("rendering_mode", "expected_options"),
+    [("plain_text", {}), ("HTML", {"parse_mode": "HTML"}), ("Markdown", {"parse_mode": "Markdown"}), ("MarkdownV2", {"parse_mode": "MarkdownV2"})],
+)
+def test_send_maps_explicit_rendering_mode(rendering_mode, expected_options, tmp_path):
     manager, account = _manager(tmp_path)
-    entities = [{"type": "bold", "offset": 0, "length": 4}]
     link_preview_options = {"is_disabled": True}
-
     result = manager._send({
-        "account": "mybot",
-        "chat_id": 123,
-        "text": "bold link",
-        "parse_mode": "HTML",
-        "entities": entities,
-        "link_preview_options": link_preview_options,
+        "account": "mybot", "chat_id": 123, "text": "formatted link",
+        "rendering_mode": rendering_mode, "link_preview_options": link_preview_options,
         "disable_web_page_preview": True,
     })
-
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
-    assert account.calls == [(
-        "send_message",
-        123,
-        "bold link",
-        None,
-        None,
-        {
-            "parse_mode": "HTML",
-            "entities": entities,
-            "link_preview_options": link_preview_options,
-            "disable_web_page_preview": True,
-        },
-    )]
-
+    assert account.calls[0][-1] == {**expected_options, "link_preview_options": link_preview_options, "disable_web_page_preview": True}
 
 def test_reply_persists_reply_to_message_id_in_sent_record(tmp_path):
     manager, account = _manager(tmp_path)
@@ -274,6 +255,7 @@ def test_reply_persists_reply_to_message_id_in_sent_record(tmp_path):
     result = manager._reply({
         "message_id": "mybot:123:456",
         "text": "reply text",
+        "rendering_mode": "plain_text",
     })
 
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
@@ -295,6 +277,7 @@ def test_send_accepts_public_reply_target_fields(tmp_path):
         "account": "mybot",
         "chat_id": 123,
         "text": "reply text",
+        "rendering_mode": "plain_text",
         "message_id": "mybot:123:456",
     })
 
@@ -312,6 +295,7 @@ def test_send_accepts_raw_reply_to_message_id(tmp_path):
         "account": "mybot",
         "chat_id": 123,
         "text": "reply text",
+        "rendering_mode": "plain_text",
         "reply_to_message_id": 456,
     })
 
@@ -329,6 +313,7 @@ def test_send_reply_target_precedence_prefers_private_field(tmp_path):
         "account": "mybot",
         "chat_id": 123,
         "text": "reply text",
+        "rendering_mode": "plain_text",
         "_reply_to_message_id": 111,
         "reply_to_message_id": 222,
         "message_id": "mybot:123:333",
@@ -341,8 +326,8 @@ def test_send_reply_target_precedence_prefers_private_field(tmp_path):
     assert read_result["messages"][0]["reply_to_message_id"] == 111
 
 
-def test_send_without_formatting_is_unchanged(tmp_path):
-    """Backward compatibility: a plain send forwards no formatting kwargs."""
+def test_internal_send_without_rendering_mode_keeps_plain_fallback(tmp_path):
+    """Manager-owned internal sends retain plain-text compatibility."""
     manager, account = _manager(tmp_path)
 
     result = manager._send({
@@ -362,93 +347,40 @@ def test_send_without_formatting_is_unchanged(tmp_path):
     )]
 
 
-def test_empty_parse_mode_is_treated_as_plain_text(tmp_path):
-    """Optional parse_mode serialized as "" should mean omitted/plain text."""
+def test_explicit_plain_text_omits_bot_parse_mode(tmp_path):
     manager, account = _manager(tmp_path)
-
-    result = manager._send({
-        "account": "mybot",
-        "chat_id": 123,
-        "text": "plain",
-        "parse_mode": "",
-    })
-
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "plain", "rendering_mode": "plain_text"})
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
-    assert account.calls == [(
-        "send_message",
-        123,
-        "plain",
-        None,
-        None,
-        {},
-    )]
+    assert account.calls == [("send_message", 123, "plain", None, None, {})]
     sent_files = list((Path(tmp_path) / "telegram" / "mybot" / "sent").glob("*/message.json"))
-    assert len(sent_files) == 1
-    assert json.loads(sent_files[0].read_text())["parse_mode"] is None
+    record = json.loads(sent_files[0].read_text())
+    assert record["rendering_mode"] == "plain_text"
+    assert record["parse_mode"] is None
 
-
-def test_empty_chat_action_with_text_is_treated_as_omitted(tmp_path):
-    """Optional chat_action serialized as "" should not block text sends."""
+def test_explicit_plain_text_with_empty_chat_action_sends_text(tmp_path):
     manager, account = _manager(tmp_path)
-
-    result = manager._send({
-        "account": "mybot",
-        "chat_id": 123,
-        "text": "plain",
-        "chat_action": "",
-    })
-
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "plain", "rendering_mode": "plain_text", "chat_action": ""})
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
-    assert account.calls == [(
-        "send_message",
-        123,
-        "plain",
-        None,
-        None,
-        {},
-    )]
+    assert account.calls == [("send_message", 123, "plain", None, None, {})]
 
-
-def test_empty_parse_mode_reply_is_treated_as_plain_text(tmp_path):
+def test_plain_text_reply_is_forwarded_without_bot_parse_mode(tmp_path):
     manager, account = _manager(tmp_path)
-
-    result = manager._reply({
-        "message_id": "mybot:123:456",
-        "text": "plain reply",
-        "parse_mode": "",
-    })
-
+    result = manager._reply({"message_id": "mybot:123:456", "text": "plain reply", "rendering_mode": "plain_text"})
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
-    assert account.calls == [(
-        "send_message",
-        123,
-        "plain reply",
-        None,
-        456,
-        {},
-    )]
-
+    assert account.calls == [("send_message", 123, "plain reply", None, 456, {})]
 
 def test_reply_passes_rich_formatting_options(tmp_path):
     manager, account = _manager(tmp_path)
-    entities = [{"type": "code", "offset": 0, "length": 1}]
-
-    result = manager._reply({
-        "message_id": "mybot:123:456",
-        "text": "x",
-        "parse_mode": "MarkdownV2",
-        "entities": entities,
-    })
-
+    result = manager._reply({"message_id": "mybot:123:456", "text": "x", "rendering_mode": "MarkdownV2"})
     assert result == {"status": "sent", "message_id": "mybot:123:111"}
-    assert account.calls == [(
-        "send_message",
-        123,
-        "x",
-        None,
-        456,
-        {"parse_mode": "MarkdownV2", "entities": entities},
-    )]
+    assert account.calls == [("send_message", 123, "x", None, 456, {"parse_mode": "MarkdownV2"})]
+
+def test_reply_entities_mode_passes_entities(tmp_path):
+    manager, account = _manager(tmp_path)
+    entities = [{"type": "code", "offset": 0, "length": 1}]
+    result = manager._reply({"message_id": "mybot:123:456", "text": "x", "rendering_mode": "entities", "entities": entities})
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls[0][-1] == {"entities": entities}
 
 
 def test_send_media_passes_caption_entities(tmp_path):
@@ -456,68 +388,35 @@ def test_send_media_passes_caption_entities(tmp_path):
     media_path.write_text("demo", encoding="utf-8")
     manager, account = _manager(tmp_path)
     caption_entities = [{"type": "italic", "offset": 0, "length": 4}]
-
-    result = manager._send({
-        "account": "mybot",
-        "chat_id": 123,
-        "text": "demo",
-        "media": {"type": "document", "path": str(media_path)},
-        "parse_mode": "HTML",
-        "caption_entities": caption_entities,
-    })
-
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "demo", "media": {"type": "document", "path": str(media_path)}, "rendering_mode": "entities", "caption_entities": caption_entities})
     assert result == {"status": "sent", "message_id": "mybot:123:222"}
-    assert account.calls == [(
-        "send_document",
-        123,
-        str(media_path),
-        "demo",
-        None,
-        {"parse_mode": "HTML", "caption_entities": caption_entities},
-    )]
+    assert account.calls == [("send_document", 123, str(media_path), "demo", None, {"caption_entities": caption_entities})]
 
-
-def test_edit_text_passes_parse_mode(tmp_path):
+def test_edit_text_passes_rendering_mode(tmp_path):
     manager, account = _manager(tmp_path)
-
-    result = manager._edit({
-        "message_id": "mybot:123:456",
-        "text": "<b>x</b>",
-        "parse_mode": "HTML",
-    })
-
+    result = manager._edit({"message_id": "mybot:123:456", "text": "<b>x</b>", "rendering_mode": "HTML"})
     assert result == {"status": "edited", "message_id": "mybot:123:456"}
-    assert account.calls == [(
-        "edit_message",
-        {
-            "chat_id": 123,
-            "message_id": 456,
-            "text": "<b>x</b>",
-            "reply_markup": None,
-            "is_caption": False,
-            "parse_mode": "HTML",
-        },
-    )]
+    assert account.calls == [("edit_message", {"chat_id": 123, "message_id": 456, "text": "<b>x</b>", "reply_markup": None, "is_caption": False, "parse_mode": "HTML"})]
 
-
-def test_invalid_parse_mode_is_rejected(tmp_path):
+def test_invalid_rendering_mode_is_rejected(tmp_path):
     manager, account = _manager(tmp_path)
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "hello", "rendering_mode": "BBCode"})
+    assert result == {"error": "rendering_mode must be one of: plain_text, HTML, MarkdownV2, Markdown, entities"}
+    assert account.calls == []
 
-    result = manager._send({
-        "account": "mybot",
-        "chat_id": 123,
-        "text": "hello",
-        "parse_mode": "BBCode",
-    })
-
-    assert result == {"error": "parse_mode must be one of: HTML, MarkdownV2, Markdown"}
+@pytest.mark.parametrize("rendering_mode", ["plain_text", "HTML", "Markdown", "MarkdownV2"])
+def test_entity_data_is_rejected_for_parse_mode_rendering(rendering_mode, tmp_path):
+    manager, account = _manager(tmp_path)
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "hello", "rendering_mode": rendering_mode, "entities": [{"type": "bold", "offset": 0, "length": 5}]})
+    assert result == {"error": f"rendering_mode='{rendering_mode}' cannot be combined with entities; choose rendering_mode='entities'"}
     assert account.calls == []
 
 
-# ---------------------------------------------------------------------------
-# Account wrapper payload shaping
-# ---------------------------------------------------------------------------
-
+def test_entities_rendering_requires_entity_data(tmp_path):
+    manager, account = _manager(tmp_path)
+    result = manager._send({"account": "mybot", "chat_id": 123, "text": "hello", "rendering_mode": "entities"})
+    assert result == {"error": "rendering_mode='entities' requires entities or caption_entities"}
+    assert account.calls == []
 
 class CaptureAccount(TelegramAccount):
     def __init__(self):
