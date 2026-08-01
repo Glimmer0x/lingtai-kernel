@@ -68,9 +68,14 @@ DEFAULT_COMMANDS: list[dict[str, str]] = [
     {"command": "taskcard", "description": "Show or hide Task Cards"},
     {"command": "refresh", "description": "Restart agent"},
     {"command": "sleep", "description": "Put agent to sleep"},
+    {"command": "clear", "description": "Clear conversation"},
+]
+
+# Commands that still work when typed, but are hidden from the visible
+# setMyCommands menu because they are rarely useful interactively.
+HIDDEN_COMMANDS: list[dict[str, str]] = [
     {"command": "system", "description": "Browse system files (tap to view)"},
     {"command": "brief", "description": "Show current briefing"},
-    {"command": "clear", "description": "Clear conversation"},
 ]
 
 
@@ -1096,6 +1101,12 @@ class TelegramAccount:
             name = cmd_info.get("command", "?")
             desc = cmd_info.get("description", "")
             lines.append(f"/{name} — {desc} (local)")
+        lines.append("")
+        lines.append("Hidden (still work if typed):")
+        for cmd_info in HIDDEN_COMMANDS:
+            name = cmd_info.get("command", "?")
+            desc = cmd_info.get("description", "")
+            lines.append(f"/{name} — {desc}")
         lines.append("")
         lines.append("Other messages are sent to the agent as normal chat.")
         self.send_message(chat_id, "\n".join(lines), parse_mode="Markdown")

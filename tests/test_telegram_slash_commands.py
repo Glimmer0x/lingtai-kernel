@@ -239,8 +239,12 @@ def test_help_lists_all_default_commands(acct: tuple[TelegramAccount, list[dict]
     acct[0]._cmd_help(123)
     body = sent[0]
     for cmd in ["/status", "/help", "/kanban", "/taskcard", "/refresh",
-                "/sleep", "/system", "/brief", "/clear"]:
+                "/sleep", "/clear"]:
         assert cmd in body
+    # Hidden commands still documented as hidden, still work if typed
+    for cmd in ["/system", "/brief"]:
+        assert cmd in body
+    assert "Hidden" in body
 
 
 def test_brief_reads_file(acct: tuple[TelegramAccount, list[dict]]) -> None:
