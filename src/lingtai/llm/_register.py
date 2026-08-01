@@ -213,6 +213,17 @@ def register_all_adapters() -> None:
     for name in ("claude-code", "claude_code"):
         LLMService.register_adapter(name, _claude_code)
 
+    def _kimi_code(*, model=None, defaults=None, **kw):
+        from .kimi_code.adapter import KimiCodeAdapter
+        kw.pop("model", None)
+        # Kimi Code owns its local CLI auth/config.  An explicitly supplied
+        # api_key is passed only through the child environment by the adapter;
+        # it is never placed in argv, prompts, or logs.
+        return KimiCodeAdapter(model=model, **{k: v for k, v in kw.items() if v is not None})
+
+    for name in ("kimi-code", "kimi_code"):
+        LLMService.register_adapter(name, _kimi_code)
+
     def _deepseek(*, model=None, defaults=None, **kw):
         from .deepseek.adapter import DeepSeekAdapter
         kw.pop("model", None)
