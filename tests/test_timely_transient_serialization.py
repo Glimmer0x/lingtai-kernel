@@ -41,6 +41,7 @@ tool-result bodies.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -261,14 +262,18 @@ def test_content_is_read_directly_without_intermediate_helpers():
 # ---------------------------------------------------------------------------
 
 
-def test_claude_code_render_preserves_historical_and_newest_holders():
+def _claude_session(iface: ChatInterface) -> "ClaudeCodeChatSession":
+    """Build a ClaudeCodeChatSession without a live CLI.
+
+    The constructor persists the stable system context through the adapter's
+    prompt-cache file, so the adapter must be a real object exposing
+    ``_system_prompt_file`` (``None`` disables the cache write). A bare
+    ``None`` adapter fails before the render is ever reached.
+    """
     from lingtai.llm.claude_code.adapter import ClaudeCodeChatSession
 
-    call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
-    call_2_content = {"done": True, "_meta": dict(_NEWER_TRANSIENT_META)}
-    iface = _iface_with_two_results(call_1_content, call_2_content)
-    session = ClaudeCodeChatSession(
-        adapter=None,
+    return ClaudeCodeChatSession(
+        adapter=SimpleNamespace(_system_prompt_file=None),
         model="sonnet",
         system_prompt="",
         tools=[],
@@ -276,7 +281,13 @@ def test_claude_code_render_preserves_historical_and_newest_holders():
         context_window=100_000,
     )
 
-    rendered = session._render_conversation()
+
+def test_claude_code_render_preserves_historical_and_newest_holders():
+    call_1_content = {"ok": True, "_meta": dict(_ALL_TRANSIENT_META)}
+    call_2_content = {"done": True, "_meta": dict(_NEWER_TRANSIENT_META)}
+    iface = _iface_with_two_results(call_1_content, call_2_content)
+
+    rendered = _claude_session(iface)._render_conversation()
 
     assert "email-1" in rendered  # historical notification copy preserved
     assert "email-2" in rendered  # newest payload also present
@@ -284,6 +295,45 @@ def test_claude_code_render_preserves_historical_and_newest_holders():
     assert call_1_content["_meta"]["notifications"] == {
         "email": {"data": {"email_ids": ["email-1"]}}
     }
+
+
+def test_claude_code_render_projects_runtime_metadata_sidecar():
+    """Regression: ToolResultBlock.metadata must reach the model-facing render.
+
+    The kernel stores runtime state (``agent_meta`` / ``guidance`` /
+    ``notifications`` / ``notification_guidance``) in the block's ``metadata``
+    sidecar, not in handler content. The claude-code full-history render used
+    to serialize ``block.content`` only, silently dropping every email/telegram
+    notification payload — the agent woke, saw "nothing pending", and never
+    replied. The render must project the sidecar through the same
+    ``_project_tool_result`` used by the wire converters.
+    """
+    iface = ChatInterface()
+    iface.add_user_message("start")
+    iface.add_assistant_message([ToolCallBlock(id="call_1", name="do_x", args={})])
+    iface.add_tool_results(
+        [
+            ToolResultBlock(
+                id="call_1",
+                name="do_x",
+                content="handler result body",
+                metadata=dict(_ALL_TRANSIENT_META),
+            )
+        ]
+    )
+
+    rendered = _claude_session(iface)._render_conversation()
+
+    # The metadata sidecar is merged into a ``_meta`` envelope next to the
+    # handler content instead of being dropped.
+    assert "email-1" in rendered
+    assert "handler result body" in rendered
+    assert '"_meta"' in rendered
+
+    # Non-mutating: the canonical block keeps its sidecar and its content.
+    block = iface._entries[-1].content[0]
+    assert block.metadata == _ALL_TRANSIENT_META
+    assert block.content == "handler result body"
 
 
 # ---------------------------------------------------------------------------
