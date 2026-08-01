@@ -25,6 +25,8 @@ _ACTIONS = (
     "contacts", "add_contact", "remove_contact", "accounts", "manual",
 )
 
+_RENDERING_MODES = ("plain_text", "HTML", "MarkdownV2", "Markdown", "entities")
+
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
     return {"anyOf": [schema, {"type": "null"}]}
@@ -81,15 +83,15 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "type": "string",
                 "enum": ["typing", "upload_photo", "upload_document", "upload_voice", ""],
             }),
-            "parse_mode": _nullable({
-                "type": "string", "enum": ["HTML", "MarkdownV2", "Markdown", ""],
-            }),
+            "rendering_mode": {
+                "type": "string", "enum": list(_RENDERING_MODES),
+            },
             "entities": _nullable({"type": "array"}),
             "caption_entities": _nullable({"type": "array"}),
             "link_preview_options": _nullable({"type": "object"}),
             "disable_web_page_preview": _nullable({"type": "boolean"}),
         },
-        required=["chat_id"],
+        required=["chat_id", "rendering_mode"],
         any_of=[
             {"required": ["text"]},
             {"required": ["media"]},
@@ -104,9 +106,17 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         "compress, thumbnail, or display text-heavy charts poorly. Do not paste local "
         "file paths in message text as a substitute for attaching the file."
     )
-    send["properties"]["parse_mode"]["anyOf"][0]["description"] = (
-        "Telegram Bot API parse_mode for rich text (send/reply/edit and media captions). "
-        "Omit or pass an empty string for plain text."
+    send["properties"]["rendering_mode"]["description"] = (
+        "Required rendering choice for every send. Choose plain_text for unformatted "
+        "text or chat actions, HTML/Markdown/MarkdownV2 for Telegram parse_mode, or "
+        "entities when supplying MessageEntity data. There is no default; do not "
+        "combine entities with a parse-mode choice."
+    )
+    send["properties"]["entities"]["anyOf"][0]["description"] = (
+        "Telegram MessageEntity[] for rendering_mode='entities' on message text."
+    )
+    send["properties"]["caption_entities"]["anyOf"][0]["description"] = (
+        "Telegram MessageEntity[] for rendering_mode='entities' on media captions."
     )
     send["properties"]["chat_action"]["anyOf"][0]["description"] = (
         "For send only. When set and no text/media is provided, sends a chat action "
@@ -129,12 +139,16 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
-                "parse_mode": _nullable({
-                    "type": "string", "enum": ["HTML", "MarkdownV2", "Markdown", ""],
-                }),
+                "rendering_mode": {
+                    "type": "string", "enum": list(_RENDERING_MODES),
+                    "description": (
+                        "Required rendering choice: plain_text, HTML, Markdown, "
+                        "MarkdownV2, or entities. There is no default."
+                    ),
+                },
                 "entities": _nullable({"type": "array"}),
             },
-            required=["message_id", "text"],
+            required=["message_id", "text", "rendering_mode"],
         ),
         "search": _object(
             {
@@ -150,12 +164,16 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
                 "reply_markup": {"type": "object"},
-                "parse_mode": _nullable({
-                    "type": "string", "enum": ["HTML", "MarkdownV2", "Markdown", ""],
-                }),
+                "rendering_mode": {
+                    "type": "string", "enum": list(_RENDERING_MODES),
+                    "description": (
+                        "Required rendering choice: plain_text, HTML, Markdown, "
+                        "MarkdownV2, or entities. There is no default."
+                    ),
+                },
                 "entities": _nullable({"type": "array"}),
             },
-            required=["message_id", "text"],
+            required=["message_id", "text", "rendering_mode"],
         ),
         "contacts": _object({"account": _nullable({"type": "string"})}),
         "add_contact": _object(
@@ -202,7 +220,9 @@ def telegram_schema() -> dict[str, Any]:
     # not reject a valid input merely because another action's branch also fits.
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "Telegram action. Each action owns a strict input branch. For charts, "
+        "Telegram action. Each action owns a strict input branch. Content-bearing "
+        "send/reply/edit calls must provide rendering_mode explicitly: plain_text, "
+        "HTML, Markdown, MarkdownV2, or entities; there is no default. For charts, "
         "reports, generated artifacts, and other files the user should open intact, "
         "prefer media.type='document'; use media.type='photo' only for an inline "
         "preview because photo previews may crop or compress text-heavy graphics. "
