@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import hashlib as _hashlib
 import json as _json
-import time as _time
 import copy as _copy
 from collections.abc import Mapping
 from typing import Any, Dict, NamedTuple
@@ -58,7 +57,6 @@ from typing import Any, Dict, NamedTuple
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     CONTEXT_PRESSURE_FORCED_REBUILD_RATIO,
-    CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias == FORCED_REBUILD_RATIO
     CONTEXT_PRESSURE_RECOVERY_TARGET,
     system_prompt_pressure_ratio,
 )

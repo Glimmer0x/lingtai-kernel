@@ -247,7 +247,6 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
     unaffected).
     """
     import json
-    import os
     from pathlib import Path
 
     init_path: Path = agent._working_dir / "init.json"

@@ -226,7 +226,6 @@ def _run_consultation_fire(agent) -> None:
     """
     from datetime import datetime, timezone
     import secrets as _secrets
-    from lingtai.kernel.message import _make_message, MSG_TC_WAKE
 
     # Opt-in gate (belt-and-suspenders): even if a residual caller reaches
     # here while flow is disabled, no fire runs. This closes the loophole
@@ -256,7 +255,6 @@ def _run_consultation_fire(agent) -> None:
         from .consultation import (
             _render_current_diary,
             _run_consultation_batch,
-            build_consultation_pair,
         )
         from lingtai.kernel.notifications import submit as publish_notification, clear as clear_notification
 

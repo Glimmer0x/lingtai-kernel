@@ -4,12 +4,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
-import mimetypes
-import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes

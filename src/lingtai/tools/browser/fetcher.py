@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from . import netpolicy
-from .port import BrowserPort, ResolvedTarget, TransportError, TransportResponse
+from .port import BrowserPort, TransportError, TransportResponse
 
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_MAX_REDIRECTS = 5

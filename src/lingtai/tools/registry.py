@@ -21,7 +21,6 @@ they are mandatory and cheap; they live under ``lingtai.tools`` and import only
 """
 from __future__ import annotations
 
-import copy
 import importlib
 from dataclasses import dataclass
 from enum import Enum

@@ -11,13 +11,12 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from .init_schema import DEPRECATED_TOP_FIELDS, LEGACY_MIGRATED_TOP_FIELDS, validate_init
 from .kernel.config_resolve import parse_jsonc, resolve_paths
 from .kernel.workdir import _redact_secrets
 from .tools.registry import (
-    CapabilityShapeDecision,
     classify_capabilities,
 )
 

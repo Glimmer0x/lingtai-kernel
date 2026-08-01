@@ -118,10 +118,9 @@ The real no-config `setup(agent)` path (no `engines=`, `provider=`,
 `default_engine=`, or `search_service=`) composes the true built-in spec set:
 all four canonical providers, with `openai`/`anthropic`/`gemini` each reading
 only their own standard, publicly-documented API-key environment variable
-(`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GEMINI_API_KEY` — the same names each
-provider's own first-party LLM adapter already trusts,
-`src/lingtai/llm/{openai,anthropic,gemini}/defaults.py`) — never the current
-Agent's own live `agent.service` credentials or any private LLM-adapter
+(`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`GEMINI_API_KEY` — as declared by
+`src/lingtai/tools/web_search/__init__.py:_CANONICAL_API_KEY_ENV`) — never the
+current Agent's own live `agent.service` credentials or any private LLM-adapter
 attribute. The built-in default engine is resolved live, per call: canonical
 OpenAI when its standard credential is genuinely present, else DuckDuckGo.
 Anthropic and Gemini are present in this spec set (so their status is

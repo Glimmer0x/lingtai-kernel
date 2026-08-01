@@ -12,7 +12,7 @@ from typing import Any
 
 from lingtai.kernel.logging import get_logger
 
-from .interface import ChatInterface, ToolResultBlock
+from .interface import ChatInterface
 
 logger = get_logger()
 

@@ -15,7 +15,6 @@ original traceable."  It does NOT delete or rewrite event traces.
 from __future__ import annotations
 
 import datetime as _dt
-import json as _json
 from typing import Any
 
 from lingtai.kernel.meta_block import formal_tool_result_visible_len

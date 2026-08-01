@@ -28,7 +28,6 @@ from .settings import (
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.services.websearch import SearchService
     from ..browser.port import BrowserPort
 
 # MiniMax and Zhipu are no longer built-in `web` providers (see
@@ -84,12 +83,12 @@ class SettingsOnlyProviderError(ValueError):
 # rejected outright at composition time (see ``_specs_from_kwargs``).
 _BACKEND_GATED_ENGINES = frozenset({"anthropic", "gemini"})
 
-# The standard, publicly-documented environment variable each canonical
-# first-party provider's own LLM adapter already trusts for its API key when
-# no explicit key is supplied (``src/lingtai/llm/openai/defaults.py``,
-# ``anthropic/defaults.py``, ``gemini/defaults.py``). The no-config built-in
-# default spec set below reads only these — never the current Agent's own
-# live ``agent.service`` credentials or any private LLM-adapter attribute.
+# The standard, publicly-documented API-key environment variable for each
+# canonical built-in web-search spec
+# (``src/lingtai/tools/web_search/__init__.py:_CANONICAL_API_KEY_ENV``). The
+# no-config built-in default spec set below reads only these — never the current
+# Agent's own live ``agent.service`` credentials or any private LLM-adapter
+# attribute.
 _CANONICAL_API_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",

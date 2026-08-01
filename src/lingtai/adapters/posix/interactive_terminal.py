@@ -12,7 +12,6 @@ import subprocess
 import threading
 import termios
 import time
-from pathlib import Path
 from collections.abc import Callable
 
 from lingtai.adapters.posix.process_identity import process_identity

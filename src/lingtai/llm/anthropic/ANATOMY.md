@@ -3,7 +3,6 @@ related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/anthropic/__init__.py
   - src/lingtai/llm/anthropic/adapter.py
-  - src/lingtai/llm/anthropic/defaults.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -23,7 +22,6 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `AnthropicAdapter`, `AnthropicChatSession` |
 | `adapter.py` | 823 | Adapter + session + helpers |
-| `defaults.py` | 6 | `DEFAULTS` dict: `api_key_env=ANTHROPIC_API_KEY`, `model=claude-sonnet-4-20250514` |
 
 ### Classes
 

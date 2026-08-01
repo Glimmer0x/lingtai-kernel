@@ -1346,6 +1346,9 @@ class Agent(BaseAgent):
         """
         from .services import mcp as mcp_service
         from .services.mcp import HTTPMCPClient
+        from lingtai.kernel.logging import get_logger
+
+        logger = get_logger()
 
         url = self._expand_agent_placeholders(url)
         if headers:
