@@ -5,17 +5,10 @@ on:
     inputs:
       publish:
         description: >-
-          Actually publish the manifest/wheels/sdist to the GitHub release and
-          (when GITEE_ACCESS_TOKEN is configured) Gitee. Default false keeps
-          manual dispatch a safe dry-run/shape-check; the automatic
-          release.published trigger always publishes.
-        type: boolean
-        default: false
-      gitee_only_recovery:
-        description: >-
-          Gitee-only recovery: download the exact existing GitHub release bytes
-          for an explicit release_tag and resume only Gitee publication; requires
-          publish=true and a simple vX.Y.Z tag. No builds or GitHub replacement.
+          Actually publish the manifest/wheels/sdist to the GitHub release.
+          Default false keeps manual dispatch a safe dry-run/shape-check; the
+          automatic release.published trigger always publishes. Gitee is not
+          part of this publish path.
         type: boolean
         default: false
       release_tag:
@@ -32,7 +25,6 @@ permissions:
 
 jobs:
   build-wheels:
-    if: inputs.gitee_only_recovery != true
     name: Wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     # Fail loud instead of hanging: cibuildwheel across three CPythons plus a
@@ -185,7 +177,6 @@ jobs:
           if-no-files-found: error
 
   build-sdist:
-    if: inputs.gitee_only_recovery != true
     name: Source distribution
     runs-on: ubuntu-latest
     # Independent of build-wheels so a wheel/auditwheel failure on any platform
@@ -240,7 +231,6 @@ jobs:
           if-no-files-found: error
 
   release-manifest:
-    if: inputs.gitee_only_recovery != true
     name: Generate release manifest
     needs: [build-wheels, build-sdist]
     runs-on: ubuntu-latest
@@ -263,10 +253,6 @@ jobs:
         with:
           ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
           persist-credentials: false
-          # sync_gitee_mirror.py needs the full history reachable from
-          # the checked-out commit to `git cat-file -e`/push it; a shallow
-          # checkout (the actions/checkout@v4 default) would make that fail.
-          fetch-depth: 0
 
       - name: Validate manual recovery tag
         if: github.event_name == 'workflow_dispatch'
@@ -358,29 +344,9 @@ jobs:
             echo "execute=0" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Non-force synchronize the exact commit/tag to Gitee
-        if: steps.publish_mode.outputs.execute == '1'
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          tag="${{ github.event.release.tag_name || inputs.release_tag || '' }}"
-          tag="${tag:-v${version}}"
-          # Skips cleanly (exit 0, prints why) when GITEE_ACCESS_TOKEN is
-          # unset — see sync_gitee_mirror.py. Every push is non-force; a
-          # divergence/existing-tag conflict fails this step loud rather than
-          # silently overwriting the mirror.
-          python scripts/sync_gitee_mirror.py \
-            --commit "$(git rev-parse HEAD)" \
-            --tag "$tag" \
-            --branch main \
-            --execute
-
       - name: Publish manifest/wheels/sdist
         env:
           GH_TOKEN: ${{ github.token }}
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
           version="$(python -c 'import tomllib,sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
@@ -395,11 +361,13 @@ jobs:
           fi
           # publish_release_assets.py is idempotent (skips already-attached
           # same-name assets) and never force-syncs/deletes — safe to run
-          # repeatedly. Gitee leg is skipped internally when
-          # GITEE_ACCESS_TOKEN is unset, regardless of execute_flag.
+          # repeatedly. --skip-gitee keeps the primary release path
+          # GitHub-only: Gitee is not synchronized or published from this
+          # job, so a Gitee problem can never delay or fail a release.
           python scripts/publish_release_assets.py \
             --manifest release-assets/lingtai-kernel-release-manifest.json \
             --assets-dir release-assets \
+            --skip-gitee \
             $execute_flag
 
       - name: Upload release manifest artifact
@@ -410,149 +378,3 @@ jobs:
             release-assets/lingtai-kernel-release-manifest.json
             release-assets/SHA256SUMS
           if-no-files-found: error
-
-  gitee-only-recovery:
-    name: Recover Gitee assets from the existing GitHub release
-    if: github.event_name == 'workflow_dispatch' && inputs.gitee_only_recovery == true
-    runs-on: ubuntu-latest
-    # Asset discovery plus a bounded retry loop must outlive the original
-    # publisher's 15-minute manifest-job ceiling, but never run indefinitely.
-    timeout-minutes: 120
-    permissions:
-      contents: read
-
-    steps:
-      - name: Check out reviewed publisher/tools at workflow SHA
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Check out exact release tag as target source
-        uses: actions/checkout@v4
-        with:
-          ref: refs/tags/${{ inputs.release_tag }}
-          path: release-source
-          persist-credentials: false
-          fetch-depth: 0
-
-      - name: Validate Gitee-only recovery inputs and checkout
-        shell: bash
-        env:
-          RECOVERY_REQUESTED: ${{ inputs.gitee_only_recovery }}
-          PUBLISH_REQUESTED: ${{ inputs.publish }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          WORKFLOW_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [[ "$RECOVERY_REQUESTED" != "true" || "$PUBLISH_REQUESTED" != "true" ]]; then
-            echo "::error::Gitee-only recovery requires gitee_only_recovery=true and publish=true."
-            exit 1
-          fi
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Gitee-only recovery requires an explicit simple vX.Y.Z release_tag."
-            exit 1
-          fi
-          main_head="$(git rev-parse HEAD)"
-          if [[ "$main_head" != "$WORKFLOW_SHA" ]]; then
-            echo "::error::Reviewed publisher checkout HEAD does not equal github.sha."
-            exit 1
-          fi
-          tag_commit="$(git -C release-source rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
-          target_head="$(git -C release-source rev-parse HEAD)"
-          if [[ "$tag_commit" != "$target_head" ]]; then
-            echo "::error::release-source HEAD does not match refs/tags/${RELEASE_TAG}."
-            exit 1
-          fi
-
-      - name: Set up Python for the Gitee publisher
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install publisher runtime dependency
-        run: python -m pip install "packaging>=24.0"
-
-      - name: Download exact GitHub release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          if [[ -e release-assets ]]; then
-            echo "::error::release-assets must be fresh on the recovery runner."
-            exit 1
-          fi
-          mkdir release-assets
-          gh release download "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir release-assets
-
-      - name: Verify downloaded manifest and SHA256SUMS
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          export EXPECTED_COMMIT="$(git -C release-source rev-parse HEAD)"
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          path = Path("release-assets/lingtai-kernel-release-manifest.json")
-          data = json.loads(path.read_text(encoding="utf-8"))
-          expected_tag = os.environ["RELEASE_TAG"]
-          expected_commit = os.environ["EXPECTED_COMMIT"]
-          actual_tag = data.get("kernel_tag")
-          actual_commit = data.get("commit")
-          if actual_tag != expected_tag:
-              raise SystemExit(
-                  f"downloaded manifest kernel_tag {actual_tag!r} does not match requested release tag {expected_tag!r}"
-              )
-          if actual_commit != expected_commit:
-              raise SystemExit(
-                  f"downloaded manifest commit {actual_commit!r} does not match release-source commit {expected_commit!r}"
-              )
-          print(f"Downloaded manifest target verified: {expected_tag} at {expected_commit[:12]}.")
-          PY
-          (
-            cd release-assets
-            sha256sum --check --strict SHA256SUMS
-          )
-
-      - name: Resume Gitee publication (idempotent bounded retry)
-        shell: bash
-        env:
-          GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${GITEE_ACCESS_TOKEN:-}" ]]; then
-            echo "::error::GITEE_ACCESS_TOKEN must be configured for Gitee-only recovery."
-            exit 1
-          fi
-          max_attempts=10
-          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-            echo "Gitee-only publisher attempt ${attempt}/${max_attempts} (10-minute timeout)."
-            set +e
-            PYTHONUNBUFFERED=1 timeout --foreground --signal=TERM --kill-after=30s 10m \
-              python scripts/publish_release_assets.py \
-                --manifest release-assets/lingtai-kernel-release-manifest.json \
-                --assets-dir release-assets \
-                --skip-github \
-                --execute
-            status=$?
-            set -e
-            if (( status == 0 )); then
-              exit 0
-            fi
-            if (( status == 124 || status == 137 )); then
-              echo "::warning::Gitee-only publisher timed out (exit ${status}); retrying so remote completion can be rediscovered."
-              continue
-            fi
-            echo "::error::Gitee-only publisher failed with non-timeout exit ${status}."
-            exit "$status"
-          done
-          echo "::error::Gitee-only publisher timed out after ${max_attempts} bounded attempts."
-          exit 124

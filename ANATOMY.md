@@ -173,9 +173,10 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   docs-governance validator described below and the release-manifest
   generator/publisher/Gitee-mirror-sync scripts described in
   [`RELEASING.md`](RELEASING.md). `wheels.yml`'s `release-manifest` job
-  actually invokes these with `--execute` on a real `release.published`
-  event (or an explicit `workflow_dispatch` with `publish: true`) — every
-  other trigger shape stays dry-run.
+  invokes the generator and the publisher (always with `--skip-gitee`;
+  no path in that workflow touches Gitee) with `--execute` on a real
+  `release.published` event (or an explicit `workflow_dispatch` with
+  `publish: true`) — every other trigger shape stays dry-run.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
   templates.
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
@@ -204,7 +205,8 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   readmes live under `docs/readmes/`.
 - [`RELEASING.md`](RELEASING.md) — kernel release process: how
   `.github/workflows/wheels.yml` builds, verifies, and manifests wheel/sdist
-  assets, and how a future authorized run publishes them to GitHub and Gitee.
+  assets, and how an authorized run publishes them to the GitHub release
+  (no path in that workflow synchronizes or publishes to Gitee).
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — public contributor entry point.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), [`SECURITY.md`](SECURITY.md), and
   [`SUPPORT.md`](SUPPORT.md) — community and safety entry points.
