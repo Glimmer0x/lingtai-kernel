@@ -228,7 +228,100 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     assert "--disallowedTools" in cmd and "Bash" in cmd
     # prompt is piped via stdin, not argv
     assert captured["kw"]["input"]
-    assert "AVAILABLE TOOLS" in captured["kw"]["input"]
+    # Stable context (protocol/system/tools) lives in the system-prompt file
+    # passed via --append-system-prompt-file (for prompt caching); the stdin
+    # user message carries only the conversation.
+    assert "# CONVERSATION" in captured["kw"]["input"]
+    assert "# NOW" in captured["kw"]["input"]
+    assert "# AVAILABLE TOOLS" not in captured["kw"]["input"]
+    assert "--append-system-prompt-file" in cmd
+    sp_idx = cmd.index("--append-system-prompt-file")
+    sp_path = cmd[sp_idx + 1]
+    with open(sp_path, encoding="utf-8") as f:
+        sp_content = f.read()
+    # The system block carries protocol + system prompt + tools.
+    assert "# AVAILABLE TOOLS" in sp_content
+    assert "(no tools available" in sp_content  # create_chat called with None
+    assert "sys" in sp_content  # the system prompt text
+    assert "You are the REASONING CORE" in sp_content  # the action protocol
+
+
+def test_system_prompt_file_stable_across_turns():
+    """The stable system block must not change as the conversation grows.
+
+    This is the prompt-cache contract: the system-prompt file passed via
+    ``--append-system-prompt-file`` must be byte-identical across turns (so
+    Claude Code's cache breakpoint on the system block hits), while only the
+    stdin user message grows.
+    """
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", [_weather_tool()])
+    captured = []
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.send("first message")
+        sess.send("second message")
+        sess.send("third message")
+
+    assert len(captured) == 3
+    sp_paths = set()
+    for cmd, _kw in captured:
+        sp_idx = cmd.index("--append-system-prompt-file")
+        sp_paths.add(cmd[sp_idx + 1])
+    assert len(sp_paths) == 1  # same stable file every turn
+
+    contents = []
+    for cmd, _kw in captured:
+        sp_idx = cmd.index("--append-system-prompt-file")
+        with open(cmd[sp_idx + 1], encoding="utf-8") as f:
+            contents.append(f.read())
+    assert contents[0] == contents[1] == contents[2]  # byte-identical system block
+
+    # Only the stdin user message grows.
+    stdins = [kw["input"] for _cmd, kw in captured]
+    assert len(stdins[0]) < len(stdins[1]) < len(stdins[2])
+    assert "# CONVERSATION" in stdins[0]
+
+
+def test_generate_omits_system_prompt_file():
+    """One-shot generate() must not reuse (or poison) the chat cache file."""
+    ad = ClaudeCodeAdapter(model="sonnet")
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeProc(stdout=_envelope("plain answer"))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        resp = ad.generate("sonnet", "hello", system_prompt="sys")
+    assert resp.text == "plain answer"
+    assert "--append-system-prompt-file" not in captured["cmd"]
+
+
+def test_update_system_prompt_rewrites_system_file():
+    """Changing the system prompt must refresh the cached system block."""
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys-v1", [_weather_tool()])
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.send("hi")
+    sp_idx = captured["cmd"].index("--append-system-prompt-file")
+    sp_path = captured["cmd"][sp_idx + 1]
+    with open(sp_path, encoding="utf-8") as f:
+        assert "sys-v1" in f.read()
+
+    sess.update_system_prompt("sys-v2")
+    with open(sp_path, encoding="utf-8") as f:
+        assert "sys-v2" in f.read()
 
 
 def test_env_strips_api_keys_but_keeps_oauth_token(monkeypatch):
