@@ -720,9 +720,9 @@ def test_local_slash_commands_stay_local(tmp_path: Path) -> None:
     seen: list[dict] = []
     acct = _account(tmp_path, [1], seen)
     handled: list[str] = []
-    acct._cmd_kanban = lambda chat_id: handled.append(f"kanban:{chat_id}")
+    acct._cmd_kanban = lambda chat_id, text="": handled.append(f"kanban:{chat_id}:{text}")
     acct._process_update({"update_id": 30, "message": _msg(text="/kanban")})
-    assert handled == ["kanban:123"]
+    assert handled == ["kanban:123:/kanban"]
     assert seen == []  # intercepted locally, never reaches the agent
     # Unknown slash commands still pass through.
     acct._process_update({"update_id": 31, "message": _msg(text="/unknowncmd")})
