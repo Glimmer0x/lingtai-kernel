@@ -2,18 +2,14 @@
 proves the publish step is actually reachable with --execute on the real
 release trigger (Blocker 3 repair), that manual dispatch defaults to dry-run,
 that exact-tag recovery checks out and validates the selected tag, that GitHub
-publication is authenticated without persisted checkout credentials, and that the
-Gitee sync step never force-pushes. This is a workflow-shape
-test, not a live GitHub Actions run — it parses the committed YAML/shell
-text.
+publication is authenticated without persisted checkout credentials, and that
+no path in the workflow synchronizes commits/tags to Gitee or publishes
+release assets to Gitee. This is a workflow-shape test, not a live GitHub
+Actions run — it parses the committed YAML/shell text.
 """
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 
 import yaml
 
@@ -88,46 +84,51 @@ def test_publish_step_conditionally_passes_execute_flag():
     assert 'execute_flag=""' in script
 
 
-def test_gitee_sync_step_is_gated_on_publish_mode_and_never_forces():
-    job = _release_manifest_job(_load_workflow())
-    step = _step(job, "synchronize the exact commit/tag to Gitee")
-    assert step.get("if") == "steps.publish_mode.outputs.execute == '1'", \
-        "Gitee sync must only run when actually publishing, not on every dry-run shape check"
-    script = step["run"]
-    assert "sync_gitee_mirror.py" in script
-    assert "--execute" in script
-    assert "--force" not in script
-    assert "force" not in script.lower() or "non-force" in script.lower()
-
-
-def test_gitee_token_never_echoed_via_echo_or_print():
-    # The env var name legitimately appears in comments/docs and in the
-    # `env:` mapping (sourced from the GitHub secret). What must never happen
-    # is a shell `echo`/`print`/`cat` of that variable, which would leak the
-    # value into the job log.
+def test_no_workflow_path_syncs_or_publishes_to_gitee():
+    # `gitee不用管了`: Gitee is fully decoupled from wheels.yml. No job may
+    # sync the mirror, receive the Gitee token, or run the publisher without
+    # explicitly skipping its Gitee leg — a Gitee problem must never delay,
+    # cancel, or fail this workflow.
     text = WORKFLOW_PATH.read_text()
-    for line in text.splitlines():
-        stripped = line.strip()
-        if "$GITEE_ACCESS_TOKEN" in stripped or "${GITEE_ACCESS_TOKEN" in stripped:
-            assert not any(stripped.startswith(cmd) for cmd in ("echo", "print", "cat")), (
-                f"found a shell command that appears to print the raw token: {line}"
-            )
+    assert "sync_gitee_mirror.py" not in text, (
+        "no path in wheels.yml may synchronize commits/tags to Gitee"
+    )
+    assert "GITEE_ACCESS_TOKEN" not in text, (
+        "no wheels.yml step may receive or reference the Gitee token"
+    )
+    data = _load_workflow()
+    publisher_invocations = 0
+    for job_name, job in data["jobs"].items():
+        for step in job["steps"]:
+            script = step.get("run", "")
+            if "publish_release_assets.py" in script:
+                publisher_invocations += 1
+                assert "--skip-gitee" in script, (
+                    f"{job_name}/{step.get('name')}: every publisher invocation "
+                    "must skip the Gitee leg explicitly, not depend on the "
+                    "token secret being absent"
+                )
+    assert publisher_invocations == 1, (
+        "exactly the release-manifest publish step invokes the publisher"
+    )
+
+
+def test_gitee_only_recovery_machinery_is_fully_removed():
+    data = _load_workflow()
+    on = data.get("on") or data.get(True)
+    assert "gitee_only_recovery" not in on["workflow_dispatch"]["inputs"]
+    assert "gitee-only-recovery" not in data["jobs"]
+    for job_name, job in data["jobs"].items():
+        assert "gitee_only_recovery" not in job.get("if", ""), (
+            f"{job_name} must not gate on the removed recovery input"
+        )
 
 
 def test_release_manifest_job_has_contents_write_for_publish():
     job = _release_manifest_job(_load_workflow())
     assert job["permissions"]["contents"] == "write", (
-        "publishing (gh release upload / git push to Gitee) requires contents:write; "
+        "publishing (gh release create/upload) requires contents:write; "
         "read-only permissions would make the publish step fail even when execute=1"
-    )
-
-
-def test_checkout_step_has_full_history_for_gitee_push():
-    job = _release_manifest_job(_load_workflow())
-    step = _step(job, "Check out repository")
-    assert step.get("with", {}).get("fetch-depth") == 0, (
-        "sync_gitee_mirror.py needs the release commit's full history reachable "
-        "to push it; a shallow checkout would break the non-force push"
     )
 
 
@@ -157,16 +158,13 @@ def test_all_release_jobs_checkout_the_optional_exact_recovery_tag():
         assert step.get("with", {}).get("persist-credentials") is False, job_name
 
 
-def test_manifest_and_gitee_sync_use_the_checked_out_commit_and_recovery_tag():
+def test_manifest_and_publish_use_the_checked_out_commit_and_recovery_tag():
     job = _release_manifest_job(_load_workflow())
     manifest = _step(job, "Generate release manifest")
-    sync = _step(job, "synchronize the exact commit/tag to Gitee")
     publish = _step(job, "Publish manifest")
     assert "inputs.release_tag" in manifest["env"]["KERNEL_TAG"]
-    for step in (manifest, sync):
-        assert "git rev-parse HEAD" in step["run"]
-        assert "github.sha" not in step["run"]
-    assert "inputs.release_tag" in sync["run"]
+    assert "git rev-parse HEAD" in manifest["run"]
+    assert "github.sha" not in manifest["run"]
     assert "inputs.release_tag" in publish["run"]
 
 
@@ -195,199 +193,3 @@ def test_manual_publish_requires_and_validates_an_exact_semver_tag():
     publish_mode = _step(_release_manifest_job(data), "Determine publish mode")["run"]
     assert "inputs.release_tag" in publish_mode
     assert "Manual publishing requires release_tag" in publish_mode
-
-
-def _recovery_job(data: dict) -> dict:
-    return data["jobs"]["gitee-only-recovery"]
-
-
-def test_gitee_only_recovery_input_has_boolean_default_and_safety_description():
-    data = _load_workflow()
-    on = data.get("on") or data.get(True)
-    recovery = on["workflow_dispatch"]["inputs"]["gitee_only_recovery"]
-    assert recovery["type"] == "boolean"
-    assert recovery["default"] is False
-    assert "Gitee-only recovery" in recovery["description"]
-    assert "publish=true" in recovery["description"]
-    assert "No builds" in recovery["description"]
-
-
-def test_gitee_only_gate_is_on_exactly_the_three_existing_jobs():
-    data = _load_workflow()
-    existing = ("build-wheels", "build-sdist", "release-manifest")
-    assert all(name in data["jobs"] for name in existing)
-    assert all(data["jobs"][name].get("if") == "inputs.gitee_only_recovery != true" for name in existing)
-    assert [name for name, job in data["jobs"].items() if job.get("if") == "inputs.gitee_only_recovery != true"] == list(existing)
-
-
-def test_gitee_only_recovery_job_is_ubuntu_bounded_and_read_only():
-    job = _recovery_job(_load_workflow())
-    assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.gitee_only_recovery == true"
-    assert job["runs-on"] == "ubuntu-latest"
-    assert job["timeout-minutes"] == 120
-    assert job["permissions"] == {"contents": "read"}
-
-
-def test_gitee_only_recovery_checks_out_exact_tag_with_no_persisted_credentials():
-    job = _recovery_job(_load_workflow())
-    main_checkout = _step(job, "Check out reviewed publisher/tools")
-    assert main_checkout["uses"] == "actions/checkout@v4"
-    assert main_checkout["with"] == {
-        "ref": "${{ github.sha }}",
-        "persist-credentials": False,
-        "fetch-depth": 0,
-    }
-    checkout = _step(job, "Check out exact release tag as target source")
-    assert checkout["uses"] == "actions/checkout@v4"
-    assert checkout["with"] == {
-        "ref": "refs/tags/${{ inputs.release_tag }}",
-        "path": "release-source",
-        "persist-credentials": False,
-        "fetch-depth": 0,
-    }
-    validation = _step(job, "Validate Gitee-only recovery inputs and checkout")
-    assert validation["shell"] == "bash"
-    assert validation["env"] == {
-        "RECOVERY_REQUESTED": "${{ inputs.gitee_only_recovery }}",
-        "PUBLISH_REQUESTED": "${{ inputs.publish }}",
-        "RELEASE_TAG": "${{ inputs.release_tag }}",
-        "WORKFLOW_SHA": "${{ github.sha }}",
-    }
-    script = validation["run"]
-    assert '"$RECOVERY_REQUESTED" != "true"' in script
-    assert '"$PUBLISH_REQUESTED" != "true"' in script
-    assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in script
-    assert 'refs/tags/${RELEASE_TAG}^{commit}' in script
-    assert "git rev-parse HEAD" in script
-    assert "git -C release-source rev-parse HEAD" in script
-    assert '"$main_head" != "$WORKFLOW_SHA"' in script
-    assert '"$tag_commit" != "$target_head"' in script
-
-
-def test_gitee_only_download_scopes_gh_token_and_uses_exact_release_tag():
-    job = _recovery_job(_load_workflow())
-    download = _step(job, "Download exact GitHub release assets")
-    assert download["env"] == {
-        "GH_TOKEN": "${{ github.token }}",
-        "RELEASE_TAG": "${{ inputs.release_tag }}",
-    }
-    script = download["run"]
-    assert 'if [[ -e release-assets ]]' in script
-    assert "mkdir release-assets" in script
-    assert 'gh release download "$RELEASE_TAG"' in script
-    assert '--repo "$GITHUB_REPOSITORY"' in script
-    assert "--dir release-assets" in script
-    token_steps = [step for step in job["steps"] if "GH_TOKEN" in step.get("env", {})]
-    assert token_steps == [download]
-
-
-def test_gitee_only_publisher_requires_token_without_echoing_it():
-    job = _recovery_job(_load_workflow())
-    publisher = _step(job, "Resume Gitee publication")
-    assert publisher["env"] == {"GITEE_ACCESS_TOKEN": "${{ secrets.GITEE_ACCESS_TOKEN }}"}
-    script = publisher["run"]
-    assert '[[ -z "${GITEE_ACCESS_TOKEN:-}" ]]' in script
-    assert "must be configured" in script
-    token_steps = [step for step in job["steps"] if "GITEE_ACCESS_TOKEN" in step.get("env", {})]
-    assert token_steps == [publisher]
-    for line in script.splitlines():
-        stripped = line.strip()
-        if "$GITEE_ACCESS_TOKEN" in stripped or "${GITEE_ACCESS_TOKEN" in stripped:
-            assert not stripped.startswith(("echo", "print", "cat")), line
-
-
-def test_gitee_only_publisher_is_unbuffered_execute_and_github_skipping():
-    script = _step(_recovery_job(_load_workflow()), "Resume Gitee publication")["run"]
-    assert "PYTHONUNBUFFERED=1" in script
-    assert "scripts/publish_release_assets.py" in script
-    assert "--skip-github" in script
-    assert "--execute" in script
-
-
-def test_gitee_only_retry_budget_and_timeout_codes_are_bounded():
-    script = _step(_recovery_job(_load_workflow()), "Resume Gitee publication")["run"]
-    assert "max_attempts=10" in script
-    assert "10m" in script
-    assert "--kill-after=30s" in script
-    assert "status == 124 || status == 137" in script
-    assert 'exit "$status"' in script
-    assert "failed with non-timeout exit" in script
-    assert 'exit 124' in script
-
-
-def test_gitee_only_recovery_does_not_build_sync_or_publish_to_github():
-    job = _recovery_job(_load_workflow())
-    recovery_text = "\\n".join(
-        [step.get("uses", "") + "\\n" + step.get("run", "") for step in job["steps"]]
-    )
-    for forbidden in (
-        "cibuildwheel",
-        "uv build",
-        "actions/upload-artifact",
-        "actions/download-artifact",
-        "sync_gitee_mirror.py",
-        "gh release upload",
-        "gh release create",
-    ):
-        assert forbidden not in recovery_text
-    assert "gh release download" in recovery_text
-
-
-def test_gitee_only_downloaded_manifest_is_bound_to_requested_tag_and_checkout(tmp_path):
-    job = _recovery_job(_load_workflow())
-    steps = job["steps"]
-    names = [step.get("name", "") for step in steps]
-    download_index = names.index("Download exact GitHub release assets")
-    verify_index = names.index("Verify downloaded manifest and SHA256SUMS")
-    publish_index = names.index("Resume Gitee publication (idempotent bounded retry)")
-    assert download_index < verify_index < publish_index
-
-    verifier = steps[verify_index]
-    assert verifier["shell"] == "bash"
-    assert verifier["env"] == {"RELEASE_TAG": "${{ inputs.release_tag }}"}
-    shell_script = verifier["run"]
-    assert 'export EXPECTED_COMMIT="$(git -C release-source rev-parse HEAD)"' in shell_script
-    assert "data.get(\"kernel_tag\")" in shell_script
-    assert "data.get(\"commit\")" in shell_script
-    assert "sha256sum --check --strict SHA256SUMS" in shell_script
-    marker = "python - <<'PY'\n"
-    assert marker in shell_script and "\nPY" in shell_script
-    verifier_code = shell_script.split(marker, 1)[1].rsplit("\nPY", 1)[0]
-
-    assets = tmp_path / "release-assets"
-    assets.mkdir()
-    manifest_path = assets / "lingtai-kernel-release-manifest.json"
-    expected_tag = "v0.17.1"
-    expected_commit = "a" * 40
-    env = {
-        **os.environ,
-        "RELEASE_TAG": expected_tag,
-        "EXPECTED_COMMIT": expected_commit,
-    }
-
-    def run_verifier(manifest: dict) -> subprocess.CompletedProcess[str]:
-        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-        return subprocess.run(
-            [sys.executable, "-c", verifier_code],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    matching = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit})
-    assert matching.returncode == 0, matching.stderr
-    assert "target verified" in matching.stdout
-
-    wrong_case_commit = run_verifier({"kernel_tag": expected_tag, "commit": expected_commit.upper()})
-    assert wrong_case_commit.returncode != 0
-    assert "manifest commit" in wrong_case_commit.stderr and "release-source commit" in wrong_case_commit.stderr
-
-    wrong_tag = run_verifier({"kernel_tag": "v0.17.0", "commit": expected_commit})
-    assert wrong_tag.returncode != 0
-    assert "kernel_tag" in wrong_tag.stderr and "requested release tag" in wrong_tag.stderr
-
-    wrong_commit = run_verifier({"kernel_tag": expected_tag, "commit": "b" * 40})
-    assert wrong_commit.returncode != 0
-    assert "manifest commit" in wrong_commit.stderr and "release-source commit" in wrong_commit.stderr
