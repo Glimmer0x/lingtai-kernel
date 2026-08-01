@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from lingtai.tools.email.primitives import EMAIL_BODY_CHAR_LIMIT
+from lingtai.kernel.services.logging import query_sqlite_event_index
+from lingtai.tools.email.primitives import EMAIL_BODY_CHAR_LIMIT, _mailman
 from uuid import uuid4
 
 from lingtai.agent import Agent
@@ -36,6 +37,30 @@ def _make_inbox_email(working_dir, *, sender="sender", to=None, subject="test",
         data["attachments"] = attachments
     (msg_dir / "message.json").write_text(json.dumps(data, indent=2))
     return email_id
+
+
+def _events_of_type(agent, event_type):
+    path = agent.working_dir / "logs" / "events.jsonl"
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    return [event for event in events if event.get("type") == event_type]
+
+
+def _sqlite_event(agent, event_type):
+    rows = query_sqlite_event_index(
+        agent.working_dir,
+        (
+            "SELECT agent_address, "
+            "json_extract(fields_json, '$.address') AS payload_address, "
+            "json_extract(fields_json, '$.sender_address') AS sender_address, "
+            "json_extract(fields_json, '$.recipient_address') AS recipient_address, "
+            "json_extract(fields_json, '$.subject') AS subject, "
+            "json_extract(fields_json, '$.message') AS message, "
+            "json_extract(fields_json, '$.status') AS status "
+            f"FROM events WHERE type='{event_type}' ORDER BY id"
+        ),
+    )
+    assert len(rows) == 1
+    return rows[0]
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +113,32 @@ def test_email_receive_notification(tmp_path):
     assert email["from"] == "sender"
     assert email["message"] == "body"
     assert email["message_truncated"] is False
+
+
+def test_mail_received_durable_event_preserves_agent_address(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="receiver", working_dir=tmp_path / "receiver")
+    _make_inbox_email(agent.working_dir, sender="sender", subject="topic", message="body")
+
+    agent._on_mail_received({
+        "_mailbox_id": "abc123",
+        "from": "sender",
+        "to": ["receiver"],
+        "subject": "topic",
+        "message": "body",
+    })
+
+    [event] = _events_of_type(agent, "mail_received")
+    assert event["address"] == agent.working_dir.name
+    assert event["sender_address"] == "sender"
+    assert event["subject"] == "topic"
+    assert event["message"] == "body"
+
+    row = _sqlite_event(agent, "mail_received")
+    assert row["agent_address"] == agent.working_dir.name
+    assert row["payload_address"] is None
+    assert row["sender_address"] == "sender"
+    assert row["subject"] == "topic"
+    assert row["message"] == "body"
 
 
 def test_email_receive_fallback_id(tmp_path):
@@ -220,6 +271,40 @@ def test_email_send_through_mailman(tmp_path):
     msg = json.loads((sent_items[0] / "message.json").read_text())
     assert msg["message"] == "hello"
     assert msg["sent_at"]
+
+
+def test_mail_sent_durable_event_preserves_agent_address(tmp_path):
+    agent = Agent(service=make_mock_service(), agent_name="sender", working_dir=tmp_path / "sender-agent")
+    mail_svc = MagicMock()
+    mail_svc.address = "sender"
+    mail_svc.send.return_value = None
+    agent._mail_service = mail_svc
+
+    payload = {
+        "from": "sender",
+        "to": ["recipient"],
+        "_dispatch_to": "recipient",
+        "_mode": "peer",
+        "subject": "topic",
+        "message": "body",
+        "type": "normal",
+    }
+    _mailman(agent, "msg-1", payload, datetime.now(timezone.utc), skip_sent=True)
+
+    [event] = _events_of_type(agent, "mail_sent")
+    assert event["address"] == agent.working_dir.name
+    assert event["recipient_address"] == "recipient"
+    assert event["subject"] == "topic"
+    assert event["message"] == "body"
+    assert event["status"] == "delivered"
+
+    row = _sqlite_event(agent, "mail_sent")
+    assert row["agent_address"] == agent.working_dir.name
+    assert row["payload_address"] is None
+    assert row["recipient_address"] == "recipient"
+    assert row["subject"] == "topic"
+    assert row["message"] == "body"
+    assert row["status"] == "delivered"
 
 
 def test_email_send_with_delay(tmp_path):

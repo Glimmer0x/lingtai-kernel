@@ -282,7 +282,7 @@ def _mailman(agent, msg_id: str, payload: dict, deliver_at: datetime,
         if outbox_entry.is_dir():
             shutil.rmtree(outbox_entry)
 
-    agent._log("mail_sent", address=address, subject=payload.get("subject", ""),
+    agent._log("mail_sent", recipient_address=address, subject=payload.get("subject", ""),
                status=status, message=payload.get("message", ""))
 
     # Bounce notification
