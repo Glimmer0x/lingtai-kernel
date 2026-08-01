@@ -344,7 +344,8 @@ class EmailManager:
         if bcc:
             sent_record["bcc"] = bcc
         (sent_dir / "message.json").write_text(
-            json.dumps(sent_record, indent=2, default=str)
+            json.dumps(sent_record, indent=2, default=str),
+            encoding="utf-8",
         )
 
         for addr in all_recipients:

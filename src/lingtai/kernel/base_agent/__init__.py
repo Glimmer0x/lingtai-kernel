@@ -458,13 +458,13 @@ class BaseAgent:
 
         # Covenant: constructor value wins, then fall back to file on disk
         if covenant:
-            covenant_file.write_text(covenant)
+            covenant_file.write_text(covenant, encoding="utf-8")
         elif covenant_file.is_file():
             covenant = _strip_frontmatter(covenant_file.read_text(encoding="utf-8"))
 
         # Principle: constructor value wins, then fall back to file on disk
         if principle:
-            principle_file.write_text(principle)
+            principle_file.write_text(principle, encoding="utf-8")
         elif principle_file.is_file():
             principle = _strip_frontmatter(principle_file.read_text(encoding="utf-8"))
 
@@ -472,26 +472,26 @@ class BaseAgent:
         # contract is enforced by lingtai.agent.Agent, where substrate is
         # kernel-owned and not an external override.
         if substrate:
-            substrate_file.write_text(substrate)
+            substrate_file.write_text(substrate, encoding="utf-8")
         elif substrate_file.is_file():
             substrate = _strip_frontmatter(substrate_file.read_text(encoding="utf-8"))
 
         # Procedures: same pattern as covenant/principle
         if procedures:
-            procedures_file.write_text(procedures)
+            procedures_file.write_text(procedures, encoding="utf-8")
         elif procedures_file.is_file():
             procedures = _strip_frontmatter(procedures_file.read_text(encoding="utf-8"))
 
         # Brief: disk-owned context (normally written by secretary/briefing
         # flows). Init.json brief overrides are retired at the Agent wrapper.
         if brief and not brief_file.is_file():
-            brief_file.write_text(brief)
+            brief_file.write_text(brief, encoding="utf-8")
         elif brief_file.is_file():
             brief = brief_file.read_text(encoding="utf-8")
 
         # Pad: constructor value seeds the file if it doesn't exist
         if pad and not pad_file.is_file():
-            pad_file.write_text(pad)
+            pad_file.write_text(pad, encoding="utf-8")
 
         # Auto-load pad from file into prompt manager
         loaded_pad = ""

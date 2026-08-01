@@ -870,7 +870,7 @@ class AvatarManager:
 
         # Write .rules signal to self — heartbeat will consume and persist
         try:
-            (parent._working_dir / ".rules").write_text(content)
+            (parent._working_dir / ".rules").write_text(content, encoding="utf-8")
         except OSError as e:
             return {"error": f"failed to write .rules signal: {e}"}
 
@@ -944,7 +944,7 @@ class AvatarManager:
         distributed: list[str] = []
         for child_dir in self._walk_avatar_tree(root):
             try:
-                (child_dir / ".rules").write_text(content)
+                (child_dir / ".rules").write_text(content, encoding="utf-8")
                 distributed.append(child_dir.name)
             except OSError:
                 pass

@@ -897,7 +897,7 @@ def _check_rules_file(agent) -> None:
     # Content changed — persist and refresh
     try:
         canonical.parent.mkdir(parents=True, exist_ok=True)
-        canonical.write_text(content)
+        canonical.write_text(content, encoding="utf-8")
     except OSError:
         agent._log("rules_write_error", source="signal")
         return

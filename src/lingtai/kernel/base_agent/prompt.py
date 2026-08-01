@@ -64,7 +64,7 @@ def _flush_system_prompt(agent) -> None:
     prompt = agent._build_system_prompt()
     system_md = agent._working_dir / "system" / "system.md"
     system_md.parent.mkdir(exist_ok=True)
-    system_md.write_text(prompt)
+    system_md.write_text(prompt, encoding="utf-8")
     if agent._chat is not None:
         agent._chat.update_system_prompt(prompt)
 
