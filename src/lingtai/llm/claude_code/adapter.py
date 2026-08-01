@@ -73,6 +73,12 @@ _OVERFLOW_MARKERS = (
     "input is too long",
 )
 
+# Sentinel for ``_invoke_raw``'s optional ``system_prompt_file`` argument so a
+# caller can explicitly pass ``None`` (no system-prompt file — used by the
+# one-shot ``generate`` path) while the default still resolves to the adapter's
+# stable prompt-cache file.
+_UNSET = object()
+
 
 class ClaudeCodeError(RuntimeError):
     """A ``claude`` CLI invocation failed (non-zero exit, no output, etc.)."""
@@ -196,6 +202,9 @@ class ClaudeCodeChatSession(ChatSession):
         self._tools = tools
         self._interface = interface
         self._context_window = context_window
+        # Persist the stable system context to the adapter's prompt-cache file
+        # so the first ``send`` already has it in the cached system block.
+        self._write_system_file()
 
     # -- ChatSession contract -------------------------------------------------
 
@@ -267,6 +276,7 @@ class ClaudeCodeChatSession(ChatSession):
             self._system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
         )
+        self._write_system_file()
 
     def update_system_prompt(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
@@ -274,6 +284,7 @@ class ClaudeCodeChatSession(ChatSession):
             system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
         )
+        self._write_system_file()
 
     def commit_tool_results(self, tool_results: list) -> None:
         self._interface.add_tool_results(tool_results)
@@ -333,7 +344,25 @@ class ClaudeCodeChatSession(ChatSession):
         return LLMResponse(text=text, tool_calls=tool_calls, usage=usage, raw=raw)
 
     def _render_prompt(self) -> str:
-        """Serialise system prompt + tools + conversation into one CLI prompt."""
+        """Serialise only the conversation into the per-turn user message.
+
+        The stable context (protocol + system prompt + tools) is passed via
+        ``--append-system-prompt-file`` so it lives in the system block that
+        Claude Code caches across turns; only the growing conversation (which
+        changes every turn) is sent as the user message. This is what makes
+        prompt caching effective: previously the whole stable context was
+        embedded in the user message, which is rewritten every turn as the
+        conversation grows, forcing a full cache write each turn.
+        """
+        parts: list[str] = ["# CONVERSATION"]
+        parts.append(self._render_conversation())
+        parts.append("")
+        parts.append("# NOW")
+        parts.append("Decide your next action and output the single JSON object.")
+        return "\n".join(parts)
+
+    def _render_system_context(self) -> str:
+        """Serialise the stable part (protocol + system + tools) for the cached system block."""
         parts: list[str] = [_PROTOCOL, ""]
         parts.append("# AGENT SYSTEM INSTRUCTIONS")
         parts.append(self._system_prompt or "(none)")
@@ -355,12 +384,17 @@ class ClaudeCodeChatSession(ChatSession):
             parts.append("(no tools available — respond with a final answer)")
             parts.append("")
 
-        parts.append("# CONVERSATION")
-        parts.append(self._render_conversation())
-        parts.append("")
-        parts.append("# NOW")
-        parts.append("Decide your next action and output the single JSON object.")
         return "\n".join(parts)
+
+    def _write_system_file(self) -> None:
+        """Write the stable context to the adapter's system-prompt file."""
+        path = self._adapter._system_prompt_file
+        if path is None:
+            return
+        try:
+            path.write_text(self._render_system_context(), encoding="utf-8")
+        except OSError:
+            logger.warning("[claude-code] could not write system-prompt file; prompt caching disabled")
 
     def _render_conversation(self) -> str:
         # Model-facing full-history serialization: every historical tool
@@ -435,6 +469,23 @@ class ClaudeCodeAdapter(LLMAdapter):
         except OSError:
             self._cwd = Path(tempfile.gettempdir())
 
+        # Stable context file for prompt caching. Claude Code puts a cache
+        # breakpoint on the *system* block, so the stable protocol/system/tools
+        # context must be passed via ``--append-system-prompt-file`` (it then
+        # lives in the cached system block) instead of being embedded in the
+        # per-turn user message, which is rewritten every turn as the
+        # conversation grows (forcing a full cache write each turn). The file
+        # path is stable per adapter instance; the session rewrites its content
+        # only when the system prompt or tools change.
+        self._system_prompt_file = Path(tempfile.gettempdir()) / (
+            f"lingtai-claude-sp-{uuid.uuid4().hex[:12]}.txt"
+        )
+        try:
+            self._system_prompt_file.write_text("", encoding="utf-8")
+        except OSError:
+            logger.warning("[claude-code] could not create system-prompt file; prompt caching disabled")
+            self._system_prompt_file = None
+
     # -- LLMAdapter contract --------------------------------------------------
 
     def create_chat(
@@ -502,7 +553,12 @@ class ClaudeCodeAdapter(LLMAdapter):
             )
         prompt = "\n".join(prompt_parts)
 
-        result_str, usage, raw = self._invoke_raw(prompt, model or self._model)
+        # One-shot path: no cross-turn cache to protect; explicitly omit the
+        # system-prompt file so generate() never reuses (or poisons) the chat
+        # adapter's stable cache file.
+        result_str, usage, raw = self._invoke_raw(
+            prompt, model or self._model, system_prompt_file=None
+        )
         return LLMResponse(text=result_str, usage=usage, raw=raw)
 
     def make_tool_result_message(
@@ -526,13 +582,28 @@ class ClaudeCodeAdapter(LLMAdapter):
             env.pop(key, None)
         return env
 
-    def _invoke_raw(self, prompt: str, model: str) -> tuple[str, UsageMetadata, dict]:
-        """Run ``claude -p`` once. Returns (result_text, usage, envelope)."""
+    def _invoke_raw(
+        self,
+        prompt: str,
+        model: str,
+        system_prompt_file: Any = _UNSET,
+    ) -> tuple[str, UsageMetadata, dict]:
+        """Run ``claude -p`` once. Returns (result_text, usage, envelope).
+
+        ``system_prompt_file`` defaults to the adapter's stable prompt-cache
+        file (the chat path). Pass ``None`` to omit the flag entirely — used
+        by the one-shot ``generate`` path, which has no cross-turn cache to
+        protect and must not reuse (or poison) the chat system-prompt file.
+        """
         cmd = [self._cli_path, "-p", "--output-format", "json"]
         if model:
             cmd += ["--model", model]
         if self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
+        if system_prompt_file is _UNSET:
+            system_prompt_file = self._system_prompt_file
+        if system_prompt_file:
+            cmd += ["--append-system-prompt-file", str(system_prompt_file)]
         cmd += self._extra_argv
 
         try:
