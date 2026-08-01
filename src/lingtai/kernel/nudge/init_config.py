@@ -1,8 +1,6 @@
 """Typed configuration-shape Nudge backed by the real init reader outcome."""
 from __future__ import annotations
 
-from typing import Any
-
 from ...init_reader import InitReadOutcome, InitShapeDecision
 
 

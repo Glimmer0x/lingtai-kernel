@@ -4,7 +4,6 @@ related_files:
   - src/lingtai/llm/anthropic/adapter.py
   - src/lingtai/llm/minimax/__init__.py
   - src/lingtai/llm/minimax/adapter.py
-  - src/lingtai/llm/minimax/defaults.py
   - src/lingtai/llm/minimax/mcp_client.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -26,7 +25,6 @@ MiniMax adapter — inherits Anthropic-compatible endpoint, adds MCP client fact
 | `__init__.py` | 4 | Re-exports `MiniMaxAdapter`, `get_minimax_mcp_client` |
 | `adapter.py` | 27 | `MiniMaxAdapter(AnthropicAdapter)` — thin subclass |
 | `mcp_client.py` | 153 | Singleton MCP client factory for MiniMax MCP server (vision/compose/draw/talk) |
-| `defaults.py` | 7 | `DEFAULTS` dict: `api_compat=anthropic`, `base_url=https://api.minimax.io/anthropic`, `api_key_env=MINIMAX_API_KEY`, `model=MiniMax-M2.7-highspeed`, `max_rpm=120` |
 
 ## Connections
 
@@ -83,6 +81,5 @@ Module-level singletons and config:
 
 - **OpenAI-compatible quirks**: MiniMax's Anthropic-compatible endpoint (`/anthropic`) means the wire format is Anthropic Messages, not OpenAI Chat Completions. Tool shapes use `input_schema`, system is a separate parameter, etc.
 - **Default RPM**: 120 (vs 0/unlimited for base Anthropic).
-- **`defaults.py` `api_compat: "anthropic"`**: Signals to the custom-provider factory that this uses Anthropic wire format.
 - **MCP subprocess**: Kept alive for agent process lifetime; `atexit` registered for cleanup. Requires `uvx` (from `uv` package manager).
 - Git history: 5 commits; recent refactor removed compose/video/draw/talk/listen capabilities.

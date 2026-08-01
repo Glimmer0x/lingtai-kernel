@@ -239,7 +239,7 @@ def _presets(agent, args: dict) -> dict:
     # Sorted by display path for stable ordering. Skip duplicates that may
     # arise if the same path appears more than once in `allowed`.
     seen: set[str] = set()
-    entries: list[tuple[str, "Path"]] = []
+    entries: list[tuple[str, str]] = []
     for path in allowed_paths:
         key = home_shortened(path)
         if key in seen:

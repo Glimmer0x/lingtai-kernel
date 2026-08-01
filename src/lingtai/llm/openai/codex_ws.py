@@ -86,7 +86,6 @@ class SyncCodexWebsocketTransport:
 
         try:
             from websockets.sync.client import connect as ws_connect
-            from websockets.exceptions import InvalidStatus
         except Exception as exc:  # pragma: no cover - guarded upstream too
             raise _CodexWsFallback(f"websockets unavailable: {exc}") from exc
 

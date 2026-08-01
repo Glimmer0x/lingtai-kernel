@@ -17,7 +17,6 @@ import contextlib
 import copy
 import functools
 import json
-import os
 import queue
 import threading
 import time
@@ -47,11 +46,8 @@ from ..meta_block import (
     TOOL_META_CONTEXT_PENDING_KEY,
     build_meta,
     build_synthetic_meta_envelope,
-    build_tool_meta_token_usage,
     build_notification_payload,
     build_notification_persistent_payload,
-    formal_tool_result_preview,
-    formal_tool_result_visible_len,
     record_notification_persistent_delivery,
     sanitize_email_notification_after_persistent,
     sanitize_feishu_notification_after_persistent,
@@ -62,7 +58,7 @@ from ..meta_block import (
 from ..session import SessionManager
 from ..tc_inbox import TCInbox
 from ..token_ledger import append_token_entry
-from .._fsutil import atomic_write_json, atomic_write_text, read_json
+from .._fsutil import atomic_write_json, atomic_write_text
 from ..trace_redaction import redact_for_trajectory
 from ..runtime_identity import runtime_identity_event_fields
 

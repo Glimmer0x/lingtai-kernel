@@ -32,7 +32,6 @@ from ._async_supervisor import (
 )
 from ._async_process import (
     BashAsyncProcessPort,
-    ProcessObservation,
     ProcessRef,
     process_ref_from_state,
 )
@@ -622,14 +621,17 @@ class ShellManager:
         try:
             supervisor_ref, supervisor = self._async_process.launch_supervisor(job_dir, start_token)
         except Exception as exc:
+            supervisor_error = f"cannot start supervisor: {exc}"
+
             def mark_failed(state: dict) -> dict:
                 state.update({
                     "status": "unrecoverable", "finished_at": time.time(),
-                    "supervisor_error": f"cannot start supervisor: {exc}",
+                    "supervisor_error": supervisor_error,
                 })
                 return state
+
             update_state(job_dir, mark_failed)
-            return {"status": "error", "message": f"Failed to start async job: {exc}"}
+            return {"status": "error", "message": supervisor_error}
 
         # Record the launched supervisor PID from the owning parent even when an
         # OS incarnation identity cannot be observed.  The child must still claim

@@ -40,7 +40,7 @@ import time
 import random
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse, quote_plus
+from urllib.parse import urlparse
 
 
 # ──────────────────────────────────────────────────────────
@@ -98,7 +98,6 @@ def tier0(url, save_pdf=None):
         # Try fitz for text extraction
         try:
             import fitz
-            from io import BytesIO
             doc = fitz.open(stream=r.content, filetype="pdf")
             n_pages = len(doc)
             text = "\n".join(page.get_text() for page in doc)
@@ -1031,7 +1030,6 @@ def _save_json(result, path):
 
 def _smoke_test():
     """Smoke test: auto_tier 决策 + import 检查 + 浊输入/畸响应验证"""
-    import traceback
 
     # ── Part 1: auto_tier 决策 (净例 + 浊例) ──
     cases = [

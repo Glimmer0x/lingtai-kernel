@@ -9,7 +9,6 @@ import os
 import re
 import tempfile
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from importlib import resources
@@ -20,7 +19,6 @@ from typing import Callable
 
 from .types import (
     MessageItemType, WeixinMessage, MessageItem, TextItem,
-    msg_from_dict, msg_to_dict,
 )
 from . import api
 from . import _family

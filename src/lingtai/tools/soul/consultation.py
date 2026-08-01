@@ -274,7 +274,7 @@ def _fit_interface_to_window(iface, target_tokens: int):
 
     Returns a fresh ChatInterface containing only the kept entries.
     """
-    from lingtai.kernel.llm.interface import ChatInterface, ToolCallBlock, ToolResultBlock
+    from lingtai.kernel.llm.interface import ChatInterface, ToolResultBlock
 
     if target_tokens <= 0:
         return ChatInterface.from_dict([])

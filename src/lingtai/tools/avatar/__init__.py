@@ -31,7 +31,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import time
 from importlib import resources
 from pathlib import Path

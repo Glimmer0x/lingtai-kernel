@@ -27,7 +27,6 @@ from .meta_block import (
 )
 from .llm.interface import ToolResultBlock
 from .reminders.context_pressure import (
-    RECONSTRUCTION_MOLT_EVENT,
     reconstruction_molt_emission_descriptor,
 )
 from .tool_result_artifacts import (

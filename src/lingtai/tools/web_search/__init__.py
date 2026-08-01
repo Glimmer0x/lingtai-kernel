@@ -28,7 +28,6 @@ from .settings import (
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
-    from lingtai.services.websearch import SearchService
     from ..browser.port import BrowserPort
 
 # MiniMax and Zhipu are no longer built-in `web` providers (see

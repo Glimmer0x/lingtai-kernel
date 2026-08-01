@@ -5,7 +5,6 @@ import os
 import signal
 import subprocess
 import threading
-from pathlib import Path
 from collections.abc import Callable
 
 from lingtai.adapters.posix.process_identity import process_identity

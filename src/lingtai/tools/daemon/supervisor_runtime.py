@@ -28,7 +28,6 @@ from pathlib import Path
 
 from lingtai.kernel import daemon_supervisor as _port_mod
 from lingtai.kernel.daemon_supervisor import control
-from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
 from lingtai.kernel.daemon_supervisor.manifest import read_manifest
 from lingtai.adapters.posix.process_identity import (
     process_identity,

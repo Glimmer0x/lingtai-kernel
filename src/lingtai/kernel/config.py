@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses

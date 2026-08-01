@@ -3,7 +3,6 @@ related_files:
   - src/lingtai/llm/ANATOMY.md
   - src/lingtai/llm/gemini/__init__.py
   - src/lingtai/llm/gemini/adapter.py
-  - src/lingtai/llm/gemini/defaults.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -23,7 +22,6 @@ Gemini adapter — `google-genai` SDK with Chat API and Interactions API, thinki
 |------|-----|------|
 | `__init__.py` | 3 | Re-exports `GeminiAdapter`, `GeminiChatSession`, `InteractionsChatSession` |
 | `adapter.py` | 913 | Adapter + 2 session classes + helpers |
-| `defaults.py` | 4 | `DEFAULTS` dict: `api_key_env=GEMINI_API_KEY`, `model=gemini-3-flash-preview` |
 
 ### Classes
 
