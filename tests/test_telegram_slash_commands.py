@@ -191,13 +191,20 @@ def test_kanban_all_text_produces_full_message(acct: tuple[TelegramAccount, list
     assert "/clear" in body
 
 
-def test_kanban_overview_uses_keyboard(acct: tuple[TelegramAccount, list[dict]]) -> None:
+def test_kanban_overview_uses_keyboard_and_stats(acct: tuple[TelegramAccount, list[dict]]) -> None:
     sent: list[dict] = []
     acct[0].send_message = (  # type: ignore[method-assign]
         lambda chat_id, text, **kw: sent.append({"chat_id": chat_id, "text": text, **kw})
     )
     acct[0]._cmd_kanban(123)
     assert len(sent) == 1
+    body = sent[0]["text"]
+    # Overview should carry real stats, not just a menu
+    assert "Kanban" in body
+    assert "sonnet" in body
+    assert "Tokens" in body
+    assert "Context" in body
+    assert "Tap a layer to drill in" in body
     markup = sent[0].get("reply_markup") or {}
     rows = markup.get("inline_keyboard", [])
     flat = [btn["text"] for row in rows for btn in row]
@@ -238,11 +245,10 @@ def test_help_lists_all_default_commands(acct: tuple[TelegramAccount, list[dict]
     )
     acct[0]._cmd_help(123)
     body = sent[0]
-    for cmd in ["/status", "/help", "/kanban", "/taskcard", "/refresh",
-                "/sleep", "/clear"]:
+    for cmd in ["/help", "/kanban", "/taskcard", "/refresh", "/sleep", "/clear"]:
         assert cmd in body
     # Hidden commands still documented as hidden, still work if typed
-    for cmd in ["/system", "/brief"]:
+    for cmd in ["/status", "/system", "/brief"]:
         assert cmd in body
     assert "Hidden" in body
 

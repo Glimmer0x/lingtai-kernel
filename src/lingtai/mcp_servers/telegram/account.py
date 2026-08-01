@@ -62,7 +62,6 @@ def _retry_after_from_payload(payload: Any) -> int | None:
 # Default slash commands registered with @BotFather via setMyCommands on
 # bot startup. Override per-account via the "commands" config field.
 DEFAULT_COMMANDS: list[dict[str, str]] = [
-    {"command": "status", "description": "Show agent status"},
     {"command": "help", "description": "List available commands"},
     {"command": "kanban", "description": "Show full agent dashboard (model, tokens, network, config)"},
     {"command": "taskcard", "description": "Show or hide Task Cards"},
@@ -74,6 +73,7 @@ DEFAULT_COMMANDS: list[dict[str, str]] = [
 # Commands that still work when typed, but are hidden from the visible
 # setMyCommands menu because they are rarely useful interactively.
 HIDDEN_COMMANDS: list[dict[str, str]] = [
+    {"command": "status", "description": "Show agent status (also in /kanban)"},
     {"command": "system", "description": "Browse system files (tap to view)"},
     {"command": "brief", "description": "Show current briefing"},
 ]
@@ -817,6 +817,7 @@ class TelegramAccount:
             "total_input": total_input,
             "total_output": total_output,
             "total_thinking": total_thinking,
+            "total_cached": total_cached,
             "total_api_calls": total_api_calls,
             "addon_status": addon_status,
             "manifest": manifest,
@@ -905,12 +906,20 @@ class TelegramAccount:
                     continue
                 marker = " 👈" if name == current_agent else ""
                 total = agent_data["input"] + agent_data["output"] + agent_data["thinking"]
+                cached = agent_data.get("cached", 0)
+                cache_rate = (cached / agent_data["input"] * 100) if agent_data["input"] else 0
                 lines.append(f"  *{name}*: {fmt(total)} tokens ({agent_data['calls']} calls){marker}")
                 lines.append(
                     f"    ↳ in={fmt(agent_data['input'])} out={fmt(agent_data['output'])} "
-                    f"think={fmt(agent_data['thinking'])} cache={fmt(agent_data['cached'])}"
+                    f"think={fmt(agent_data['thinking'])} cache={fmt(cached)} "
+                    f"({cache_rate:.0f}%)"
                 )
             lines.append(f"  *Total*: {fmt(data['grand_total'])} tokens ({data['total_api_calls']} calls)")
+            if data["total_input"]:
+                lines.append(
+                    f"  *Cache rate*: {data['total_cached'] / data['total_input'] * 100:.0f}% "
+                    f"({fmt(data['total_cached'])} cached of {fmt(data['total_input'])} input)"
+                )
         elif layer_key == "6":
             # Layer 6: Network topology
             lines.append("🌐 *Layer 6 · Network*")
@@ -962,7 +971,7 @@ class TelegramAccount:
             full_text = (
                 f"📊 *Kanban — {current_agent}*\n\n"
                 + "\n\n".join(layers[str(k)] for k in range(1, 8))
-                + "\n\n⚡ /status /help /kanban /taskcard /refresh /sleep /system /brief /clear"
+                + "\n\n⚡ /help /kanban /taskcard /refresh /sleep /clear"
             )
             self.send_message(chat_id, full_text, parse_mode="Markdown")
             return
@@ -975,11 +984,29 @@ class TelegramAccount:
         usage_pct = data["ctx"].get("usage_pct", 0)
         total_t = data["ctx"].get("total_tokens", 0)
         window = data["ctx"].get("window_size", data["context_limit"])
+        total_in = data["total_input"]
+        total_out = data["total_output"]
+        total_think = data["total_thinking"]
+        total_cached = data["total_cached"]
+        total_calls = data["total_api_calls"]
+        cache_rate = (total_cached / total_in * 100) if total_in else 0
+        addon_parts = [
+            ("✅" if ok else "⬜") + name
+            for name, ok in sorted(data["addon_status"].items())
+        ]
+        addon_line = " ".join(addon_parts) if addon_parts else "none"
         overview_text = (
             f"📊 *Kanban — {current_agent}*\n\n"
             f"{state_emoji} {data['agent_state']} · {data['current_model']} ({data['current_provider']})\n"
             f"Context: {fmt(total_t)}/{fmt(window)} ({usage_pct:.1f}%) · "
-            f"Tokens: {fmt(data['grand_total'])} · Molts: {data['molt_count']}\n\n"
+            f"Uptime: {data['fmt_duration'](data['uptime'])} · Molts: {data['molt_count']}\n\n"
+            f"📈 *Tokens* ({total_calls} calls)\n"
+            f"  Total: {fmt(data['grand_total'])} · In: {fmt(total_in)} · Out: {fmt(total_out)} · "
+            f"Think: {fmt(total_think)}\n"
+            f"  Cached: {fmt(total_cached)} ({cache_rate:.0f}% cache rate)\n\n"
+            f"🧠 Mind: {data['knowledge_count']} knowledge · {data['skill_count']} skills · "
+            f"{data['delegate_count']} delegates\n"
+            f"🔌 Addons: {addon_line}\n\n"
             "Tap a layer to drill in:"
         )
         keyboard = inline_keyboard_options(
