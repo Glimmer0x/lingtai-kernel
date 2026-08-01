@@ -31,6 +31,8 @@ _PROBE_TIMEOUT_S = 2.0
 _LOCAL_CLI_LOGIN_PROVIDERS = {
     "claude-code": "lingtai.llm.claude_code.adapter",
     "claude_code": "lingtai.llm.claude_code.adapter",
+    "kimi-code": "lingtai.llm.kimi_code.adapter",
+    "kimi_code": "lingtai.llm.kimi_code.adapter",
 }
 
 # Default base_url per provider for presets that omit base_url.

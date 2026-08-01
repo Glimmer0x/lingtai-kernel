@@ -795,6 +795,11 @@ REGISTRY_EDGES: list[RegistryEdge] = [
                  base_url=None),
     RegistryEdge("claude_code", "ClaudeCodeAdapter", "ClaudeCodeChatSession",
                  base_url=None),
+    # --- Kimi Code (both explicit local-CLI provider spellings) ----------
+    RegistryEdge("kimi-code", "KimiCodeAdapter", "KimiCodeChatSession",
+                 base_url=None),
+    RegistryEdge("kimi_code", "KimiCodeAdapter", "KimiCodeChatSession",
+                 base_url=None),
     # --- Codex (all three registered spellings) — token manager mocked --
     RegistryEdge("codex", "CodexOpenAIAdapter", "CodexResponsesSession"),
     RegistryEdge("codex-pool", "CodexOpenAIAdapter", "CodexResponsesSession"),

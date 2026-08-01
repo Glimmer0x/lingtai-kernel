@@ -240,3 +240,31 @@ def test_claude_code_missing_module_reports_no_credentials(monkeypatch):
         assert result["status"] == "no_credentials"
         assert "claude-code" in (result.get("error") or "")
         assert "no base_url" not in (result.get("error") or "")
+
+
+def test_kimi_code_aliases_are_local_cli_providers(monkeypatch):
+    """Kimi Code aliases must use module health, never a Kimi HTTP probe."""
+    from lingtai.kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_probe_host") as probe, \
+         patch.object(preset_connectivity, "_module_available", return_value=True):
+        for provider in ("kimi-code", "kimi_code"):
+            result = preset_connectivity.check_connectivity(
+                provider=provider,
+                base_url="https://api.kimi.com",
+                api_key_env="KIMI_MODEL_API_KEY",
+            )
+            assert result["status"] == "ok"
+        probe.assert_not_called()
+
+
+def test_kimi_code_missing_module_is_actionable(monkeypatch):
+    from lingtai.kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_module_available", return_value=False):
+        result = preset_connectivity.check_connectivity(
+            provider="kimi-code",
+            base_url=None,
+            api_key_env=None,
+        )
+    assert result["status"] == "no_credentials"
+    assert "kimi-code" in (result.get("error") or "")
+    assert "no base_url" not in (result.get("error") or "")
