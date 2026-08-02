@@ -124,7 +124,7 @@ _CHILD = textwrap.dedent(
         _import_lark()
         lark_logger = logging.getLogger("Lark")
         lark_logger.setLevel(logging.INFO)
-        lark_logger.info({ _LARK_DIAGNOSTIC!r })
+        lark_logger.info({_LARK_DIAGNOSTIC!r})
 
         async def list_tools(_ctx, _params):
             return types.ListToolsResult(
