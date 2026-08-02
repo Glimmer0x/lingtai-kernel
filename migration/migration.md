@@ -1,7 +1,7 @@
 ---
 product: kernel
-release_version: "0.18.0"
-release_tag: "v0.18.0"
+release_version: "0.19.5"
+release_tag: "v0.19.5"
 migration: no-op
 refresh_required: true
 related_files:
@@ -17,11 +17,11 @@ maintenance: |
   per-release versions. Never append a second release history here or invent a
   version that disagrees with package metadata.
 ---
-# LingTai kernel 0.18.0 migration
+# LingTai kernel 0.19.5 migration
 
 ## Applies when
 
-The target kernel release is `0.18.0` / tag `v0.18.0` and that tag lies in the
+The target kernel release is `0.19.5` / tag `v0.19.5` and that tag lies in the
 open update interval `(current, target]`.
 
 ## Migration
@@ -40,7 +40,7 @@ user machine, and do not use PyPI metadata to choose the release version.
 ## Validate
 
 - Do not rewrite agent configuration for this kernel migration.
-- Confirm this file was read from the kernel repository at exact tag `v0.18.0`.
+- Confirm this file was read from the kernel repository at exact tag `v0.19.5`.
 - Verify `lingtai.__version__`, `lingtai.__file__`, and
   `lingtai.kernel.__file__` from the selected runtime interpreter after install.
 - If the product, version, tag, stable path, mirror content, or artifact hash does
@@ -52,4 +52,4 @@ user machine, and do not use PyPI metadata to choose the release version.
 The verified wheel changes bytes on disk but a running agent still has the old
 code loaded. After active work is checkpointed and refresh is authorized, call
 `system(action='refresh')` and verify the new process uses the selected
-interpreter and reports `0.18.0`.
+interpreter and reports `0.19.5`.
