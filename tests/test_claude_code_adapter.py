@@ -246,13 +246,13 @@ def test_command_includes_print_json_model_and_disallowed_tools():
     assert "You are the REASONING CORE" in sp_content  # the action protocol
 
 
-def test_system_prompt_file_stable_across_turns():
-    """The stable system block must not change as the conversation grows.
+def test_session_resume_keeps_system_block_stable_and_sends_only_new_history():
+    """The CLI session owns prior turns while the canonical interface remains local.
 
-    This is the prompt-cache contract: the system-prompt file passed via
-    ``--append-system-prompt-file`` must be byte-identical across turns (so
-    Claude Code's cache breakpoint on the system block hits), while only the
-    stdin user message grows.
+    The first command creates a normal CLI session. Later commands resume the
+    returned session ID and send only entries committed after the preceding
+    successful response, so history is neither duplicated remotely nor rewritten
+    in the mutable stdin prompt.
     """
     ad = ClaudeCodeAdapter(model="sonnet")
     sess = ad.create_chat("sonnet", "sys", [_weather_tool()])
@@ -268,6 +268,11 @@ def test_system_prompt_file_stable_across_turns():
         sess.send("third message")
 
     assert len(captured) == 3
+    assert "--resume" not in captured[0][0]
+    for cmd, _kw in captured[1:]:
+        resume_idx = cmd.index("--resume")
+        assert cmd[resume_idx + 1] == "sess-123"
+
     sp_paths = set()
     for cmd, _kw in captured:
         sp_idx = cmd.index("--append-system-prompt-file")
@@ -281,10 +286,11 @@ def test_system_prompt_file_stable_across_turns():
             contents.append(f.read())
     assert contents[0] == contents[1] == contents[2]  # byte-identical system block
 
-    # Only the stdin user message grows.
     stdins = [kw["input"] for _cmd, kw in captured]
-    assert len(stdins[0]) < len(stdins[1]) < len(stdins[2])
-    assert "# CONVERSATION" in stdins[0]
+    assert "first message" in stdins[0]
+    assert "second message" in stdins[1] and "first message" not in stdins[1]
+    assert "third message" in stdins[2] and "second message" not in stdins[2]
+    assert all("# CONVERSATION" in stdin for stdin in stdins)
 
 
 def test_generate_omits_system_prompt_file():
@@ -525,6 +531,21 @@ def test_successful_overflow_recovery_injects_notice():
     assert sess.interface._entries[-1].role == "assistant"
     assert sess.interface._entries[-2].role == "user"
     assert sess.interface._entries[-2].content[0].text.startswith("[kernel] Context exceeded")
+
+    # The local notice was added after the successful fresh retry, so the next
+    # request must rebuild canonical history rather than resume divergent remote
+    # history that never received that notice.
+    next_call = {}
+
+    def capture_next(cmd, **kw):
+        next_call["cmd"] = cmd
+        next_call["input"] = kw["input"]
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"after recovery"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=capture_next):
+        sess.send("after recovery")
+    assert "--resume" not in next_call["cmd"]
+    assert "[kernel] Context exceeded" in next_call["input"]
 
 
 def test_no_overflow_means_no_notice():
