@@ -33,6 +33,7 @@ from lingtai.kernel.llm.interface import (
 from lingtai.kernel.logging import get_logger
 
 from lingtai.llm.base import LLMAdapter
+from lingtai.llm.interface_converters import _project_tool_result
 
 logger = get_logger()
 
@@ -397,11 +398,14 @@ class ClaudeCodeChatSession(ChatSession):
             logger.warning("[claude-code] could not write system-prompt file; prompt caching disabled")
 
     def _render_conversation(self) -> str:
-        # Model-facing full-history serialization: every historical tool
-        # result's content is rendered as-is, including any
-        # ``_meta.agent_meta`` / ``guidance`` / ``notifications`` /
-        # ``notification_guidance`` it carries — this render does not strip
-        # those keys from any holder, same as the shared wire converters.
+        # Model-facing full-history serialization. Every historical tool result
+        # is projected through the shared ``_project_tool_result`` used by the
+        # wire converters, so the runtime sidecar (``ToolResultBlock.metadata``:
+        # ``agent_meta`` / ``guidance`` / ``notifications`` /
+        # ``notification_guidance``) is merged into a ``_meta`` envelope
+        # alongside the handler content instead of being dropped. Content that
+        # already carries its own ``_meta`` holder is preserved verbatim; this
+        # render strips those keys from no holder.
         lines: list[str] = []
         for entry in self._interface._entries:
             role = entry.role
@@ -424,7 +428,7 @@ class ClaudeCodeChatSession(ChatSession):
                         f"ASSISTANT_ACTION: called tool `{block.name}` with input {args}"
                     )
                 elif isinstance(block, ToolResultBlock):
-                    content = block.content
+                    content = _project_tool_result(block)
                     if not isinstance(content, str):
                         try:
                             content = json.dumps(content, ensure_ascii=False)
