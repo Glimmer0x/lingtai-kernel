@@ -182,9 +182,10 @@ def _extract_json_object(text: str) -> dict | None:
 class ClaudeCodeChatSession(ChatSession):
     """Multi-turn session backed by repeated ``claude -p`` invocations.
 
-    Holds the canonical ChatInterface; each ``send`` re-serialises it into one
-    CLI prompt. Stateless on the CLI side — LingTai owns all context, so its
-    molt / trim / pairing invariants stay authoritative.
+    The canonical ChatInterface remains authoritative for molt, trimming, and
+    tool-pairing invariants. After a successful CLI turn the session resumes the
+    CLI-owned conversation with only newly committed canonical entries, avoiding
+    repeated-history prompts without making remote state authoritative.
     """
 
     def __init__(
@@ -203,6 +204,10 @@ class ClaudeCodeChatSession(ChatSession):
         self._tools = tools
         self._interface = interface
         self._context_window = context_window
+        # Remote state is an acceleration only. The canonical interface remains
+        # the recovery source whenever this continuation cannot be trusted.
+        self._remote_session_id: str | None = None
+        self._remote_entry_count = 0
         # Persist the stable system context to the adapter's prompt-cache file
         # so the first ``send`` already has it in the cached system block.
         self._write_system_file()
@@ -233,8 +238,20 @@ class ClaudeCodeChatSession(ChatSession):
 
             def _do_call():
                 self._interface.enforce_tool_pairing()
-                prompt = self._render_prompt()
-                return self._adapter._invoke(prompt, self._model)
+                prompt = self._render_prompt(
+                    self._remote_entry_count if self._remote_session_id else 0
+                )
+                try:
+                    return self._adapter._invoke(
+                        prompt,
+                        self._model,
+                        resume_session_id=self._remote_session_id,
+                    )
+                except ClaudeCodeContextOverflow:
+                    # A locally trimmed retry cannot safely continue a remote
+                    # conversation that still contains the overlong history.
+                    self._reset_remote_session()
+                    raise
 
             (action, usage, raw), total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
             # On successful context-overflow recovery the kernel silently trimmed
@@ -243,8 +260,19 @@ class ClaudeCodeChatSession(ChatSession):
             # the assistant turn so the notice precedes it in history.
             if rounds > 0:
                 self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
-            return self._record_response(action, usage, raw)
+            response = self._record_response(action, usage, raw)
+            if rounds > 0:
+                # The local overflow notice was injected after the fresh remote
+                # retry completed, so it must be replayed from canonical history.
+                self._reset_remote_session()
+            else:
+                self._remember_remote_session(raw)
+            return response
         except Exception:
+            # A failed child may have accepted a prompt before failing. Rebuild
+            # from canonical history on the next call rather than risk a replay
+            # into uncertain remote state.
+            self._reset_remote_session()
             if restore is not None:
                 restore()
             raise
@@ -271,8 +299,21 @@ class ClaudeCodeChatSession(ChatSession):
 
         return restore
 
+    def _reset_remote_session(self) -> None:
+        self._remote_session_id = None
+        self._remote_entry_count = 0
+
+    def _remember_remote_session(self, raw: Any) -> None:
+        session_id = raw.get("session_id") if isinstance(raw, dict) else None
+        if isinstance(session_id, str) and session_id:
+            self._remote_session_id = session_id
+            self._remote_entry_count = len(self._interface._entries)
+        else:
+            self._reset_remote_session()
+
     def update_tools(self, tools: list[FunctionSchema] | None) -> None:
         self._tools = list(tools) if tools else []
+        self._reset_remote_session()
         self._interface.add_system(
             self._system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
@@ -281,6 +322,7 @@ class ClaudeCodeChatSession(ChatSession):
 
     def update_system_prompt(self, system_prompt: str) -> None:
         self._system_prompt = system_prompt
+        self._reset_remote_session()
         self._interface.add_system(
             system_prompt,
             tools=[t.to_dict() for t in self._tools] if self._tools else None,
@@ -344,7 +386,7 @@ class ClaudeCodeChatSession(ChatSession):
         )
         return LLMResponse(text=text, tool_calls=tool_calls, usage=usage, raw=raw)
 
-    def _render_prompt(self) -> str:
+    def _render_prompt(self, entry_start: int = 0) -> str:
         """Serialise only the conversation into the per-turn user message.
 
         The stable context (protocol + system prompt + tools) is passed via
@@ -356,7 +398,7 @@ class ClaudeCodeChatSession(ChatSession):
         conversation grows, forcing a full cache write each turn.
         """
         parts: list[str] = ["# CONVERSATION"]
-        parts.append(self._render_conversation())
+        parts.append(self._render_conversation(entry_start))
         parts.append("")
         parts.append("# NOW")
         parts.append("Decide your next action and output the single JSON object.")
@@ -397,7 +439,7 @@ class ClaudeCodeChatSession(ChatSession):
         except OSError:
             logger.warning("[claude-code] could not write system-prompt file; prompt caching disabled")
 
-    def _render_conversation(self) -> str:
+    def _render_conversation(self, entry_start: int = 0) -> str:
         # Model-facing full-history serialization. Every historical tool result
         # is projected through the shared ``_project_tool_result`` used by the
         # wire converters, so the runtime sidecar (``ToolResultBlock.metadata``:
@@ -407,7 +449,7 @@ class ClaudeCodeChatSession(ChatSession):
         # already carries its own ``_meta`` holder is preserved verbatim; this
         # render strips those keys from no holder.
         lines: list[str] = []
-        for entry in self._interface._entries:
+        for entry in self._interface._entries[entry_start:]:
             role = entry.role
             if role == "system":
                 continue  # system prompt + tools rendered separately
@@ -439,7 +481,7 @@ class ClaudeCodeChatSession(ChatSession):
 
 
 class ClaudeCodeAdapter(LLMAdapter):
-    """LLMAdapter that drives the ``claude`` CLI as a stateless reasoning core."""
+    """LLMAdapter that drives the ``claude`` CLI with local canonical state."""
 
     def __init__(
         self,
@@ -591,6 +633,7 @@ class ClaudeCodeAdapter(LLMAdapter):
         prompt: str,
         model: str,
         system_prompt_file: Any = _UNSET,
+        resume_session_id: str | None = None,
     ) -> tuple[str, UsageMetadata, dict]:
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
@@ -602,6 +645,8 @@ class ClaudeCodeAdapter(LLMAdapter):
         cmd = [self._cli_path, "-p", "--output-format", "json"]
         if model:
             cmd += ["--model", model]
+        if resume_session_id:
+            cmd += ["--resume", resume_session_id]
         if self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
         if system_prompt_file is _UNSET:
@@ -689,9 +734,19 @@ class ClaudeCodeAdapter(LLMAdapter):
                 continue
         raise ClaudeCodeError(f"could not parse claude CLI output as JSON: {stdout[:300]}")
 
-    def _invoke(self, prompt: str, model: str) -> tuple[dict, UsageMetadata, dict]:
+    def _invoke(
+        self,
+        prompt: str,
+        model: str,
+        *,
+        resume_session_id: str | None = None,
+    ) -> tuple[dict, UsageMetadata, dict]:
         """Run the CLI and parse one JSON *action* from its result."""
-        result_str, usage, envelope = self._invoke_raw(prompt, model)
+        result_str, usage, envelope = self._invoke_raw(
+            prompt,
+            model,
+            resume_session_id=resume_session_id,
+        )
         action = _extract_json_object(result_str)
         if action is None:
             # Model ignored the protocol — treat the whole reply as a final answer
