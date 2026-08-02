@@ -16,14 +16,16 @@ Channel ``.notification/nudge.json`` carries a list of active nudges:
       "icon": "🔔",
       "priority": "low",
       "instructions": "Call notification(action='dismiss_channel', input={'channel': 'nudge', ...}, reasoning='...') ...",
-      "data": {"nudges": [{"kind": "kernel_version", ...}, ...]}
+      "data": {"nudges": [{"kind": "kernel_version", "nudge_channel": "release_version", ...}, ...]}
     }
 
-Each check identifies its slot by a unique ``kind`` string. ``upsert``
-replaces (or appends) one entry; ``remove`` deletes one. When the last
-entry leaves, the channel file is cleared so the agent's wire surface
-drops the notification entirely. The agent dismisses everything at once
-with ``notification(action='dismiss_channel', input={'channel': 'nudge',
+Each check identifies its slot by a unique ``kind`` string. Built-in producers
+are classified by fixed Core-owned kind mapping; unrelated legacy/unknown
+entries remain channel-less. ``upsert`` replaces (or appends) one entry;
+``remove`` deletes one. When the last entry leaves, the channel file is cleared
+so the agent's wire surface drops the notification entirely. The agent
+dismisses everything at once with
+``notification(action='dismiss_channel', input={'channel': 'nudge',
 'force': null, 'reason': null}, reasoning='...')``.
 
 To add a new nudge: drop ``nudge/<name>.py`` exposing ``check(agent)``,
@@ -51,6 +53,14 @@ DEFAULT_REPEAT_INTERVAL_SECONDS = 24 * 60 * 60
 ENABLED_ENV = "LINGTAI_NUDGE_ENABLED"
 REPEAT_INTERVAL_ENV = "LINGTAI_NUDGE_REPEAT_INTERVAL"
 ENVIRONMENT_MANUAL = "system-manual/reference/environment-variables/SKILL.md"
+ENTRY_CHANNEL_RELEASE_VERSION = "release_version"
+ENTRY_CHANNEL_SOURCE_INTEGRITY = "source_integrity"
+ENTRY_CHANNEL_CONFIG_STALENESS = "configuration_staleness"
+_ENTRY_CHANNEL_BY_KIND = {
+    "kernel_version": ENTRY_CHANNEL_RELEASE_VERSION,
+    "source_drift": ENTRY_CHANNEL_SOURCE_INTEGRITY,
+    "init_config_shape": ENTRY_CHANNEL_CONFIG_STALENESS,
+}
 
 # Hard maximum for one nudge entry's inline, model-visible JSON serialization.
 # Entries at or below this size are unchanged; entries above it are
@@ -174,6 +184,9 @@ __all__ = [
     "DEFAULT_ENABLED",
     "DEFAULT_REPEAT_INTERVAL_SECONDS",
     "ENABLED_ENV",
+    "ENTRY_CHANNEL_CONFIG_STALENESS",
+    "ENTRY_CHANNEL_RELEASE_VERSION",
+    "ENTRY_CHANNEL_SOURCE_INTEGRITY",
     "ENVIRONMENT_MANUAL",
     "INLINE_MAX_CHARS",
     "NudgeExternalizationError",
@@ -233,8 +246,13 @@ def upsert(agent, kind: str, body: dict) -> None:
         _modify(agent, lambda entries: [e for e in entries if e.get("kind") != kind])
         return
 
+    resolved_channel = _entry_channel_for_kind(kind)
     entry = dict(body)
     entry["kind"] = kind
+    if resolved_channel is not None:
+        entry["nudge_channel"] = resolved_channel
+    else:
+        entry.pop("nudge_channel", None)
     entry["policy"] = policy.payload()
     entry["policy_message"] = policy.message()
     entry["detail"] = (
@@ -244,7 +262,12 @@ def upsert(agent, kind: str, body: dict) -> None:
     # muting is a property of the finding's facts, not of whether the wire
     # copy happened to be externalized this heartbeat.
     fingerprint = _finding_fingerprint(kind, entry)
-    if _dismissed_until(agent, fingerprint) > time.time():
+    legacy_fingerprint = _finding_fingerprint(kind, entry, include_channel=False)
+    now = time.time()
+    if (
+        _dismissed_until(agent, fingerprint) > now
+        or _dismissed_until(agent, legacy_fingerprint) > now
+    ):
         return
     # Externalization must complete (or return the entry unchanged) before
     # ANY state mutates. If it raises, neither `.notification/nudge.json`
@@ -252,6 +275,8 @@ def upsert(agent, kind: str, body: dict) -> None:
     # heartbeat retry sees byte-for-byte the same prior state.
     entry = _cap_inline_payload(agent, kind, entry, fingerprint=fingerprint)
     _clear_dismissal(agent, fingerprint)
+    if legacy_fingerprint != fingerprint:
+        _clear_dismissal(agent, legacy_fingerprint)
     _modify(agent, lambda entries: _replace_kind(entries, kind, entry))
 
 
@@ -284,6 +309,14 @@ def record_dismissal(agent) -> None:
             "dismissed_at": now,
             "until": now + policy.repeat_interval_seconds,
         }
+        if "nudge_channel" not in entry:
+            legacy_fingerprint = _finding_fingerprint(kind, entry, include_channel=False)
+            if legacy_fingerprint != fingerprint:
+                dismissed[legacy_fingerprint] = {
+                    "kind": kind,
+                    "dismissed_at": now,
+                    "until": now + policy.repeat_interval_seconds,
+                }
     _save_policy_state(agent, state)
     _safe_log(
         agent,
@@ -301,7 +334,7 @@ def record_dismissal(agent) -> None:
 _STATE_FILE = Path(".notification") / ".nudge_state.json"
 
 
-def _finding_fingerprint(kind: str, body: dict) -> str:
+def _finding_fingerprint(kind: str, body: dict, *, include_channel: bool = True) -> str:
     """Hash stable finding facts, excluding policy display bookkeeping.
 
     When an entry carries a stamped ``_dismiss_fingerprint`` (written by
@@ -326,6 +359,8 @@ def _finding_fingerprint(kind: str, body: dict) -> str:
         "latest": body.get("latest"),
         "drift_signals": body.get("drift_signals"),
     }
+    if include_channel:
+        stable["nudge_channel"] = body.get("nudge_channel")
     raw = json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -487,6 +522,8 @@ def _cap_inline_payload(agent, kind: str, entry: dict, *, fingerprint: str) -> d
             f"(SHA-256 {digest}); read that file directly for full detail."
         ),
     }
+    if "nudge_channel" in entry:
+        compact["nudge_channel"] = entry["nudge_channel"]
 
     # Defensive: even the bounded fields above could combine to exceed the
     # cap in a degenerate case. Shrink detail/title first — this is
@@ -586,6 +623,10 @@ def _replace_kind(entries: list, kind: str, body: dict) -> list:
     entry["kind"] = kind
     out.append(entry)
     return out
+
+
+def _entry_channel_for_kind(kind: str) -> str | None:
+    return _ENTRY_CHANNEL_BY_KIND.get(kind)
 
 
 def _modify(agent, mutate) -> None:

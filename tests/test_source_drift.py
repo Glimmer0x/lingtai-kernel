@@ -7,8 +7,6 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from tests._notification_store_helpers import FakeNotificationStore
 from tests._snapshot_helpers import FakeSourceRevisionPort
 from tests._lifecycle_clock_helpers import make_test_lifecycle_clock
@@ -212,13 +210,6 @@ class TestSourceDriftNudge:
     # Patch target: _capture_runtime_fingerprint is imported locally inside
     # source_drift.check(), so we must patch it at its definition site.
     _PATCH_TARGET = "lingtai.kernel.base_agent.lifecycle._capture_runtime_fingerprint"
-    _DEV_RUNTIME_TARGET = "lingtai.kernel.nudge.source_drift._dev_runtime_reason"
-
-    @pytest.fixture(autouse=True)
-    def _packaged_runtime(self):
-        """Existing drift tests model a packaged/runtime install unless stated."""
-        with patch(self._DEV_RUNTIME_TARGET, return_value=None):
-            yield
 
     def test_no_drift_removes_prior_nudge(self):
         """When startup and disk fingerprints match, no nudge emitted."""
@@ -310,34 +301,8 @@ class TestSourceDriftNudge:
         # Should not raise
         check(agent)
 
-    def test_dev_runtime_skips_and_clears_prior_nudge(self):
-        """Editable/source/dev installs should not prompt source drift refresh."""
-        from lingtai.kernel.nudge.source_drift import check, _state
-
-        startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
-        disk_fp = {"git_rev": "ccc3333", "source_digest": "ddd4444", "captured_at": "t2"}
-        agent = self._make_agent(startup_fp=startup_fp)
-        state = _state(agent)
-        state["emitted"] = True
-        state["emitted_for"] = "git_rev: old → stale"
-
-        with (
-            patch(self._DEV_RUNTIME_TARGET, return_value="source-checkout"),
-            patch(self._PATCH_TARGET, return_value=disk_fp) as mock_capture,
-            patch("lingtai.kernel.nudge.remove") as mock_remove,
-            patch("lingtai.kernel.nudge.upsert") as mock_upsert,
-        ):
-            check(agent)
-
-        mock_remove.assert_called_once_with(agent, "source_drift")
-        mock_upsert.assert_not_called()
-        mock_capture.assert_not_called()
-        assert state.get("emitted") is False
-        assert state.get("emitted_for") is None
-        assert state.get("skipped_dev_reason") == "source-checkout"
-
-    def test_dev_runtime_clears_stale_channel_even_without_local_state(self):
-        """A fresh dev process should clear a source_drift nudge from an older run."""
+    def test_dev_runtime_still_emits_source_integrity_diagnostic(self):
+        """Editable/source/dev installs still surface source drift diagnostics."""
         from lingtai.kernel.nudge.source_drift import check, _state
 
         startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
@@ -345,20 +310,39 @@ class TestSourceDriftNudge:
         agent = self._make_agent(startup_fp=startup_fp)
 
         with (
-            patch(self._DEV_RUNTIME_TARGET, return_value="editable-install"),
             patch(self._PATCH_TARGET, return_value=disk_fp) as mock_capture,
-            patch("lingtai.kernel.nudge.remove") as mock_remove,
             patch("lingtai.kernel.nudge.upsert") as mock_upsert,
         ):
             check(agent)
 
+        mock_capture.assert_called_once()
+        mock_upsert.assert_called_once()
+        assert mock_upsert.call_args.args[1] == "source_drift"
+        assert mock_upsert.call_args.kwargs == {}
         state = _state(agent)
-        mock_remove.assert_called_once_with(agent, "source_drift")
-        mock_upsert.assert_not_called()
-        mock_capture.assert_not_called()
-        assert state.get("emitted") is False
-        assert state.get("emitted_for") is None
-        assert state.get("skipped_dev_reason") == "editable-install"
+        assert state.get("emitted") is True
+        assert "aaa1111" in state.get("emitted_for", "")
+        assert "ccc3333" in state.get("emitted_for", "")
+
+    def test_source_drift_entry_persists_source_integrity_channel(self, tmp_path):
+        """The real persisted source_drift entry carries channel metadata."""
+        from lingtai.kernel.nudge.source_drift import check, _state
+        from tests._notification_store_helpers import notification_store_for, snapshot_notifications
+
+        startup_fp = {"git_rev": "aaa1111", "source_digest": "bbb2222", "captured_at": "t1"}
+        disk_fp = {"git_rev": "ccc3333", "source_digest": "ddd4444", "captured_at": "t2"}
+        agent = self._make_agent(startup_fp=startup_fp)
+        agent._working_dir = tmp_path
+        agent._notification_store = notification_store_for(tmp_path)
+
+        with patch(self._PATCH_TARGET, return_value=disk_fp):
+            check(agent)
+
+        state = _state(agent)
+        assert state.get("emitted") is True
+        entry = snapshot_notifications(tmp_path)["nudge"]["data"]["nudges"][0]
+        assert entry["kind"] == "source_drift"
+        assert entry["nudge_channel"] == "source_integrity"
 
     def test_partial_drift_git_only(self):
         """Only git_rev differs → still detected as drift."""

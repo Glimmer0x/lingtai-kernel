@@ -7,17 +7,15 @@ that was captured at startup (git rev + source digest) and compares with
 is stale: only a full process relaunch (``system(action='refresh')``) picks up
 new code.
 
-Editable/source/dev installs are intentionally skipped.  In a development
-checkout, source and git HEAD changes are normal, and automatically nudging a
-running agent to refresh into whatever is currently on disk is too aggressive:
-if the checkout is broken, the nudge amplifies that breakage.  Dev agents should
-use explicit runtime/import-path diagnosis instead.
+Editable/source/dev installs are intentionally included. This producer is an
+integrity/diagnostic channel: it reports that the running interpreter's startup
+fingerprint differs from current on-disk source, without classifying that fact
+as a package update or suppressing it under the release-version dev policy.
 
 Throttled to one check per 60 seconds so a long-running agent doesn't get a
-flood of nudge entries on every heartbeat tick.  If the on-disk state returns
-to match the startup fingerprint (revert, or stale state from a prior process),
-or the runtime is detected as dev/source/editable, the previously-emitted entry
-is cleared.
+flood of nudge entries on every heartbeat tick. If the on-disk state returns to
+match the startup fingerprint (revert, or stale state from a prior process), the
+previously-emitted entry is cleared.
 """
 from __future__ import annotations
 
@@ -38,18 +36,6 @@ def check(agent) -> None:
     state["last_probe_ts"] = now
 
     from . import upsert, remove
-
-    dev_reason = _dev_runtime_reason()
-    if dev_reason:
-        remove(agent, _KIND)
-        if state.get("emitted") or state.get("skipped_dev_reason") != dev_reason:
-            _safe_log(agent, "nudge_skipped", kind=_KIND, reason="dev-runtime", dev_reason=dev_reason)
-        state["emitted"] = False
-        state["emitted_for"] = None
-        state["skipped_dev_reason"] = dev_reason
-        return
-
-    state.pop("skipped_dev_reason", None)
 
     from ..base_agent.lifecycle import _capture_runtime_fingerprint
 
@@ -105,16 +91,6 @@ def check(agent) -> None:
         )
     except Exception as e:
         agent._log("nudge_emit_error", kind=_KIND, error=str(e)[:200])
-
-
-def _dev_runtime_reason() -> str | None:
-    """Return the dev/source/editable reason that should suppress this nudge."""
-    try:
-        from .kernel_version import _runtime_info
-
-        return _runtime_info().dev_reason
-    except Exception:
-        return None
 
 
 def _safe_log(agent, event: str, **fields) -> None:

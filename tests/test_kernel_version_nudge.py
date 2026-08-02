@@ -3,7 +3,7 @@ import json
 import pytest
 
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
-from lingtai.kernel.nudge import upsert
+from lingtai.kernel.nudge import ENTRY_CHANNEL_RELEASE_VERSION, upsert
 from lingtai.kernel.nudge import kernel_version as kv
 
 
@@ -53,6 +53,7 @@ def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypat
     assert len(entries) == 1
     entry = entries[0]
     assert entry["kind"] == "kernel_version"
+    assert entry["nudge_channel"] == ENTRY_CHANNEL_RELEASE_VERSION
     assert entry["source"] == "installed-distribution"
     assert entry["running"] == "0.14.1"
     assert entry["installed"] == "0.14.2"
@@ -307,6 +308,7 @@ def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_pa
     assert len(entries) == 1
     entry = entries[0]
     assert entry["source"] == "release-manifest"
+    assert entry["nudge_channel"] == ENTRY_CHANNEL_RELEASE_VERSION
     assert entry["latest"] == "0.14.2"
     assert entry["suggested_action"] == "execute-installer-help-then-ask-human"
     assert entry["install_url"] == "https://lingtai.ai/install.sh"
