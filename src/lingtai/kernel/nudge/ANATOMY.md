@@ -34,6 +34,12 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `__init__.py` — `run_checks`, `upsert`, `remove`, `effective_policy`, and
   `record_dismissal` provide the shared policy, finding identity, dismissal mute,
   and `.notification/nudge.json` mutation (`src/lingtai/kernel/nudge/__init__.py:1-360`).
+  New built-in producer entries carry fixed `nudge_channel` metadata:
+  `release_version` for `kernel_version`, `source_integrity` for
+  `source_drift`, and `configuration_staleness` for `init_config_shape`;
+  unrelated legacy/unknown entries remain channel-less, and legacy entries
+  persisted before this field existed remain visible as-is until their producer
+  rewrites or removes them.
   `upsert` also enforces the hard `INLINE_MAX_CHARS=10_000` inline-payload cap
   via `_cap_inline_payload`: at or below the cap the assembled entry (producer
   body plus shared policy fields and `kind`) is unchanged; above it, the full
@@ -54,8 +60,9 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
   cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`).
-- `source_drift.py` — read-only runtime/source comparison, skipped for editable
-  or source runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
+- `source_drift.py` — read-only runtime/source comparison in a separate
+  integrity/diagnostic channel; it remains active for editable/source/dev
+  runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
 - `goal.py` — IDLE-only protected-goal reminder projected into the ordinary
   `system` notification channel, gated by an in-memory 10-second check
   cadence (`src/lingtai/kernel/nudge/goal.py:20-75`).
@@ -106,12 +113,18 @@ These sidecar files are local to one agent run and are not auto-cleaned.
 
 ## Notes
 
-Every emitted entry includes the effective `LINGTAI_NUDGE_ENABLED` and
-`LINGTAI_NUDGE_REPEAT_INTERVAL` values, both names, and the environment catalogue
-route. `FULLY_EFFECTIVE`, ignored-field, and failed init-reader outcomes are a
-separate axis from Nudge action; a dismissed finding is not resolved until the
-same real reader reports no finding. The old per-kind daily/fingerprint state is
-not consulted for repeat behavior.
+Every built-in producer entry includes an explicit fixed `nudge_channel`
+classification, the effective `LINGTAI_NUDGE_ENABLED` and
+`LINGTAI_NUDGE_REPEAT_INTERVAL` values, both names, and the environment
+catalogue route. Unrelated legacy/unknown entries are preserved honestly
+without a channel. `kernel_version` is the only producer whose release-version
+channel is silent for editable/source/dev runtimes; `source_drift` remains an
+integrity diagnostic and `init_config_shape` remains configuration-staleness
+guidance in those runtimes.
+`FULLY_EFFECTIVE`, ignored-field, and failed init-reader outcomes are a separate
+axis from Nudge action; a dismissed finding is not resolved until the same real
+reader reports no finding. The old per-kind daily/fingerprint state is not
+consulted for repeat behavior.
 
 The kernel-version producer reads only the exact
 `lingtai-kernel-release-manifest.json` release asset from the GitHub/Gitee latest

@@ -4,7 +4,13 @@ import json
 import time
 
 from lingtai.init_reader import read_init
-from lingtai.kernel.nudge import effective_policy, run_checks, upsert
+from lingtai.kernel.nudge import (
+    ENTRY_CHANNEL_CONFIG_STALENESS,
+    effective_policy,
+    record_dismissal,
+    run_checks,
+    upsert,
+)
 from lingtai.kernel.nudge.init_config import check as check_init_config
 from lingtai.kernel.notifications import dismiss_channel
 from tests._notification_store_helpers import notification_store_for, snapshot_notifications
@@ -49,6 +55,7 @@ def test_emitted_finding_describes_effective_global_policy(monkeypatch, tmp_path
     upsert(agent, "example", {"title": "Needs attention", "detail": "read it"})
 
     entry = _entries(tmp_path)[0]
+    assert "nudge_channel" not in entry
     assert entry["policy"] == {
         "enabled": "on",
         "repeat_after_dismiss": "2h",
@@ -61,6 +68,123 @@ def test_emitted_finding_describes_effective_global_policy(monkeypatch, tmp_path
     assert "LINGTAI_NUDGE_ENABLED=on" in entry["detail"]
     assert "LINGTAI_NUDGE_REPEAT_INTERVAL=2h" in entry["detail"]
     assert "system-manual/reference/environment-variables/SKILL.md" in entry["detail"]
+
+
+def test_fixed_entry_channel_metadata_is_producer_kind_owned(tmp_path):
+    agent = _Agent(tmp_path)
+
+    upsert(
+        agent,
+        "init_config_shape",
+        {
+            "title": "Needs attention",
+            "detail": "read it",
+            "nudge_channel": "not-a-caller-override",
+        },
+    )
+    upsert(agent, "example", {"title": "Legacy", "nudge_channel": "not-a-channel"})
+
+    entries = _entries(tmp_path)
+    init = next(entry for entry in entries if entry["kind"] == "init_config_shape")
+    legacy = next(entry for entry in entries if entry["kind"] == "example")
+    assert init["nudge_channel"] == ENTRY_CHANNEL_CONFIG_STALENESS
+    assert "nudge_channel" not in legacy
+
+
+def test_legacy_entries_without_channel_metadata_remain_visible(tmp_path):
+    agent = _Agent(tmp_path)
+
+    def _seed_legacy(_current):
+        return {
+            "header": "1 nudge",
+            "icon": "\U0001f514",
+            "priority": "low",
+            "data": {"nudges": [{"kind": "legacy", "title": "old"}]},
+        }, True, None
+
+    from lingtai.kernel.notification_store import UNCONDITIONAL
+
+    agent._notification_store.compare_update_channel("nudge", UNCONDITIONAL, _seed_legacy)
+    upsert(agent, "example", {"title": "new"})
+
+    entries = _entries(tmp_path)
+    legacy = next(entry for entry in entries if entry["kind"] == "legacy")
+    new = next(entry for entry in entries if entry["kind"] == "example")
+    assert "nudge_channel" not in legacy
+    assert "nudge_channel" not in new
+
+
+def test_legacy_state_dismissal_fingerprint_mutes_rewritten_channel_entry(tmp_path):
+    agent = _Agent(tmp_path)
+    body = {"title": "Needs attention", "detail": "same finding"}
+    from lingtai.kernel import nudge as nudge_module
+
+    policy = effective_policy()
+    legacy_fingerprint = nudge_module._finding_fingerprint(
+        "example",
+        {
+            "kind": "example",
+            "title": body["title"],
+            "detail": f"{body['detail']}\n\n{policy.message()}",
+            "policy": policy.payload(),
+            "policy_message": policy.message(),
+        },
+        include_channel=False,
+    )
+    state_path = tmp_path / ".notification" / ".nudge_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "dismissed": {
+                    legacy_fingerprint: {
+                        "kind": "example",
+                        "dismissed_at": time.time(),
+                        "until": time.time() + 3600,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    upsert(agent, "example", body)
+
+    assert _entries(tmp_path) == []
+
+
+def test_visible_legacy_entry_dismissed_after_upgrade_mutes_first_classified_rewrite(tmp_path):
+    agent = _Agent(tmp_path)
+    body = {"title": "Needs attention", "detail": "same finding", "source": "release-manifest"}
+
+    def _seed_legacy(_current):
+        return {
+            "header": "1 nudge",
+            "icon": "\U0001f514",
+            "priority": "low",
+            "data": {
+                "nudges": [
+                    {
+                        "kind": "kernel_version",
+                        "title": body["title"],
+                        "detail": f"{body['detail']}\n\n{effective_policy().message()}",
+                        "source": body["source"],
+                        "policy": effective_policy().payload(),
+                        "policy_message": effective_policy().message(),
+                    }
+                ]
+            },
+        }, True, None
+
+    from lingtai.kernel.notification_store import UNCONDITIONAL
+
+    agent._notification_store.compare_update_channel("nudge", UNCONDITIONAL, _seed_legacy)
+    record_dismissal(agent)
+    dismiss_channel(agent, "nudge", invoked_by="notification", force=True)
+
+    upsert(agent, "kernel_version", body)
+
+    assert _entries(tmp_path) == []
 
 
 def test_disabled_policy_suppresses_all_nudge_kinds(monkeypatch, tmp_path):
@@ -79,6 +203,66 @@ def test_run_checks_off_clears_visible_nudge_before_producer_gates(monkeypatch, 
     run_checks(agent)
 
     assert _entries(tmp_path) == []
+
+
+def test_run_checks_dev_kernel_version_silent_but_source_and_config_persist(monkeypatch, tmp_path):
+    agent = _Agent(tmp_path)
+    agent._source_revision_port = object()
+    agent._runtime_fingerprint = {
+        "git_rev": "startup111",
+        "source_digest": "startup222",
+        "captured_at": "t1",
+    }
+    upsert(agent, "kernel_version", {"title": "old", "source": "release-manifest"})
+
+    init_payload = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"bash": {"yolo": True}},
+        },
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init = tmp_path / "init.json"
+    init.write_text(json.dumps(init_payload), encoding="utf-8")
+    agent._last_init_read_outcome = read_init(tmp_path)
+
+    from lingtai.kernel.nudge import kernel_version as kv
+
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo(
+            running_version="0.14.1.dev0",
+            installed_version="0.14.1.dev0",
+            dev_reason="editable-install",
+        ),
+    )
+    monkeypatch.setattr(kv, "_today_utc", lambda: "2026-06-24")
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(AssertionError("dev mode should skip remote")),
+    )
+    monkeypatch.setattr(
+        "lingtai.kernel.base_agent.lifecycle._capture_runtime_fingerprint",
+        lambda _port: {
+            "git_rev": "disk333",
+            "source_digest": "disk444",
+            "captured_at": "t2",
+        },
+    )
+
+    run_checks(agent)
+
+    entries = _entries(tmp_path)
+    by_kind = {entry["kind"]: entry for entry in entries}
+    assert "kernel_version" not in by_kind
+    assert by_kind["source_drift"]["nudge_channel"] == "source_integrity"
+    assert by_kind["init_config_shape"]["nudge_channel"] == ENTRY_CHANNEL_CONFIG_STALENESS
+    assert by_kind["source_drift"]["startup_fingerprint"]["git_rev"] == "startup111"
+    assert by_kind["source_drift"]["disk_fingerprint"]["git_rev"] == "disk333"
+    assert by_kind["init_config_shape"]["shape_decision"] == "NUDGE"
 
 
 def test_dismissal_mutes_unresolved_finding_then_global_interval_allows_repeat(monkeypatch, tmp_path):
@@ -117,6 +301,7 @@ def test_config_shape_nudge_consumes_outcome_and_clears_after_explicit_repair(tm
 
     entry = _entries(tmp_path)[0]
     assert entry["kind"] == "init_config_shape"
+    assert entry["nudge_channel"] == ENTRY_CHANNEL_CONFIG_STALENESS
     assert entry["shape_decision"] == "NUDGE"
     assert entry["compatibility_paths"][0]["raw_path"] == "manifest.capabilities.bash"
     assert entry["effective_outcome"]["effective_config"]["redacted"] is True

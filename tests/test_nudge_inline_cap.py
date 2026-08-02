@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from lingtai.kernel.nudge import (
+    ENTRY_CHANNEL_RELEASE_VERSION,
     INLINE_MAX_CHARS,
     NudgeExternalizationError,
     effective_policy,
@@ -140,12 +141,38 @@ def test_externalization_preserves_full_content_and_metadata(
     full = json.loads(full_text)
     assert full["detail"].startswith(big_detail)
     assert full["title"] == "Oversized finding"
+    assert "nudge_channel" not in full
 
     raw_bytes = full_text.encode("utf-8")
     assert ext["original_char_count"] == len(full_text)
     assert ext["original_byte_count"] == len(raw_bytes)
     assert ext["sha256"] == hashlib.sha256(raw_bytes).hexdigest()
     assert (ext["original_byte_count"] > ext["original_char_count"]) == byte_count_exceeds_char_count
+
+
+def test_externalized_builtin_wire_entry_retains_fixed_channel(tmp_path):
+    agent = _Agent(tmp_path)
+    big_detail = "k" * 11_000
+
+    upsert(
+        agent,
+        "kernel_version",
+        {
+            "title": "Oversized kernel update",
+            "detail": big_detail,
+            "source": "release-manifest",
+        },
+    )
+
+    entry = _entry(tmp_path, "kernel_version")
+    assert _entry_chars(entry) <= INLINE_MAX_CHARS
+    assert entry["nudge_channel"] == ENTRY_CHANNEL_RELEASE_VERSION
+    assert "externalized" in entry
+    assert big_detail not in json.dumps(entry, ensure_ascii=False, default=str)
+
+    sidecar = json.loads(Path(entry["externalized"]["path"]).read_text(encoding="utf-8"))
+    assert sidecar["kind"] == "kernel_version"
+    assert sidecar["nudge_channel"] == ENTRY_CHANNEL_RELEASE_VERSION
 
 
 def test_content_addressed_reuse_and_distinct_files(tmp_path):
@@ -255,6 +282,7 @@ def test_ordinary_small_nudge_behavior_is_unchanged(tmp_path):
     assert "externalized" not in entry
     assert entry["kind"] == "small"
     assert not _findings_dir(tmp_path).exists()
+    assert "nudge_channel" not in entry
     # Internal bookkeeping field must never leak into the persisted payload.
     assert "_dismiss_fingerprint" not in entry
 
@@ -263,6 +291,11 @@ def test_ordinary_small_nudge_behavior_is_unchanged(tmp_path):
         upsert(agent, kind, {"title": "t", "detail": "short detail", "source": "s"})
     entries = snapshot_notifications(tmp_path)["nudge"]["data"]["nudges"]
     assert {e["kind"] for e in entries} >= {"small", "kernel_version", "source_drift", "init_config_shape"}
+    channel_by_kind = {e["kind"]: e.get("nudge_channel") for e in entries}
+    assert channel_by_kind["small"] is None
+    assert channel_by_kind["kernel_version"] == "release_version"
+    assert channel_by_kind["source_drift"] == "source_integrity"
+    assert channel_by_kind["init_config_shape"] == "configuration_staleness"
 
 
 def test_dismissal_round_trip_for_capped_finding(tmp_path, monkeypatch):

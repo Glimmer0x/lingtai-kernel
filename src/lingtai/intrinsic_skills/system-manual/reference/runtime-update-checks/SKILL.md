@@ -65,7 +65,9 @@ The end-to-end path is:
    version. `runtime_identity.py` separately stamps durable event identity with
    package/dev mode, source kind, and available git state. No package-index
    request is needed for the local comparison.
-2. **Check `kernel_version` — `kernel_version.py`.** If running and installed
+2. **Check `kernel_version` — `kernel_version.py`.** This is the
+   `release_version` nudge channel. In editable/source/dev runtimes it is
+   silent and clears only its own stale release-version entry. If running and installed
    versions differ, it emits a local refresh nudge and preserves the existing
    local-only path. For packaged, non-editable, non-dev runtimes whose versions
    match, it fetches the exact `lingtai-kernel-release-manifest.json` asset from
@@ -75,13 +77,13 @@ The end-to-end path is:
    version. If one mirror is unavailable, the other may establish the result.
    A newer manifest version produces a package-availability nudge; network or
    response errors are recorded diagnostically and do not become an update.
-3. **Check `source_drift` — `source_drift.py`.** For non-dev runtimes it
-   compares the startup runtime fingerprint (git revision and curated source
-   digest when available) with a fresh on-disk fingerprint. Drift means the
-   running process is stale relative to code already on disk. Editable,
-   source-checkout, and dev-version runtimes skip this check deliberately.
-   This is local read-only source diagnosis and refresh mechanics only; it does
-   not enter the release-migration route.
+3. **Check `source_drift` — `source_drift.py`.** This is the
+   `source_integrity` nudge channel. It compares the startup runtime fingerprint
+   (git revision and curated source digest when available) with a fresh on-disk
+   fingerprint. Drift means the running process differs from code currently on
+   disk. Editable/source/dev runtimes still emit this diagnostic; the finding is
+   local read-only source diagnosis and refresh mechanics only, and does not
+   enter the release-migration route.
 4. **Dispatch — `nudge/__init__.py` and `lifecycle.py`.** The heartbeat loop
    runs the nudge dispatcher once per one-second tick. `kernel_version` and
    `source_drift` each have their own roughly 60-second in-memory probe gate;
@@ -147,20 +149,25 @@ has been downloaded.
 The editable/source/dev modes are detected through `direct_url.json` with
 `dir_info.editable: true`; source checkouts are recognized from the module path
 and the checkout's `.git` plus `pyproject.toml`; dev-version markers also
-suppress the package-index check. Missing distribution metadata is treated as
-source/dev rather than as permission to install. In these modes, the checkout,
-branch, commit, dirty state, and import path are the useful truth. A source-drift
-refresh nudge is also intentionally suppressed: refreshing arbitrary in-flight
-checkout changes could amplify a broken development edit.
+suppress only the `kernel_version` release-version check. Missing distribution
+metadata is treated as source/dev rather than as permission to install. In these
+modes, the checkout, branch, commit, dirty state, and import path are the useful
+truth. A `source_drift` finding can still appear as a source-integrity
+diagnostic, and an `init_config_shape` finding can still appear as
+configuration-staleness guidance; neither is package-update authority.
 
 ## Nudge mechanics and dismissal
 
-`kernel_version` and `source_drift` are producers of the shared low-priority
-`.notification/nudge.json` envelope. The envelope carries `data.nudges`, a
-`published_at` timestamp, channel-level instructions, and a self-describing
-policy block. `kind: kernel_version` has `running`, `installed`, `latest` (or
-`null` for a local refresh), `source`, and a suggested action. `source_drift`
-carries startup and disk fingerprints instead.
+`kernel_version`, `source_drift`, and `init_config_shape` are producers of the
+shared low-priority `.notification/nudge.json` envelope. The envelope carries
+`data.nudges`, a `published_at` timestamp, channel-level instructions, and a
+self-describing policy block. Those built-in producer kinds carry fixed
+`nudge_channel` metadata: `release_version` for `kernel_version`,
+`source_integrity` for `source_drift`, and `configuration_staleness` for
+`init_config_shape`. Unrelated legacy/unknown entries remain channel-less.
+`kind: kernel_version` has `running`, `installed`, `latest` (or `null` for a
+local refresh), `source`, and a suggested action. `source_drift` carries startup
+and disk fingerprints instead.
 
 The shared Nudge policy records finding identity and dismissal mute expiry in
 `.notification/.nudge_state.json`. The two global controls
@@ -168,8 +175,9 @@ The shared Nudge policy records finding identity and dismissal mute expiry in
 and set the post-dismiss repeat window for an unresolved finding; their defaults,
 accepted values, reload behavior, and invalid-value fallback are owned by
 `reference/environment-variables/SKILL.md`. Producer probe gates are only bounded
-observation costs, not product cadence. A producer removes an entry when its real
-fact resolves or the runtime is intentionally skipped.
+observation costs, not product cadence. A producer removes an entry when its
+real fact resolves; `kernel_version` also removes its own entry when the runtime
+is intentionally release-version-silent.
 
 After interpreting a nudge, use the narrowest safe action:
 
