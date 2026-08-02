@@ -456,6 +456,7 @@ def test_load_config_defaults_to_5_10_2000_when_no_config_file_exists(agent, man
     assert config.interval_s == 5.0
     assert config.timeout_s == 10.0
     assert config.max_refreshes == 2000
+    assert config.reminder_turns == 10
 
     # The one-way gate closes on this very first resolution: the intrinsic
     # file is written even though nothing migrated, so no legacy state ever
@@ -463,6 +464,19 @@ def test_load_config_defaults_to_5_10_2000_when_no_config_file_exists(agent, man
     assert manager._config_path.is_file()
     persisted = json.loads(manager._config_path.read_text(encoding="utf-8"))
     assert persisted == {"interval_s": 5.0, "timeout_s": 10.0, "max_refreshes": 2000}
+
+
+def test_completed_work_turn_publishes_configured_soft_reminder(agent, manager, monkeypatch):
+    published = []
+    monkeypatch.setattr(
+        "lingtai.tools.task_card.notifications.submit", lambda *args, **kwargs: published.append(kwargs)
+    )
+    _write_config(agent, {"reminder_turns": 2})
+
+    manager.on_completed_work_turn()
+    assert published == []
+    manager.on_completed_work_turn()
+    assert published[0]["data"] == {"source": "task_card.reminder", "turns": 2}
 
 
 def test_start_with_no_config_file_uses_builtin_defaults(agent, manager):

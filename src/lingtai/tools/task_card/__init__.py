@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from lingtai.kernel import notifications
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 
 from ..tool_family import ChildTool, ToolFamily
@@ -42,6 +43,7 @@ _DEFAULT_INTERVAL_S = 5.0
 _MIN_INTERVAL_S = 1.0
 _MIN_TIMEOUT_S = 0.1
 _DEFAULT_MAX_REFRESHES = 2000
+_DEFAULT_REMINDER_TURNS = 10
 _TASKCARD_DIR = "taskcard"
 _STATUS_FILENAME = "status"
 _BODY_FILENAME = "taskcard.md"
@@ -63,6 +65,7 @@ _LEGACY_CONFIG_DIR = "telegram"
 # default instead of leaving them on it.
 _LEGACY_UNTOUCHED_MAX_REFRESHES = 1000
 _MANUAL_SKILL_NAME = "task_card"
+notifications.register_notification_channel("task_card")
 
 
 class _Config(NamedTuple):
@@ -71,9 +74,12 @@ class _Config(NamedTuple):
     interval_s: float
     timeout_s: float
     max_refreshes: int
+    reminder_turns: int
 
 
-_BUILTIN_CONFIG = _Config(_DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, _DEFAULT_MAX_REFRESHES)
+_BUILTIN_CONFIG = _Config(
+    _DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, _DEFAULT_MAX_REFRESHES, _DEFAULT_REMINDER_TURNS
+)
 
 
 def _utc_now_iso() -> str:
@@ -212,6 +218,7 @@ class TaskCardManager:
         self._agent = agent
         self._lock = threading.RLock()
         self._counter = 0
+        self._completed_text_turns = 0
         self._watch: _Watch | None = None
         self._taskcard_dir = Path(agent._working_dir) / _TASKCARD_DIR
         self._status_path = self._taskcard_dir / _STATUS_FILENAME
@@ -278,6 +285,7 @@ class TaskCardManager:
         try:
             body = self._run_renderer(renderer_path, timeout_s)
             self._publish_active(body)
+            self._clear_reminder()
         except Exception:
             with self._lock:
                 if self._watch is watch:
@@ -438,6 +446,7 @@ class TaskCardManager:
                 **self._paths_payload(),
                 **self._status_payload("inactive"),
             }
+        self._clear_reminder()
         return {
             "status": "ok",
             "state": "removed",
@@ -509,6 +518,7 @@ class TaskCardManager:
                     self._exhaust(watch)
                 return
             self._mark_recovered(watch, body)
+            self._clear_reminder()
             if exhausted and not watch.stopping:
                 self._exhaust(watch)
 
@@ -725,8 +735,32 @@ class TaskCardManager:
             raise TaskCardError(f"unknown watch_id: {watch_id}")
         return watch
 
+    def on_completed_work_turn(self) -> None:
+        threshold = self._reminder_turns()
+        with self._lock:
+            self._completed_text_turns += 1
+            if self._completed_text_turns < threshold:
+                return
+            self._completed_text_turns = 0
+        notifications.submit(
+            self._agent,
+            "task_card",
+            data={"source": "task_card.reminder", "turns": threshold},
+            header="Task Card reminder",
+            instructions="Check whether the Task Card is absent or stale; update or issue one only if useful.",
+        )
+
+    def _clear_reminder(self) -> None:
+        with self._lock:
+            self._completed_text_turns = 0
+        try:
+            notifications.clear(self._agent, "task_card")
+        except AttributeError:
+            pass
+
     def shutdown_for_agent_stop(self, *, reason: str = "") -> None:
         del reason
+        self._clear_reminder()
         with self._lock:
             watch = self._watch
             self._watch = None
@@ -766,6 +800,7 @@ class TaskCardManager:
             self._config_number(data.get("interval_s"), _MIN_INTERVAL_S, _DEFAULT_INTERVAL_S),
             self._config_number(data.get("timeout_s"), _MIN_TIMEOUT_S, _DEFAULT_TIMEOUT_S),
             self._config_max_refreshes(data.get("max_refreshes")),
+            self._config_reminder_turns(data.get("reminder_turns")),
         )
 
     def _migrate_legacy_config(self) -> _Config:
@@ -803,7 +838,7 @@ class TaskCardManager:
         ):
             resolved = _BUILTIN_CONFIG
         else:
-            resolved = _Config(_DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, legacy_max)
+            resolved = _Config(_DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, legacy_max, _DEFAULT_REMINDER_TURNS)
         try:
             atomic_write_json(
                 self._config_path,
@@ -828,6 +863,16 @@ class TaskCardManager:
     @staticmethod
     def _config_max_refreshes(value: Any) -> int:
         return value if type(value) is int and value > 0 else _DEFAULT_MAX_REFRESHES
+
+    @staticmethod
+    def _config_reminder_turns(value: Any) -> int:
+        return value if type(value) is int and value > 0 else _DEFAULT_REMINDER_TURNS
+
+    def _reminder_turns(self) -> int:
+        try:
+            return self._config_reminder_turns(read_json(self._config_path, expect=dict).get("reminder_turns"))
+        except (OSError, ValueError, TypeError):
+            return _DEFAULT_REMINDER_TURNS
 
     def _validate_renderer_path(self, raw: Any) -> Path:
         if not isinstance(raw, str) or not raw.strip():
