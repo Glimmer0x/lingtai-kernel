@@ -1,8 +1,8 @@
 """LingTai Feishu MCP server.
 
 Exposes a single omnibus ``feishu`` MCP tool that dispatches to
-FeishuManager for all 9 actions (send, check, read, reply, search,
-contacts, add_contact, remove_contact, accounts). Inbound Feishu events
+FeishuManager for all 13 actions (send, check, read, reply, react, search,
+delete, edit, contacts, add_contact, remove_contact, accounts, manual). Inbound Feishu events
 flow into the host agent's inbox via LICC.
 
 Configuration:
@@ -38,6 +38,7 @@ from typing import Any
 import mcp.types as types
 from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
+from lingtai.mcp_servers.local_commands import LocalCommandCore
 
 from .._results import json_tool_result as _tool_result
 from .._results import text_resource_result as _resource_result
@@ -228,10 +229,11 @@ def _profile_manifest(manager: FeishuManager | None) -> dict[str, Any]:
         "tools": [
             {
                 "name": "feishu",
-                "description": "Omnibus Feishu tool for send/check/read/reply/search/delete/edit/contacts/accounts.",
+                "description": "Omnibus Feishu tool for messages, reactions, contacts, accounts, and its manual.",
                 "actions": [
-                    "send", "check", "read", "reply", "search", "delete", "edit",
-                    "contacts", "add_contact", "remove_contact", "accounts",
+                    "send", "check", "read", "reply", "react", "search",
+                    "delete", "edit", "contacts", "add_contact",
+                    "remove_contact", "accounts", "manual",
                 ],
             }
         ],
@@ -314,14 +316,16 @@ Common optional fields:
 
 ## Tool entrypoint
 
-Use the `feishu` tool with actions: `send`, `check`, `read`, `reply`, `search`,
-`delete`, `edit`, `contacts`, `add_contact`, `remove_contact`, and `accounts`.
+Use the `feishu` tool with actions: `send`, `check`, `read`, `reply`, `react`,
+`search`, `delete`, `edit`, `contacts`, `add_contact`, `remove_contact`,
+`accounts`, and `manual`.
 Compound message IDs have the form `account_alias:chat_id:feishu_message_id`.
 
 Voice messages received from Feishu are downloaded and transcribed locally with
 the required faster-whisper dependency. For long-running responses,
-`send` accepts `placeholder=true` to post an immediate placeholder that `edit`
-can later replace.
+`send` accepts `placeholder=true` to post a native progress card that `edit`
+updates only at meaningful phase changes. Send the final answer separately with
+`send` or `reply`; the progress card is not the final response.
 """
 
 
@@ -622,12 +626,17 @@ def build_manager() -> tuple[FeishuManager, Path]:
         accounts_config=accounts,
         on_message=lambda alias, ctx: mgr_ref[0].on_incoming(alias, ctx),
         config_source=os.environ.get("LINGTAI_FEISHU_CONFIG"),
+        on_event=lambda alias, event: mgr_ref[0].on_channel_event(alias, event),
+        on_card_action=lambda alias, action: mgr_ref[0].on_card_action(
+            alias, action
+        ),
     )
 
     mgr = FeishuManager(
         service=svc,
         working_dir=working_dir,
         on_inbound=_on_inbound,
+        local_command_core=LocalCommandCore(working_dir),
     )
     mgr_ref[0] = mgr
     return mgr, working_dir
@@ -727,11 +736,11 @@ async def serve() -> None:
     """Run the MCP server over stdio. Eagerly starts the WebSocket clients
     so inbound messages flow before the host expects them."""
     manager: FeishuManager | None = None
-    service_started = False
+    manager_started = False
     try:
         manager, _wd = build_manager()
-        manager._service.start()
-        service_started = True
+        manager.start()
+        manager_started = True
         log.info("Feishu listener running")
     except Exception as e:
         log.error(
@@ -748,8 +757,8 @@ async def serve() -> None:
                 server.create_initialization_options(),
             )
     finally:
-        if manager is not None and service_started:
+        if manager is not None and manager_started:
             try:
-                manager._service.stop()
+                manager.stop()
             except Exception:
                 pass
