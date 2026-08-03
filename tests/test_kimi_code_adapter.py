@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from lingtai.kernel.llm.base import FunctionSchema
+from lingtai.kernel.llm.interface import ToolCallBlock, ToolResultBlock
 from lingtai.llm.kimi_code.adapter import (
     KimiCodeAdapter,
     KimiCodeAuthError,
@@ -14,6 +15,8 @@ from lingtai.llm.kimi_code.adapter import (
     _extract_json_object,
     _parse_stream_json,
 )
+from lingtai.tools.context import _rebuild_action, _summarize_action
+from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE, SUMMARY_STATUS_PENDING
 
 
 class _FakeProc:
@@ -49,6 +52,42 @@ def _weather_tool():
             "required": ["city"],
         },
     )
+
+
+class _RebuildAgent:
+    def __init__(self, chat, *, system_prompt="sys", tools=None):
+        self._chat = chat
+        self._system_prompt = system_prompt
+        self._tools = list(tools or [])
+        self._summarize_notification_threshold = 3000
+        self.saved_history = []
+        self.logs = []
+
+    def _reconstruct_context(self):
+        self._chat.update_system_prompt(self._system_prompt)
+        self._chat.update_tools(self._tools)
+
+    def _save_chat_history(self, **kwargs):
+        self.saved_history.append(kwargs)
+
+    def _log(self, event, **kwargs):
+        self.logs.append((event, kwargs))
+
+
+def _summarize_marker(iface, tool_call_id):
+    for entry in iface._entries:
+        for block in entry.content:
+            if isinstance(block, ToolResultBlock) and block.id == tool_call_id:
+                return block.content
+    raise AssertionError(f"missing marker for {tool_call_id}")
+
+
+def _append_context_call_result(session, content):
+    call_id = "ctx-rebuild"
+    session.interface.add_assistant_message(
+        [ToolCallBlock(id=call_id, name="context", args={"action": "rebuild"})]
+    )
+    return ToolResultBlock(id=call_id, name="context", content=content)
 
 
 def test_extract_json_object_handles_fence_and_nested_braces():
@@ -371,6 +410,97 @@ def test_changed_system_prompt_or_tools_resets_remote_session(tmp_path):
         session.send("m4")
 
     assert ["--session" in cmd for cmd in captured] == [False, True, False, True, False]
+
+
+def test_explicit_rebuild_on_resumed_session_replays_summarized_history(tmp_path):
+    adapter = KimiCodeAdapter(model="kimi-k2", cwd=tmp_path / "cwd")
+    tool = _weather_tool()
+    session = adapter.create_chat("kimi-k2", "sys", [tool])
+    agent = _RebuildAgent(session, system_prompt="sys", tools=[tool])
+    raw_sentinel = "RAW-KIMI-REBUILD-SENTINEL"
+    summary_sentinel = "SUMMARY-KIMI-REBUILD-SENTINEL"
+    captured = []
+    replies = [
+        '{"action":"tool_call","name":"get_weather","input":{"city":"SF"}}',
+        '{"action":"final","text":"recorded"}',
+        '{"action":"final","text":"rebuilt"}',
+    ]
+
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc(stdout=_stream(replies[len(captured) - 1]))
+
+    with patch("lingtai.llm.kimi_code.adapter.subprocess.run", side_effect=fake_run):
+        response = session.send("collect raw")
+        tool_call_id = response.tool_calls[0].id
+        session.send([
+            ToolResultBlock(
+                id=tool_call_id,
+                name="get_weather",
+                content={"raw": raw_sentinel},
+            )
+        ])
+
+        summarize = _summarize_action(
+            agent,
+            {"items": [{"tool_call_id": tool_call_id, "summary": summary_sentinel}]},
+        )
+        assert summarize["status"] == "ok"
+        assert _summarize_marker(session.interface, tool_call_id)["status"] == SUMMARY_STATUS_PENDING
+
+        rebuild = _rebuild_action(agent, {})
+        assert rebuild["status"] == "ok"
+        assert rebuild["rebuild_requested"] is True
+        assert rebuild["marked_done"] == [tool_call_id]
+        assert _summarize_marker(session.interface, tool_call_id)["status"] == SUMMARY_STATUS_DONE
+        assert session.kimi_session_id is None
+        assert session._remote_entry_count == 0
+        assert session._pending_resume_session_id is None
+
+        session.send([_append_context_call_result(session, rebuild)])
+
+    assert "--session" not in captured[0]
+    assert "--session" in captured[1]
+    assert "--session" not in captured[2]
+    replay_prompt = captured[2][captured[2].index("--prompt") + 1]
+    assert summary_sentinel in replay_prompt
+    assert raw_sentinel not in replay_prompt
+    assert "Rebuild successful" in replay_prompt
+
+
+def test_explicit_zero_pending_rebuild_clears_resumed_session(tmp_path):
+    adapter = KimiCodeAdapter(model="kimi-k2", cwd=tmp_path / "cwd")
+    session = adapter.create_chat("kimi-k2", "sys", None)
+    agent = _RebuildAgent(session)
+    captured = []
+
+    def fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeProc(stdout=_stream('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.kimi_code.adapter.subprocess.run", side_effect=fake_run):
+        session.send("first")
+        result = _rebuild_action(agent, {})
+        assert result["status"] == "ok"
+        assert result["rebuild_requested"] is True
+        assert result["marked_done"] == []
+        assert session.kimi_session_id is None
+        session.send([_append_context_call_result(session, result)])
+
+    assert "--session" not in captured[0]
+    assert "--session" not in captured[1]
+    replay_prompt = captured[1][captured[1].index("--prompt") + 1]
+    assert "first" in replay_prompt
+
+
+def test_explicit_rebuild_without_remote_id_is_accepted():
+    adapter = KimiCodeAdapter(model="kimi-k2")
+    session = adapter.create_chat("kimi-k2", "sys", None)
+
+    assert session.kimi_session_id is None
+    assert session.request_history_rebuild() is True
+    assert session.kimi_session_id is None
+    assert session._remote_entry_count == 0
 
 
 def test_env_maps_existing_kimi_alias_without_logging(monkeypatch):

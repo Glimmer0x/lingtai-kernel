@@ -378,6 +378,10 @@ class KimiCodeChatSession(ChatSession):
         self._remote_entry_count = 0
         self._pending_resume_session_id = None
 
+    def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
+        self._reset_remote_session()
+        return True
+
     def _system_block_digest(self) -> str:
         """Digest of the stable context the remote session was opened with."""
         payload = json.dumps(

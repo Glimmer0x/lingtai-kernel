@@ -18,7 +18,9 @@ from lingtai.llm.claude_code.adapter import (
     _extract_json_object,
 )
 from lingtai.kernel.llm.base import FunctionSchema
-from lingtai.kernel.llm.interface import TextBlock, ToolResultBlock
+from lingtai.kernel.llm.interface import TextBlock, ToolCallBlock, ToolResultBlock
+from lingtai.tools.context import _rebuild_action, _summarize_action
+from lingtai.tools.system.summarize import SUMMARY_STATUS_DONE, SUMMARY_STATUS_PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,42 @@ def _weather_tool():
             "required": ["city"],
         },
     )
+
+
+class _RebuildAgent:
+    def __init__(self, chat, *, system_prompt="sys", tools=None):
+        self._chat = chat
+        self._system_prompt = system_prompt
+        self._tools = list(tools or [])
+        self._summarize_notification_threshold = 3000
+        self.saved_history = []
+        self.logs = []
+
+    def _reconstruct_context(self):
+        self._chat.update_system_prompt(self._system_prompt)
+        self._chat.update_tools(self._tools)
+
+    def _save_chat_history(self, **kwargs):
+        self.saved_history.append(kwargs)
+
+    def _log(self, event, **kwargs):
+        self.logs.append((event, kwargs))
+
+
+def _summarize_marker(iface, tool_call_id):
+    for entry in iface._entries:
+        for block in entry.content:
+            if isinstance(block, ToolResultBlock) and block.id == tool_call_id:
+                return block.content
+    raise AssertionError(f"missing marker for {tool_call_id}")
+
+
+def _append_context_call_result(sess, content):
+    call_id = "ctx-rebuild"
+    sess.interface.add_assistant_message(
+        [ToolCallBlock(id=call_id, name="context", args={"action": "rebuild"})]
+    )
+    return ToolResultBlock(id=call_id, name="context", content=content)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +435,95 @@ def test_resume_survives_a_tool_call_round_trip():
     # The resumed turn carries only the new tool result, not the original ask.
     assert "sunny, 20C" in captured[1][1]["input"]
     assert "what is the weather in SF?" not in captured[1][1]["input"]
+
+
+def test_explicit_rebuild_on_resumed_session_replays_summarized_history():
+    ad = ClaudeCodeAdapter(model="sonnet")
+    tool = _weather_tool()
+    sess = ad.create_chat("sonnet", "sys", [tool])
+    agent = _RebuildAgent(sess, system_prompt="sys", tools=[tool])
+    raw_sentinel = "RAW-CLAUDE-REBUILD-SENTINEL"
+    summary_sentinel = "SUMMARY-CLAUDE-REBUILD-SENTINEL"
+    captured = []
+    replies = [
+        '{"action":"tool_call","name":"get_weather","input":{"city":"SF"}}',
+        '{"action":"final","text":"recorded"}',
+        '{"action":"final","text":"rebuilt"}',
+    ]
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope(replies[len(captured) - 1]))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        response = sess.send("collect raw")
+        tool_call_id = response.tool_calls[0].id
+        sess.send([
+            ToolResultBlock(
+                id=tool_call_id,
+                name="get_weather",
+                content={"raw": raw_sentinel},
+            )
+        ])
+
+        summarize = _summarize_action(
+            agent,
+            {"items": [{"tool_call_id": tool_call_id, "summary": summary_sentinel}]},
+        )
+        assert summarize["status"] == "ok"
+        assert _summarize_marker(sess.interface, tool_call_id)["status"] == SUMMARY_STATUS_PENDING
+
+        rebuild = _rebuild_action(agent, {})
+        assert rebuild["status"] == "ok"
+        assert rebuild["rebuild_requested"] is True
+        assert rebuild["marked_done"] == [tool_call_id]
+        assert _summarize_marker(sess.interface, tool_call_id)["status"] == SUMMARY_STATUS_DONE
+        assert sess._remote_session_id is None
+        assert sess._remote_entry_count == 0
+
+        sess.send([_append_context_call_result(sess, rebuild)])
+
+    assert "--resume" not in captured[0][0]
+    assert "--resume" in captured[1][0]
+    assert "--resume" not in captured[2][0]
+    replay_prompt = captured[2][1]["input"]
+    assert summary_sentinel in replay_prompt
+    assert raw_sentinel not in replay_prompt
+    assert "Rebuild successful" in replay_prompt
+
+
+def test_explicit_zero_pending_rebuild_clears_resumed_session():
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", None)
+    agent = _RebuildAgent(sess)
+    captured = []
+
+    def fake_run(cmd, **kw):
+        captured.append((cmd, kw))
+        return _FakeProc(stdout=_envelope('{"action":"final","text":"ok"}'))
+
+    with patch("lingtai.llm.claude_code.adapter.subprocess.run", side_effect=fake_run):
+        sess.send("first")
+        result = _rebuild_action(agent, {})
+        assert result["status"] == "ok"
+        assert result["rebuild_requested"] is True
+        assert result["marked_done"] == []
+        assert sess._remote_session_id is None
+        sess.send([_append_context_call_result(sess, result)])
+
+    assert "--resume" not in captured[0][0]
+    assert "--resume" not in captured[1][0]
+    assert "first" in captured[1][1]["input"]
+
+
+def test_explicit_rebuild_without_remote_id_is_accepted():
+    ad = ClaudeCodeAdapter(model="sonnet")
+    sess = ad.create_chat("sonnet", "sys", None)
+
+    assert sess._remote_session_id is None
+    assert sess.request_history_rebuild() is True
+    assert sess._remote_session_id is None
+    assert sess._remote_entry_count == 0
 
 
 def test_generate_omits_system_prompt_file():
