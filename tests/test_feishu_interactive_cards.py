@@ -167,9 +167,14 @@ def test_send_reply_and_edit_preserve_exact_schema_2_card(tmp_path: Path) -> Non
 
     assert sent["content_type"] == "card"
     assert replied["content_type"] == "card"
+    # A single-chunk card edit still reports the full lifecycle chunk
+    # projection: one physical member, edited exactly once.
     assert edited == {
         "status": "edited",
         "message_id": sent["message_id"],
+        "message_ids": [sent["message_id"]],
+        "chunk_count": 1,
+        "chunks": [{"index": 1, "message_id": sent["message_id"]}],
         "content_type": "card",
     }
     assert account.calls[0][1][2] == {"card": initial}

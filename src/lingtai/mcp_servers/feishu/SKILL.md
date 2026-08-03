@@ -84,9 +84,15 @@ needed; do not load all three for an ordinary message send.
   compound `message_id`, ordered `message_ids`, `chunk_count`, and `chunks`;
   every chunk of a topic reply stays in that topic.
 - `edit` accepts text, markdown, post, or a complete schema-2.0 card and updates
-  the persisted sent record after Feishu confirms the edit. Card edits replace
-  the existing card in place through Feishu's native card update API. Feishu
-  does not expose media messages through the same edit path.
+  every physical chunk in the logical sent record, even when called with a
+  secondary compound ID, and updates the persisted record only after Feishu
+  confirms every edit. `delete` resolves the same logical chunk group and
+  deletes every physical member. Successful lifecycle results expose the
+  ordered `message_ids`, `chunk_count`, and `chunks`. A partial edit/delete
+  persists exact successes and failures, disables whole-operation automatic
+  replay, and requires provider-state reconciliation before another attempt.
+  Card edits replace the existing card in place through Feishu's native card
+  update API. Feishu does not expose media messages through the same edit path.
 
 ## INTERACTIVE CARDS AND BUSINESS CALLBACKS
 
