@@ -12,6 +12,7 @@ from typing import Any
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
 from .. import _skill
+from ._errors import failure_result
 
 # Kept local to avoid importing the manager (which consumes this schema).
 _SKILL_NAME = "feishu-mcp-manual"
@@ -20,7 +21,7 @@ _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
 )
 
 _ACTIONS = (
-    "send", "check", "read", "reply", "search", "delete", "edit",
+    "send", "check", "read", "reply", "react", "search", "delete", "edit",
     "contacts", "add_contact", "remove_contact", "accounts", "manual",
 )
 
@@ -50,7 +51,130 @@ def _object(
     return result
 
 
+def _media_source_schema() -> dict[str, Any]:
+    return {
+        "oneOf": [
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["path"]},
+                    "path": {"type": "string", "minLength": 1},
+                },
+                required=["type", "path"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["key"]},
+                    "key": {"type": "string", "minLength": 1},
+                },
+                required=["type", "key"],
+            ),
+        ]
+    }
+
+
+def _outbound_content_schema(*, include_media: bool = True) -> dict[str, Any]:
+    """Strict outbound union; media may be excluded for edit."""
+    post_value = {"type": "object", "minProperties": 1}
+    card_value = {
+        "type": "object",
+        "properties": {
+            "schema": {"type": "string", "enum": ["2.0"]},
+        },
+        "required": ["schema"],
+        "minProperties": 2,
+    }
+    branches = [
+        _object(
+            {
+                "type": {"type": "string", "enum": ["text"]},
+                "text": {"type": "string", "minLength": 1},
+            },
+            required=["type", "text"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["markdown"]},
+                "markdown": {"type": "string", "minLength": 1},
+            },
+            required=["type", "markdown"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["post"]},
+                "post": post_value,
+            },
+            required=["type", "post"],
+        ),
+        _object(
+            {
+                "type": {"type": "string", "enum": ["card"]},
+                "card": card_value,
+            },
+            required=["type", "card"],
+        ),
+    ]
+    if include_media:
+        source = _media_source_schema()
+        branches.extend([
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["image"]},
+                    "source": source,
+                    "caption": {"type": "string"},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["file"]},
+                    "source": source,
+                    "file_name": {"type": "string", "minLength": 1},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["audio"]},
+                    "source": source,
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["video"]},
+                    "source": source,
+                    "caption": {"type": "string"},
+                },
+                required=["type", "source"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["share_chat"]},
+                    "chat_id": {"type": "string", "minLength": 1},
+                },
+                required=["type", "chat_id"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["share_user"]},
+                    "user_id": {"type": "string", "minLength": 1},
+                },
+                required=["type", "user_id"],
+            ),
+            _object(
+                {
+                    "type": {"type": "string", "enum": ["sticker"]},
+                    "file_key": {"type": "string", "minLength": 1},
+                },
+                required=["type", "file_key"],
+            ),
+        ])
+    return {"oneOf": branches}
+
+
 def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
+    content = _outbound_content_schema()
+    editable_content = _outbound_content_schema(include_media=False)
     send = _object(
         {
             "account": _nullable({"type": "string"}),
@@ -60,9 +184,11 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
                 "enum": ["open_id", "user_id", "email", "chat_id", "union_id"],
             }),
             "text": {"type": "string"},
+            "content": content,
             "placeholder": _nullable({"type": "boolean"}),
         },
-        required=["receive_id", "text"],
+        required=["receive_id"],
+        one_of=[{"required": ["text"]}, {"required": ["content"]}],
     )
     send["properties"]["receive_id_type"]["anyOf"][0]["description"] = (
         "Type of receive_id. Use 'open_id' for individual users "
@@ -70,11 +196,10 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
         "Defaults to 'open_id'."
     )
     send["properties"]["placeholder"]["anyOf"][0]["description"] = (
-        "send only — send 'text' as a placeholder message immediately "
-        "and return its compound message_id so the agent can call "
-        "edit later with the final result. "
-        "Use for long-running responses (>5s) to avoid the perception "
-        "of silence."
+        "send only — wrap text, markdown, or post content in a native "
+        "schema-2.0 progress card and return its compound message_id. "
+        "Edit that card only at meaningful phase changes; send the final "
+        "answer separately with send or reply."
     )
     empty = _object({})
     return {
@@ -92,8 +217,38 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             {
                 "message_id": {"type": "string"},
                 "text": {"type": "string"},
+                "content": content,
+                "reply_in_thread": {"type": "boolean"},
             },
-            required=["message_id", "text"],
+            required=["message_id"],
+            one_of=[{"required": ["text"]}, {"required": ["content"]}],
+        ),
+        "react": _object(
+            {
+                "message_id": {"type": "string", "minLength": 1},
+                "operation": {
+                    "type": "string", "enum": ["add", "remove"],
+                },
+                "emoji_type": {"type": "string", "minLength": 1},
+                "reaction_id": {"type": "string", "minLength": 1},
+            },
+            required=["message_id", "operation"],
+            one_of=[
+                {
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["add"]},
+                    },
+                    "required": ["emoji_type"],
+                    "not": {"required": ["reaction_id"]},
+                },
+                {
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["remove"]},
+                    },
+                    "required": ["reaction_id"],
+                    "not": {"required": ["emoji_type"]},
+                },
+            ],
         ),
         "search": _object(
             {
@@ -103,13 +258,29 @@ def _feishu_input_schemas() -> dict[str, dict[str, Any]]:
             },
             required=["query"],
         ),
-        "delete": _object({"message_id": {"type": "string"}}, required=["message_id"]),
+        "delete": _object({
+            "message_id": {
+                "type": "string",
+                "description": (
+                    "Any compound ID returned for a logical bot message; "
+                    "all persisted physical chunks are deleted."
+                ),
+            },
+        }, required=["message_id"]),
         "edit": _object(
             {
-                "message_id": {"type": "string"},
+                "message_id": {
+                    "type": "string",
+                    "description": (
+                        "Any compound ID returned for a logical bot message; "
+                        "all persisted physical chunks are edited."
+                    ),
+                },
                 "text": {"type": "string"},
+                "content": editable_content,
             },
-            required=["message_id", "text"],
+            required=["message_id"],
+            one_of=[{"required": ["text"]}, {"required": ["content"]}],
         ),
         "contacts": _object({"account": _nullable({"type": "string"})}),
         "add_contact": _object(
@@ -159,21 +330,30 @@ def feishu_schema() -> dict[str, Any]:
     # another action's branch also fits.
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
-        "send: send a text message to a user or chat "
-        "(receive_id, receive_id_type, text; optional account, placeholder). "
-        "If placeholder is true, sends text as a placeholder message "
-        "immediately and returns its compound message_id so the agent "
-        "can call edit later with the final result. "
+        "send: send text, markdown, post, card, media, share, or sticker content "
+        "to a user or chat "
+        "(receive_id, receive_id_type, exactly one of text/content; "
+        "optional account, placeholder). "
+        "If placeholder is true, sends a native progress card immediately; "
+        "edit it only at meaningful phase changes and send the final answer "
+        "separately with send or reply. "
         "check: list recent conversations with unread counts "
         "(optional account). "
         "read: read messages from a specific chat "
         "(chat_id; optional limit, account). "
-        "reply: reply to a specific message "
-        "(message_id from read results, text). "
+        "reply: reply to a specific message with text, markdown, post, card, "
+        "media, share, or sticker content "
+        "(message_id from read results, exactly one of text/content; "
+        "optional reply_in_thread). "
+        "react: add or remove a reaction on a message "
+        "(message_id, operation='add' + emoji_type, or "
+        "operation='remove' + reaction_id). "
         "search: search inbox messages by regex "
         "(query; optional account, chat_id). "
-        "delete: delete a bot message (message_id). "
-        "edit: edit a bot message (message_id, text). "
+        "delete: delete every physical chunk of a logical bot message "
+        "using any returned compound message_id. "
+        "edit: edit every physical chunk of a bot text/post/card message "
+        "(message_id, exactly one of text/content). "
         "contacts: list saved contacts (optional account). "
         "add_contact: save a contact "
         "(open_id, alias; optional name, chat_id). "
@@ -208,6 +388,8 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
     if expected == "object":
         if not isinstance(value, Mapping):
             return False
+        if len(value) < schema.get("minProperties", 0):
+            return False
         properties = schema.get("properties", {})
         if schema.get("additionalProperties") is False and set(value) - set(properties):
             return False
@@ -223,7 +405,11 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
     if expected == "array":
         return isinstance(value, list)
     if expected == "string":
-        return isinstance(value, str) and value in schema.get("enum", [value])
+        return (
+            isinstance(value, str)
+            and value in schema.get("enum", [value])
+            and len(value) >= schema.get("minLength", 0)
+        )
     if expected == "integer":
         return (
             type(value) is int
@@ -269,19 +455,47 @@ def build_feishu_family(manager: Any | None) -> ToolFamily:
 def handle_feishu(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
     raw = dict(args or {})
     if set(raw) - {"action", "input", "reasoning", "summarize"}:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "unsupported feishu argument"}
+        return failure_result(
+            "unsupported feishu argument", error_code="INVALID_ARGUMENT",
+        )
     action = raw.get("action")
     if type(action) is not str or action not in _ACTIONS:
-        return {"status": "failed", "error_code": "ACTION_REQUIRED", "message": "invalid feishu action"}
+        return failure_result(
+            "invalid feishu action", error_code="ACTION_REQUIRED",
+        )
     if "input" not in raw or not isinstance(raw.get("input"), Mapping):
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "input must be an object"}
+        return failure_result(
+            "input must be an object", error_code="INVALID_ARGUMENT",
+        )
     if type(raw.get("reasoning")) is not str:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "reasoning is required"}
+        return failure_result(
+            "reasoning is required", error_code="INVALID_ARGUMENT",
+        )
     if "summarize" in raw and type(raw["summarize"]) is not bool:
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "summarize must be a boolean"}
+        return failure_result(
+            "summarize must be a boolean", error_code="INVALID_ARGUMENT",
+        )
     schema = _feishu_input_schemas()[action]
     if not _basic_validate(raw["input"], schema):
-        return {"status": "failed", "error_code": "INVALID_ARGUMENT", "message": "invalid feishu input"}
+        return failure_result(
+            "invalid feishu input", error_code="INVALID_ARGUMENT",
+        )
+    if action == "react":
+        input_ = raw["input"]
+        operation = input_.get("operation")
+        expected = "emoji_type" if operation == "add" else "reaction_id"
+        unexpected = "reaction_id" if operation == "add" else "emoji_type"
+        if operation not in {"add", "remove"} or not input_.get(expected) or input_.get(
+            unexpected
+        ):
+            return failure_result(
+                "invalid feishu input", error_code="INVALID_ARGUMENT",
+            )
+    if manager is None and action != "manual":
+        return failure_result(
+            "Feishu manager is not initialized",
+            error_code="NOT_CONNECTED",
+        )
     return build_feishu_family(manager).handle(raw)
 
 

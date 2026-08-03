@@ -13,7 +13,6 @@ Mirrors IMAPMailManager patterns with Telegram-specific adaptations.
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import tempfile
@@ -31,12 +30,17 @@ from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel._frontmatter import strip_frontmatter
 from lingtai.kernel.agent_presence import observe_alive
 from lingtai.kernel.state import AgentState
+from lingtai.mcp_servers.task_card import (
+    TaskCardEventProjection,
+    TaskCardResident,
+    TaskCardResidentTransport,
+    TaskCardRoute,
+)
 
 from .. import _skill
 from . import _family
 from . import updates as tg_updates
 from .account import TelegramRateLimitError
-from .task_card.resident import TaskCardResident
 
 if TYPE_CHECKING:
     from lingtai.kernel.notification_store import NotificationStorePort
@@ -86,19 +90,19 @@ _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
 # replacement. Only the exact Bot API conditions which prove the message itself
 # cannot be edited permit replacement; every unknown/network/provider failure
 # fails loud and leaves the resident and committed slot state untouched.
-_TASK_CARD_EDIT_OK = "ok"
-_TASK_CARD_EDIT_IMPOSSIBLE = "edit_impossible"
-_TASK_CARD_EDIT_FAILED = "failed"
+_TASK_CARD_EDIT_OK = TaskCardResident.EDIT_OK
+_TASK_CARD_EDIT_IMPOSSIBLE = TaskCardResident.EDIT_IMPOSSIBLE
+_TASK_CARD_EDIT_FAILED = TaskCardResident.EDIT_FAILED
 _TASK_CARD_EDIT_UNCHANGED = "bad request: message is not modified"
 _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
     "bad request: message to edit not found",
     "bad request: message can't be edited",
     "bad request: message can not be edited",
 })
-_TASK_CARD_DELETE_OK = "ok"
-_TASK_CARD_DELETE_MISSING = "missing"
-_TASK_CARD_DELETE_NONDELETABLE = "nondeletable"
-_TASK_CARD_DELETE_FAILED = "failed"
+_TASK_CARD_DELETE_OK = TaskCardResident.DELETE_OK
+_TASK_CARD_DELETE_MISSING = TaskCardResident.DELETE_MISSING
+_TASK_CARD_DELETE_NONDELETABLE = TaskCardResident.DELETE_NONDELETABLE
+_TASK_CARD_DELETE_FAILED = TaskCardResident.DELETE_FAILED
 _TASK_CARD_DELETE_MISSING_DESCRIPTIONS = frozenset({
     "bad request: message to delete not found",
 })
@@ -113,19 +117,16 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
 # Telegram message-size bound even under multi-row length pressure. The
 # "current: X" suffix is appended per-render from the manager's live
 # normal-row setting; see ``_task_card_footer``.
-_TASK_CARD_FOOTER = (
-    "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
-    "/taskcard N sets normal rows (1-10"
-)
-_TASK_CARD_DEFAULT_NORMAL_ROWS = 1
-_TASK_CARD_METADATA_MAX_CHARS = 150
-_TASK_CARD_METADATA_MAX_LINES = 2
+_TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
+_TASK_CARD_DEFAULT_NORMAL_ROWS = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
+_TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
+_TASK_CARD_METADATA_MAX_LINES = TaskCardEventProjection.METADATA_MAX_LINES
 
 # Canonical AgentState values that render without a /refresh hint; "stuck" is
 # the exact same enum plus the hint, and "offline" is not an AgentState value
 # at all — it is this footer's own name for a stale heartbeat overriding an
 # active/idle/asleep snapshot (see ``_task_card_agent_lifecycle_status``).
-_TASK_CARD_AGENT_STATES = frozenset(state.value for state in AgentState)
+_TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 
 # Card-level "last updated" line prefix.  The automatic channel's final
 # standalone line reports when that channel's event-tail snapshot was last
@@ -133,7 +134,7 @@ _TASK_CARD_AGENT_STATES = frozenset(state.value for state in AgentState)
 # unrelated programmable-channel edits) as ``Last Updated: HH:MM:SS UTC±HH``,
 # always present — unlike the retired started_at-derived line, it never
 # depends on any row carrying a stamp.
-_TASK_CARD_TIME_PREFIX = "Last Updated: "
+_TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
 
 
 def _task_card_footer(normal_rows: int) -> str:
@@ -142,7 +143,7 @@ def _task_card_footer(normal_rows: int) -> str:
     ``normal_rows`` is trusted to already be validated to ``1-10`` by the
     caller (``TelegramManager._taskcard_normal_rows``); this only formats it.
     """
-    return f"{_TASK_CARD_FOOTER}, current: {normal_rows})."
+    return TaskCardEventProjection.footer(normal_rows)
 
 
 def _format_task_card_current_time(now: datetime) -> str:
@@ -153,13 +154,7 @@ def _format_task_card_current_time(now: datetime) -> str:
     a naive ``datetime`` (no usable offset) so the render simply omits the
     line rather than raising.
     """
-    offset = now.utcoffset()
-    if offset is None:
-        return ""
-    total = offset.total_seconds()
-    sign = "-" if total < 0 else "+"
-    hours = int(abs(total) // 3600)
-    return f"{now.strftime('%H:%M:%S')} UTC{sign}{hours:02d}"
+    return TaskCardEventProjection.format_current_time(now)
 
 
 def _safe_document_download_reason(exc: Exception) -> str:
@@ -562,7 +557,37 @@ class TelegramManager:
         # never reads, advances, or overrides the other's frame.
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
-            deliver=self._deliver_channel_frame_locked,
+            transport=TaskCardResidentTransport(
+                get_resident=lambda route: self._get_resident_task_card(
+                    route.account,
+                    route.chat_id,
+                ),
+                matches_route=lambda route, resident_id: (
+                    self._resident_id_matches_route(route, resident_id)
+                ),
+                is_superseded=lambda route, resident_id: self._resident_superseded(
+                    route.account,
+                    route.chat_id,
+                    resident_id,
+                ),
+                edit=lambda resident_id, text: self._try_update_progress_message(
+                    resident_id,
+                    text,
+                ),
+                delete=lambda resident_id: self._delete_task_card_message_outcome(
+                    resident_id,
+                ),
+                send=lambda route, text: self.send_progress_message(
+                    route.account,
+                    route.chat_id,
+                    text,
+                ),
+                persist=lambda route, resident_id: self._set_resident_task_card(
+                    route.account,
+                    route.chat_id,
+                    resident_id,
+                ),
+            ),
         )
         listener = getattr(self._service, "set_taskcard_listener", None)
         if callable(listener):
@@ -1995,11 +2020,11 @@ class TelegramManager:
     # ------------------------------------------------------------------
 
     # Reasoning cap (Unicode code points) after secret redaction.
-    _TASK_CARD_REASONING_CAP = 500
+    _TASK_CARD_REASONING_CAP = TaskCardEventProjection.REASONING_CAP
     # Overall render ceiling, safely below Telegram's 4096-char message limit.
-    _TASK_CARD_TEXT_LIMIT = 3500
+    _TASK_CARD_TEXT_LIMIT = TaskCardEventProjection.TEXT_LIMIT
     # Header shown at the top of every card.
-    _TASK_CARD_HEADER = "📋 TASK CARD"
+    _TASK_CARD_HEADER = TaskCardEventProjection.HEADER
     # The two composed channels of the single resident card (Jason #7258/#7259).
     _TASK_CARD_CHANNELS = ("automatic", "programmable")
     _TASK_CARD_DEFAULT_CHANNEL = "automatic"
@@ -2052,108 +2077,16 @@ class TelegramManager:
         *, error: str, resident_id: str | None = None,
         empty_fallback: str | None = None,
     ) -> dict:
-        """Deliver a proposed ``channel`` frame to the tracked resident target and
-        commit it to the resident owner's frames **only after** the edit/send/
-        replacement succeeds.
-
-        The composed payload uses the proposed ``frame`` for ``channel`` and the
-        last committed frame for the other slot. An identical-content Telegram
-        no-op counts as success and retains the resident id. Replacement is allowed
-        only after Telegram explicitly proves the resident is edit-impossible;
-        unknown or transient edit failures fail loud without sending or committing.
-        Thus a later automatic or programmable compose can never resurrect a frame
-        that was never delivered. Shared by every automatic mutation and the
-        programmable channel.
-
-        ``empty_fallback`` supplies a nonempty terminal presentation for the case
-        where the composed text would be empty (clearing a programmable-only
-        resident). Telegram cannot edit/send empty text, so the fallback is
-        transported instead — the proposed ``frame`` (``None`` for finalize) is
-        still what gets committed on success, so the slot is really cleared and the
-        marker never becomes stored channel state.
-
-        The two channels are fully independent: this method never reads or
-        refreshes the other slot's content, so a programmable edit can never
-        advance, override, or propose automatic event-tail/session state, and
-        an automatic update never touches the programmable frame.
-        """
-        text = self._compose_channels(account, chat_id, channel=channel, frame=frame)
-        # Programmable-only finalize clears the slot: the composed text is empty
-        # and Telegram cannot edit/send empty text, so substitute the nonempty
-        # terminal marker for transport while ``frame`` (``None``) is still what
-        # commits on success (#898 WATCH STOPPED).
-        if not text and empty_fallback is not None:
-            text = empty_fallback
-        # Re-read the resident *inside* the route transaction. A concurrently
-        # queued caller may carry the prior id while the first caller has already
-        # rotated and persisted a new resident; durable/in-memory state is newer.
-        tracked_resident = self._get_resident_task_card(account, chat_id)
-        resident_id = tracked_resident or resident_id
-        if resident_id:
-            # A resident id is only authorized for its exact account+chat slot.
-            # Corrupt/cross-bound state must not edit or delete some other chat's
-            # message merely because that message id is older than this chat's
-            # high-water mark.
-            try:
-                resident_account, resident_chat_id, _ = self._parse_compound_id(
-                    resident_id)
-            except Exception:
-                return {"status": "error", "error": error}
-            if resident_account != account or resident_chat_id != chat_id:
-                return {"status": "error", "error": error}
-            # Jason #5272/#5273/#5275: the resident card must reside as the chat's
-            # LAST message. When we deterministically know a newer message exists
-            # below the resident, rotate old-first: probe the exact resident,
-            # require confirmed exact-old delete/missing, then send a fresh card so
-            # it becomes last — instead of editing it in place (which would leave
-            # it stranded above the newer message). When
-            # the resident is still the last message, or the latest-message state
-            # is unknown/malformed, we fall through to the in-place edit path
-            # (#891) and never delete anything on unknown/transient state.
-            if self._resident_superseded(account, chat_id, resident_id):
-                rotated = self._rotate_task_card_to_latest(
-                    account, chat_id, resident_id, text, error=error)
-                if rotated.get("status") == "ok":
-                    self._set_channel_frame(account, chat_id, channel, frame)
-                return rotated
-            edit_outcome, edit_error = self._try_update_progress_message(
-                resident_id, text
-            )
-            if edit_outcome == _TASK_CARD_EDIT_OK:
-                self._set_channel_frame(account, chat_id, channel, frame)
-                return {"status": "ok", "message_id": resident_id}
-            if edit_outcome == _TASK_CARD_EDIT_FAILED:
-                # Unknown, transient, network, and provider failures do not prove
-                # that replacement is safe. Preserve both resident and slot state,
-                # and surface only the redacted bounded provider reason.
-                return {"status": "error", "error": edit_error or error}
-            # The provider confirmed this exact message is missing/uneditable.
-            # Confirm exact delete-or-missing before any replacement send.
-            recovered = self._recover_task_card_by_replacement(
-                account, chat_id, resident_id, text, error=error)
-            if recovered.get("status") == "ok":
-                self._set_channel_frame(account, chat_id, channel, frame)
-            return recovered
-
-        result = self.send_progress_message(account, chat_id, text)
-        if result is None or result.get("status") != "sent":
-            # No prior resident here, so nothing was deleted. A raised send is a
-            # plain failure; an ``indeterminate_send`` means a card may be visible
-            # with an unknown id — either way NEVER form/adopt/persist a fake id or
-            # delete an unknown card. Surface the indeterminate case explicitly.
-            outcome: dict = {"status": "error", "error": error}
-            if result is not None and result.get("status") == "indeterminate_send":
-                outcome["indeterminate_send"] = True
-            return outcome
-        new_id = result["message_id"]
-        self._set_channel_frame(account, chat_id, channel, frame)
-        persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome = {"status": "ok", "message_id": new_id}
-        if not persisted:
-            # The sent card remains visible and in-memory current, but the durable
-            # resident write was not acknowledged. No prior resident exists here.
-            outcome["resident_persist_failed"] = True
-        return outcome
+        """Compatibility wrapper around the shared serialized state machine."""
+        return self._resident.deliver_locked(
+            account,
+            chat_id,
+            channel,
+            frame,
+            error=error,
+            resident_id=resident_id,
+            empty_fallback=empty_fallback,
+        )
 
     @classmethod
     def _format_programmable_card_text(
@@ -2207,14 +2140,14 @@ class TelegramManager:
     # action/arguments/results are excluded. Rows group by provider ``api_call_id``.
     # Latest final-carrier session telemetry is projected separately. There is no
     # durable cursor: startup and log replacement rehydrate from the bounded tail.
-    _TASK_CARD_EVENT_WINDOW = 10
+    _TASK_CARD_EVENT_WINDOW = TaskCardEventProjection.EVENT_WINDOW
     _TASK_CARD_EVENT_POLL_INTERVAL = 1.0
     _TASK_CARD_EVENT_TAIL_CHUNK = 65536
-    _TASK_CARD_EVENT_REASONING_CAP = 300
-    _TASK_CARD_EVENT_TEXT_CAP = 500
-    _TASK_CARD_MAX_EVENTS_PER_CALL = 24
+    _TASK_CARD_EVENT_REASONING_CAP = TaskCardEventProjection.EVENT_REASONING_CAP
+    _TASK_CARD_EVENT_TEXT_CAP = TaskCardEventProjection.EVENT_TEXT_CAP
+    _TASK_CARD_MAX_EVENTS_PER_CALL = TaskCardEventProjection.MAX_EVENTS_PER_CALL
     # The same quiet horizontal rule used by the TUI between provider calls.
-    _TASK_CARD_API_CALL_DIVIDER = TaskCardResident.API_CALL_DIVIDER
+    _TASK_CARD_API_CALL_DIVIDER = TaskCardEventProjection.API_CALL_DIVIDER
 
     def _task_card_events_path(self) -> Path:
         return self._working_dir / "logs" / "events.jsonl"
@@ -2288,177 +2221,52 @@ class TelegramManager:
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:
-        """Project only canonical public agent text, never hidden internals.
-
-        ``diary`` is the kernel's public response-text event. Thinking, system
-        prompts, tool args/results, and runtime diagnostics are not accepted.
-        """
-        if event.get("type") != "diary":
-            return None
-        if event.get("hidden") is True or event.get("visibility") not in (None, "public"):
-            return None
-        text = event.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return None
-        from lingtai.kernel.trace_redaction import redact_text
-        text = redact_text(text).strip()
-        cap = TelegramManager._TASK_CARD_EVENT_TEXT_CAP
-        if len(text) > cap:
-            text = text[: cap - 1] + "…"
-        return {"kind": "text", "text": text}
+        return TaskCardEventProjection.project_agent_text_event(
+            event,
+            text_cap=TelegramManager._TASK_CARD_EVENT_TEXT_CAP,
+        )
 
     @staticmethod
     def _project_task_card_event(event: dict) -> dict | None:
-        text = TelegramManager._project_agent_text_event(event)
-        if text is not None:
-            return text
-        row = TelegramManager._project_tool_call_row(event)
-        if row is not None:
-            row["kind"] = "tool"
-            return row
-        return None
+        return TaskCardEventProjection.project_event(
+            event,
+            text_cap=TelegramManager._TASK_CARD_EVENT_TEXT_CAP,
+            reasoning_cap=TelegramManager._TASK_CARD_EVENT_REASONING_CAP,
+        )
 
     @staticmethod
     def _event_group_id(event: dict, fallback: int) -> str:
-        value = event.get("api_call_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        # Legacy rows predate the provider id. Treat each such public event as
-        # one synthetic call so old persisted numeric windows remain readable.
-        return f"legacy:{fallback}"
+        return TaskCardEventProjection.event_group_id(event, fallback)
 
     def _group_task_card_events(self, projected: list[tuple[dict, dict]]) -> list[dict]:
-        groups: list[dict] = []
-        by_id: dict[str, dict] = {}
-        for index, (event, row) in enumerate(projected):
-            group_id = self._event_group_id(event, index)
-            group = by_id.get(group_id)
-            if group is None:
-                group = {"api_call_id": group_id, "events": []}
-                by_id[group_id] = group
-                groups.append(group)
-            events = group["events"]
-            if len(events) < self._TASK_CARD_MAX_EVENTS_PER_CALL:
-                events.append(row)
-        return groups[-self._TASK_CARD_EVENT_WINDOW:]
+        return TaskCardEventProjection.group_events(
+            projected,
+            window=self._TASK_CARD_EVENT_WINDOW,
+            max_events_per_call=self._TASK_CARD_MAX_EVENTS_PER_CALL,
+        )
 
     @staticmethod
     def _flatten_task_card_groups(
         groups: list[dict], *, include_group_id: bool = False,
     ) -> list[dict]:
-        rows: list[dict] = []
-        for group in groups:
-            group_id = group.get("api_call_id")
-            for event in group.get("events", []):
-                row = dict(event)
-                if include_group_id:
-                    row["group_id"] = group_id
-                else:
-                    # Keep the long-standing public helper shape for tool rows;
-                    # grouping metadata remains internal to the resident renderer.
-                    row.pop("group_id", None)
-                    row.pop("_tool_call_id", None)
-                if row.get("kind") == "tool":
-                    row.pop("kind", None)
-                rows.append(row)
-        return rows
+        return TaskCardEventProjection.flatten_groups(
+            groups, include_group_id=include_group_id,
+        )
 
     @staticmethod
     def _project_tool_call_row(event: dict) -> dict | None:
-        """Extract the fixed safe-field allowlist from one ``tool_call`` event.
-
-        Returns ``None`` (fail-closed) when the event does not carry the
-        expected shape — a malformed row is skipped exactly like a
-        non-whitelisted one, never partially trusted.
-        """
-        if event.get("type") != "tool_call":
-            return None
-        tool_name = event.get("tool_name")
-        if not isinstance(tool_name, str) or not tool_name:
-            return None
-        tool_args = event.get("tool_args")
-        if not isinstance(tool_args, dict):
-            return None
-        reasoning = tool_args.get("_reasoning", "")
-        if not isinstance(reasoning, str):
-            reasoning = ""
-        from lingtai.kernel.trace_redaction import redact_text
-
-        reasoning = redact_text(reasoning)
-        cap = TelegramManager._TASK_CARD_EVENT_REASONING_CAP
-        if len(reasoning) > cap:
-            # The ellipsis itself must stay inside the cap, not extend past it.
-            reasoning = reasoning[:cap - 1] + "…"
-        row = {"tool": tool_name, "reasoning": reasoning}
-        call_id = event.get("tool_call_id")
-        if isinstance(call_id, str) and call_id:
-            row.update({"_tool_call_id": call_id, "status": "???"})
-        action = tool_args.get("action")
-        if isinstance(action, str) and action:
-            row["tool_action"] = action
-        started_at = TelegramManager._format_task_card_row_timestamp(event.get("ts"))
-        if started_at:
-            row["started_at"] = started_at
-        return row
+        return TaskCardEventProjection.project_tool_call_row(
+            event,
+            reasoning_cap=TelegramManager._TASK_CARD_EVENT_REASONING_CAP,
+        )
 
     @staticmethod
     def _project_final_carrier_metadata(event: dict) -> dict | None:
-        """Project current session telemetry from one final-carrier event.
-
-        ``agent_meta`` is a whole current snapshot: only the newest
-        ``notification_block_injected`` carrier is consulted, and only its
-        ``agent_state.token_usage.session`` fields cross into the Task Card.
-        An empty dict is a recognized-but-malformed carrier, so it clears an
-        older snapshot instead of leaving stale telemetry visible. ``None``
-        means this event is not a final carrier and must not change state.
-        """
-        if event.get("type") != "notification_block_injected":
-            return None
-        envelope = event.get("_meta")
-        if not isinstance(envelope, dict):
-            return {}
-        agent_meta = envelope.get("agent_meta")
-        if not isinstance(agent_meta, dict):
-            return {}
-        state = agent_meta.get("agent_state")
-        if not isinstance(state, dict):
-            return {}
-        token_usage = state.get("token_usage")
-        if not isinstance(token_usage, dict):
-            return {}
-        session = token_usage.get("session")
-        if not isinstance(session, dict):
-            return {}
-        supported = (
-            "session_cache_rate",
-            "cache_miss_tokens",
-            "cache_miss_budget",
-            "api_calls",
-            "context_tokens",
-            "context_window",
-            "context_usage",
-        )
-        return {key: session[key] for key in supported if key in session}
+        return TaskCardEventProjection.project_final_carrier_metadata(event)
 
     @staticmethod
     def _format_task_card_row_timestamp(ts: object) -> str:
-        """Convert an event's canonical epoch ``ts`` to the row stamp shape.
-
-        Mirrors ``_format_task_card_current_time``'s ``HH:MM:SS UTC±HH``
-        format so a row's own stamp and the render-time line read
-        consistently. Missing, non-numeric (incl. ``bool``), non-finite, or
-        out-of-range ``ts`` values safely resolve to ``""`` (row renders with
-        no inline stamp) rather than crashing or fabricating a timestamp.
-        """
-        if type(ts) not in (int, float):
-            return ""
-        if isinstance(ts, float) and not math.isfinite(ts):
-            return ""
-        try:
-            local = datetime.fromtimestamp(ts).astimezone()
-        except (OverflowError, OSError, ValueError):
-            return ""
-        return _format_task_card_current_time(local)
+        return TaskCardEventProjection.format_row_timestamp(ts)
 
     @staticmethod
     def _event_file_identity(stat_result: os.stat_result) -> tuple[str, float | int] | None:
@@ -2634,14 +2442,7 @@ class TelegramManager:
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
-        line = raw.strip()
-        if not line:
-            return None
-        try:
-            event = json.loads(line.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return None
-        return event if isinstance(event, dict) else None
+        return TaskCardEventProjection.decode_event_line(raw)
 
     @staticmethod
     def _decode_and_project_line(raw: bytes) -> dict | None:
@@ -2753,7 +2554,6 @@ class TelegramManager:
                 # candidate is the only current snapshot.
                 latest_metadata = candidate
 
-        result_changed = False
         with self._task_card_event_lock:
             metadata_changed = (
                 latest_metadata is not None
@@ -2772,20 +2572,10 @@ class TelegramManager:
                         combined.append(({"api_call_id": group_id}, event_row))
                 combined.extend(projected_events)
                 self._task_card_event_groups = self._group_task_card_events(combined)
-            for group in self._task_card_event_groups:
-                for event_row in group.get("events", []):
-                    result = tool_results.get(event_row.get("_tool_call_id"))
-                    if result is None:
-                        continue
-                    status = result.get("status")
-                    event_row["status"] = (
-                        "error" if status == "error" else "success"
-                        if isinstance(status, str) and status else "???"
-                    )
-                    elapsed_ms = result.get("elapsed_ms")
-                    if type(elapsed_ms) in (int, float) and elapsed_ms >= 0:
-                        event_row["elapsed_s"] = elapsed_ms / 1000
-                    result_changed = True
+            result_changed = TaskCardEventProjection.apply_tool_results(
+                self._task_card_event_groups,
+                tool_results,
+            )
         return bool(projected_events) or metadata_changed or result_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
@@ -2921,21 +2711,11 @@ class TelegramManager:
         if not self._taskcard_enabled():
             return
         normal_rows = self._taskcard_normal_rows()
-        groups = self._task_card_event_groups_snapshot()[-normal_rows:]
-        rows: list[dict] = []
-        for group in groups:
-            rows.append({"kind": "divider", "text": self._TASK_CARD_API_CALL_DIVIDER})
-            rows.extend(group.get("events", []))
-        automatic = self._format_task_card_text(
-            "", "", "", rows=rows,
+        automatic = TaskCardEventProjection.render_event_groups(
+            self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
         )
-        # Telegram transport and the resident contract share one bounded card
-        # ceiling.  Group selection counts calls; this final cap truncates only
-        # inside the selected group rather than selecting extra tool rows.
-        if len(automatic) > self._TASK_CARD_TEXT_LIMIT:
-            automatic = automatic[: self._TASK_CARD_TEXT_LIMIT]
         for account, chat_id in self._resident_task_card_targets():
             try:
                 self._deliver_channel_frame(
@@ -3116,64 +2896,13 @@ class TelegramManager:
     def _replace_task_card_after_probe(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
     ) -> dict:
-        """Resolve the exact old resident, then send and persist one replacement."""
-        delete_outcome = self._delete_task_card_message_outcome(stale_id)
-        if delete_outcome == _TASK_CARD_DELETE_FAILED:
-            return {
-                "status": "error",
-                "error": error,
-                "stale_delete_failed": True,
-            }
-
-        # Cross-process guard for the duplicate-Task-Card bug. Sibling Telegram
-        # MCP server processes share this route, and each probes with the id it
-        # remembers. Once a peer has rotated/replaced the resident, our probe of
-        # the *old* id reports "already missing" — the very outcome that would
-        # authorize a replacement — while the peer's brand-new card is alive and
-        # visible. Sending here is what puts a second (third, fourth …) card in
-        # the chat. Re-read the resident first: when it has moved on, edit that
-        # live card instead of injecting another one.
-        current = self._get_resident_task_card(account, chat_id)
-        if current and current != stale_id:
-            adopt_outcome, adopt_error = self._try_update_progress_message(
-                current, text
-            )
-            if adopt_outcome == _TASK_CARD_EDIT_OK:
-                log.debug("Adopted the resident task card established by a peer")
-                return {
-                    "status": "ok",
-                    "message_id": current,
-                    "adopted_resident": True,
-                }
-            if adopt_outcome == _TASK_CARD_EDIT_FAILED:
-                # Unknown/transient failure against the live resident proves
-                # nothing; never answer it by adding a card.
-                return {"status": "error", "error": adopt_error or error}
-            # The peer's card is itself provably gone, so this route really does
-            # need one new card: fall through to the single replacement send.
-
-        result = self.send_progress_message(account, chat_id, text)
-        if result is None or result.get("status") != "sent":
-            # Replacement send failed or returned no usable id. Preserve the truth
-            # that the exact old resident was already deleted (may leave zero
-            # cards); an ``indeterminate_send`` additionally means a new card may be
-            # visible with an unknown id. Fail closed either way — no fake id is
-            # formed, adopted, persisted, or deleted.
-            outcome: dict = {"status": "error", "error": error}
-            if delete_outcome == _TASK_CARD_DELETE_OK:
-                outcome["old_resident_deleted"] = True
-            if result is not None and result.get("status") == "indeterminate_send":
-                outcome["indeterminate_send"] = True
-            return outcome
-
-        new_id = result["message_id"]
-        persisted = self._set_resident_task_card(account, chat_id, new_id)
-        outcome = {"status": "ok", "message_id": new_id}
-        if not persisted:
-            # The new card is the only visible tracked candidate in this process;
-            # surface the durability gap so callers never claim a clean result.
-            outcome["resident_persist_failed"] = True
-        return outcome
+        """Compatibility wrapper around shared old-first replacement."""
+        return self._resident.replace_after_probe(
+            self._resident.route(account, chat_id),
+            stale_id,
+            text,
+            error=error,
+        )
 
     def _get_last_message_id(self, account: str, chat_id: int) -> int | None:
         """Read the chat's latest observed message id from the account; fail-open.
@@ -3216,32 +2945,29 @@ class TelegramManager:
             return False
         return latest > card_tg_id
 
+    def _resident_id_matches_route(
+        self,
+        route: TaskCardRoute,
+        resident_id: str,
+    ) -> bool:
+        """Validate one provider id against its exact Telegram resident route."""
+        if route.thread_id is not None:
+            return False
+        try:
+            account, chat_id, _ = self._parse_compound_id(resident_id)
+        except Exception:
+            return False
+        return account == route.account and chat_id == route.chat_id
+
     def _rotate_task_card_to_latest(
         self, account: str, chat_id: int, stale_id: str, text: str, *, error: str,
     ) -> dict:
-        """Probe the exact old resident, then delete/missing-confirm before send.
-
-        When this process still knows the last committed render, a same-content
-        edit/no-op is the remote existence probe required before injecting another
-        card. A cold process may know only the persisted resident id; in that case
-        the exact delete itself is the existence/removal probe. Its success or
-        explicit not-found must be confirmed before a new send. Unknown probe or
-        delete failures abort without sending.
-
-        Deleting first intentionally chooses the hard at-most-one direction: a
-        later send failure can leave zero resident cards, reported by
-        ``old_resident_deleted``, but tracked rotation never deliberately creates
-        two visible cards. Unknown historical orphans remain out of scope.
-        """
-        committed_text = self._compose_channels(account, chat_id)
-        if committed_text:
-            probe_outcome, probe_error = self._try_update_progress_message(
-                stale_id, committed_text
-            )
-            if probe_outcome == _TASK_CARD_EDIT_FAILED:
-                return {"status": "error", "error": probe_error or error}
-        return self._replace_task_card_after_probe(
-            account, chat_id, stale_id, text, error=error
+        """Compatibility wrapper around shared conservative rotation."""
+        return self._resident.rotate_to_latest(
+            self._resident.route(account, chat_id),
+            stale_id,
+            text,
+            error=error,
         )
 
     def _get_resident_task_card(self, account: str, chat_id: int) -> str | None:
@@ -3522,113 +3248,30 @@ class TelegramManager:
         control bounds the latest API-call groups to 1-10; it does not truncate
         fixed row scaffolding.  See ``_format_rows_task_card_text``.
         """
-        if rows is None:
-            return cls._format_scalar_task_card_text(tool, action, reasoning)
-        return cls._format_rows_task_card_text(
-            rows, metadata=metadata, normal_rows=normal_rows, now=now)
+        return TaskCardEventProjection.format_task_card_text(
+            tool,
+            action,
+            reasoning,
+            rows=rows,
+            metadata=metadata,
+            normal_rows=normal_rows,
+            now=now,
+        )
 
     @classmethod
     def _format_scalar_task_card_text(cls, tool: str, action: str, reasoning: str) -> str:
-        from lingtai.kernel.trace_redaction import redact_text
-
-        redacted = redact_text(reasoning)
-        if len(redacted) > cls._TASK_CARD_REASONING_CAP:
-            excerpt = redacted[:cls._TASK_CARD_REASONING_CAP] + "…"
-        else:
-            excerpt = redacted
-        label = f"{tool}.{action}" if action else tool
-        if label:
-            return f"{cls._TASK_CARD_HEADER}\n{label}: {excerpt}"
-        return f"{cls._TASK_CARD_HEADER}\n{excerpt}" if excerpt else cls._TASK_CARD_HEADER
+        return TaskCardEventProjection.format_scalar_task_card_text(
+            tool, action, reasoning,
+        )
 
     @staticmethod
     def _format_task_card_count(value: object) -> str | None:
-        """Format a non-negative count compactly without float overflow."""
-        if type(value) is not int or value < 0:
-            return None
-        for threshold, suffix in (
-            (1_000_000_000_000, "T"),
-            (1_000_000_000, "B"),
-            (1_000_000, "M"),
-            (1_000, "k"),
-        ):
-            if value >= threshold:
-                tenths = (value * 10 + threshold // 2) // threshold
-                if suffix == "T":
-                    tenths = min(tenths, 9_999)
-                return f"{tenths // 10}.{tenths % 10}{suffix}"
-        return str(value)
+        return TaskCardEventProjection.format_count(value)
 
     @classmethod
     def _format_task_card_metadata(cls, metadata: object) -> list[str]:
         """Render at most two compact session lines within a 150-char budget."""
-        if not isinstance(metadata, dict):
-            return []
-
-        session_parts: list[str] = []
-        cache_rate = metadata.get("session_cache_rate")
-        if (
-            type(cache_rate) in {int, float}
-            and not isinstance(cache_rate, bool)
-            and 0 <= cache_rate <= 1
-        ):
-            session_parts.append(f"cache {float(cache_rate):.1%}")
-        miss = cls._format_task_card_count(metadata.get("cache_miss_tokens"))
-        budget = cls._format_task_card_count(metadata.get("cache_miss_budget"))
-        if miss is not None:
-            session_parts.append(f"miss {miss}/{budget}" if budget is not None else f"miss {miss}")
-        calls = cls._format_task_card_count(metadata.get("api_calls"))
-        if calls is not None:
-            session_parts.append(f"calls {calls}")
-
-        context_parts: list[str] = []
-        context = cls._format_task_card_count(metadata.get("context_tokens"))
-        window = cls._format_task_card_count(metadata.get("context_window"))
-        if context is not None:
-            context_parts.append(f"{context}/{window}" if window is not None else context)
-        usage = metadata.get("context_usage")
-        if (
-            type(usage) in {int, float}
-            and not isinstance(usage, bool)
-            and 0 <= usage <= 1
-        ):
-            context_parts.append(f"{float(usage):.0%}")
-
-        agent_line: str | None = None
-        lifecycle = metadata.get("agent_lifecycle")
-        if lifecycle in (AgentState.STUCK.value, "offline"):
-            agent_line = f"agent · {lifecycle} · try /refresh"
-        elif lifecycle in _TASK_CARD_AGENT_STATES:
-            agent_line = f"agent · {lifecycle}"
-
-        session_line = "session · " + " · ".join(session_parts) if session_parts else None
-        context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
-
-        # Agent health leads within line 1 so stuck/offline's actionable hint
-        # is never the line dropped to the 2-line cap; session shares line 1
-        # with it (rather than displacing ctx to a 3rd, always-dropped line)
-        # so ctx survives whenever both agent and session metadata exist.
-        lines: list[str] = []
-        if agent_line and session_line:
-            lines.append(f"{agent_line} · {session_line}")
-        elif agent_line:
-            lines.append(agent_line)
-        elif session_line:
-            lines.append(session_line)
-        if context_line:
-            lines.append(context_line)
-        lines = lines[:_TASK_CARD_METADATA_MAX_LINES]
-        if not lines:
-            return []
-
-        joined = "\n".join(lines)
-        if len(joined) <= _TASK_CARD_METADATA_MAX_CHARS:
-            return lines
-        # The field set is bounded, but keep the UI contract deterministic even
-        # for pathological numeric inputs: preserve line 1, then fit line 2.
-        first = lines[0][:_TASK_CARD_METADATA_MAX_CHARS]
-        remaining = _TASK_CARD_METADATA_MAX_CHARS - len(first) - 1
-        return [first] if remaining <= 0 or len(lines) == 1 else [first, lines[1][:remaining]]
+        return TaskCardEventProjection.format_metadata(metadata)
 
     @classmethod
     def _format_rows_task_card_text(
@@ -3636,144 +3279,21 @@ class TelegramManager:
         normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
     ) -> str:
-        from lingtai.kernel.trace_redaction import redact_text
-
-        footer = _task_card_footer(normal_rows)
-
-        # Split tool rows (redacted, capped reasoning) from sanitized API-error
-        # rows (fixed machine summary, no reasoning to redact).  Redact every tool
-        # row's reasoning up front (before any excerpt/trim) and compute the
-        # per-row reasoning-excerpt budget so the *reasoning* stays under the
-        # ceiling while keeping every row visible.  NOTE: the budget bounds
-        # excerpt shrinkage only, not the total render — fixed per-row scaffolding
-        # (below) is unbounded in row count, so an extreme operator-set N can
-        # still exceed the ceiling and Telegram's transport limit.  Each row
-        # carries its own captured ``started_at`` inline; malformed/missing
-        # values degrade to an empty suffix rather than raising.
-        tool_prepared: list[tuple[int, str, str, str, bool, str, str | None]] = []
-        text_prepared: list[tuple[int, str]] = []
-        api_prepared: list[tuple[int, str]] = []
-        for idx, row in enumerate(rows):
-            if not isinstance(row, dict):
-                continue
-            kind = row.get("kind")
-            if kind == "divider":
-                api_prepared.append((idx, cls._TASK_CARD_API_CALL_DIVIDER))
-                continue
-            if kind == "text":
-                text = redact_text(str(row.get("text", ""))).strip()
-                if text:
-                    text_prepared.append((idx, text[:cls._TASK_CARD_EVENT_TEXT_CAP]))
-                continue
-            if kind == "api_error":
-                api_prepared.append((idx, cls._format_api_error_line(row)))
-                continue
-            tool = str(row.get("tool", ""))
-            action = str(row.get("tool_action", ""))
-            label = f"{tool}.{action}" if action else tool
-            redacted = redact_text(str(row.get("reasoning", "")))
-            elapsed = cls._format_elapsed(row.get("elapsed_s", 0))
-            done = bool(row.get("done", False))
-            started_at = row.get("started_at", "")
-            started_at = started_at if isinstance(started_at, str) else ""
-            status = row.get("status")
-            status = status if status in {"success", "error", "???"} else None
-            tool_prepared.append((idx, label, redacted, elapsed, done, started_at, status))
-
-        metadata_lines = cls._format_task_card_metadata(metadata)
-        # The bottom time line always reflects the render instant, never a
-        # row's own start instant, and is present even for an empty card.
-        time_line = f"{_TASK_CARD_TIME_PREFIX}{cls._task_card_render_time(now)}"
-        if not tool_prepared and not text_prepared and not api_prepared:
-            lines = [cls._TASK_CARD_HEADER, "", footer]
-            lines.extend(metadata_lines)
-            lines.append(time_line)
-            return "\n".join(lines)
-
-        # Budget the reasoning excerpts against the render ceiling.  The fixed
-        # cost is the header + footer + their newlines plus the *actual*
-        # non-reasoning scaffolding of every row (marker, label, elapsed suffix,
-        # own timestamp suffix, and each row's newline) and the time line —
-        # measured, not a flat estimate.  ``fixed`` is subtracted from the
-        # ceiling so the reasoning excerpts shrink first; when ``fixed`` itself
-        # exceeds the ceiling (many rows and/or long labels), ``budget`` goes
-        # negative and ``per_row_cap`` floors at 0 — every row still renders
-        # with an empty excerpt, and the scaffolding alone can then exceed
-        # ``_TASK_CARD_TEXT_LIMIT`` (and Telegram's transport limit).  We
-        # deliberately do NOT drop rows or truncate the final string to fit:
-        # the operator asked for N rows, so N rows are shown.  What remains of
-        # the budget is shared evenly across tool rows so no single row crowds
-        # the others out.
-        api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
-        text_scaffold = sum(len(text) + 4 for _, text in text_prepared)
-        tool_scaffold = 0
-        for _, label, _redacted, elapsed, done, started_at, status in tool_prepared:
-            marker = "✓ " if done or status == "success" else "• "
-            prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            # +1 newline, +1 for a possible truncation ellipsis (conservative).
-            tool_scaffold += len(prefix) + len(f" ({elapsed}s{status_suffix})") + len(stamp_suffix) + 2
-        fixed = (
-            len(cls._TASK_CARD_HEADER) + 1  # header + newline
-            + 1                              # blank line before footer
-            + len(footer)
-            + sum(len(line) + 1 for line in metadata_lines)
-            + len(time_line) + 1             # time line + its newline
-            + api_scaffold + text_scaffold + tool_scaffold
+        return TaskCardEventProjection.format_rows_task_card_text(
+            rows,
+            metadata=metadata,
+            normal_rows=normal_rows,
+            now=now,
         )
-        budget = cls._TASK_CARD_TEXT_LIMIT - fixed
-        divisor = max(1, len(tool_prepared) + len(text_prepared))
-        # Floor at 0 (not 16) so an over-budget batch trims reasoning to empty
-        # excerpts (the most the excerpt budget can do); the remaining scaffolding
-        # may still exceed the ceiling for extreme N — we do not truncate or drop
-        # rows to force a fit.  A healthy card keeps a generous per-row excerpt.
-        per_row_cap = max(0, min(cls._TASK_CARD_REASONING_CAP, budget // divisor))
-
-        # Render in original row order so tool and API rows interleave correctly.
-        by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done, started_at, status in tool_prepared:
-            excerpt = redacted[:per_row_cap] + "…" if len(redacted) > per_row_cap else redacted
-            marker = "✓ " if done or status == "success" else "• "
-            prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s{status_suffix}){stamp_suffix}"
-        for idx, text in text_prepared:
-            excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
-            by_idx[idx] = f"• {excerpt}"
-        for idx, line in api_prepared:
-            by_idx[idx] = line
-
-        lines = [cls._TASK_CARD_HEADER]
-        lines.extend(by_idx[i] for i in sorted(by_idx))
-        lines.append("")
-        lines.append(footer)
-        lines.extend(metadata_lines)
-        lines.append(time_line)
-        return "\n".join(lines)
 
     @staticmethod
     def _task_card_render_time(now: datetime | None) -> str:
         """Resolve the render-time stamp, defaulting to the real local instant."""
-        if now is None:
-            now = datetime.now().astimezone()
-        return _format_task_card_current_time(now)
+        return TaskCardEventProjection.render_time(now)
 
     @staticmethod
     def _task_card_machine_identifier(value: object, *, limit: int) -> str | None:
-        if not isinstance(value, str):
-            return None
-        value = value.strip()
-        if not value or len(value) > limit:
-            return None
-        safe_punctuation = frozenset("._:/-")
-        if not all(
-            ch.isascii() and (ch.isalnum() or ch in safe_punctuation)
-            for ch in value
-        ):
-            return None
-        return value
+        return TaskCardEventProjection.machine_identifier(value, limit=limit)
 
     @classmethod
     def _format_api_error_line(cls, row: dict) -> str:
@@ -3784,42 +3304,7 @@ class TelegramManager:
         lifecycle state. Opaque external identifiers and raw exception text are
         deliberately absent, so there is no free-form field to leak.
         """
-        state = row.get("state")
-        parts = ["API error"]
-        error_type = cls._task_card_machine_identifier(row.get("error_type"), limit=48)
-        if error_type is not None:
-            parts.append(error_type)
-        provider = cls._task_card_machine_identifier(row.get("provider"), limit=48)
-        model = cls._task_card_machine_identifier(row.get("model"), limit=80)
-        if provider is not None and model is not None:
-            parts.append(f"{provider}/{model}")
-        elif provider is not None or model is not None:
-            parts.append(provider or model or "")
-        status = row.get("status")
-        if type(status) is int and 100 <= status <= 599:
-            parts.append(f"HTTP {status}")
-        code = row.get("code")
-        if isinstance(code, str) and code:
-            parts.append(code)
-        summary = " · ".join(parts)
-
-        if state == "recovered":
-            return f"✓ {summary} · recovered"
-        if state == "error":
-            return f"⚠️ {summary} · failed"
-        # retrying (default)
-        attempt = row.get("attempt")
-        max_attempts = row.get("max_attempts")
-        if (
-            type(attempt) is int
-            and type(max_attempts) is int
-            and attempt > 0
-            and max_attempts > 0
-        ):
-            return f"⚠️ {summary} · retrying {attempt}/{max_attempts}"
-        if type(attempt) is int and attempt > 0:
-            return f"⚠️ {summary} · retrying (attempt {attempt})"
-        return f"⚠️ {summary} · retrying"
+        return TaskCardEventProjection.format_api_error_line(row)
 
     @staticmethod
     def _format_elapsed(value: object) -> str:
@@ -3830,10 +3315,7 @@ class TelegramManager:
         This coerces + floors defensively (a float payload is floored, junk
         degrades to ``0``) so the render never raises.
         """
-        try:
-            return str(max(0, int(float(value))))
-        except (TypeError, ValueError):
-            return "0"
+        return TaskCardEventProjection.format_elapsed(value)
 
     # ------------------------------------------------------------------
     # Actions
