@@ -930,6 +930,20 @@ def _run_loop(agent) -> None:
             if not agent._asleep.is_set():
                 agent._set_state(sleep_state)
 
+            if (
+                sleep_state == AgentState.IDLE
+                and not agent._asleep.is_set()
+                and not skip_post_turn_save
+                and msg is not None
+                and msg.type in _TEXT_MSG_TYPES
+            ):
+                manager = getattr(agent, "_task_card_manager", None)
+                if manager is not None:
+                    try:
+                        manager.on_completed_work_turn()
+                    except Exception as exc:
+                        agent._log("task_card_reminder_error", error=str(exc))
+
             # Issue #83: check for pending notifications only after the
             # state is observably IDLE.  A check while still ACTIVE would
             # take the ACTIVE deferral path, leaving the fingerprint
