@@ -562,6 +562,241 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# worker_still_running recovery-artifact resolution on dismiss.
+#
+# The system event is only the transient surface. The open artifact under
+# history/unfinished_turns is what rehydrate_worker_hang_recovery re-surfaces on
+# startup, so dismissing the matching worker_still_running event must mark the
+# artifact resolved without deleting it.
+# ---------------------------------------------------------------------------
+
+
+def _write_worker_hang_artifact(
+    tmp_path: Path,
+    artifact_id: str,
+    *,
+    status: str = "open",
+    resolved_at: str | None = None,
+) -> Path:
+    directory = tmp_path / "history" / "unfinished_turns"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{artifact_id}.json"
+    payload = {
+        "schema_version": 1,
+        "type": "worker_still_running_recovery",
+        "status": status,
+        "created_at": "2026-06-22T14:10:04Z",
+        "recovery": {
+            "notification_ref_id": f"worker_still_running:{artifact_id}",
+        },
+    }
+    if resolved_at is not None:
+        payload["resolved_at"] = resolved_at
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _worker_hang_event(artifact_id: str, *, event_id: str = "evt_wh") -> dict:
+    return {
+        "event_id": event_id,
+        "source": "kernel.llm_worker_hang",
+        "ref_id": f"worker_still_running:{artifact_id}",
+        "priority": "high",
+        "body": "Previous LLM worker exceeded timeout plus grace.",
+    }
+
+
+def _publish_worker_hang_event(
+    tmp_path: Path,
+    artifact_id: str,
+    *,
+    extra_events: list[dict] | None = None,
+) -> None:
+    events = list(extra_events or []) + [_worker_hang_event(artifact_id)]
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {
+            "header": f"{len(events)} system notifications",
+            "icon": "warning",
+            "priority": "high",
+            "published_at": "2026-06-22T14:10:05Z",
+            "data": {"events": events},
+        },
+    )
+
+
+def test_dismiss_ref_resolves_worker_hang_artifact_and_prevents_rehydrate(
+    tmp_path: Path,
+) -> None:
+    from lingtai.kernel.base_agent.worker_recovery import (
+        _open_artifacts,
+        rehydrate_worker_hang_recovery,
+    )
+
+    artifact_id = "worker_still_running_20260622T141004Z_e2373f"
+    ref_id = f"worker_still_running:{artifact_id}"
+    artifact_path = _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(tmp_path, artifact_id)
+    agent = _StubAgent(tmp_path)
+    setattr(agent, "_enqueue_system_notification", lambda **_kw: "evt_new")
+    _mark_delivered(agent)
+
+    assert len(_open_artifacts(agent)) == 1
+
+    result = _dismiss_ref(agent, ref_id=ref_id, reason="obsolete: handled")
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 1
+    assert result["resolved_worker_hang_refs"] == [ref_id]
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "resolved"
+    assert payload["resolved_at"]
+    assert payload["resolved_reason"] == "obsolete: handled"
+    assert artifact_path.exists()
+    assert _open_artifacts(agent) == []
+    assert rehydrate_worker_hang_recovery(agent) == 0
+    assert _events(agent, "worker_hang_artifact_resolved")
+
+
+def test_dismiss_event_resolves_worker_hang_artifact(tmp_path: Path) -> None:
+    from lingtai.kernel.base_agent.worker_recovery import _open_artifacts
+
+    artifact_id = "worker_still_running_20260627T235817Z_e5c91d"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(tmp_path, artifact_id)
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    result = _dismiss_event(agent, event_id="evt_wh")
+
+    assert result["status"] == "ok"
+    assert result["resolved_worker_hang_refs"] == [
+        f"worker_still_running:{artifact_id}"
+    ]
+    assert _open_artifacts(agent) == []
+
+
+def test_whole_system_dismiss_resolves_worker_hang_artifact_and_prevents_rehydrate(
+    tmp_path: Path,
+) -> None:
+    from lingtai.kernel.base_agent.worker_recovery import (
+        _open_artifacts,
+        rehydrate_worker_hang_recovery,
+    )
+
+    artifact_id = "worker_still_running_20260701T010203Z_abc123"
+    ref_id = f"worker_still_running:{artifact_id}"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(
+        tmp_path,
+        artifact_id,
+        extra_events=[{"event_id": "evt_other", "source": "daemon", "ref_id": "d"}],
+    )
+    agent = _StubAgent(tmp_path)
+    setattr(agent, "_enqueue_system_notification", lambda **_kw: "evt_new")
+    _mark_delivered(agent)
+
+    result = _dismiss_channel(agent, "system")
+
+    assert result["status"] == "ok"
+    assert result["cleared"] is True
+    assert result["resolved_worker_hang_refs"] == [ref_id]
+    assert "system" not in snapshot_notifications(tmp_path)
+    assert _open_artifacts(agent) == []
+    assert rehydrate_worker_hang_recovery(agent) == 0
+
+
+def test_dismiss_unrelated_system_event_leaves_worker_hang_artifact_open(
+    tmp_path: Path,
+) -> None:
+    from lingtai.kernel.base_agent.worker_recovery import _open_artifacts
+
+    artifact_id = "worker_still_running_20260630T110256Z_edaea9"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(
+        tmp_path,
+        artifact_id,
+        extra_events=[{"event_id": "evt_d", "source": "daemon", "ref_id": "d"}],
+    )
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    result = _dismiss_event(agent, event_id="evt_d")
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 1
+    assert "resolved_worker_hang_refs" not in result
+    assert len(_open_artifacts(agent)) == 1
+
+
+def test_worker_hang_resolution_is_idempotent_for_missing_or_resolved_artifact(
+    tmp_path: Path,
+) -> None:
+    missing_id = "worker_still_running_20260702T010203Z_missing"
+    resolved_id = "worker_still_running_20260702T010203Z_resolved"
+    _write_worker_hang_artifact(
+        tmp_path,
+        resolved_id,
+        status="resolved",
+        resolved_at="2026-07-02T01:03:00Z",
+    )
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {
+            "data": {
+                "events": [
+                    _worker_hang_event(missing_id, event_id="evt_missing"),
+                    _worker_hang_event(resolved_id, event_id="evt_resolved"),
+                ]
+            }
+        },
+    )
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    missing = _dismiss_ref(agent, ref_id=f"worker_still_running:{missing_id}")
+    resolved = _dismiss_ref(
+        agent,
+        ref_id=f"worker_still_running:{resolved_id}",
+        force=True,
+    )
+
+    assert missing["status"] == "ok"
+    assert resolved["status"] == "ok"
+    assert "resolved_worker_hang_refs" not in missing
+    assert "resolved_worker_hang_refs" not in resolved
+
+
+def test_worker_hang_resolution_write_failure_does_not_fail_dismiss(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from lingtai.kernel.base_agent import worker_recovery
+    from lingtai.kernel.base_agent.worker_recovery import _open_artifacts
+
+    artifact_id = "worker_still_running_20260703T010203Z_write"
+    _write_worker_hang_artifact(tmp_path, artifact_id)
+    _publish_worker_hang_event(tmp_path, artifact_id)
+    agent = _StubAgent(tmp_path)
+    _mark_delivered(agent)
+
+    def _raise_write(_path, _payload):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(worker_recovery, "_write_json_atomic", _raise_write)
+
+    result = _dismiss_ref(agent, ref_id=f"worker_still_running:{artifact_id}")
+
+    assert result["status"] == "ok"
+    assert result["removed"] == 1
+    assert "resolved_worker_hang_refs" not in result
+    assert len(_open_artifacts(agent)) == 1
+    assert _events(agent, "worker_hang_resolve_failed")
+
+
+# ---------------------------------------------------------------------------
 # Codex ws_full / fresh-epoch reset on notification dismiss/cleanup.
 #
 # Dismissing or clearing a notification rewrites the resident
