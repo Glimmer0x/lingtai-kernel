@@ -403,6 +403,36 @@ def _system_payload_with_events(current: dict, events: list, published_at: str):
     return payload
 
 
+def _resolve_worker_hang_refs(
+    agent,
+    removed_events: list,
+    *,
+    reason: str,
+) -> list[str]:
+    """Best-effort artifact resolution for removed worker-hang system events."""
+    try:
+        from .base_agent.worker_recovery import (
+            is_worker_hang_ref,
+            resolve_worker_hang_artifact,
+        )
+    except Exception:
+        return []
+
+    refs = sorted({
+        str(ev.get("ref_id"))
+        for ev in removed_events
+        if isinstance(ev, dict) and is_worker_hang_ref(ev.get("ref_id"))
+    })
+    resolved: list[str] = []
+    for ref in refs:
+        try:
+            if resolve_worker_hang_artifact(agent, ref, reason=reason or "dismissed"):
+                resolved.append(ref)
+        except Exception:
+            pass
+    return resolved
+
+
 def _channel_fingerprint_entry(fp: tuple | None, channel: str) -> tuple | None:
     """Return one channel's fingerprint entry from a directory fingerprint."""
     filename = f"{channel}.json"
@@ -609,7 +639,7 @@ def dismiss_channel(
                 and str(ev.get("ref_id", "")).startswith("goal:")
                 for ev in events
             )
-            return None, True, (large_ref_ids, goal_removed)
+            return None, True, (large_ref_ids, goal_removed, events)
 
         try:
             update = store.compare_update_channel(channel, expected, _mutator)
@@ -636,9 +666,15 @@ def dismiss_channel(
                 current=update.current_version,
             )
 
-        large_ref_ids, goal_reminder_cleared_by_whole_system_dismiss = (
-            update.value if isinstance(update.value, tuple) and len(update.value) == 2
-            else ((), False)
+        large_ref_ids, goal_reminder_cleared_by_whole_system_dismiss, removed_events = (
+            update.value if isinstance(update.value, tuple) and len(update.value) == 3
+            else ((), False, [])
+        )
+        existed = update.cleared
+        resolved_worker_refs = (
+            _resolve_worker_hang_refs(agent, removed_events, reason=ack_reason)
+            if channel == "system" and existed
+            else []
         )
         if large_ref_ids:
             try:
@@ -650,7 +686,6 @@ def dismiss_channel(
                 invoked_by=invoked_by, forced=bool(force),
                 acked_ref_ids=list(large_ref_ids), event_id=None, ref_id=None,
             )
-        existed = update.cleared
         if existed and goal_reminder_cleared_by_whole_system_dismiss:
             try:
                 import time as _time
@@ -691,6 +726,8 @@ def dismiss_channel(
         if large_ref_ids:
             result["acked_large_result_refs"] = list(large_ref_ids)
             result["note"] = _LARGE_RESULT_DISMISS_NOTE
+        if resolved_worker_refs:
+            result["resolved_worker_hang_refs"] = resolved_worker_refs
         return result
 
     def _dismiss_system_event() -> dict:
@@ -719,7 +756,13 @@ def dismiss_channel(
                 and str(ev.get("ref_id", "")).startswith("goal:")
                 for ev in removed_events
             )
-            value = (len(removed_events), len(kept), large_ref_ids, goal_removed)
+            value = (
+                len(removed_events),
+                len(kept),
+                large_ref_ids,
+                goal_removed,
+                removed_events,
+            )
             if not removed_events:
                 return current_payload, False, value
             return _system_payload_with_events(
@@ -738,9 +781,9 @@ def dismiss_channel(
                 agent, channel, invoked_by=invoked_by, delivered=delivered,
                 current=update.current_version,
             )
-        removed, remaining, large_ref_ids, goal_removed = (
-            update.value if isinstance(update.value, tuple) and len(update.value) == 4
-            else (0, 0, (), False)
+        removed, remaining, large_ref_ids, goal_removed, removed_events = (
+            update.value if isinstance(update.value, tuple) and len(update.value) == 5
+            else (0, 0, (), False, [])
         )
         if large_ref_ids:
             try:
@@ -800,6 +843,10 @@ def dismiss_channel(
             except Exception:
                 pass
 
+        resolved_worker_refs = _resolve_worker_hang_refs(
+            agent, removed_events, reason=ack_reason
+        )
+
         try:
             agent._log(
                 "notification_event_dismiss",
@@ -840,6 +887,8 @@ def dismiss_channel(
         if large_ref_ids:
             result["acked_large_result_refs"] = list(large_ref_ids)
             result["note"] = _LARGE_RESULT_DISMISS_NOTE
+        if resolved_worker_refs:
+            result["resolved_worker_hang_refs"] = resolved_worker_refs
         return result
 
     # Nudge owns dismissal semantics while Notification remains the transport.
