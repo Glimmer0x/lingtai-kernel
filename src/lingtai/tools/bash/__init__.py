@@ -476,6 +476,12 @@ class ShellManager:
                 process_kwargs["encoding"] = invocation.encoding
             if invocation.errors is not None:
                 process_kwargs["errors"] = invocation.errors
+            if invocation.stdin_script is not None:
+                # The dialect transports the real command through stdin (the
+                # command line carries only an ASCII bootstrap).  ``input`` in
+                # text mode lets subprocess encode it with the dialect encoding
+                # (UTF-8) and feed it while concurrently draining the pipes.
+                process_kwargs["input"] = invocation.stdin_script
             result = subprocess.run(
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,

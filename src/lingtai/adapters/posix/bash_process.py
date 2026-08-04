@@ -127,8 +127,18 @@ class PosixBashAsyncProcessAdapter(BashAsyncProcessPort):
             args, kwargs = invocation.process_args()
             kwargs.update({"text": True, "encoding": invocation.encoding or "utf-8",
                            "errors": invocation.errors or "replace"})
+            if invocation.stdin_script is not None:
+                # The command line is ASCII-only; the real script arrives on
+                # stdin (text mode).  Closing the pipe signals EOF so the
+                # child's ReadToEnd() returns.
+                kwargs["stdin"] = subprocess.PIPE
             process = subprocess.Popen(args, stdout=stdout, stderr=stderr, cwd=cwd,
                                        start_new_session=True, **kwargs)
+            if invocation.stdin_script is not None:
+                try:
+                    process.stdin.write(invocation.stdin_script)
+                finally:
+                    process.stdin.close()
         except Exception:
             stdout.close(); stderr.close()
             raise

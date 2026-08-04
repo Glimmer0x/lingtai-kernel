@@ -117,7 +117,8 @@ co-located owning ANATOMY.md files.
   yielding `(pid, command_line)` and yielding nothing when `ps` is unavailable
   (`src/lingtai/adapters/posix/process_scan.py`).
 - `PosixBashAsyncProcessAdapter` implements the Bash-local async process Port:
-  detached supervisor launch, `ShellInvocation` command spawn, neutral
+  detached supervisor launch, `ShellInvocation` command spawn (including the
+  UTF-8 stdin delivery of `stdin_script` payloads), neutral
   identity observation, exact owned waits, and bounded process-tree cancellation
   (`src/lingtai/adapters/posix/bash_process.py:111-185`).
 - `PosixBashStateLockAdapter` implements the Bash-local state-lock Port with an

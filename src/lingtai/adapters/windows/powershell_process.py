@@ -320,7 +320,11 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
         try:
             args, kwargs = invocation.process_args()
             kwargs.update({
-                "stdin": subprocess.DEVNULL,
+                "stdin": (
+                    subprocess.PIPE
+                    if invocation.stdin_script is not None
+                    else subprocess.DEVNULL
+                ),
                 "stdout": stdout,
                 "stderr": stderr,
                 "cwd": cwd,
@@ -332,6 +336,15 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
             process = subprocess.Popen(args, **kwargs)
             job = _new_job_for_process(process)
             _resume_suspended_process(process)
+            if invocation.stdin_script is not None:
+                # Deliver the UTF-8 script only after resume: the pipe write
+                # can block while the suspended child has not begun reading,
+                # and the bootstrap's ``[Console]::In.ReadToEnd()`` needs the
+                # close (EOF) below to return.  Binary pipe -> explicit UTF-8.
+                try:
+                    process.stdin.write(invocation.stdin_script.encode("utf-8"))
+                finally:
+                    process.stdin.close()
             ref = _ref(process.pid)
             return ref, _Owned(process, ref, job, stdout, stderr)
         except Exception:

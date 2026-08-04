@@ -14,6 +14,21 @@ import shutil
 from lingtai.tools.bash._shell_dialect import ShellDialect, ShellInvocation
 
 _UNSUPPORTED = "__powershell_unsupported__"
+
+# ASCII-only ``pwsh -Command`` bootstrap (Cline's technique,
+# sdk/packages/shared/src/parse/shell.ts).  PowerShell decodes ``-Command``
+# through the active Windows console code page, so user source must never
+# travel on the command line; the bootstrap reads the entire command from
+# stdin as UTF-8, appends an exit-status check, and runs it as a ScriptBlock.
+# Feeding stdin instead of the cmdline also lifts Windows' 32,768-character
+# process command-line limit and keeps arbitrary UTF-8 source intact.
+_ASCII_BOOTSTRAP = (
+    "[Console]::InputEncoding=[Text.UTF8Encoding]::new();"
+    "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();"
+    "$c=[Console]::In.ReadToEnd();"
+    "$c+=[Environment]::NewLine+'if(-not $?){exit 1}';"
+    "& ([ScriptBlock]::Create($c))"
+)
 _CONTROL_WORDS = {
     "begin", "break", "catch", "class", "continue", "data", "do", "else",
     "end", "finally", "for", "foreach", "function", "if", "param", "process",
@@ -271,6 +286,15 @@ class PowerShellDialect(ShellDialect):
         # Crucially, the wrapper never resets or rewrites ``$LASTEXITCODE``
         # between user statements, so ordinary PowerShell status checks retain
         # their native semantics.
+        #
+        # Transport: the wrapped payload below is byte-for-byte what used to be
+        # passed as the ``-Command`` argument, so the existing escape/quote and
+        # exit-code handling is preserved as the stdin payload.  The command
+        # line itself carries only the fixed ASCII ``_ASCII_BOOTSTRAP``: user
+        # source travels over UTF-8 stdin instead of the Windows command line,
+        # which avoids code-page mangling of the ``-Command`` argument, the
+        # 32,768-character process command-line limit, and UTF-8 in/out
+        # problems (the bootstrap forces Input/OutputEncoding to UTF-8).
         wrapped = (
             "$global:__lingtai_success = $false\n"
             "$global:__lingtai_native_exit = 0\n"
@@ -311,8 +335,12 @@ class PowerShellDialect(ShellDialect):
         )
         return ShellInvocation(
             script=wrapped,
+            # The wrapped script is delivered over UTF-8 stdin; see
+            # ``_ASCII_BOOTSTRAP``.  The argv is the complete fixed command
+            # line: bootstrap is its final ``-Command`` argument.
+            stdin_script=wrapped,
             executable=self._executable,
-            argv=("-NoLogo", "-NoProfile", "-NonInteractive", "-Command"),
+            argv=("-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _ASCII_BOOTSTRAP),
             encoding="utf-8",
             errors="replace",
         )

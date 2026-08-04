@@ -279,16 +279,22 @@ POSIX script-form job. If either field is present, both must be valid; malformed
 or incomplete new state becomes an explicit unrecoverable launch failure and
 never falls back to the raw display command.
 
-`ShellInvocation` has exactly five serialized keys: `script`, `executable`,
-`argv`, `encoding`, and `errors`. Script form uses `argv: null` and
-`shell=True`; direct argv form requires a non-empty executable and runs
-`[executable, *argv, script]` with `shell=False`. All fields and argv elements
-are validated before launch, and unknown or missing serialized keys are
-unrecoverable. `shell_dialect` is non-empty provenance selected and validated
-by outer composition; the detached supervisor executes this self-contained
-invocation and does not use the key for adapter dispatch. This is fail-loud
-schema/semantic validation, not cryptographic integrity for user-rewritable
-durable state.
+`ShellInvocation` serializes five keys by default (`script`, `executable`,
+`argv`, `encoding`, `errors`) plus an optional sixth `stdin_script` when the
+dialect transports the command through stdin. Script form uses `argv: null`
+and `shell=True`; direct argv form requires a non-empty executable. Without
+`stdin_script` the direct argv form runs `[executable, *argv, script]` with
+`shell=False`; with `stdin_script` the argv is the complete command line
+(typically ending in an ASCII-only bootstrap) and the caller must write
+`stdin_script` to the child's stdin as UTF-8 before waiting — the Windows
+PowerShell dialect uses this to keep user source off the code-page-mangling
+command line and under the 32,768-character process command-line limit. All
+fields and argv elements are validated before launch, and unknown or missing
+serialized keys are unrecoverable. `shell_dialect` is non-empty provenance
+selected and validated by outer composition; the detached supervisor executes
+this self-contained invocation and does not use the key for adapter dispatch.
+This is fail-loud schema/semantic validation, not cryptographic integrity for
+user-rewritable durable state.
 
 The registered description is setup-time metadata and always includes
 `Active shell dialect: posix` or `Active shell dialect: powershell`, plus a

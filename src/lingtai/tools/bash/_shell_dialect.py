@@ -30,6 +30,13 @@ class ShellInvocation:
     argv: tuple[str, ...] | None = None
     encoding: str | None = None
     errors: str | None = None
+    # When set, ``script`` is NOT placed on the child command line; instead the
+    # spawner must write ``stdin_script`` to the child's stdin (UTF-8) before
+    # waiting.  ``argv`` then carries the complete command line, whose last
+    # element is typically an ASCII-only bootstrap that reads stdin.  This is
+    # how PowerShell dialects dodge the Windows command-line code page and the
+    # 32,768-character process command-line limit.
+    stdin_script: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.script, str) or not self.script.strip():
@@ -38,6 +45,10 @@ class ShellInvocation:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"{name} must be a non-empty string when present")
+        if self.stdin_script is not None and (
+            not isinstance(self.stdin_script, str) or not self.stdin_script.strip()
+        ):
+            raise ValueError("stdin_script must be a non-empty string when present")
         if self.argv is None:
             return
         if not isinstance(self.argv, (tuple, list)):
@@ -49,18 +60,26 @@ class ShellInvocation:
         object.__setattr__(self, "argv", tuple(self.argv))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "script": self.script,
             "executable": self.executable,
             "argv": list(self.argv) if self.argv is not None else None,
             "encoding": self.encoding,
             "errors": self.errors,
         }
+        if self.stdin_script is not None:
+            value["stdin_script"] = self.stdin_script
+        return value
 
     @classmethod
     def from_dict(cls, value: object) -> "ShellInvocation | None":
-        keys = {"script", "executable", "argv", "encoding", "errors"}
-        if not isinstance(value, dict) or set(value) != keys:
+        base = {"script", "executable", "argv", "encoding", "errors"}
+        optional = {"stdin_script"}
+        if (
+            not isinstance(value, dict)
+            or not base.issubset(value)
+            or not set(value).issubset(base | optional)
+        ):
             return None
         argv = value.get("argv")
         if argv is not None and (
@@ -70,12 +89,16 @@ class ShellInvocation:
         executable = value.get("executable")
         encoding = value.get("encoding")
         errors = value.get("errors")
-        if any(item is not None and not isinstance(item, str) for item in (executable, encoding, errors)):
+        stdin_script = value.get("stdin_script")
+        if any(
+            item is not None and not isinstance(item, str)
+            for item in (executable, encoding, errors, stdin_script)
+        ):
             return None
         try:
             return cls(
                 script=value["script"], executable=executable, argv=argv,
-                encoding=encoding, errors=errors,
+                encoding=encoding, errors=errors, stdin_script=stdin_script,
             )
         except (TypeError, ValueError):
             return None
@@ -83,7 +106,19 @@ class ShellInvocation:
     def process_args(self) -> tuple[object, dict[str, object]]:
         """Return only dialect process arguments; callers add lifecycle policy."""
         if self.argv is not None:
-            return [self.executable, *self.argv, self.script], {"shell": False}
+            args = [self.executable, *self.argv]
+            if self.stdin_script is None:
+                # Classic argv form: the script is the trailing command argument
+                # (for example the payload of ``-Command``).
+                args.append(self.script)
+            # stdin_script form: ``argv`` already is the complete command line
+            # (ending in an ASCII-only bootstrap) and the real script travels
+            # through stdin; callers feed ``stdin_script`` before waiting.
+            return args, {"shell": False}
+        if self.stdin_script is not None:
+            # A stdin payload without the argv form has no fixed command line
+            # to receive it; fail loudly instead of silently dropping it.
+            raise ValueError("stdin_script requires the argv form (non-None argv)")
         kwargs: dict[str, object] = {"shell": True}
         if self.executable is not None:
             kwargs["executable"] = self.executable

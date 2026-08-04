@@ -96,7 +96,13 @@ only method execution requires Windows.
   (`src/lingtai/adapters/windows/process_identity.py`).
 - `PowerShellDialect` — PowerShell 7 command extraction, invocation shaping,
   and `state_key() == "powershell"` provenance
-  (`src/lingtai/adapters/windows/powershell.py`).
+  (`src/lingtai/adapters/windows/powershell.py`).  Invocations keep the
+  command line ASCII-only: `pwsh` runs a fixed bootstrap
+  (`_ASCII_BOOTSTRAP`) that forces UTF-8 console encodings, reads the real
+  command from stdin, and executes it as a ScriptBlock, so user source never
+  crosses the code-page-mangling Windows command line nor its 32,768-character
+  limit.  The existing exit-code wrapper travels unchanged as the stdin
+  payload (`ShellInvocation.stdin_script`).
 - `WindowsShellAsyncProcessAdapter` — Job Object process-tree ownership:
   suspended spawn, job assignment, `NtResumeProcess`, active-process
   accounting, bounded tree cancellation, creation-time process identity
