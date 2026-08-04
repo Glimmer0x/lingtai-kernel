@@ -46,6 +46,11 @@ from ._async_process import (
 # second, flat, pre-migration pair to drift against.
 from ._tool_family import ShellFamilyDispatcher, get_description, get_schema
 
+# Output hygiene (ANSI/CSI stripping, C0/C1 control escaping, startup-noise
+# stripping, explicit truncation) applied at the tool boundary before results
+# are returned to the model.
+from ._output_hygiene import sanitize_output
+
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -583,7 +588,16 @@ class ShellManager:
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,
             )
-            return self._sync_result_from(result.stdout, result.stderr, result.returncode)
+            stdout, stderr = result.stdout, result.stderr
+            # Output hygiene at the tool boundary: strip ANSI/CSI, escape
+            # C0/C1 controls, drop startup noise, then cap with the explicit
+            # truncation marker (all in one pass per stream).
+            stdout = sanitize_output(stdout, self._max_output)
+            stderr = sanitize_output(stderr, self._max_output)
+            return _augment_command_result({
+                "status": "ok", "exit_code": result.returncode,
+                "stdout": stdout, "stderr": stderr,
+            })
         except subprocess.TimeoutExpired:
             return _timeout_error(command, timeout)
         except Exception as e:
@@ -1305,10 +1319,11 @@ class ShellManager:
             stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
         except OSError:
             stderr = ""
-        if len(stdout) > self._max_output:
-            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
-        if len(stderr) > self._max_output:
-            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
+        # Same hygiene as the sync path: async logs are surfaced to the model
+        # through poll results and completion previews, so they get the same
+        # ANSI/control/noise stripping and capped truncation.
+        stdout = sanitize_output(stdout, self._max_output)
+        stderr = sanitize_output(stderr, self._max_output)
         return stdout, stderr
 
     def _already_finished(self, state: dict) -> dict:
