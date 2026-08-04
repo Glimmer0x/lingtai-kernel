@@ -112,7 +112,9 @@ only method execution requires Windows.
   descendant can leave the job, so ActiveProcesses accounting stays the exact
   ownership/quiescence source of truth; when the Job kill fails or a
   descendant escapes the job, an identity-gated `taskkill /T /F` fallback
-  re-checks the creation-time identity before killing
+  re-checks the creation-time identity before killing; the fallback sweep and
+  root reap are bounded so a fail-closed (identity-mismatch) sweep still
+  converges to a terminal commit
   (`src/lingtai/adapters/windows/powershell_process.py`).
 - `win32_job` — raw ctypes Job Object primitives shared by the shell
   adapters: kill-on-close + breakaway-ok job creation (Codex parity for the

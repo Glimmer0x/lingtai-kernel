@@ -4,12 +4,6 @@ This module is imported only by the Windows composition selector.  It does not
 use ``killpg``, ``/proc`` or ``ps``.  A command process is assigned to a native
 Job Object immediately after spawn; cancellation terminates that job and waits
 for its active-process count to reach zero before reporting ``group_cancelled``.
-When the Job-Object kill itself fails or a descendant escapes the job, the tree
-is swept with the identity-gated ``taskkill /T /F`` fallback and the outcome is
-reported ``unconfirmed``.  The fallback sweep and root reap are bounded so a
-fail-closed (identity-mismatch) sweep can never stall the supervisor's
-terminal commit; the natural wait loop converges and commits the recorded
-outcome once the root exits.
 """
 from __future__ import annotations
 
@@ -28,7 +22,6 @@ from lingtai.tools.bash._async_process import (
     ProcessRef,
 )
 from lingtai.tools.bash._shell_dialect import ShellInvocation
-from ._win32 import taskkill_tree
 
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_SUSPENDED = 0x00000004
@@ -143,13 +136,6 @@ def _set_kill_on_close(job_handle) -> None:
         ]
 
     info = _ExtendedLimitInformation()
-    # KILL_ON_JOB_CLOSE only.  The async adapter's containment invariant is
-    # "no descendant can exist outside the job": ActiveProcesses accounting
-    # is its ownership/quiescence source of truth, and a BREAKAWAY_OK escape
-    # hatch would silently let a requesting descendant leave the job (escaping
-    # tree-kill, kill-on-close, and that accounting).  The sync shell path
-    # (``win32_job.create_job_handle``) is the Codex-parity breakaway-ok
-    # variant, for installer/service hosts that must manage their own job.
     info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     if not _kernel32().SetInformationJobObject(
         job_handle,
@@ -305,29 +291,6 @@ def _wait_job(job_handle, timeout_seconds: float) -> bool:
         time.sleep(min(0.05, remaining))
 
 
-_FALLBACK_REAP_TIMEOUT_SECONDS = 2.0
-
-
-def _reap_root_bounded(process, timeout_seconds: float) -> int | None:
-    """Reap the root with a bound so a declined sweep cannot stall the commit.
-
-    Returns the root's exact exit code once it has exited, or ``None`` while it
-    is still alive after ``timeout_seconds``.  A fail-closed sweep (identity
-    mismatch or taskkill failure) must not block the supervisor's terminal
-    commit forever; the outer natural wait loop converges once the root exits
-    and commits the recorded fallback outcome.
-    """
-    deadline = time.monotonic() + max(0.0, timeout_seconds)
-    while True:
-        code = process.poll()
-        if code is not None:
-            return code
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        time.sleep(min(0.05, remaining))
-
-
 class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
     """Native Windows implementation of the shared async process Port."""
 
@@ -357,11 +320,7 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
         try:
             args, kwargs = invocation.process_args()
             kwargs.update({
-                "stdin": (
-                    subprocess.PIPE
-                    if invocation.stdin_script is not None
-                    else subprocess.DEVNULL
-                ),
+                "stdin": subprocess.DEVNULL,
                 "stdout": stdout,
                 "stderr": stderr,
                 "cwd": cwd,
@@ -373,15 +332,6 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
             process = subprocess.Popen(args, **kwargs)
             job = _new_job_for_process(process)
             _resume_suspended_process(process)
-            if invocation.stdin_script is not None:
-                # Deliver the UTF-8 script only after resume: the pipe write
-                # can block while the suspended child has not begun reading,
-                # and the bootstrap's ``[Console]::In.ReadToEnd()`` needs the
-                # close (EOF) below to return.  Binary pipe -> explicit UTF-8.
-                try:
-                    process.stdin.write(invocation.stdin_script.encode("utf-8"))
-                finally:
-                    process.stdin.close()
             ref = _ref(process.pid)
             return ref, _Owned(process, ref, job, stdout, stderr)
         except Exception:
@@ -391,11 +341,6 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 finally:
                     _kernel32().CloseHandle(job)
             if process is not None:
-                # The child was spawned CREATE_SUSPENDED and never resumed on
-                # this path, so it can have no descendants: exact-PID
-                # TerminateProcess is sufficient and no taskkill tree sweep is
-                # needed.  The held Popen handle also makes PID reuse between
-                # spawn and cleanup impossible, so no identity re-check applies.
                 try:
                     process.kill()
                     process.wait(timeout=2)
@@ -420,47 +365,17 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
 
     def wait(self, owned: _Owned, cancellation_requested: Callable[[], bool]):
         process = owned.process
-        fallback_outcome: str | None = None
-        fallback_swept = False
 
         def cancel_owned_tree() -> ProcessCompletion | None:
-            nonlocal fallback_outcome, fallback_swept
             if not cancellation_requested():
                 return None
             terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
             if not terminated:
-                # Job-Object kill failed (job already dead/closed or access
-                # denied).  Fall back to the taskkill tree-kill primitive,
-                # which re-validates the creation-time identity captured at
-                # spawn so a recycled PID is never signaled (Hermes
-                # ``_host_pid_is_ours`` pattern).  The Job can no longer prove
-                # full-tree ownership, so the outcome is ``unconfirmed``.
-                if not fallback_swept:
-                    fallback_swept = True
-                    taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
-                    fallback_outcome = "unconfirmed"
-                    # The identity gate is fail-closed: a declined sweep leaves
-                    # the root alive.  Reap with a bound and let the natural
-                    # loop converge instead of blocking the terminal commit.
-                    code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
-                    if code is not None:
-                        return ProcessCompletion(code, "unconfirmed")
-                return None
+                return ProcessCompletion(process.wait(), "unconfirmed")
             # ActiveProcesses reaches zero only after every assigned child exits,
             # which is the full-tree ownership proof.
             if not _wait_job(owned.job_handle, 5.0):
-                # A descendant escaped the Job (breakaway process / nested job)
-                # and survived the terminate; Job accounting can no longer prove
-                # full-tree ownership.  ``taskkill /T`` follows the live PPID
-                # links from the root, so sweep the escaped tree as a fallback.
-                if not fallback_swept:
-                    fallback_swept = True
-                    taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
-                    fallback_outcome = "unconfirmed"
-                    code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
-                    if code is not None:
-                        return ProcessCompletion(code, "unconfirmed")
-                return None
+                return ProcessCompletion(process.wait(), "unconfirmed")
             return ProcessCompletion(process.wait(), "group_cancelled")
 
         try:
@@ -483,10 +398,7 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                     cancellation = cancel_owned_tree()
                     if cancellation is not None:
                         return cancellation
-                # A prior fail-closed sweep that could not kill the root keeps
-                # its recorded fallback outcome once the root finally exits
-                # naturally, so the supervisor still converges to a commit.
-                return ProcessCompletion(code, fallback_outcome)
+                return ProcessCompletion(code)
         finally:
             owned.close()
 

@@ -164,3 +164,30 @@ def test_healthy_job_cancel_does_not_trigger_fallback(monkeypatch):
     completion = WindowsShellAsyncProcessAdapter().wait(owned, lambda: True)
     assert completion.cancellation_outcome == "group_cancelled"
     assert fallback == []
+
+
+def test_fallback_sweep_declined_root_survives_then_bounded_reap_commits(monkeypatch):
+    """A fail-closed sweep leaves the root alive; the bounded reap must still
+    commit once the root exits instead of blocking the supervisor forever.
+    """
+    import lingtai.adapters.windows.powershell_process as process_adapter
+
+    class AliveThenExit:
+        def __init__(self):
+            self.calls = 0
+
+        def poll(self):
+            self.calls += 1
+            return None if self.calls < 3 else 7
+
+        def wait(self):
+            return 7
+
+    monkeypatch.setattr(process_adapter, "_kernel32", lambda: _FakeKernel(0))
+    fallback = []
+    monkeypatch.setattr(process_adapter, "taskkill_tree", _record_fallback(fallback))
+    owned = _Owned(AliveThenExit(), ProcessRef(222, "windows:222"), object())
+    completion = WindowsShellAsyncProcessAdapter().wait(owned, lambda: True)
+    assert completion.exit_code == 7
+    assert completion.cancellation_outcome == "unconfirmed"
+    assert fallback == [(222, "windows:222")]
