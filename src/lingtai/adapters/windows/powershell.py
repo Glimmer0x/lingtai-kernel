@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 from lingtai.tools.bash._shell_dialect import (
@@ -19,6 +20,8 @@ from lingtai.tools.bash._shell_dialect import (
     ShellKind,
     make_invocation_for_kind,
 )
+
+from .windows_cmd_shim import try_cmd_shim_plan
 
 _UNSUPPORTED = "__powershell_unsupported__"
 
@@ -320,6 +323,35 @@ class PowerShellDialect(ShellDialect):
         return _commands(script)
 
     def make_invocation(self, script: str) -> ShellInvocation:
+        # Trusted cmd.exe shim handling: when the script is one simple command
+        # whose first token resolves to a .cmd/.bat shim (or npm/npx), do not
+        # let pwsh call the shim through the ambient cmd.exe.  npm/npx are
+        # rewritten to a direct ``node .../npm-cli.js`` invocation that still
+        # runs inside the normal pwsh exit-code envelope below; other shims are
+        # wrapped in a trusted ``cmd.exe /d /s /c`` invocation with
+        # metacharacter rejection (see ``windows_cmd_shim``).  A ``ValueError``
+        # here rejects metacharacters that are unsafe under cmd.exe instead of
+        # silently reinterpreting them; anything not a simple shim command
+        # falls through to the pwsh wrapper unchanged.
+        plan = try_cmd_shim_plan(script)
+        if plan is not None:
+            kind, argv = plan
+            if kind == "cmd":
+                return ShellInvocation(
+                    script=argv[-1],
+                    executable=argv[0],
+                    argv=tuple(argv[1:-1]),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            # npm/npx: direct node invocation of the CLI script, still wrapped
+            # in the pwsh exit-code envelope (no cmd.exe involved).  Args are
+            # quote-free by construction, so ``list2cmdline`` output is also
+            # valid PowerShell syntax.
+            script = subprocess.list2cmdline(argv)
+        return self._pwsh_invocation(script)
+
+    def _pwsh_invocation(self, script: str) -> ShellInvocation:
         # ``pwsh -Command`` otherwise collapses an external program's native
         # exit status to PowerShell's generic 0/1 process status.  PowerShell
         # 7.3+ can expose non-zero native results as a typed ErrorRecord without
