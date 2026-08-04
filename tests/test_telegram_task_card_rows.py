@@ -608,3 +608,23 @@ def test_event_metadata_snapshot_merges_with_existing_session_metadata(tmp_path)
     assert snapshot == {"api_calls": 4, "agent_lifecycle": "suspended"}
     # The manager's own stored metadata must not be mutated by the merge.
     assert mgr._task_card_event_metadata == {"api_calls": 4}
+
+
+def test_metadata_renders_current_model_first():
+    lines = TelegramManager._format_task_card_metadata({
+        "model": "deepseek-v4-flash",
+        "session_cache_rate": 0.5,
+    })
+    assert lines == ["session · model deepseek-v4-flash · cache 50.0%"]
+
+
+def test_event_metadata_snapshot_adds_current_model(tmp_path):
+    import json as _json
+
+    (tmp_path / ".agent.json").write_text(
+        _json.dumps({"llm": {"model": "deepseek-v4-flash"}}), encoding="utf-8"
+    )
+    mgr, _ = _integration_manager(tmp_path)
+    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    snapshot = mgr._task_card_event_metadata_snapshot()
+    assert snapshot == {"agent_lifecycle": "active", "model": "deepseek-v4-flash"}

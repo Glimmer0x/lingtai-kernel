@@ -347,6 +347,9 @@ class TaskCardEventProjection:
             return []
 
         session_parts: list[str] = []
+        model = metadata.get("model")
+        if isinstance(model, str) and model.strip():
+            session_parts.append(f"model {model.strip()}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}
