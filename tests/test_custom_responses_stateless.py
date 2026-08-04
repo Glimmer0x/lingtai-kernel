@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -157,6 +158,98 @@ def _stream_tool_events(response_id: str):
     ]
 
 
+def _forced_sse_tool_response(response_id: str) -> str:
+    """SSE body from a provider that ignored a non-streaming request."""
+    events = [
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "delta": "Need forced stream.",
+            "item_id": "rs_forced",
+        },
+        {
+            "type": "response.reasoning_summary_text.done",
+            "text": "Need forced stream.",
+            "item_id": "rs_forced",
+        },
+        {"type": "response.output_text.delta", "delta": "Checking forced stream."},
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "call_id": "call_forced",
+                "name": "lookup",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "arguments": '{"query":"forced"}',
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "call_forced",
+                "name": "lookup",
+                "arguments": '{"query":"forced"}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": response_id,
+                "usage": {
+                    "input_tokens": 21,
+                    "output_tokens": 9,
+                    "input_tokens_details": {"cached_tokens": 4},
+                    "output_tokens_details": {"reasoning_tokens": 3},
+                },
+            },
+        },
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in events
+    )
+
+
+def _forced_sse_without_usage(response_id: str) -> str:
+    """Forced SSE body whose ``response.completed`` omits ``usage`` entirely."""
+    events = [
+        {"type": "response.output_text.delta", "delta": "No usage here."},
+        {"type": "response.completed", "response": {"id": response_id}},
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in events
+    )
+
+
+def _forced_sse_without_completed(response_id: str) -> str:
+    """Forced SSE body that never emits ``response.completed``."""
+    events = [
+        {"type": "response.created", "response": {"id": response_id}},
+        {"type": "response.output_text.delta", "delta": "Truncated."},
+    ]
+    return "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in events
+    )
+
+
+def _stream_without_completed(response_id: str):
+    return [
+        SimpleNamespace(
+            type="response.created",
+            response=SimpleNamespace(id=response_id),
+        ),
+        SimpleNamespace(type="response.output_text.delta", delta="truncated"),
+    ]
+
+
+def _stream_without_any_response_id():
+    return [SimpleNamespace(type="response.output_text.delta", delta="orphan")]
+
+
 def _broken_stream():
     yield SimpleNamespace(type="response.output_text.delta", delta="partial")
     raise RuntimeError("stream")
@@ -242,6 +335,114 @@ def test_custom_responses_nonstreaming_replays_full_history_and_records_assistan
         "thinking_tokens": 0,
         "cached_tokens": 1,
     }
+
+
+def test_custom_responses_nonstreaming_parses_provider_forced_sse_without_retry():
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(_Responses([_forced_sse_tool_response("resp_forced")]))
+    session = adapter.create_chat("gpt-test", "system", tools=[_tool()])
+
+    result = session.send("start")
+
+    assert result.text == "Checking forced stream."
+    assert result.thoughts == ["Need forced stream."]
+    assert [(call.id, call.name, call.args) for call in result.tool_calls] == [
+        ("call_forced", "lookup", {"query": "forced"}),
+    ]
+    assert result.usage.input_tokens == 21
+    assert result.usage.output_tokens == 9
+    assert result.usage.thinking_tokens == 3
+    assert result.usage.cached_tokens == 4
+    assert len(adapter._client.responses.kwargs) == 1
+    assert "stream" not in adapter._client.responses.kwargs[0]
+
+    assistant = session.interface.entries[-1]
+    assert assistant.usage == {
+        "input_tokens": 21,
+        "output_tokens": 9,
+        "thinking_tokens": 3,
+        "cached_tokens": 4,
+    }
+
+
+def test_forced_sse_completed_without_usage_does_not_crash():
+    """Gateway JSON has no guaranteed fields — a missing ``usage`` must not raise."""
+    adapter = create_custom_adapter(
+        api_key="fake",
+        api_compat="openai",
+        base_url="https://sub2api.example/v1",
+        wire_api="responses",
+    )
+    adapter._client = _Client(_Responses([_forced_sse_without_usage("resp_no_usage")]))
+    session = adapter.create_chat("gpt-test", "system")
+
+    result = session.send("start")
+
+    assert result.text == "No usage here."
+    assert result.usage.input_tokens == 0
+    assert result.usage.output_tokens == 0
+    assert result.usage.thinking_tokens == 0
+    assert result.usage.cached_tokens == 0
+
+
+def test_forced_sse_without_completed_still_latches_continuation_id():
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter._client = _Client(
+        _Responses([
+            _forced_sse_without_completed("resp_created"),
+            _text_raw("resp_next", "second"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    assert session.send("first").text == "Truncated."
+    assert session.session_resume_id == "resp_created"
+
+    session.send("second")
+    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_created"
+
+
+def test_stream_without_completed_latches_continuation_id_from_created():
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_without_completed("resp_s_created"),
+            _stream_text("resp_s2", "second"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    session.send_stream("first")
+    assert session.session_resume_id == "resp_s_created"
+
+    session.send_stream("second")
+    assert adapter._client.responses.kwargs[1]["previous_response_id"] == "resp_s_created"
+
+
+def test_stream_with_no_response_id_keeps_previous_continuation_id():
+    """An id-less stream must not silently wipe the server-side chain."""
+    adapter = OpenAIAdapter(api_key="fake", use_responses=True)
+    adapter._client = _Client(
+        _StreamResponses([
+            _stream_text("resp_first", "one"),
+            _stream_without_any_response_id(),
+            _stream_text("resp_third", "three"),
+        ])
+    )
+    session = adapter.create_chat("gpt-test", "system")
+
+    session.send_stream("first")
+    session.send_stream("second")
+
+    assert session.session_resume_id == "resp_first"
+
+    session.send_stream("third")
+    assert adapter._client.responses.kwargs[2]["previous_response_id"] == "resp_first"
 
 
 def test_custom_responses_streaming_replays_reasoning_tool_result_full_history():
