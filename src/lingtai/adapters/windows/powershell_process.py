@@ -4,6 +4,9 @@ This module is imported only by the Windows composition selector.  It does not
 use ``killpg``, ``/proc`` or ``ps``.  A command process is assigned to a native
 Job Object immediately after spawn; cancellation terminates that job and waits
 for its active-process count to reach zero before reporting ``group_cancelled``.
+When the Job-Object kill itself fails or a descendant escapes the job, the tree
+is swept with the identity-gated ``taskkill /T /F`` fallback and the outcome is
+reported ``unconfirmed``.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from lingtai.tools.bash._async_process import (
     ProcessRef,
 )
 from lingtai.tools.bash._shell_dialect import ShellInvocation
+from ._win32 import taskkill_tree
 
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_SUSPENDED = 0x00000004
@@ -361,6 +365,11 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 finally:
                     _kernel32().CloseHandle(job)
             if process is not None:
+                # The child was spawned CREATE_SUSPENDED and never resumed on
+                # this path, so it can have no descendants: exact-PID
+                # TerminateProcess is sufficient and no taskkill tree sweep is
+                # needed.  The held Popen handle also makes PID reuse between
+                # spawn and cleanup impossible, so no identity re-check applies.
                 try:
                     process.kill()
                     process.wait(timeout=2)
@@ -391,10 +400,22 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 return None
             terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
             if not terminated:
+                # Job-Object kill failed (job already dead/closed or access
+                # denied).  Fall back to the taskkill tree-kill primitive,
+                # which re-validates the creation-time identity captured at
+                # spawn so a recycled PID is never signaled (Hermes
+                # ``_host_pid_is_ours`` pattern).  The Job can no longer prove
+                # full-tree ownership, so the outcome is ``unconfirmed``.
+                taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
                 return ProcessCompletion(process.wait(), "unconfirmed")
             # ActiveProcesses reaches zero only after every assigned child exits,
             # which is the full-tree ownership proof.
             if not _wait_job(owned.job_handle, 5.0):
+                # A descendant escaped the Job (breakaway process / nested job)
+                # and survived the terminate; Job accounting can no longer prove
+                # full-tree ownership.  ``taskkill /T`` follows the live PPID
+                # links from the root, so sweep the escaped tree as a fallback.
+                taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
                 return ProcessCompletion(process.wait(), "unconfirmed")
             return ProcessCompletion(process.wait(), "group_cancelled")
 
