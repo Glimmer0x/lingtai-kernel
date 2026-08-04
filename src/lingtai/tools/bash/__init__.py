@@ -22,12 +22,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ._shell_dialect import (
-    ShellDialect,
-    ShellInvocation,
-    ShellKind,
-    extract_posix_commands,
-)
+from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
 
 from ._async_supervisor import (
     load_state,
@@ -46,11 +41,6 @@ from ._async_process import (
 # second, flat, pre-migration pair to drift against.
 from ._tool_family import ShellFamilyDispatcher, get_description, get_schema
 
-# Output hygiene (ANSI/CSI stripping, C0/C1 control escaping, startup-noise
-# stripping, explicit truncation) applied at the tool boundary before results
-# are returned to the model.
-from ._output_hygiene import sanitize_output
-
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -68,20 +58,7 @@ _SUPERVISOR_START_LEASE_SECONDS = 3.0
 _RETURN_HANDOFF_LEASE_SECONDS = _SUPERVISOR_START_LEASE_SECONDS * 2
 _RETURN_HANDOFF_RECHECK_SECONDS = 0.05
 _SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
-# The supervisor's bounded cancel-commit work must fit inside this window: the
-# Job-Object active-process confirmation can take its full 5s, the
-# identity-gated taskkill fallback sweep can take its full 10s
-# (``_TASKKILL_TIMEOUT_SECONDS``), and the bounded root reap adds up to 2s --
-# ~17s worst case on the escaped-child branch (the job-kill-failure branch
-# skips the 5s wait).  A tighter 3s window flaked the native Windows cancel
-# contract under runner load (manager gave up with "awaiting supervisor
-# terminal commit" while the supervisor was still committing); 20s keeps the
-# full worst case inside the window with margin.
-_CANCEL_COMMIT_TIMEOUT_SECONDS = 20.0
-# Windows sync runs bound the post-kill pipe drain (Codex ``io_drain_timeout``,
-# Goose PR #7689): a grandchild that inherited the stdout/stderr pipe write
-# ends and survived the kill must not block the caller on EOF forever.
-_IO_DRAIN_TIMEOUT_SECONDS = 0.5
+_CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
 _JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
 
 
@@ -98,20 +75,11 @@ def _working_dir_contained(resolved: str, sandbox: str) -> bool:
     return resolved == sandbox or resolved.startswith(sandbox + os.sep)
 
 
-def _select_shell_dialect(kind: ShellKind | None = None) -> ShellDialect:
+def _select_shell_dialect() -> ShellDialect:
     """Load the canonical outer selector lazily to keep imports acyclic."""
     from lingtai.adapters.shell import select_shell_dialect
 
-    return select_shell_dialect(shell_kind=kind)
-
-
-def _resolve_shell_kind(kind: ShellKind | None = None) -> ShellKind:
-    """Resolve the classifier result, honoring an explicit kind override."""
-    if kind is not None:
-        return kind
-    from lingtai.adapters.shell import resolve_shell_kind
-
-    return resolve_shell_kind()
+    return select_shell_dialect()
 
 
 def _describe_host_os() -> str:
@@ -125,11 +93,6 @@ def _select_shell_async_process() -> BashAsyncProcessPort:
     """Load the canonical process selector lazily."""
     from lingtai.adapters.shell_process import select_shell_async_process
     return select_shell_async_process()
-
-
-def _sync_run_contained() -> bool:
-    """Return whether the sync run path uses Windows Job Object containment."""
-    return os.name == "nt"
 
 
 # Retained private names keep old implementation-only callers readable during
@@ -224,6 +187,116 @@ def _broad_scan_hint(command: str) -> str | None:
     return _BROAD_SCAN_HINT if _BROAD_SCAN_RE.search(command) else None
 
 
+# =============================================================================
+# Exit-code interpretation (benign non-zero codes)
+# =============================================================================
+# Many Unix commands use non-zero exit codes for informational purposes, not
+# failure.  The model sees a raw exit_code=1 from `grep` and wastes a turn
+# investigating something that just means "no matches".  Port of Hermes'
+# ``_interpret_exit_code``: when the *last* pipeline/chain segment is one of
+# these commands and its exit code is a known benign code, a human-readable
+# note is appended to the result so the agent can move on.  The exit_code
+# field itself is never rewritten — this is a presentation/guidance layer
+# only (the native-exit wrapper keeps $LASTEXITCODE fidelity).
+_BENIGN_EXIT_NOTES: dict[str, dict[int, str]] = {
+    # grep/rg/ag/ack: 1 = no matches found (normal), 2+ = real error
+    "grep":   {1: "No matches found (not an error)"},
+    "egrep":  {1: "No matches found (not an error)"},
+    "fgrep":  {1: "No matches found (not an error)"},
+    "rg":     {1: "No matches found (not an error)"},
+    "ag":     {1: "No matches found (not an error)"},
+    "ack":    {1: "No matches found (not an error)"},
+}
+
+
+def _split_on_chain_operators(command: str) -> list[str]:
+    """Split a shell command on chain/pipeline operators outside quotes.
+
+    Splits on ``;``, ``&&``, ``||`` and ``|`` while respecting single quotes,
+    double quotes and backslash escapes, so ``echo 'a | b'`` stays one
+    segment. A bare ``&`` (backgrounding) is not a chain operator and stays
+    inside its segment. Deliberately simple: used only to pick the last
+    segment whose exit status the shell reports — never to execute anything.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if escaped:
+            current.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            current.append(ch)
+            escaped = True
+            i += 1
+            continue
+        if quote is not None:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            current.append(ch)
+            i += 1
+            continue
+        if ch in (";", "|", "&"):
+            if ch == "&" and (i + 1 >= n or command[i + 1] != "&"):
+                # Bare `&` backgrounds the command; keep it in the segment so
+                # the segment's first word still names the command.
+                current.append(ch)
+                i += 1
+                continue
+            if ch == "&":
+                operator = "&&"
+            elif ch == "|" and i + 1 < n and command[i + 1] == "|":
+                operator = "||"
+            else:
+                operator = ch
+            segments.append("".join(current))
+            current = []
+            i += len(operator)
+            continue
+        current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return segments
+
+
+def interpret_exit_code(command: str, exit_code: int) -> tuple[int, str | None]:
+    """Return ``(exit_code, note)`` when a non-zero exit is benign.
+
+    Inspects only the *last* pipeline/compound segment (split on
+    ``;``/``&&``/``||``/``|`` respecting quotes) — that is the command whose
+    exit status the shell reports. Maps known benign non-zero codes
+    (``grep``/``egrep``/``fgrep``/``rg``/``ag``/``ack`` exit 1 = "No matches")
+    to a guidance note; returns the original code with ``None`` otherwise.
+    Never changes ``exit_code`` — presentation/guidance only.
+    """
+    if exit_code == 0:
+        return exit_code, None
+    segments = _split_on_chain_operators(command)
+    last_segment = (segments[-1] if segments else command).strip()
+    if not last_segment:
+        return exit_code, None
+    # Base command name = first word of the last segment, skipping env-var
+    # assignments (``VAR=val cmd``) and stripping path prefixes
+    # (``/usr/bin/grep`` -> ``grep``).
+    base_cmd = ""
+    for word in last_segment.split():
+        if "=" in word and not word.startswith("-"):
+            continue
+        base_cmd = word.split("/")[-1]
+        break
+    return exit_code, _BENIGN_EXIT_NOTES.get(base_cmd, {}).get(exit_code)
+
+
 def _timeout_error(command: str, timeout: float) -> dict:
     """Build the historical timeout result shape; shared by every sync path."""
     msg = f"Command timed out after {timeout}s"
@@ -231,7 +304,7 @@ def _timeout_error(command: str, timeout: float) -> dict:
     return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
 
 
-def _augment_command_result(result: dict) -> dict:
+def _augment_command_result(result: dict, command: str | None = None) -> dict:
     """Add explicit pass/fail fidelity fields to a completed-command result.
 
     The top-level ``status`` of a bash result reflects only that the shell
@@ -263,7 +336,12 @@ def _augment_command_result(result: dict) -> dict:
     signature = _detect_failure_signature(
         result.get("stdout", "") or "", result.get("stderr", "") or ""
     )
-    if not failed and signature is None:
+    # Benign non-zero exit (e.g. grep/rg no-match) → guidance note, only when
+    # the originating command is known. Presentation-only: exit_code is kept.
+    exit_note: str | None = None
+    if command:
+        _, exit_note = interpret_exit_code(command, exit_code)
+    if not failed and signature is None and exit_note is None:
         return result
 
     parts: list[str] = []
@@ -275,6 +353,8 @@ def _augment_command_result(result: dict) -> dict:
         parts.append(f"command exited 0 but output contains a {signature}")
     if failed and signature is not None:
         parts.append(f"detected {signature}")
+    if exit_note is not None:
+        parts.append(f"note: {exit_note}")
     stderr = (result.get("stderr") or "").strip()
     if stderr:
         tail = stderr[-_WARNING_STDERR_TAIL:]
@@ -381,17 +461,12 @@ class ShellManager:
         max_output: int = 50_000,
         dialect: ShellDialect | None = None,
         async_process: BashAsyncProcessPort | None = None,
-        shell_kind: "ShellKind | str | None" = None,
     ):
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
         self._agent = agent
         self._dialect = dialect or _select_shell_dialect()
-        # Runtime shell-family metadata: classifier override when provided,
-        # otherwise derived from the dialect.  Unknown dialects (test mocks)
-        # fall back to the POSIX kind for metadata purposes only.
-        self._shell_kind = ShellKind.coerce(shell_kind) or self._dialect.kind() or ShellKind.POSIX
         self._async_process = async_process or _select_shell_async_process()
         self._jobs_dir: Path | None = None
         self._reminder_lock = threading.Lock()
@@ -399,11 +474,6 @@ class ShellManager:
         self._completion_lock = threading.Lock()
         self._completion_watchers: set[str] = set()
         self._rehydrate_async_jobs()
-
-    @property
-    def shell_kind(self) -> ShellKind:
-        """Runtime shell-family metadata (drives model-facing description)."""
-        return self._shell_kind
 
     def _jobs_path(self) -> Path:
         return self._jobs_dir or Path(self._working_dir) / "system" / "jobs"
@@ -442,34 +512,15 @@ class ShellManager:
             commands = self._dialect.extract_commands(command)
         except (NotImplementedError, ValueError) as exc:
             return {"status": "error", "message": f"Shell dialect cannot validate command safely: {exc}"}
-        state_key = self._dialect.state_key()
-        # PowerShell and cmd.exe command names are case-insensitive; POSIX
-        # retains its historical case-sensitive matching. The manager supplies
-        # the dialect fact rather than making this policy object inspect the host.
-        case_insensitive = state_key in {"powershell", "cmd"}
-        powershell = state_key == "powershell"
-        cmd = state_key == "cmd"
-        # PowerShell and cmd.exe both fail closed on syntax the static
-        # extractor cannot prove (dynamic invocation, ``%`` expansion): the
-        # refusal marker is only enforced when a policy is actually
-        # configured -- yolo mode has nothing to protect.
-        unsupported = (
-            (powershell and "__powershell_unsupported__" in commands)
-            or (cmd and "__cmd_unsupported__" in commands)
-        )
-        if unsupported and (
+        powershell = self._dialect.state_key() == "powershell"
+        if powershell and "__powershell_unsupported__" in commands and (
             self._policy._allow is not None or self._policy._deny is not None
         ):
             return {
                 "status": "error",
-                "message": (
-                    "cmd.exe policy validation does not support this syntax; "
-                    "refusing to run it"
-                    if cmd
-                    else "PowerShell policy validation does not support this syntax; refusing to run it"
-                ),
+                "message": "PowerShell policy validation does not support this syntax; refusing to run it",
             }
-        if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
+        if not all(self._policy._check_single(cmd, case_insensitive=powershell) for cmd in commands):
             denied = commands
             return {
                 "status": "error",
@@ -533,13 +584,7 @@ class ShellManager:
         err = self._validate_working_dir(cwd)
         if err:
             return err
-        # The powershell dialect may reject cmd.exe-shim commands whose
-        # metacharacters would be unsafe under cmd.exe; surface that as a
-        # regular error instead of an unhandled exception.
-        try:
-            invocation = self._dialect.make_invocation(command)
-        except ValueError as exc:
-            return {"status": "error", "message": str(exc)}
+        invocation = self._dialect.make_invocation(command)
         if args.get("async", False):
             reminder, err = self._validate_reminder(args.get("reminder"))
             if err:
@@ -551,161 +596,29 @@ class ShellManager:
         """Run the selected invocation; timeout/capture/result policy stays here."""
         try:
             process_args, process_kwargs = invocation.process_args()
-        except Exception as e:
-            # Historical safety net: a dialect-construction failure (e.g. the
-            # #1191 "stdin_script requires the argv form" ValueError) surfaces
-            # as a result on every platform, never as an exception to the
-            # tool caller.
-            return {"status": "error", "message": f"Command failed: {e}"}
-        if invocation.encoding is not None:
-            process_kwargs["encoding"] = invocation.encoding
-        if invocation.errors is not None:
-            process_kwargs["errors"] = invocation.errors
-        # #1191 stdin bootstrap: a dialect that delivers the real script via
-        # stdin (``invocation.stdin_script``) carries it as the ``input``
-        # process kwarg, consumed by ``subprocess.run`` here and forwarded to
-        # ``communicate(input=...)`` by the contained path.  The getattr guard
-        # keeps this inert until #1191 lands on this branch.
-        stdin_script = getattr(invocation, "stdin_script", None)
-        if stdin_script is not None:
-            process_kwargs["input"] = stdin_script
-        if _sync_run_contained():
-            try:
-                return self._run_sync_contained(
-                    command, cwd, timeout, invocation, process_args, process_kwargs,
-                )
-            except Exception as e:
-                # Keep the historical safety net: an unexpected contained-path
-                # failure is reported, never raised to the tool caller.
-                return {"status": "error", "message": f"Command failed: {e}"}
-        try:
-            process_args, process_kwargs = invocation.process_args()
             if invocation.encoding is not None:
                 process_kwargs["encoding"] = invocation.encoding
             if invocation.errors is not None:
                 process_kwargs["errors"] = invocation.errors
-            if invocation.stdin_script is not None:
-                # The dialect transports the real command through stdin (the
-                # command line carries only an ASCII bootstrap).  ``input`` in
-                # text mode lets subprocess encode it with the dialect encoding
-                # (UTF-8) and feed it while concurrently draining the pipes.
-                process_kwargs["input"] = invocation.stdin_script
             result = subprocess.run(
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,
             )
             stdout, stderr = result.stdout, result.stderr
-            # Output hygiene at the tool boundary: strip ANSI/CSI, escape
-            # C0/C1 controls, drop startup noise, then cap with the explicit
-            # truncation marker (all in one pass per stream).
-            stdout = sanitize_output(stdout, self._max_output)
-            stderr = sanitize_output(stderr, self._max_output)
+            if len(stdout) > self._max_output:
+                stdout = stdout[: self._max_output] + f"\n... (truncated, {len(result.stdout)} chars total)"
+            if len(stderr) > self._max_output:
+                stderr = stderr[: self._max_output] + f"\n... (truncated, {len(result.stderr)} chars total)"
             return _augment_command_result({
                 "status": "ok", "exit_code": result.returncode,
                 "stdout": stdout, "stderr": stderr,
-            })
+            }, command=command)
         except subprocess.TimeoutExpired:
-            return _timeout_error(command, timeout)
+            msg = f"Command timed out after {timeout}s"
+            hint = _broad_scan_hint(command)
+            return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
-
-    def _sync_result_from(self, stdout: str, stderr: str, returncode: int) -> dict:
-        """Cap captured output and apply the shared pass/fail fidelity fields."""
-        if len(stdout) > self._max_output:
-            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
-        if len(stderr) > self._max_output:
-            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
-        return _augment_command_result({
-            "status": "ok", "exit_code": returncode,
-            "stdout": stdout, "stderr": stderr,
-        })
-
-    def _run_sync_contained(
-        self, command: str, cwd: str, timeout: float,
-        invocation: ShellInvocation, process_args: object, process_kwargs: dict,
-    ) -> dict:
-        """Windows sync run: Job Object containment plus bounded pipe drain.
-
-        ``subprocess.run``'s Windows timeout path kills only the direct child
-        and then blocks in a second ``communicate()`` until EOF; a grandchild
-        that inherited the stdout/stderr pipe write ends hangs the caller
-        forever (Goose PR #7689).  Contain the command in a kill-on-close Job
-        Object (Codex ``process_group`` ``win/job.rs``) so a timeout kills the
-        whole tree race-free, then drain the pipes only for the bounded
-        ``io_drain_timeout`` window (Codex ``exec.rs``).  If Job containment is
-        unavailable on the host, fall back to the historical plain
-        ``subprocess.run`` behavior.
-
-        Containment is deliberate: the Job Object is kill-on-close, so closing
-        the job handle on the success path also terminates any surviving
-        descendant (e.g. a daemon the script started with ``Start-Process``
-        and detached stdio from).  Background work that must outlive the
-        command belongs to the async path (``async: true``).
-        """
-        from lingtai.adapters.windows import win32_job
-
-        spawn_kwargs = {
-            **process_kwargs,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-            "cwd": cwd,
-        }
-        # #1191 stdin bootstrap integration: the dialect delivers the real
-        # script through stdin (``invocation.stdin_script``, surfaced as the
-        # ``input`` kwarg by ``_run_sync``).  ``Popen`` has no ``input``
-        # parameter, so pop it and feed ``communicate(input=...)``; without
-        # this, the bootstrap's ``ReadToEnd()`` never sees EOF and every sync
-        # command would time out and be tree-killed.  The invocation-attribute
-        # fallback keeps the contained path correct even if a later merge
-        # drops the ``_run_sync`` wiring line.
-        input_data = spawn_kwargs.pop("input", None)
-        if input_data is None:
-            input_data = getattr(invocation, "stdin_script", None)
-        if input_data is not None:
-            spawn_kwargs["stdin"] = subprocess.PIPE
-        else:
-            # Never inherit the parent console stdin: a sync run must not read
-            # from or pin the supervisor's input handle, and a background
-            # child cannot keep our stdin open after the command completes.
-            spawn_kwargs["stdin"] = subprocess.DEVNULL
-        try:
-            process, job = win32_job.spawn_into_job(process_args, spawn_kwargs)
-        except FileNotFoundError:
-            # A genuine spawn failure (missing executable) must be reported,
-            # not retried through the plain path as if the Job machinery had
-            # failed.
-            raise
-        except OSError:
-            # Job containment unavailable (host job policy / sandboxed
-            # environment): keep the pre-existing plain subprocess.run path.
-            try:
-                result = subprocess.run(
-                    process_args, capture_output=True, text=True,
-                    timeout=timeout, cwd=cwd, **process_kwargs,
-                )
-            except subprocess.TimeoutExpired:
-                return _timeout_error(command, timeout)
-            return self._sync_result_from(result.stdout, result.stderr, result.returncode)
-        try:
-            try:
-                stdout, stderr = process.communicate(input=input_data, timeout=timeout)
-                returncode = process.returncode
-            except subprocess.TimeoutExpired:
-                win32_job.terminate_owned_tree(job, process.pid)
-                # Bounded drain: a grandchild that survived the kill and still
-                # holds the pipe write ends must not block this supervisor on
-                # EOF forever (Codex io_drain_timeout; Goose PR #7689).  The
-                # process is never ``wait()``-ed on this double-timeout path;
-                # the bounded drain plus handle close is the documented bound.
-                win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
-                return _timeout_error(command, timeout)
-        finally:
-            # Closing the last job handle fires KILL_ON_JOB_CLOSE, terminating
-            # any surviving descendant — this is the containment contract of
-            # the sync path (see module/CONTRACT docs).
-            win32_job.close_handle(job)
-        return self._sync_result_from(stdout, stderr, returncode)
 
     @staticmethod
     def _terminal(status: object) -> bool:
@@ -762,7 +675,6 @@ class ShellManager:
             "job_id": job_id,
             "command": command,
             "shell_dialect": self._dialect.state_key(),
-            "shell_kind": self._shell_kind.value,
             "invocation": invocation.to_dict(),
             "cwd": cwd,
             "status": "launching",
@@ -1317,42 +1229,18 @@ class ShellManager:
             return False
 
     def _read_logs(self, job_dir: Path) -> tuple[str, str]:
-        def read_log(name: str) -> str:
-            raw = (job_dir / name).read_bytes()
-            if os.name != "nt":
-                # POSIX async logs keep the historical replacement-character
-                # decode; the Windows OEM fallback below is console-specific.
-                text = raw.decode("utf-8", errors="replace")
-            else:
-                # The PowerShell wrapper forces the child's console encoding
-                # to UTF-8, but a native tool can still emit OEM-codepage
-                # bytes; re-decode those instead of corrupting them with
-                # errors="replace".  The fallback is decided per line, so a
-                # mostly-UTF-8 log with one invalid byte run is not re-decoded
-                # wholesale as OEM (which would garble the whole log).
-                from lingtai.adapters.windows.powershell import decode_windows_output
-
-                text = decode_windows_output(raw)
-            # Restore the universal-newlines translation the previous
-            # read_text() provided: pwsh emits CRLF-terminated lines, and
-            # without this every async stdout/stderr line would carry a
-            # stray "\r" into results, truncation accounting, and
-            # newline-based splitting.
-            return text.replace("\r\n", "\n").replace("\r", "\n")
-
         try:
-            stdout = read_log("stdout.log")
+            stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
         except OSError:
             stdout = ""
         try:
-            stderr = read_log("stderr.log")
+            stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
         except OSError:
             stderr = ""
-        # Same hygiene as the sync path: async logs are surfaced to the model
-        # through poll results and completion previews, so they get the same
-        # ANSI/control/noise stripping and capped truncation.
-        stdout = sanitize_output(stdout, self._max_output)
-        stderr = sanitize_output(stderr, self._max_output)
+        if len(stdout) > self._max_output:
+            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
+        if len(stderr) > self._max_output:
+            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
         return stdout, stderr
 
     def _already_finished(self, state: dict) -> dict:
@@ -1402,7 +1290,7 @@ class ShellManager:
             return _augment_command_result({
                 "status": "done", "exit_status_known": True,
                 "exit_code": state["exit_code"], "stdout": stdout, "stderr": stderr,
-            })
+            }, command=str(state.get("command") or ""))
         return {
             "status": "done", "job_id": job_id, "exit_status_known": False,
             "exit_code": None, "stdout": stdout, "stderr": stderr,
@@ -1709,7 +1597,6 @@ def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
     yolo: bool = False,
-    shell_kind: "ShellKind | str | None" = None,
 ) -> ShellManager:
     """Set up the canonical shell capability on an agent.
 
@@ -1717,17 +1604,13 @@ def setup(
         agent: The agent to extend.
         policy_file: Path to JSON policy file (required unless yolo=True).
         yolo: If True, allow all commands (no policy file needed).
-        shell_kind: Optional ShellKind override (init.json
-            ``manifest.capabilities.shell.shell_kind`` or ``LINGTAI_SHELL``).
-            Defaults to the platform classifier result.
 
     Returns:
         The BashManager instance for programmatic access.
     """
     # Resolve the dialect before the default policy so PowerShell does not
     # silently reuse a POSIX denylist.  An explicit policy remains authoritative.
-    kind = _resolve_shell_kind(ShellKind.coerce(shell_kind))
-    dialect = _select_shell_dialect(kind)
+    dialect = _select_shell_dialect()
     resolved_policy_file = policy_file
     if yolo:
         policy = ShellPolicy.yolo()
@@ -1742,14 +1625,10 @@ def setup(
         working_dir=str(agent._working_dir),
         agent=agent,
         dialect=dialect,
-        shell_kind=kind,
     )
     # Description is setup-time metadata derived from the injected adapter and
-    # host, documenting the registered action-separated call shape.  The shell
-    # kind + sequencing guidance tells the model which dialect it is using.
-    desc = get_description(
-        dialect=dialect.state_key(), host_os=_describe_host_os(), shell_kind=kind,
-    )
+    # host, documenting the registered action-separated call shape.
+    desc = get_description(dialect=dialect.state_key(), host_os=_describe_host_os())
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
