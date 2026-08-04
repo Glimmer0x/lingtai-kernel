@@ -10,7 +10,10 @@ name = "lingtai"
 version = "0.19.5"
 description = "Generic research agent with intrinsic tools and MCP-compatible extension interface"
 readme = "README.md"
-requires-python = ">=3.11"
+# faster-whisper's onnxruntime dependency currently has no Intel macOS wheel
+# for Python 3.14. Keep the supported range aligned with the classifiers and
+# with the wheels available on both macOS architectures.
+requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
 classifiers = [
     "Programming Language :: Python :: 3.11",
@@ -45,6 +48,15 @@ dependencies = [
     "cryptography>=42.0.0",
     "qrcode>=7.4.0",
     "faster-whisper>=1.0.0",
+]
+
+[tool.uv]
+# Resolve one lockfile that is installable on both native Apple Silicon and
+# Intel macOS. Without these required environments, uv may select the latest
+# ARM-only onnxruntime release when locking on an Apple Silicon host.
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
 ]
 
 [project.scripts]
