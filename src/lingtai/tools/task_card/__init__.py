@@ -5,9 +5,12 @@ under ``<workdir>/taskcard/``:
 
 - ``status``     — exact text ``active`` or ``inactive``
 - ``taskcard.md`` — the rendered card body
+- ``watch.json`` — persisted active-watch descriptor for restart resume
 
 The producer writes only those files. Channels consume/project them
-independently.
+independently. The watch descriptor survives ``refresh``/molt/agent-stop so a
+restart rehydrates the active watch; ``stop``/``remove``/refresh exhaustion
+clear it because those are deliberate terminal ends.
 """
 
 from __future__ import annotations
@@ -48,6 +51,7 @@ _TASKCARD_DIR = "taskcard"
 _STATUS_FILENAME = "status"
 _BODY_FILENAME = "taskcard.md"
 _CONFIG_FILENAME = "taskcard.json"
+_WATCH_FILENAME = "watch.json"
 # One-way migration source only: the retired Telegram-owned reverse-channel
 # design persisted its own refresh ceiling here. Consulted only when this
 # capability's own config file has never been created; that first resolution
@@ -224,6 +228,7 @@ class TaskCardManager:
         self._status_path = self._taskcard_dir / _STATUS_FILENAME
         self._body_path = self._taskcard_dir / _BODY_FILENAME
         self._config_path = self._taskcard_dir / _CONFIG_FILENAME
+        self._watch_path = self._taskcard_dir / _WATCH_FILENAME
         self._legacy_config_path = self._taskcard_dir.parent / _LEGACY_CONFIG_DIR / _CONFIG_FILENAME
 
     def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
@@ -299,6 +304,7 @@ class TaskCardManager:
             watch.last_valid_body = body
             watch.last_valid_at = _utc_now_iso()
         self._spawn(watch)
+        self._persist_watch(watch)
         return {
             "status": "ok",
             "watch_id": watch.watch_id,
@@ -388,6 +394,7 @@ class TaskCardManager:
         with self._lock:
             if self._watch is watch:
                 self._watch = None
+        self._clear_watch_descriptor()
         return {
             "status": "ok",
             "watch_id": watch.watch_id,
@@ -446,6 +453,7 @@ class TaskCardManager:
                 **self._paths_payload(),
                 **self._status_payload("inactive"),
             }
+        self._clear_watch_descriptor()
         self._clear_reminder()
         return {
             "status": "ok",
@@ -544,6 +552,7 @@ class TaskCardManager:
         with self._lock:
             if self._watch is watch:
                 self._watch = None
+        self._clear_watch_descriptor()
 
     def _stop_requested(self, watch: _Watch) -> bool:
         if watch.stop_event.is_set():
@@ -775,6 +784,148 @@ class TaskCardManager:
         watch.stop_event.set()
         if watch.thread is not None and watch.thread.is_alive():
             watch.thread.join(timeout=watch.timeout_s + 1.0)
+        # Carry the live refresh budget into the persisted descriptor so a
+        # restart resume honors it instead of starting over at zero.
+        try:
+            self._persist_watch(watch)
+        except OSError:
+            pass
+
+    def _persist_watch(self, watch: _Watch) -> None:
+        """Persist the active watch descriptor so a restart can resume it.
+
+        Written atomically on a successful ``start``. Kept across
+        ``shutdown_for_agent_stop`` (refresh/molt/agent-stop) so the next
+        process can rehydrate the watch; cleared on ``stop``, ``remove``, or
+        refresh-limit exhaustion because those are deliberate terminal ends
+        of the watch, not process-transient stops.
+        """
+        with watch.lock:
+            payload = {
+                "watch_id": watch.watch_id,
+                "renderer_path": str(watch.renderer_path),
+                "interval_s": watch.interval_s,
+                "timeout_s": watch.timeout_s,
+                "max_refreshes": watch.max_refreshes,
+                "refreshes_used": watch.refreshes_used,
+                "started_at": _utc_now_iso(),
+            }
+        atomic_write_json(self._watch_path, payload)
+
+    def _clear_watch_descriptor(self) -> None:
+        try:
+            self._watch_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            # A stale descriptor is harmless; a later start/resume overwrites it.
+            pass
+
+    def resume_persisted_watch(self) -> dict[str, Any] | None:
+        """Rehydrate the persisted watch after a process restart.
+
+        Called from ``setup`` on every boot. If ``taskcard/watch.json`` exists
+        and is valid, re-creates the watch (same id/params/refresh budget),
+        writes the current renderer output to the body, marks ``active``, and
+        spawns the updater thread. Returns the start-style payload on success
+        or ``None`` when there is nothing to resume.
+
+        A missing/corrupt descriptor, a renderer that no longer exists, an
+        invalid path, or an already-exhausted refresh budget are treated as
+        stale: the descriptor is cleared and the card left ``inactive`` so a
+        boot never silently resurrects a dead watch.
+        """
+        with self._lock:
+            if self._watch is not None:
+                return None
+        try:
+            payload = read_json(self._watch_path, expect=dict)
+        except (OSError, ValueError, TypeError):
+            return None
+        if not payload:
+            return None
+        watch_id = payload.get("watch_id")
+        renderer_raw = payload.get("renderer_path")
+        if not isinstance(watch_id, str) or not isinstance(renderer_raw, str):
+            self._clear_watch_descriptor()
+            return None
+        try:
+            renderer_path = self._validate_renderer_path(renderer_raw)
+        except TaskCardError:
+            self._clear_watch_descriptor()
+            return None
+        config = self._load_config()
+        interval_s = self._coerce_positive(
+            payload.get("interval_s", config.interval_s), "interval_s", _MIN_INTERVAL_S
+        )
+        requested_timeout = payload.get("timeout_s")
+        if requested_timeout is None:
+            timeout_s = config.timeout_s
+        else:
+            timeout_s = min(
+                self._coerce_positive(requested_timeout, "timeout_s", _MIN_TIMEOUT_S),
+                config.timeout_s,
+            )
+        requested_max = payload.get("max_refreshes")
+        if type(requested_max) is int and requested_max > 0:
+            effective_max = min(requested_max, config.max_refreshes)
+        else:
+            effective_max = config.max_refreshes
+        refreshes_used = payload.get("refreshes_used", 0)
+        if type(refreshes_used) is not int or refreshes_used < 0:
+            refreshes_used = 0
+        if refreshes_used >= effective_max:
+            # Budget already exhausted while away: retire the stale card.
+            self._clear_watch_descriptor()
+            return None
+        try:
+            counter = int(str(watch_id).split("_")[-1])
+            self._counter = max(self._counter, counter)
+        except (ValueError, IndexError):
+            pass
+        watch = _Watch(
+            watch_id,
+            renderer_path,
+            interval_s,
+            timeout_s,
+            effective_max,
+        )
+        watch.refreshes_used = refreshes_used
+        with self._lock:
+            self._watch = watch
+        try:
+            body = self._run_renderer(renderer_path, timeout_s)
+            self._publish_active(body)
+            self._clear_reminder()
+        except Exception:
+            # A transient renderer failure at boot must not kill the card:
+            # keep the last body, mark active, and let the thread retry.
+            try:
+                body = self._body_path.read_text(encoding="utf-8")
+            except OSError:
+                body = None
+            if body is None:
+                try:
+                    self._write_status("active")
+                except OSError:
+                    pass
+            with watch.lock:
+                watch.last_valid_body = body
+                watch.last_valid_at = _utc_now_iso() if body is not None else None
+        else:
+            with watch.lock:
+                watch.last_valid_body = body
+                watch.last_valid_at = _utc_now_iso()
+        self._spawn(watch)
+        return {
+            "status": "ok",
+            "watch_id": watch.watch_id,
+            "state": "watching",
+            "resumed": True,
+            **self._paths_payload(),
+            **self._status_payload("active"),
+            **self._refresh_fields(watch),
+        }
 
     def _load_config(self) -> _Config:
         """Load this agent's persisted Task Card defaults/ceilings.
@@ -923,6 +1074,7 @@ class TaskCardManager:
             "taskcard_dir": str(self._taskcard_dir),
             "status_path": str(self._status_path),
             "body_path": str(self._body_path),
+            "watch_path": str(self._watch_path),
         }
 
     @staticmethod
@@ -944,4 +1096,11 @@ def setup(agent: BaseAgent, **_ignored: Any) -> TaskCardManager:
         description=get_description(),
         glossary_package=None,
     )
+    # A watch persisted by a previous process (refresh/molt/agent-stop) is
+    # rehydrated on boot so the card survives process restarts. Deliberate
+    # terminal ends (stop/remove/exhaust) already cleared the descriptor.
+    try:
+        manager.resume_persisted_watch()
+    except Exception:
+        pass
     return manager

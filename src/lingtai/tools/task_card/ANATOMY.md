@@ -27,7 +27,9 @@ plus its persisted agent-wide configuration, both under `<workdir>/taskcard/`,
 and nothing else. It is producer-first and channel-neutral: it runs a
 renderer, writes `taskcard/taskcard.md`, and writes `taskcard/status` as exact
 `active` or `inactive`, reading `taskcard/taskcard.json` to resolve each new
-watch's cadence/ceiling defaults. `stop` pauses a watch and preserves the last
+watch's cadence/ceiling defaults. An active watch persists a resume descriptor
+at `taskcard/watch.json` so a `refresh`/molt/agent-stop can rehydrate the same
+watch on the next boot; `stop` pauses a watch and preserves the last
 body; `remove` is the terminal lifecycle action that also retires any active
 watch and deletes the body, so a caller never needs to reach around this
 capability with a filesystem delete. It does not own Telegram, Feishu, portals,
@@ -47,9 +49,12 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 ## Connections
 
 - `setup(agent)` registers the public `task_card` tool through
-  `lingtai.tools.registry`.
+  `lingtai.tools.registry` and rehydrates a persisted active watch
+  (`TaskCardManager.resume_persisted_watch`) so the card survives
+  `refresh`/molt/agent-stop restarts.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
-  writes `inactive` and joins the watch thread best-effort.
+  writes `inactive`, joins the watch thread best-effort, and re-persists the
+  watch descriptor with its carried refresh budget for the next boot.
 - Telegram and Feishu are only consumers: each manager reads
   `<workdir>/taskcard/status` and `<workdir>/taskcard/taskcard.md` and projects
   them separately. The intrinsic capability never calls back into either
@@ -78,8 +83,14 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   (`interval_s`/`timeout_s`/`max_refreshes`); read fresh on every `start`,
   written only by the one-way legacy migration (never by any model-facing
   action)
+- `<workdir>/taskcard/watch.json` — persisted active-watch descriptor
+  (`watch_id`/`renderer_path`/`interval_s`/`timeout_s`/`max_refreshes`/
+  `refreshes_used`/`started_at`); written on `start` and re-written on
+  agent-stop with the carried refresh budget, read by `setup` to resume the
+  watch, and cleared on `stop`/`remove`/refresh exhaustion
 - In-memory only: one active watch, its thread, last valid body/timestamp, and
-  deduped error/limit bookkeeping
+  deduped error/limit bookkeeping (the descriptor is the only cross-process
+  watch state)
 
 ## Notes
 

@@ -131,6 +131,155 @@ def test_start_writes_body_before_active_and_reports_exact_paths(agent, manager,
     manager.handle({"action": "stop", "input": {"watch_id": result["watch_id"]}, "reasoning": "cleanup"})
 
 
+def test_start_persists_watch_descriptor_for_restart_resume(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_path = Path(started["watch_path"])
+    assert watch_path.is_file()
+    payload = json.loads(watch_path.read_text(encoding="utf-8"))
+    assert payload["watch_id"] == started["watch_id"]
+    assert payload["renderer_path"] == renderer
+    assert payload["interval_s"] == 3600
+    assert payload["max_refreshes"] == 2000
+    assert payload["refreshes_used"] == 0
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})
+    assert not watch_path.exists()
+
+
+def test_resume_persisted_watch_after_shutdown_rehydrates_watch(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_id = started["watch_id"]
+    watch_path = Path(started["watch_path"])
+    assert watch_path.is_file()
+
+    # Simulate a process restart: shutdown stops the thread but keeps the
+    # descriptor; a fresh manager rehydrates the watch on setup.
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+    assert manager._watch is None
+    assert watch_path.is_file()
+    assert Path(started["status_path"]).read_text(encoding="utf-8") == "inactive"
+
+    fresh = TaskCardManager(agent)
+    resumed = fresh.resume_persisted_watch()
+    assert resumed is not None
+    assert resumed["status"] == "ok"
+    assert resumed["resumed"] is True
+    assert resumed["watch_id"] == watch_id
+    assert resumed["state"] == "watching"
+    assert resumed["status_value"] == "active"
+    assert fresh._watch is not None
+    assert fresh._watch.watch_id == watch_id
+    assert fresh._watch.thread is not None and fresh._watch.thread.is_alive()
+    assert Path(started["status_path"]).read_text(encoding="utf-8") == "active"
+    assert Path(started["body_path"]).read_text(encoding="utf-8") == "# Task Card\n\n- first\n- second\n"
+    fresh.shutdown_for_agent_stop()
+
+
+def test_resume_persisted_watch_is_idempotent_with_active_watch(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    # A second resume while the watch is live is a no-op, not a duplicate.
+    assert manager.resume_persisted_watch() is None
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "cleanup"})
+
+
+def test_resume_missing_or_corrupt_descriptor_is_noop(agent, manager):
+    assert manager.resume_persisted_watch() is None
+    watch_path = manager._taskcard_dir / "watch.json"
+    watch_path.parent.mkdir(parents=True, exist_ok=True)
+    watch_path.write_text("{not json", encoding="utf-8")
+    assert manager.resume_persisted_watch() is None
+
+
+def test_resume_clears_descriptor_when_renderer_no_longer_exists(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_path = Path(started["watch_path"])
+    Path(renderer).unlink()
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+
+    fresh = TaskCardManager(agent)
+    assert fresh.resume_persisted_watch() is None
+    assert not watch_path.exists()
+    assert fresh._watch is None
+    assert Path(started["status_path"]).read_text(encoding="utf-8") == "inactive"
+
+
+def test_resume_respects_carried_refresh_budget(agent, manager):
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600, "max_refreshes": 3},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch = manager._watch
+    assert watch is not None
+    watch.refreshes_used = 3  # budget exhausted
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+
+    fresh = TaskCardManager(agent)
+    assert fresh.resume_persisted_watch() is None
+    assert not Path(started["watch_path"]).exists()
+    assert fresh._watch is None
+
+
+def test_stop_clears_persisted_descriptor(agent, manager):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_path = Path(started["watch_path"])
+    assert watch_path.exists()
+    manager.handle({"action": "stop", "input": {"watch_id": started["watch_id"]}, "reasoning": "deactivate"})
+    assert not watch_path.exists()
+    assert manager.resume_persisted_watch() is None
+
+
+def test_remove_clears_persisted_descriptor(agent, manager):
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": _write_renderer(agent._working_dir, _OK_BODY), "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_path = Path(started["watch_path"])
+    assert watch_path.exists()
+    manager.handle({"action": "remove", "input": {}, "reasoning": "work is done"})
+    assert not watch_path.exists()
+    assert manager.resume_persisted_watch() is None
+
+
 def test_retry_replaces_only_the_body_and_preserves_active_status(agent, manager, monkeypatch):
     renderer = _write_renderer(agent._working_dir, _OK_BODY)
     started = manager.handle(

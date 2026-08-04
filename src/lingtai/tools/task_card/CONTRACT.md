@@ -36,17 +36,23 @@ declarative artifact and one active watch per agent.
 1. The capability owns exactly two artifact files under the agent working
    directory: `taskcard/status` and `taskcard/taskcard.md`. It additionally
    owns one persisted agent-wide configuration file, `taskcard/taskcard.json`
-   (see rule 9), which is policy input, not producer output.
+   (see rule 9), which is policy input, not producer output, and one
+   persisted active-watch descriptor, `taskcard/watch.json` (see rule 14),
+   which is producer state for restart recovery, not channel-facing output.
 2. `start` validates a Python renderer path contained within the agent working
    directory, runs it synchronously, requires non-empty stdout, writes the full
    body atomically to `taskcard/taskcard.md`, then atomically writes
-   `taskcard/status` as exact `active`, and only then starts the watch thread.
+   `taskcard/status` as exact `active`, and only then starts the watch thread
+   and persists `taskcard/watch.json` for restart resume.
 3. `retry` reruns the renderer for the active watch. On success it atomically
    replaces only `taskcard/taskcard.md`; `status` remains `active`.
 4. `stop` and agent shutdown write exact `inactive` before stopping the updater.
    The last body remains on disk. `stop` is non-terminal: it pauses/preserves
    the artifact for a possible later `retry`/inspection, it does not clean it
-   up.
+   up. Agent shutdown (refresh/molt/agent-stop) also re-persists the watch
+   descriptor with its carried refresh budget so the next boot can resume the
+   watch; `stop` is the explicit pause that clears the descriptor instead, so
+   a stopped watch does not auto-resume on the next boot.
 5. At most one watch may be active per agent. A second `start` fails closed.
 6. The capability is channel-neutral. It MUST NOT own transport-specific
    concepts such as Telegram chat/message IDs, API retries, or consumer
@@ -117,7 +123,23 @@ declarative artifact and one active watch per agent.
     SHOULD call `remove` once the underlying work is completed, cancelled, or
     abandoned, so a consumer such as `/taskcard` cannot keep exposing a stale
     card; agents MUST NOT reach around this capability with a shell/file-tool
-    delete of `taskcard/taskcard.md`.
+    delete of `taskcard/taskcard.md`. `remove` also clears the watch
+    descriptor, so the removed card never auto-resumes on a later boot.
+14. The active watch is persisted to `taskcard/watch.json` so the card
+    survives process restarts (`refresh`, molt, agent-stop). `start` writes
+    the descriptor after a successful spawn; agent shutdown re-writes it with
+    the carried refresh budget; `setup` reads it on boot and rehydrates the
+    watch (same `watch_id`, renderer path, cadence, ceilings, and remaining
+    refresh budget), reruns the renderer to refresh the body, marks `active`,
+    and respawns the updater thread. `stop`, `remove`, and refresh-limit
+    exhaustion clear the descriptor, because those are deliberate terminal
+    ends of the watch rather than process-transient stops. A stale descriptor
+    (missing/corrupt file, renderer path that no longer exists or escapes the
+    working directory, already-exhausted refresh budget) is cleared on boot
+    and leaves the card `inactive` — a restart never silently resurrects a
+    dead watch. A transient renderer failure during resume preserves the last
+    body and lets the updater thread retry, matching live-watch error
+    semantics.
 
 ## Port
 
@@ -132,6 +154,9 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
   for `start`/`retry`/`stop`; `remove` additionally unlinks `taskcard/
   taskcard.md` (tolerating an already-missing file) after the watch is
   retired.
+- Watch-descriptor writer: atomic JSON write of `taskcard/watch.json` on
+  `start` and agent shutdown (carried refresh budget); unlink on
+  `stop`/`remove`/refresh exhaustion (tolerating an already-missing file).
 - Filesystem config reader: plain read of `taskcard/taskcard.json` (no fsync;
   read-only in the steady state) plus the one-way legacy-migration writer
   described in Behavior rule 11.
@@ -159,6 +184,11 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 9. Removal order is strict: retire the watch (write `inactive`, then confirm
    the updater has quiesced) before deleting `taskcard/taskcard.md`. `remove`
    MUST NOT delete the body while a watch might still be running.
+10. Restart resume is safe and honest: the watch descriptor is the only
+    cross-process watch state, `setup` rehydrates at most one watch from it,
+    stale descriptors are cleared without resurrecting a dead watch, and the
+    resumed watch keeps the same refresh budget rather than silently
+    resetting its ceiling.
 
 ## Tests
 
