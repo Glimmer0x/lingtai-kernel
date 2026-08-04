@@ -325,6 +325,61 @@ def _find_pwsh() -> str | None:
     return shutil.which("pwsh")
 
 
+_OEM_CODEPAGE_GUESSES = ("cp437", "cp850", "cp1252")
+
+
+def _oem_text_score(text: str) -> int:
+    """Lower is better: penalize C0 controls and non-Latin characters.
+
+    Every single-byte codepage decodes every byte, so a first-successful-decode
+    fallback would always pick ``cp437`` and never reach ``cp850``/``cp1252``.
+    Scoring instead prefers the candidate whose bytes look most like text: C0
+    controls signal binary data, and characters beyond Latin Extended-B (box
+    drawing, Greek, ...) are rarely produced by OEM text tools.
+    """
+    score = 0
+    for char in text:
+        value = ord(char)
+        if value < 32 and char not in "\t\n\r":
+            score += 5
+        elif value > 0x24F:
+            score += 2
+        elif value > 0xFF:
+            score += 1
+    return score
+
+
+def decode_windows_output(data: bytes) -> str:
+    """Decode captured child output: strict UTF-8 first, then OEM codepages.
+
+    The PowerShell wrapper forces ``[Console]::OutputEncoding`` and
+    ``$OutputEncoding`` to UTF-8, so native commands normally emit valid UTF-8
+    bytes.  If a child still writes OEM console bytes (for example a tool that
+    re-enables the OEM codepage or is invoked outside the wrapper), strict
+    UTF-8 decoding fails and the bytes are re-decoded with the common Windows
+    OEM codepages (cp437/cp850/cp1252 heuristics, lowest text score wins)
+    instead of being silently corrupted by ``errors="replace"``.
+    ``errors="replace"`` is used only as a last resort for binary data, so
+    this function never raises.
+    """
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        best: tuple[int, str] | None = None
+        for codepage in _OEM_CODEPAGE_GUESSES:
+            try:
+                text = data.decode(codepage)
+            except UnicodeDecodeError:
+                continue
+            score = _oem_text_score(text)
+            if best is None or score < best[0]:
+                best = (score, text)
+        if best is not None:
+            return best[1]
+        return data.decode(_OEM_CODEPAGE_GUESSES[0], errors="replace")
+>>>>>>> e98ae4e9 (feat(windows): enforce UTF-8 console output and OEM fallback decode (ps/pr-2))
+
+
 class PowerShellDialect(ShellDialect):
     """PowerShell 7 (``pwsh``) invocation and policy extraction."""
 
@@ -384,6 +439,7 @@ class PowerShellDialect(ShellDialect):
         # between user statements, so ordinary PowerShell status checks retain
         # their native semantics.
         #
+<<<<<<< HEAD
         # Transport: the wrapped payload below is byte-for-byte what used to be
         # passed as the ``-Command`` argument, so the existing escape/quote and
         # exit-code handling is preserved as the stdin payload.  The command
@@ -392,7 +448,17 @@ class PowerShellDialect(ShellDialect):
         # which avoids code-page mangling of the ``-Command`` argument, the
         # 32,768-character process command-line limit, and UTF-8 in/out
         # problems (the bootstrap forces Input/OutputEncoding to UTF-8).
+=======
+        # Windows console utilities (ipconfig, chcp-sensitive tools) write
+        # through WriteConsole; PowerShell redirects that output, but only if
+        # the console encoding matches what the pipe consumer expects.  Force
+        # the child's console and pipeline encodings to UTF-8 up front so
+        # captured bytes decode cleanly at the boundary instead of arriving in
+        # the OEM codepage (which ``errors="replace"`` would corrupt).
+>>>>>>> e98ae4e9 (feat(windows): enforce UTF-8 console output and OEM fallback decode (ps/pr-2))
         wrapped = (
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
             "$global:__lingtai_success = $false\n"
             "$global:__lingtai_native_exit = 0\n"
             "$global:__lingtai_final_native_failure = $false\n"
@@ -454,4 +520,4 @@ class PowerShellDialect(ShellDialect):
         return ShellKind.POWERSHELL.value
 
 
-__all__ = ["PowerShellDialect"]
+__all__ = ["PowerShellDialect", "decode_windows_output"]
