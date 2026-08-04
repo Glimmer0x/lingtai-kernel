@@ -59,6 +59,10 @@ _RETURN_HANDOFF_LEASE_SECONDS = _SUPERVISOR_START_LEASE_SECONDS * 2
 _RETURN_HANDOFF_RECHECK_SECONDS = 0.05
 _SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
 _CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
+# Windows sync runs bound the post-kill pipe drain (Codex ``io_drain_timeout``,
+# Goose PR #7689): a grandchild that inherited the stdout/stderr pipe write
+# ends and survived the kill must not block the caller on EOF forever.
+_IO_DRAIN_TIMEOUT_SECONDS = 0.5
 _JOB_ID_RE = re.compile(r"job-(?:[0-9a-f]{32}|[0-9a-f]{8})\Z")
 
 
@@ -93,6 +97,11 @@ def _select_shell_async_process() -> BashAsyncProcessPort:
     """Load the canonical process selector lazily."""
     from lingtai.adapters.shell_process import select_shell_async_process
     return select_shell_async_process()
+
+
+def _sync_run_contained() -> bool:
+    """Return whether the sync run path uses Windows Job Object containment."""
+    return os.name == "nt"
 
 
 # Retained private names keep old implementation-only callers readable during
@@ -185,6 +194,13 @@ def _broad_scan_hint(command: str) -> str | None:
     are harmless (an extra sentence); it never blocks or rewrites the command.
     """
     return _BROAD_SCAN_HINT if _BROAD_SCAN_RE.search(command) else None
+
+
+def _timeout_error(command: str, timeout: float) -> dict:
+    """Build the historical timeout result shape; shared by every sync path."""
+    msg = f"Command timed out after {timeout}s"
+    hint = _broad_scan_hint(command)
+    return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
 
 
 def _augment_command_result(result: dict) -> dict:
@@ -470,6 +486,18 @@ class ShellManager:
 
     def _run_sync(self, command: str, cwd: str, timeout: float, invocation: ShellInvocation) -> dict:
         """Run the selected invocation; timeout/capture/result policy stays here."""
+        process_args, process_kwargs = invocation.process_args()
+        if invocation.encoding is not None:
+            process_kwargs["encoding"] = invocation.encoding
+        if invocation.errors is not None:
+            process_kwargs["errors"] = invocation.errors
+        if _sync_run_contained():
+            try:
+                return self._run_sync_contained(command, cwd, timeout, process_args, process_kwargs)
+            except Exception as e:
+                # Keep the historical safety net: an unexpected contained-path
+                # failure is reported, never raised to the tool caller.
+                return {"status": "error", "message": f"Command failed: {e}"}
         try:
             process_args, process_kwargs = invocation.process_args()
             if invocation.encoding is not None:
@@ -482,25 +510,82 @@ class ShellManager:
                 # text mode lets subprocess encode it with the dialect encoding
                 # (UTF-8) and feed it while concurrently draining the pipes.
                 process_kwargs["input"] = invocation.stdin_script
+ (fix(windows): Job Object tree-kill + io drain timeout for shell sync runs)
             result = subprocess.run(
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,
             )
-            stdout, stderr = result.stdout, result.stderr
-            if len(stdout) > self._max_output:
-                stdout = stdout[: self._max_output] + f"\n... (truncated, {len(result.stdout)} chars total)"
-            if len(stderr) > self._max_output:
-                stderr = stderr[: self._max_output] + f"\n... (truncated, {len(result.stderr)} chars total)"
-            return _augment_command_result({
-                "status": "ok", "exit_code": result.returncode,
-                "stdout": stdout, "stderr": stderr,
-            })
+            return self._sync_result_from(result.stdout, result.stderr, result.returncode)
         except subprocess.TimeoutExpired:
-            msg = f"Command timed out after {timeout}s"
-            hint = _broad_scan_hint(command)
-            return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
+            return _timeout_error(command, timeout)
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
+
+    def _sync_result_from(self, stdout: str, stderr: str, returncode: int) -> dict:
+        """Cap captured output and apply the shared pass/fail fidelity fields."""
+        if len(stdout) > self._max_output:
+            stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
+        if len(stderr) > self._max_output:
+            stderr = stderr[: self._max_output] + f"\n... (truncated, {len(stderr)} chars total)"
+        return _augment_command_result({
+            "status": "ok", "exit_code": returncode,
+            "stdout": stdout, "stderr": stderr,
+        })
+
+    def _run_sync_contained(
+        self, command: str, cwd: str, timeout: float,
+        process_args: object, process_kwargs: dict,
+    ) -> dict:
+        """Windows sync run: Job Object containment plus bounded pipe drain.
+
+        ``subprocess.run``'s Windows timeout path kills only the direct child
+        and then blocks in a second ``communicate()`` until EOF; a grandchild
+        that inherited the stdout/stderr pipe write ends hangs the caller
+        forever (Goose PR #7689).  Contain the command in a kill-on-close Job
+        Object (Codex ``process_group`` ``win/job.rs``) so a timeout kills the
+        whole tree race-free, then drain the pipes only for the bounded
+        ``io_drain_timeout`` window (Codex ``exec.rs``).  If Job containment is
+        unavailable on the host, fall back to the historical plain
+        ``subprocess.run`` behavior.
+        """
+        from lingtai.adapters.windows import win32_job
+
+        try:
+            process, job = win32_job.spawn_into_job(
+                process_args,
+                {
+                    **process_kwargs,
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.PIPE,
+                    "text": True,
+                    "cwd": cwd,
+                },
+            )
+        except OSError:
+            # Job containment unavailable (host job policy / sandboxed
+            # environment): keep the pre-existing plain subprocess.run path.
+            try:
+                result = subprocess.run(
+                    process_args, capture_output=True, text=True,
+                    timeout=timeout, cwd=cwd, **process_kwargs,
+                )
+            except subprocess.TimeoutExpired:
+                return _timeout_error(command, timeout)
+            return self._sync_result_from(result.stdout, result.stderr, result.returncode)
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+                returncode = process.returncode
+            except subprocess.TimeoutExpired:
+                win32_job.terminate_owned_tree(job, process.pid)
+                # Bounded drain: a grandchild that survived the kill and still
+                # holds the pipe write ends must not block this supervisor on
+                # EOF forever (Codex io_drain_timeout; Goose PR #7689).
+                win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
+                return _timeout_error(command, timeout)
+        finally:
+            win32_job.close_handle(job)
+        return self._sync_result_from(stdout, stderr, returncode)
 
     @staticmethod
     def _terminal(status: object) -> bool:

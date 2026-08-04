@@ -20,6 +20,7 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/adapters/windows/powershell.py
   - src/lingtai/adapters/windows/powershell_process.py
+  - src/lingtai/adapters/windows/win32_job.py
   - src/lingtai/adapters/windows/powershell_state_lock.py
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
@@ -107,6 +108,12 @@ only method execution requires Windows.
   suspended spawn, job assignment, `NtResumeProcess`, active-process
   accounting, bounded tree cancellation, creation-time process identity
   (`src/lingtai/adapters/windows/powershell_process.py`).
+- `win32_job` — raw ctypes Job Object primitives shared by the shell
+  adapters: kill-on-close + breakaway-ok job creation, suspended contained
+  spawn (`spawn_into_job`), job terminate with `taskkill /T /F` fallback,
+  active-process accounting, and the bounded post-kill pipe drain
+  (`drain_pipes`, Codex `io_drain_timeout`)
+  (`src/lingtai/adapters/windows/win32_job.py`).
 - `WindowsShellStateLockAdapter` — cross-process shell job state lock via
   `msvcrt.locking` byte 0/length 1 on `<job_dir>/.state.lock`
   (`src/lingtai/adapters/windows/powershell_state_lock.py`).
