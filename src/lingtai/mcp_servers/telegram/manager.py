@@ -2176,7 +2176,36 @@ class TelegramManager:
         lifecycle = self._task_card_agent_lifecycle_status()
         if lifecycle is not None:
             snapshot["agent_lifecycle"] = lifecycle
+        model = self._task_card_current_model()
+        if model:
+            snapshot["model"] = model
         return snapshot or None
+
+    def _task_card_current_model(self) -> str | None:
+        """Read the agent's current LLM model from ``.agent.json``.
+
+        ``llm.model`` is the canonical running model (the same value the
+        runtime reports in its identity); ``provider`` is kept out so the card
+        stays compact. Missing, malformed, or non-object data degrades to
+        ``None`` — no line is rendered rather than fabricating a model.
+        """
+        try:
+            raw = (self._working_dir / ".agent.json").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        llm = data.get("llm")
+        if not isinstance(llm, dict):
+            return None
+        model = llm.get("model")
+        if not isinstance(model, str) or not model.strip():
+            return None
+        return model.strip()
 
     def _task_card_agent_lifecycle_status(self) -> str | None:
         """Read this agent's own canonical lifecycle for the footer.
