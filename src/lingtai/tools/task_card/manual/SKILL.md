@@ -34,6 +34,16 @@ The capability owns exactly two files under your working directory:
 - `taskcard/status`
 - `taskcard/taskcard.md`
 
+While a watch is active it also keeps one restart descriptor at
+`taskcard/watch.json`, so the card survives `refresh`/molt/agent-stop: the next
+boot rehydrates the same watch (same `watch_id`, renderer, cadence, ceilings,
+and remaining refresh budget), reruns the renderer to refresh the body, marks
+`active`, and resumes the updater. `stop`, `remove`, and refresh-limit
+exhaustion clear the descriptor because those are deliberate ends of the watch;
+a stale descriptor (renderer gone, budget exhausted, corrupt file) is cleared
+on boot and leaves the card `inactive` rather than silently resurrecting a
+dead watch.
+
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
 
 `start` runs a Python renderer under your working directory. The renderer must
