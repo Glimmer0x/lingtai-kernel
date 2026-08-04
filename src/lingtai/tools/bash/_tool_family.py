@@ -29,6 +29,7 @@ from typing import Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import build_manual_child
+from ._shell_dialect import ShellKind
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
@@ -128,10 +129,16 @@ def get_description(
     lang: str = "en",
     dialect: str = "posix",
     host_os: str | None = None,
+    shell_kind: "ShellKind | str | None" = None,
 ) -> str:
     host = f" Host OS: {host_os}." if host_os else ""
+    kind = ShellKind.coerce(shell_kind) or ShellKind.coerce(dialect)
+    shell_prose = (
+        f" Active shell: {kind.display_name}. {kind.sequencing_guidance}"
+        if kind is not None else ""
+    )
     return (
-        f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{host} "
+        f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{shell_prose}{host} "
         "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, data pipelines. "
         "shell(action='run', input={'command': '...'}, reasoning='...') executes a command; "
         "shell(action='poll', input={'job_id': '...'}, reasoning='...') checks an async job; "

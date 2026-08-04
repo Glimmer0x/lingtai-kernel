@@ -1,0 +1,218 @@
+"""Golden spawn-argument tests per ShellKind.
+
+The spawn shape is the single ``ShellKind``-keyed authority
+(``make_invocation_for_kind``); these tests pin the exact argv/encoding/errors
+for every kind so a refactor can never silently change what ``subprocess``
+runs or what the model-facing description claims.
+"""
+from __future__ import annotations
+
+import pytest
+
+from lingtai.tools.bash._shell_dialect import ShellKind, make_invocation_for_kind
+
+
+def test_posix_kind_preserves_historical_shell_true_form():
+    invocation = make_invocation_for_kind(ShellKind.POSIX, "echo hi")
+    assert invocation.to_dict() == {
+        "script": "echo hi", "executable": None, "argv": None,
+        "encoding": None, "errors": None,
+    }
+    assert invocation.process_args() == ("echo hi", {"shell": True})
+
+
+def test_powershell_kind_spawn_argv_golden():
+    invocation = make_invocation_for_kind(
+        ShellKind.POWERSHELL, "Get-ChildItem", executable="pwsh",
+    )
+    args, kwargs = invocation.process_args()
+    assert args == [
+        "pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+        "Get-ChildItem",
+    ]
+    assert kwargs == {"shell": False}
+    assert invocation.encoding == "utf-8"
+    assert invocation.errors == "replace"
+
+
+def test_cmd_kind_spawn_argv_golden(monkeypatch):
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    invocation = make_invocation_for_kind(ShellKind.CMD, "dir")
+    args, kwargs = invocation.process_args()
+    assert args == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c", "dir"]
+    assert kwargs == {"shell": False}
+    assert invocation.encoding == "utf-8"
+
+
+def test_cmd_kind_defaults_to_cmd_exe_when_comspec_unset(monkeypatch):
+    monkeypatch.delenv("COMSPEC", raising=False)
+    invocation = make_invocation_for_kind(ShellKind.CMD, "dir")
+    args, _kwargs = invocation.process_args()
+    assert args[0] == "cmd.exe"
+
+
+def test_gitbash_kind_spawn_argv_golden():
+    invocation = make_invocation_for_kind(
+        ShellKind.GITBASH, "ls -la",
+        executable=r"C:\Program Files\Git\bin\bash.exe",
+    )
+    args, kwargs = invocation.process_args()
+    assert args == [r"C:\Program Files\Git\bin\bash.exe", "-lc", "ls -la"]
+    assert kwargs == {"shell": False}
+
+
+def test_wsl_kind_spawn_argv_golden():
+    invocation = make_invocation_for_kind(
+        ShellKind.WSL, "ls -la", executable=r"C:\Windows\System32\wsl.exe",
+    )
+    args, kwargs = invocation.process_args()
+    assert args == [r"C:\Windows\System32\wsl.exe", "-e", "bash", "-lc", "ls -la"]
+    assert kwargs == {"shell": False}
+
+
+def test_argv_kind_requires_discovered_executable():
+    with pytest.raises(ValueError, match="requires a discovered executable"):
+        make_invocation_for_kind(ShellKind.GITBASH, "ls")
+
+
+def test_powershell_dialect_wraps_script_and_spawns_through_kind():
+    from lingtai.adapters.windows.powershell import PowerShellDialect
+
+    dialect = PowerShellDialect(executable="pwsh")
+    invocation = dialect.make_invocation("Write-Output hi")
+    args, kwargs = invocation.process_args()
+    assert args[:5] == [
+        "pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+    ]
+    assert "$global:__lingtai_success" in args[-1]
+    assert "Write-Output hi" in args[-1]
+    assert kwargs == {"shell": False}
+    assert dialect.state_key() == "powershell"
+    assert dialect.kind() is ShellKind.POWERSHELL
+
+
+def test_cmd_dialect_make_invocation_and_extraction():
+    from lingtai.adapters.windows.cmd import CmdDialect
+
+    dialect = CmdDialect()
+    assert dialect.state_key() == "cmd"
+    assert dialect.kind() is ShellKind.CMD
+    assert dialect.extract_commands("dir & del x") == ("dir", "del")
+    assert dialect.extract_commands("echo a | findstr b") == ("echo", "findstr")
+    args, kwargs = dialect.make_invocation("dir").process_args()
+    assert args[1:4] == ["/d", "/s", "/c"]
+    assert args[-1] == "dir"
+    assert kwargs == {"shell": False}
+
+
+def test_gitbash_dialect_make_invocation_and_extraction():
+    from lingtai.adapters.windows.gitbash import GitBashDialect
+
+    dialect = GitBashDialect(executable=r"C:\Program Files\Git\bin\bash.exe")
+    assert dialect.state_key() == "gitbash"
+    assert dialect.kind() is ShellKind.GITBASH
+    assert dialect.extract_commands("FOO=1 ls | grep x; echo done") == (
+        "ls", "grep", "echo",
+    )
+    args, kwargs = dialect.make_invocation("ls").process_args()
+    assert args == [r"C:\Program Files\Git\bin\bash.exe", "-lc", "ls"]
+    assert kwargs == {"shell": False}
+
+
+def test_wsl_dialect_make_invocation_and_extraction():
+    from lingtai.adapters.windows.wsl import WslDialect
+
+    dialect = WslDialect(executable=r"C:\Windows\System32\wsl.exe")
+    assert dialect.state_key() == "wsl"
+    assert dialect.kind() is ShellKind.WSL
+    args, kwargs = dialect.make_invocation("ls").process_args()
+    assert args == [r"C:\Windows\System32\wsl.exe", "-e", "bash", "-lc", "ls"]
+    assert kwargs == {"shell": False}
+
+
+def test_description_exposes_shell_kind_and_sequencing():
+    from lingtai.tools.bash._tool_family import get_description
+
+    desc = get_description(dialect="powershell", shell_kind=ShellKind.POWERSHELL)
+    assert "Active shell dialect: powershell" in desc
+    assert "Active shell: PowerShell" in desc
+    assert "not supported" in desc
+    assert "'&&'" in desc
+
+    desc_cmd = get_description(dialect="cmd", shell_kind=ShellKind.CMD)
+    assert "Active shell dialect: cmd" in desc_cmd
+    assert "Active shell: cmd.exe" in desc_cmd
+
+
+def test_description_keeps_legacy_shape_without_kind():
+    from lingtai.tools.bash._tool_family import get_description
+
+    desc = get_description(dialect="posix")
+    assert "Active shell dialect: posix" in desc
+    assert "Active shell: Bash (POSIX)" in desc
+    assert "Host OS" not in desc
+
+
+def test_setup_honors_shell_kind_override(tmp_path):
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lingtai.tools.bash import ShellManager, setup
+
+    agent = MagicMock()
+    agent._working_dir = Path(tmp_path)
+    manager = setup(agent, yolo=True, shell_kind="cmd")
+    assert isinstance(manager, ShellManager)
+    assert manager.shell_kind is ShellKind.CMD
+    description = agent.add_tool.call_args.kwargs["description"]
+    assert "Active shell dialect: cmd" in description
+    assert "Active shell: cmd.exe" in description
+    assert "'&&'" in description
+
+
+def test_manager_exposes_runtime_shell_kind_metadata(tmp_path):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from tests._notification_store_helpers import notification_store_for
+    from lingtai.adapters.windows.cmd import CmdDialect
+    from lingtai.tools.bash import ShellManager, ShellPolicy
+
+    agent = SimpleNamespace(_notification_store=notification_store_for(tmp_path))
+    manager = ShellManager(
+        policy=ShellPolicy.yolo(), working_dir=str(tmp_path), agent=agent,
+        dialect=CmdDialect(),
+    )
+    assert manager.shell_kind is ShellKind.CMD
+
+    state = manager._initial_async_state(
+        "job-00000000000000000000000000000001", "dir", str(tmp_path), 30,
+    )
+    assert state["shell_dialect"] == "cmd"
+    assert state["shell_kind"] == "cmd"
+
+
+def test_unknown_test_dialect_falls_back_to_posix_metadata(tmp_path):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from tests._notification_store_helpers import notification_store_for
+    from lingtai.tools.bash import ShellManager, ShellPolicy
+    from lingtai.tools.bash._shell_dialect import ShellDialect, ShellInvocation
+
+    class MarkerDialect(ShellDialect):
+        def extract_commands(self, script):
+            return ("echo",)
+
+        def make_invocation(self, script):
+            return ShellInvocation(script="printf marker")
+
+        def state_key(self):
+            return "test-marker"
+
+    agent = SimpleNamespace(_notification_store=notification_store_for(tmp_path))
+    manager = ShellManager(
+        policy=ShellPolicy.yolo(), working_dir=str(tmp_path), agent=agent,
+        dialect=MarkerDialect(),
+    )
+    assert manager.shell_kind is ShellKind.POSIX

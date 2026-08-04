@@ -4,7 +4,7 @@ description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
 version: 1.0.0
-last_changed_at: "2026-07-24"
+last_changed_at: "2026-08-04"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -56,6 +56,7 @@ reports, prompts, or this registry.
 | `LINGTAI_REFRESH_ENV_OVERWRITE` | unset and off | `1` enables one refresh overwrite | One refresh handoff | Boot or refresh setup; consumed and removed after use | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/agent.py` | Do not log inherited or env-file contents |
 | `LINGTAI_RUNTIME_PYTHON` | unset; caller uses `sys.executable` | Local executable path | Runtime self-check and host-tool routing | When the consumer is invoked; relaunch to change interpreter | Missing or invalid is a caller/configuration error | `src/lingtai/cli.py` and runtime checks | A path is not a credential or a trust decision |
 | `LINGTAI_RUNTIME_VENV` | unset | Local virtualenv directory path | Host-tool runtime hint | When a host tool is invoked; new process sees changes | Missing is tolerated when another interpreter is available | `src/lingtai/cli.py` | Do not infer package trust or freshness from an unrelated shell |
+| `LINGTAI_SHELL` | unset (platform default) | `posix`, `powershell`, `cmd`, `gitbash`, `wsl`; case-insensitive | Canonical shell tool dialect and spawn selection | Shell tool setup; restart to change | Unknown values fall back to the platform default | `src/lingtai/adapters/shell.py` | Only changes which shell program the model-driven shell tool spawns; it is not an authorization boundary |
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |
 | `LINGTAI_TUI_DIR` | unset | Local directory path | TUI-facing invocation and auth lookup | Invocation; restart caller after change | Invalid path fails the caller's lookup | TUI integration and `src/lingtai/venv_resolve.py` | May reveal local layout; do not treat as authorization |
