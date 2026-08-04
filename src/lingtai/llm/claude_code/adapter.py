@@ -307,6 +307,10 @@ class ClaudeCodeChatSession(ChatSession):
         self._remote_session_id = None
         self._remote_entry_count = 0
 
+    def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
+        self._reset_remote_session()
+        return True
+
     def _remember_remote_session(self, raw: Any) -> None:
         session_id = raw.get("session_id") if isinstance(raw, dict) else None
         if isinstance(session_id, str) and session_id:
