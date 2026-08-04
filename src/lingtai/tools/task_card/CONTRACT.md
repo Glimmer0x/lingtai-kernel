@@ -201,6 +201,15 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
   terminal cleanup: removal after a stopped watch, removal of an active watch
   with no body-recreation race, blocking (without deleting) on a watch that
   will not quiesce, and idempotence when already removed or never started.
+  Watch persistence/resume (Behavior rule 14, Invariant 10): descriptor
+  written on start and re-written with the carried refresh budget on agent
+  shutdown; `setup()` rehydrating the watch on the next boot with the same
+  id/params/budget; a transient renderer failure at resume preserving the
+  last body, writing `active` unconditionally, and staying `active` after a
+  later successful tick; corrupt/empty/stale descriptors being cleared;
+  partial and exhausted budgets being carried; and stop/remove/exhaust
+  clearing the descriptor so a deliberately stopped watch is never
+  resurrected.
 - `tests/test_telegram_toolfamily_ltpv2.py` covers the strict public family
   schema plus intrinsic refresh-limit behavior.
 - `tests/test_telegram_task_card_programmable.py` covers Telegram's read-only

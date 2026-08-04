@@ -144,7 +144,9 @@ def test_start_persists_watch_descriptor_for_restart_resume(agent, manager):
     assert watch_path.is_file()
     payload = json.loads(watch_path.read_text(encoding="utf-8"))
     assert payload["watch_id"] == started["watch_id"]
-    assert payload["renderer_path"] == renderer
+    # The renderer path is persisted relative to the working directory so a
+    # relocated workdir can still resume the watch.
+    assert payload["renderer_path"] == "renderer.py"
     assert payload["interval_s"] == 3600
     assert payload["max_refreshes"] == 2000
     assert payload["refreshes_used"] == 0
@@ -208,6 +210,13 @@ def test_resume_missing_or_corrupt_descriptor_is_noop(agent, manager):
     watch_path.parent.mkdir(parents=True, exist_ok=True)
     watch_path.write_text("{not json", encoding="utf-8")
     assert manager.resume_persisted_watch() is None
+    # The contract promises stale descriptors are cleared, not left to wedge
+    # every future boot (CONTRACT Behavior rule 14).
+    assert not watch_path.exists(), "corrupt descriptor must be cleared on boot"
+    # A valid-JSON but empty descriptor is equally stale.
+    watch_path.write_text("{}", encoding="utf-8")
+    assert manager.resume_persisted_watch() is None
+    assert not watch_path.exists(), "empty descriptor must be cleared on boot"
 
 
 def test_resume_clears_descriptor_when_renderer_no_longer_exists(agent, manager):
@@ -248,6 +257,109 @@ def test_resume_respects_carried_refresh_budget(agent, manager):
     assert fresh.resume_persisted_watch() is None
     assert not Path(started["watch_path"]).exists()
     assert fresh._watch is None
+
+
+def test_resume_renderer_failure_writes_active_and_preserves_body(agent, manager):
+    """A transient renderer failure at resume keeps the card visible.
+
+    CONTRACT Behavior rule 14: resume marks ``active`` unconditionally, keeps
+    the last body on disk, and lets the updater thread retry; a later
+    successful tick must not leave the card stuck ``inactive``.
+    """
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    status_path = Path(started["status_path"])
+    body_path = Path(started["body_path"])
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+    assert status_path.read_text(encoding="utf-8") == "inactive"
+    assert body_path.read_text(encoding="utf-8") == "# Task Card\n\n- first\n- second\n"
+
+    # The renderer now fails transiently (nonzero exit); the last body stays
+    # on disk, exactly the case that used to leave status stuck inactive.
+    Path(renderer).write_text("import sys; sys.exit(3)", encoding="utf-8")
+    fresh = TaskCardManager(agent)
+    resumed = fresh.resume_persisted_watch()
+    try:
+        assert resumed is not None
+        assert resumed["status_value"] == "active"
+        assert fresh._watch is not None
+        assert fresh._watch.last_valid_body == "# Task Card\n\n- first\n- second\n"
+        assert fresh._watch.last_valid_at is not None
+        assert status_path.read_text(encoding="utf-8") == "active"
+        assert body_path.read_text(encoding="utf-8") == "# Task Card\n\n- first\n- second\n"
+
+        # Renderer recovers: a later successful tick keeps the card active.
+        Path(renderer).write_text(_OK_BODY, encoding="utf-8")
+        fresh._tick(fresh._watch)
+        assert fresh._watch.error is None
+        assert status_path.read_text(encoding="utf-8") == "active"
+        assert fresh._watch.last_valid_body == "# Task Card\n\n- first\n- second\n"
+    finally:
+        fresh.shutdown_for_agent_stop()
+
+
+def test_resume_carries_partial_refresh_budget_into_live_watch(agent, manager):
+    """A partial refresh budget survives shutdown and a live resume."""
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600, "max_refreshes": 5},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch = manager._watch
+    assert watch is not None
+    watch.refreshes_used = 3  # partial budget: 2 refreshes remain
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+    payload = json.loads(Path(started["watch_path"]).read_text(encoding="utf-8"))
+    assert payload["refreshes_used"] == 3
+
+    fresh = TaskCardManager(agent)
+    resumed = fresh.resume_persisted_watch()
+    try:
+        assert resumed is not None
+        assert resumed["refreshes_used"] == 3
+        assert resumed["max_refreshes"] == 5
+        assert resumed["refreshes_remaining"] == 2
+        assert fresh._watch is not None
+        assert fresh._watch.refreshes_used == 3
+        assert fresh._watch.max_refreshes == 5
+    finally:
+        fresh.shutdown_for_agent_stop()
+
+
+def test_setup_resumes_a_persisted_watch_on_boot(agent, manager):
+    """setup() on a fresh agent rehydrates a persisted watch."""
+    renderer = _write_renderer(agent._working_dir, _OK_BODY)
+    started = manager.handle(
+        {
+            "action": "start",
+            "input": {"renderer_path": renderer, "interval_s": 3600},
+            "reasoning": "publish a task card",
+        }
+    )
+    watch_path = Path(started["watch_path"])
+    assert watch_path.is_file()
+    manager.shutdown_for_agent_stop(reason="agent_stop")
+
+    fresh_agent = _FakeAgent(agent._working_dir)
+    mgr = setup(fresh_agent)
+    try:
+        assert isinstance(mgr, TaskCardManager)
+        assert mgr._watch is not None
+        assert mgr._watch.watch_id == started["watch_id"]
+        assert mgr._watch.thread is not None and mgr._watch.thread.is_alive()
+        assert Path(started["status_path"]).read_text(encoding="utf-8") == "active"
+        assert fresh_agent.added_tools[0][0] == "task_card"
+    finally:
+        mgr.shutdown_for_agent_stop()
 
 
 def test_stop_clears_persisted_descriptor(agent, manager):

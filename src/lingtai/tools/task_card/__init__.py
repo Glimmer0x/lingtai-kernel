@@ -185,6 +185,7 @@ class _Watch:
         "attempt_lock",
         "limit_notified",
         "stop_reason",
+        "terminated",
     )
 
     def __init__(
@@ -213,6 +214,7 @@ class _Watch:
         self.attempt_lock = threading.Lock()
         self.limit_notified = False
         self.stop_reason: str | None = None
+        self.terminated = False
 
 
 class TaskCardManager:
@@ -303,8 +305,15 @@ class TaskCardManager:
         with watch.lock:
             watch.last_valid_body = body
             watch.last_valid_at = _utc_now_iso()
+        # Persist the descriptor before spawning the thread: the updater could
+        # otherwise exhaust and clear it in the gap, resurrecting a dead watch.
+        # Persistence is best-effort here — a start that already succeeded must
+        # not fail because the descriptor write hit ENOSPC/EROFS/EACCES.
+        try:
+            self._persist_watch(watch)
+        except OSError:
+            pass
         self._spawn(watch)
-        self._persist_watch(watch)
         return {
             "status": "ok",
             "watch_id": watch.watch_id,
@@ -394,6 +403,8 @@ class TaskCardManager:
         with self._lock:
             if self._watch is watch:
                 self._watch = None
+        with watch.lock:
+            watch.terminated = True
         self._clear_watch_descriptor()
         return {
             "status": "ok",
@@ -454,6 +465,14 @@ class TaskCardManager:
                 **self._status_payload("inactive"),
             }
         self._clear_watch_descriptor()
+        # A concurrent agent-shutdown may still hold this watch: mark it
+        # terminated so shutdown does not re-persist the descriptor after
+        # ``remove`` deliberately retired it.
+        with self._lock:
+            watch = self._watch
+        if watch is not None:
+            with watch.lock:
+                watch.terminated = True
         self._clear_reminder()
         return {
             "status": "ok",
@@ -547,6 +566,8 @@ class TaskCardManager:
                 }
             self._emit_limit_event(watch)
             return
+        with watch.lock:
+            watch.terminated = True
         watch.stop_event.set()
         self._emit_limit_event(watch)
         with self._lock:
@@ -785,11 +806,17 @@ class TaskCardManager:
         if watch.thread is not None and watch.thread.is_alive():
             watch.thread.join(timeout=watch.timeout_s + 1.0)
         # Carry the live refresh budget into the persisted descriptor so a
-        # restart resume honors it instead of starting over at zero.
-        try:
-            self._persist_watch(watch)
-        except OSError:
-            pass
+        # restart resume honors it instead of starting over at zero. A watch
+        # already deliberately terminated (stop/remove/exhaust racing this
+        # shutdown) must not be resurrected: re-check the flag under
+        # ``watch.lock``, which also serializes against the descriptor write.
+        with watch.lock:
+            if watch.terminated:
+                return
+            try:
+                self._persist_watch(watch)
+            except OSError:
+                pass
 
     def _persist_watch(self, watch: _Watch) -> None:
         """Persist the active watch descriptor so a restart can resume it.
@@ -801,16 +828,23 @@ class TaskCardManager:
         of the watch, not process-transient stops.
         """
         with watch.lock:
+            workdir = Path(self._agent._working_dir).resolve()
+            try:
+                renderer_rel = str(watch.renderer_path.relative_to(workdir))
+            except ValueError:
+                # Path not under the workdir (should not happen given
+                # validation); fall back to the absolute path.
+                renderer_rel = str(watch.renderer_path)
             payload = {
                 "watch_id": watch.watch_id,
-                "renderer_path": str(watch.renderer_path),
+                "renderer_path": renderer_rel,
                 "interval_s": watch.interval_s,
                 "timeout_s": watch.timeout_s,
                 "max_refreshes": watch.max_refreshes,
                 "refreshes_used": watch.refreshes_used,
                 "started_at": _utc_now_iso(),
             }
-        atomic_write_json(self._watch_path, payload)
+        atomic_write_json(self._watch_path, payload, fsync=True)
 
     def _clear_watch_descriptor(self) -> None:
         try:
@@ -841,12 +875,29 @@ class TaskCardManager:
         try:
             payload = read_json(self._watch_path, expect=dict)
         except (OSError, ValueError, TypeError):
+            # Corrupt descriptor: the contract promises stale descriptors are
+            # cleared on boot, not left to wedge every future boot.
+            self._clear_watch_descriptor()
             return None
         if not payload:
+            # Valid-JSON but empty (e.g. ``{}``): can never resume; clear it.
+            self._clear_watch_descriptor()
             return None
         watch_id = payload.get("watch_id")
+        if not isinstance(watch_id, str):
+            self._clear_watch_descriptor()
+            return None
+        # Carry the watch-id counter before any stale-clear path: a discard
+        # must not reset the counter and let a later start reuse ``tc_1``
+        # (notification idempotency keys embed the watch id).
+        with self._lock:
+            try:
+                counter = int(str(watch_id).split("_")[-1])
+                self._counter = max(self._counter, counter)
+            except (ValueError, IndexError):
+                pass
         renderer_raw = payload.get("renderer_path")
-        if not isinstance(watch_id, str) or not isinstance(renderer_raw, str):
+        if not isinstance(renderer_raw, str):
             self._clear_watch_descriptor()
             return None
         try:
@@ -855,17 +906,22 @@ class TaskCardManager:
             self._clear_watch_descriptor()
             return None
         config = self._load_config()
-        interval_s = self._coerce_positive(
-            payload.get("interval_s", config.interval_s), "interval_s", _MIN_INTERVAL_S
-        )
-        requested_timeout = payload.get("timeout_s")
-        if requested_timeout is None:
-            timeout_s = config.timeout_s
-        else:
-            timeout_s = min(
-                self._coerce_positive(requested_timeout, "timeout_s", _MIN_TIMEOUT_S),
-                config.timeout_s,
+        try:
+            interval_s = self._coerce_positive(
+                payload.get("interval_s", config.interval_s), "interval_s", _MIN_INTERVAL_S
             )
+            requested_timeout = payload.get("timeout_s")
+            if requested_timeout is None:
+                timeout_s = config.timeout_s
+            else:
+                timeout_s = min(
+                    self._coerce_positive(requested_timeout, "timeout_s", _MIN_TIMEOUT_S),
+                    config.timeout_s,
+                )
+        except TaskCardError:
+            # Non-numeric cadence/ceiling in the descriptor: treat as stale.
+            self._clear_watch_descriptor()
+            return None
         requested_max = payload.get("max_refreshes")
         if type(requested_max) is int and requested_max > 0:
             effective_max = min(requested_max, config.max_refreshes)
@@ -878,11 +934,6 @@ class TaskCardManager:
             # Budget already exhausted while away: retire the stale card.
             self._clear_watch_descriptor()
             return None
-        try:
-            counter = int(str(watch_id).split("_")[-1])
-            self._counter = max(self._counter, counter)
-        except (ValueError, IndexError):
-            pass
         watch = _Watch(
             watch_id,
             renderer_path,
@@ -899,16 +950,16 @@ class TaskCardManager:
             self._clear_reminder()
         except Exception:
             # A transient renderer failure at boot must not kill the card:
-            # keep the last body, mark active, and let the thread retry.
+            # keep the last body, mark active unconditionally (the watch IS
+            # live and the returned payload says so), and let the thread retry.
             try:
                 body = self._body_path.read_text(encoding="utf-8")
             except OSError:
                 body = None
-            if body is None:
-                try:
-                    self._write_status("active")
-                except OSError:
-                    pass
+            try:
+                self._write_status("active")
+            except OSError:
+                pass
             with watch.lock:
                 watch.last_valid_body = body
                 watch.last_valid_at = _utc_now_iso() if body is not None else None
@@ -1101,6 +1152,11 @@ def setup(agent: BaseAgent, **_ignored: Any) -> TaskCardManager:
     # terminal ends (stop/remove/exhaust) already cleared the descriptor.
     try:
         manager.resume_persisted_watch()
-    except Exception:
-        pass
+    except Exception as exc:
+        log = getattr(agent, "_log", None)
+        if callable(log):
+            try:
+                log("task_card_resume_failed", error=str(exc))
+            except Exception:
+                pass
     return manager
