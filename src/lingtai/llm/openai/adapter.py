@@ -1441,6 +1441,14 @@ def _consume_responses_stream(
     seen_reasoning_summary_items: set[str] = set()
 
     for event in stream:
+        # Any lifecycle event may carry the response id (``response.created``,
+        # ``response.in_progress``, ``response.incomplete``, ``response.failed``,
+        # ``response.completed``).  Latch the newest one so a stream that ends
+        # without ``response.completed`` — which non-conforming gateways do —
+        # still yields a continuation id instead of silently dropping the chain.
+        latched_id = getattr(getattr(event, "response", None), "id", None)
+        if latched_id:
+            response_id = latched_id
         if _handle_responses_reasoning_event(event, acc, seen_reasoning_summary_items):
             continue
         if event.type == "response.output_text.delta":
@@ -1461,24 +1469,21 @@ def _consume_responses_stream(
                 acc.set_tool_args_if_empty(getattr(event.item, "arguments", None))
                 acc.finish_tool()
         elif event.type == "response.completed":
-            response_id = event.response.id
-            if event.response.usage:
-                cached = getattr(event.response.usage, "input_tokens_details", None)
+            # Locally decoded gateway SSE is raw JSON, not an SDK model: every
+            # field here is optional and must be probed, never dotted.
+            raw_usage = getattr(getattr(event, "response", None), "usage", None)
+            if raw_usage:
+                cached = getattr(raw_usage, "input_tokens_details", None)
                 cached_tokens = (
                     (getattr(cached, "cached_tokens", 0) or 0) if cached else 0
                 )
+                details = getattr(raw_usage, "output_tokens_details", None)
                 usage = UsageMetadata(
-                    input_tokens=getattr(event.response.usage, "input_tokens", 0) or 0,
-                    output_tokens=getattr(event.response.usage, "output_tokens", 0) or 0,
-                    thinking_tokens=getattr(
-                        event.response.usage, "output_tokens_details", None
-                    )
-                    and getattr(
-                        event.response.usage.output_tokens_details,
-                        "reasoning_tokens",
-                        0,
-                    )
-                    or 0,
+                    input_tokens=getattr(raw_usage, "input_tokens", 0) or 0,
+                    output_tokens=getattr(raw_usage, "output_tokens", 0) or 0,
+                    thinking_tokens=(
+                        getattr(details, "reasoning_tokens", 0) or 0 if details else 0
+                    ),
                     cached_tokens=cached_tokens,
                 )
 
@@ -2250,7 +2255,7 @@ class OpenAIResponsesSession(ChatSession):
             if self._stateless_replay:
                 self._record_assistant_response(response)
             else:
-                self._response_id = response_id
+                self._adopt_response_id(response_id)
             return response
         except Exception:
             if self._stateless_replay:
@@ -2298,12 +2303,29 @@ class OpenAIResponsesSession(ChatSession):
             if self._stateless_replay:
                 self._record_assistant_response(response)
             else:
-                self._response_id = response_id
+                self._adopt_response_id(response_id)
             return response
         except Exception:
             if self._stateless_replay:
                 self._rollback_staged(rollback_snapshot)
             raise
+
+    def _adopt_response_id(self, response_id: str | None) -> None:
+        """Advance the stateful continuation chain, never silently clear it.
+
+        A gateway that ends a stream without any response-carrying event leaves
+        ``response_id`` as ``None``. Overwriting the chain with ``None`` would
+        drop ``previous_response_id`` from the next request and discard the whole
+        server-side conversation with no signal. Keep the last known id and warn.
+        """
+        if response_id:
+            self._response_id = response_id
+            return
+        logger.warning(
+            "Responses request returned no response id; keeping previous "
+            "continuation id %r (server-side history may be stale)",
+            self._response_id,
+        )
 
     def get_history(self) -> list[dict]:
         """Return minimal state for session persistence (server-side)."""
