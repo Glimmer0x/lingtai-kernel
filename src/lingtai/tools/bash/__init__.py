@@ -63,7 +63,16 @@ _SUPERVISOR_START_LEASE_SECONDS = 3.0
 _RETURN_HANDOFF_LEASE_SECONDS = _SUPERVISOR_START_LEASE_SECONDS * 2
 _RETURN_HANDOFF_RECHECK_SECONDS = 0.05
 _SUPERVISOR_COMMIT_GRACE_SECONDS = 0.25
-_CANCEL_COMMIT_TIMEOUT_SECONDS = 3.0
+# The supervisor's bounded cancel-commit work must fit inside this window: the
+# Job-Object active-process confirmation can take its full 5s, the
+# identity-gated taskkill fallback sweep can take its full 10s
+# (``_TASKKILL_TIMEOUT_SECONDS``), and the bounded root reap adds up to 2s --
+# ~17s worst case on the escaped-child branch (the job-kill-failure branch
+# skips the 5s wait).  A tighter 3s window flaked the native Windows cancel
+# contract under runner load (manager gave up with "awaiting supervisor
+# terminal commit" while the supervisor was still committing); 20s keeps the
+# full worst case inside the window with margin.
+_CANCEL_COMMIT_TIMEOUT_SECONDS = 20.0
 # Windows sync runs bound the post-kill pipe drain (Codex ``io_drain_timeout``,
 # Goose PR #7689): a grandchild that inherited the stdout/stderr pipe write
 # ends and survived the kill must not block the caller on EOF forever.

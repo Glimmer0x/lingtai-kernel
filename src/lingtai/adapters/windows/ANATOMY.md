@@ -62,7 +62,8 @@ only method execution requires Windows.
 - `_win32` — shared low-level ctypes surface: `process_alive`
   (OpenProcess/GetExitCodeProcess — never `os.kill`, which terminates on
   Windows), `process_creation_identity` (`windows:<creation_filetime>`),
-  `terminate_pid` (exact-PID `TerminateProcess`), and the
+  `terminate_pid` (exact-PID `TerminateProcess`), `taskkill_tree`
+  (identity-gated `taskkill /PID <pid> /T /F` tree-kill fallback), and the
   `DETACHED_CREATIONFLAGS` spawn constant
   (`src/lingtai/adapters/windows/_win32.py`).
 - `WindowsWorkdirLeaseAdapter` — exclusive workdir lease via `msvcrt.locking`
@@ -109,7 +110,11 @@ only method execution requires Windows.
   accounting, bounded tree cancellation, creation-time process identity.  Its
   Job Object is strict kill-on-close with **no** breakaway escape hatch: no
   descendant can leave the job, so ActiveProcesses accounting stays the exact
-  ownership/quiescence source of truth
+  ownership/quiescence source of truth; when the Job kill fails or a
+  descendant escapes the job, an identity-gated `taskkill /T /F` fallback
+  re-checks the creation-time identity before killing; the fallback sweep and
+  root reap are bounded so a fail-closed (identity-mismatch) sweep still
+  converges to a terminal commit
   (`src/lingtai/adapters/windows/powershell_process.py`).
 - `win32_job` — raw ctypes Job Object primitives shared by the shell
   adapters: kill-on-close + breakaway-ok job creation (Codex parity for the

@@ -3,10 +3,10 @@
 Internal to ``lingtai.adapters.windows``: capability adapters (workdir lease,
 refresh watcher, daemon, avatar) each keep their own capability-local Ports and
 policy; this module only prevents divergent copies of the same raw ctypes
-plumbing. It deliberately exposes exactly four primitives — liveness,
-creation-time identity, exact-PID termination, and the detached-spawn creation
-flags — and no process enumeration, tree, or policy surface, so it cannot grow
-into a generic process supervisor.
+plumbing. It deliberately exposes a small primitive surface — liveness,
+creation-time identity, exact-PID termination, the taskkill tree-kill
+fallback, and the detached-spawn creation flags — and no process enumeration
+or policy surface, so it cannot grow into a generic process supervisor.
 
 All helpers require Windows at call time and guard with ``os.name``; importing
 this module is safe on every platform.
@@ -23,6 +23,11 @@ Windows semantics worth naming once:
   liveness with creation-time identity.
 - Creation-time identity (``windows:<creation_filetime>``) matches the format
   used by the shell adapter's process references; PID alone is never authority.
+- ``taskkill /PID <pid> /T /F`` is the documented Microsoft tree-kill
+  primitive (Hermes ``_terminate_host_pid``).  The tree must be killed before
+  any exact-PID root kill, or the descendant relationship is lost and
+  descendants leak (OpenClaw #71662); ``/F`` is already a hard kill, so there
+  is no Windows SIGTERM-to-SIGKILL escalation tier.
 """
 from __future__ import annotations
 
@@ -163,11 +168,60 @@ def terminate_pid(pid: int, exit_code: int = 1) -> bool:
         kernel.CloseHandle(handle)
 
 
+_TASKKILL_TIMEOUT_SECONDS = 10
+
+
+def taskkill_tree(pid: int, creation_filetime: str | None) -> bool:
+    """Force-kill a process tree via ``taskkill /PID <pid> /T /F``.
+
+    Identity guard: ``creation_filetime`` is the ``windows:<creation_filetime>``
+    captured when the process was spawned.  The live PID is re-validated against
+    it before any signal is sent; a mismatch (or an unobservable PID) means the
+    number was recycled onto an unrelated process, and the helper refuses to
+    signal a stranger — a leaked orphan is strictly preferable to killing a
+    recycled PID's new owner (Hermes ``_host_pid_is_ours`` pattern).  A
+    milliseconds-wide TOCTOU remains between the re-validation and the
+    taskkill spawn during which the PID could still be recycled; the guard
+    makes signaling a recycled owner vanishingly unlikely, not airtight.
+
+    Tree-first, root-last (OpenClaw #71662): ``/T`` resolves the descendant
+    relationship from the live tree and terminates it as one primitive, so the
+    root is never exact-PID-killed first (that would orphan the descendants for
+    a later ``/T``).  ``/F`` is already a hard kill, so there is no
+    SIGTERM-to-SIGKILL escalation tier on Windows (Hermes ``_terminate_host_pid``,
+    tools/process_registry.py:548).  The helper console window is hidden with
+    ``CREATE_NO_WINDOW``.
+
+    Returns ``True`` when the identity matched and taskkill reported success;
+    ``False`` when the identity did not match, the PID is gone, or taskkill
+    could not be invoked.
+    """
+    if os.name != "nt":
+        raise OSError("Win32 process surface requires Windows")
+    if pid <= 0 or not creation_filetime:
+        return False
+    if process_creation_identity(pid) != creation_filetime:
+        return False
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_TASKKILL_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 __all__ = [
     "CREATE_NEW_PROCESS_GROUP",
     "CREATE_NO_WINDOW",
     "DETACHED_CREATIONFLAGS",
     "process_alive",
     "process_creation_identity",
+    "taskkill_tree",
     "terminate_pid",
 ]
