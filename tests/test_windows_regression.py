@@ -161,7 +161,10 @@ class TestSpawnNoWindowFlags:
             args, kwargs = popen.call_args
             argv = args[0]
             assert argv[1:5] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-            assert argv[-1] == invocation.script
+            # The wrapped script travels over UTF-8 stdin; argv ends in the
+            # ASCII bootstrap that reads stdin and runs the script.
+            assert "[Console]::In.ReadToEnd()" in argv[-1]
+            assert invocation.stdin_script == invocation.script
             creationflags = kwargs["creationflags"]
             # Never flash a console window for the pwsh child (Hermes
             # test_windows_subprocess_no_window_flags.py pattern).
