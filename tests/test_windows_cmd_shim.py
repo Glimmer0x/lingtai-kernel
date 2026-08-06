@@ -239,9 +239,9 @@ def test_powershell_dialect_uses_trusted_cmd_shim(npm_prefix, tmp_path, monkeypa
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
     node = shutil.which("node", path=str(npm_prefix))
     cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
-    assert f"& '{node}' '{cli}' 'run' 'build'" in args[-1]
-    assert '"' not in args[-1]  # PS source: never list2cmdline C-runtime quoting
-    assert "$global:__lingtai_success" in args[-1]
+    assert f"& '{node}' '{cli}' 'run' 'build'" in invocation.stdin_script
+    assert '"' not in invocation.stdin_script  # PS source: never list2cmdline C-runtime quoting
+    assert "$global:__lingtai_success" in invocation.stdin_script
 
     # unsafe metachars on a shim command -> clean ValueError
     with pytest.raises(ValueError, match="unsafe metacharacter"):
@@ -251,7 +251,7 @@ def test_powershell_dialect_uses_trusted_cmd_shim(npm_prefix, tmp_path, monkeypa
     invocation = dialect.make_invocation("Write-Output hi")
     args, kwargs = invocation.process_args()
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-    assert "Write-Output hi" in args[-1]
+    assert "Write-Output hi" in invocation.stdin_script
     assert kwargs == {"shell": False}
 
 
@@ -293,9 +293,9 @@ def test_npm_script_with_spaces_in_path(tmp_path, monkeypatch):
     node = shutil.which("node", path=str(prefix))
     cli = str(prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
     assert " " in node  # the spacey path is genuinely exercised
-    assert f"& '{node}' '{cli}' 'run' 'build'" in args[-1]
-    assert '"' not in args[-1]  # no list2cmdline C-runtime quoting
-    assert args[-1].count("'") % 2 == 0  # balanced quotes -> no parse error
+    assert f"& '{node}' '{cli}' 'run' 'build'" in invocation.stdin_script
+    assert '"' not in invocation.stdin_script  # no list2cmdline C-runtime quoting
+    assert invocation.stdin_script.count("'") % 2 == 0  # balanced quotes -> no parse error
 
 
 def test_npm_script_with_single_quote_arg(npm_prefix, monkeypatch):
@@ -312,5 +312,5 @@ def test_npm_script_with_single_quote_arg(npm_prefix, monkeypatch):
     args, kwargs = invocation.process_args()
     node = shutil.which("node", path=str(npm_prefix))
     cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
-    assert f"& '{node}' '{cli}' 'view' 'it''s'" in args[-1]
-    assert args[-1].count("'") % 2 == 0  # balanced quotes -> no parse error
+    assert f"& '{node}' '{cli}' 'view' 'it''s'" in invocation.stdin_script
+    assert invocation.stdin_script.count("'") % 2 == 0  # balanced quotes -> no parse error
