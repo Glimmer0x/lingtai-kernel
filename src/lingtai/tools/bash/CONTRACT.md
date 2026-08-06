@@ -284,7 +284,11 @@ dialect's `encoding`/`errors` (the PowerShell wrapper forces UTF-8 console
 output, so `errors="replace"` rarely corrupts). Async output files are bytes;
 on Windows the read-back boundary decodes them with
 `lingtai.adapters.windows.powershell.decode_windows_output` (strict UTF-8,
-then OEM codepage fallback) so OEM-codepage output is not replaced.
+then OEM codepage fallback decided per line) so OEM-codepage output is not
+replaced and a mostly-UTF-8 log with one invalid byte run keeps its valid
+text.  The read-back boundary then translates `\r\n`/`\r` to `\n`,
+preserving the universal-newlines semantics of the previous `read_text`
+decode (async output never carries stray CR characters).
 
 `ShellInvocation` serializes five keys by default (`script`, `executable`,
 `argv`, `encoding`, `errors`) plus an optional sixth `stdin_script` when the

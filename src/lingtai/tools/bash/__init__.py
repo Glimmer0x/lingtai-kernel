@@ -1322,13 +1322,23 @@ class ShellManager:
             if os.name != "nt":
                 # POSIX async logs keep the historical replacement-character
                 # decode; the Windows OEM fallback below is console-specific.
-                return raw.decode("utf-8", errors="replace")
-            # The PowerShell wrapper forces the child's console encoding to
-            # UTF-8, but a native tool can still emit OEM-codepage bytes;
-            # re-decode those instead of corrupting them with errors="replace".
-            from lingtai.adapters.windows.powershell import decode_windows_output
+                text = raw.decode("utf-8", errors="replace")
+            else:
+                # The PowerShell wrapper forces the child's console encoding
+                # to UTF-8, but a native tool can still emit OEM-codepage
+                # bytes; re-decode those instead of corrupting them with
+                # errors="replace".  The fallback is decided per line, so a
+                # mostly-UTF-8 log with one invalid byte run is not re-decoded
+                # wholesale as OEM (which would garble the whole log).
+                from lingtai.adapters.windows.powershell import decode_windows_output
 
-            return decode_windows_output(raw)
+                text = decode_windows_output(raw)
+            # Restore the universal-newlines translation the previous
+            # read_text() provided: pwsh emits CRLF-terminated lines, and
+            # without this every async stdout/stderr line would carry a
+            # stray "\r" into results, truncation accounting, and
+            # newline-based splitting.
+            return text.replace("\r\n", "\n").replace("\r", "\n")
 
         try:
             stdout = read_log("stdout.log")
