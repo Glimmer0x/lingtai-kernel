@@ -570,7 +570,6 @@ class ShellManager:
                 # text mode lets subprocess encode it with the dialect encoding
                 # (UTF-8) and feed it while concurrently draining the pipes.
                 process_kwargs["input"] = invocation.stdin_script
- (fix(windows): Job Object tree-kill + io drain timeout for shell sync runs)
             result = subprocess.run(
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,
