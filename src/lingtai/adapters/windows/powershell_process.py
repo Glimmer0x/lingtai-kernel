@@ -427,6 +427,17 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
             nonlocal fallback_outcome, fallback_swept
             if not cancellation_requested():
                 return None
+            if fallback_swept:
+                # A prior identity-gated sweep already ran and could not prove
+                # full-tree ownership (fail-closed).  Never re-enter the
+                # TerminateJobObject + 5s wait path -- the recorded fallback
+                # outcome stands.  Just retry the bounded reap so a root that
+                # has since exited still commits promptly instead of stalling
+                # the supervisor's terminal commit.
+                code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
+                if code is not None:
+                    return ProcessCompletion(code, fallback_outcome)
+                return None
             terminated = bool(_kernel32().TerminateJobObject(owned.job_handle, 1))
             if not terminated:
                 # Job-Object kill failed (job already dead/closed or access
@@ -435,16 +446,15 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 # spawn so a recycled PID is never signaled (Hermes
                 # ``_host_pid_is_ours`` pattern).  The Job can no longer prove
                 # full-tree ownership, so the outcome is ``unconfirmed``.
-                if not fallback_swept:
-                    fallback_swept = True
-                    taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
-                    fallback_outcome = "unconfirmed"
-                    # The identity gate is fail-closed: a declined sweep leaves
-                    # the root alive.  Reap with a bound and let the natural
-                    # loop converge instead of blocking the terminal commit.
-                    code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
-                    if code is not None:
-                        return ProcessCompletion(code, "unconfirmed")
+                fallback_swept = True
+                taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
+                fallback_outcome = "unconfirmed"
+                # The identity gate is fail-closed: a declined sweep leaves
+                # the root alive.  Reap with a bound and let the natural
+                # loop converge instead of blocking the terminal commit.
+                code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
+                if code is not None:
+                    return ProcessCompletion(code, "unconfirmed")
                 return None
             # ActiveProcesses reaches zero only after every assigned child exits,
             # which is the full-tree ownership proof.
@@ -453,13 +463,12 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                 # and survived the terminate; Job accounting can no longer prove
                 # full-tree ownership.  ``taskkill /T`` follows the live PPID
                 # links from the root, so sweep the escaped tree as a fallback.
-                if not fallback_swept:
-                    fallback_swept = True
-                    taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
-                    fallback_outcome = "unconfirmed"
-                    code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
-                    if code is not None:
-                        return ProcessCompletion(code, "unconfirmed")
+                fallback_swept = True
+                taskkill_tree(owned.ref.public_id, owned.ref.incarnation)
+                fallback_outcome = "unconfirmed"
+                code = _reap_root_bounded(process, _FALLBACK_REAP_TIMEOUT_SECONDS)
+                if code is not None:
+                    return ProcessCompletion(code, "unconfirmed")
                 return None
             return ProcessCompletion(process.wait(), "group_cancelled")
 
@@ -472,21 +481,27 @@ class WindowsShellAsyncProcessAdapter(BashAsyncProcessPort):
                     time.sleep(0.05)
                     continue
 
+                code = process.wait()
+                # A prior fail-closed sweep already recorded the fallback
+                # outcome.  Commit it as soon as the root has exited, without
+                # requiring the Job to drain: an escaped/stuck descendant (e.g.
+                # hung kernel I/O) can keep the Job non-empty for minutes, and
+                # waiting for emptiness would stall the supervisor's terminal
+                # commit forever -- base behavior returned "unconfirmed" here
+                # within ~5s.
+                if fallback_swept:
+                    return ProcessCompletion(code, fallback_outcome)
                 # The root Popen may have exited while a descendant is still in
                 # the Job.  Keep the Job handle owned and poll it in short
                 # intervals so a later durable cancel request still gets the
                 # confirmed TerminateJobObject/group_cancelled path.  Basic Job
                 # accounting is used because natural completion did not reliably
                 # signal the Job handle in native CI.
-                code = process.wait()
                 while not _wait_job(owned.job_handle, 0.05):
                     cancellation = cancel_owned_tree()
                     if cancellation is not None:
                         return cancellation
-                # A prior fail-closed sweep that could not kill the root keeps
-                # its recorded fallback outcome once the root finally exits
-                # naturally, so the supervisor still converges to a commit.
-                return ProcessCompletion(code, fallback_outcome)
+                return ProcessCompletion(code)
         finally:
             owned.close()
 

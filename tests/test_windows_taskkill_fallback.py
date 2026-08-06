@@ -21,8 +21,13 @@ from lingtai.adapters.windows.powershell_process import (
 from lingtai.tools.bash._async_process import ProcessRef
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def _force_windows(monkeypatch):
+    # Scope this to the primitive tests that actually exercise the
+    # ``os.name != "nt"`` guard: patching the global ``os`` module attribute
+    # for the whole file is a landmine for any future ``Path``/``os.name``
+    # usage in the wiring path (pathlib's flavour selection is
+    # ``os.name``-sensitive on 3.12).
     monkeypatch.setattr(_win32.os, "name", "nt")
 
 
@@ -41,12 +46,12 @@ def test_taskkill_tree_requires_windows(monkeypatch):
         _win32.taskkill_tree(123, "windows:1")
 
 
-def test_taskkill_tree_refuses_without_captured_identity():
+def test_taskkill_tree_refuses_without_captured_identity(_force_windows):
     assert _win32.taskkill_tree(123, None) is False
     assert _win32.taskkill_tree(123, "") is False
 
 
-def test_taskkill_tree_refuses_recycled_pid_without_signaling(monkeypatch):
+def test_taskkill_tree_refuses_recycled_pid_without_signaling(_force_windows, monkeypatch):
     monkeypatch.setattr(
         _win32, "process_creation_identity", lambda pid: "windows:999"
     )
@@ -60,7 +65,7 @@ def test_taskkill_tree_refuses_recycled_pid_without_signaling(monkeypatch):
     assert calls == []
 
 
-def test_taskkill_tree_invokes_taskkill_hidden_window_on_identity_match(monkeypatch):
+def test_taskkill_tree_invokes_taskkill_hidden_window_on_identity_match(_force_windows, monkeypatch):
     monkeypatch.setattr(
         _win32, "process_creation_identity", _matching_identity
     )
@@ -78,7 +83,7 @@ def test_taskkill_tree_invokes_taskkill_hidden_window_on_identity_match(monkeypa
     assert kwargs["timeout"] == 10
 
 
-def test_taskkill_tree_reports_failure_on_nonzero_taskkill_exit(monkeypatch):
+def test_taskkill_tree_reports_failure_on_nonzero_taskkill_exit(_force_windows, monkeypatch):
     monkeypatch.setattr(_win32, "process_creation_identity", _matching_identity)
     monkeypatch.setattr(
         subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=128)
@@ -86,7 +91,7 @@ def test_taskkill_tree_reports_failure_on_nonzero_taskkill_exit(monkeypatch):
     assert _win32.taskkill_tree(123, "windows:123") is False
 
 
-def test_taskkill_tree_reports_failure_when_taskkill_unavailable(monkeypatch):
+def test_taskkill_tree_reports_failure_when_taskkill_unavailable(_force_windows, monkeypatch):
     monkeypatch.setattr(_win32, "process_creation_identity", _matching_identity)
 
     def boom(*args, **kwargs):

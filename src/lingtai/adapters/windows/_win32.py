@@ -179,7 +179,10 @@ def taskkill_tree(pid: int, creation_filetime: str | None) -> bool:
     it before any signal is sent; a mismatch (or an unobservable PID) means the
     number was recycled onto an unrelated process, and the helper refuses to
     signal a stranger — a leaked orphan is strictly preferable to killing a
-    recycled PID's new owner (Hermes ``_host_pid_is_ours`` pattern).
+    recycled PID's new owner (Hermes ``_host_pid_is_ours`` pattern).  A
+    milliseconds-wide TOCTOU remains between the re-validation and the
+    taskkill spawn during which the PID could still be recycled; the guard
+    makes signaling a recycled owner vanishingly unlikely, not airtight.
 
     Tree-first, root-last (OpenClaw #71662): ``/T`` resolves the descendant
     relationship from the live tree and terminates it as one primitive, so the
