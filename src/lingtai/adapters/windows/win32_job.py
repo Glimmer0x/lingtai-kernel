@@ -382,13 +382,18 @@ def drain_pipes(process, timeout_seconds: float = IO_DRAIN_TIMEOUT_SECONDS):
         return process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
         partial = (exc.stdout, exc.stderr)
-        for stream in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
-        return partial
+    except (OSError, ValueError):
+        # The kill can leave a pipe already broken; the reader thread then
+        # surfaces OSError/ValueError instead of TimeoutExpired.  Same bounded
+        # outcome: hand back what we have and never block on EOF.
+        partial = (None, None)
+    for stream in (getattr(process, "stdout", None), getattr(process, "stderr", None)):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+    return partial
 
 
 __all__ = [

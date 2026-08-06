@@ -305,7 +305,7 @@ class _SyncProcess:
         self._result = result
         self.pid = 4242
 
-    def communicate(self, timeout=None):
+    def communicate(self, input=None, timeout=None):
         raise self._result
 
 
@@ -349,7 +349,7 @@ def test_sync_success_caps_output(monkeypatch, tmp_path):
         pid = 7
         returncode = 0
 
-        def communicate(self, timeout=None):
+        def communicate(self, input=None, timeout=None):
             return "x" * 60_000, ""
 
     events = []
@@ -388,3 +388,134 @@ def test_sync_falls_back_to_plain_run_when_job_unavailable(monkeypatch, tmp_path
     assert result["stdout"] == "plain"
     assert run_calls[0]["timeout"] == 30.0
     assert run_calls[0]["capture_output"] is True
+
+
+class _StdinProcess:
+    """Fake Popen that records what ``communicate`` received."""
+
+    pid = 4242
+    returncode = 0
+
+    def __init__(self):
+        self.calls = {}
+
+    def communicate(self, input=None, timeout=None):
+        self.calls["input"] = input
+        self.calls["timeout"] = timeout
+        return "boot ok", ""
+
+
+def _invocation_with_stdin_script(script: str, stdin_script: str) -> ShellInvocation:
+    """ShellInvocation plus the #1191 ``stdin_script`` field (frozen dataclass)."""
+    invocation = ShellInvocation(script=script)
+    object.__setattr__(invocation, "stdin_script", stdin_script)
+    return invocation
+
+
+def test_sync_contained_delivers_stdin_bootstrap_script(monkeypatch, tmp_path):
+    """Cross-PR guard: #1191's stdin-bootstrap script must reach the child.
+
+    The PowerShell bootstrap reads the real script from stdin; without this
+    wiring the contained sync path would never send it (no EOF -> the
+    bootstrap's ReadToEnd() blocks -> every sync command times out and gets
+    tree-killed).  Asserts the spawn gets ``stdin=PIPE`` (and no stray
+    ``input`` key, which Popen would reject), and ``communicate`` receives the
+    script as ``input``.
+    """
+    import lingtai.tools.bash as bash_module
+
+    monkeypatch.setattr(bash_module, "_sync_run_contained", lambda: True)
+    process = _StdinProcess()
+    events = []
+    monkeypatch.setattr(
+        win32_job, "spawn_into_job",
+        lambda args, kwargs: events.append(kwargs) or (process, 9),
+    )
+    monkeypatch.setattr(win32_job, "close_handle", lambda handle: None)
+
+    manager = _manager(tmp_path)
+    invocation = _invocation_with_stdin_script(
+        "bootstrap", "Write-Output 'real-script'"
+    )
+    result = manager._run_sync("bootstrap", str(tmp_path), 30.0, invocation)
+    assert result["status"] == "ok"
+    assert result["stdout"] == "boot ok"
+    spawn_kwargs = events[0]
+    assert spawn_kwargs["stdin"] is subprocess.PIPE
+    assert "input" not in spawn_kwargs
+    assert process.calls["input"] == "Write-Output 'real-script'"
+    assert process.calls["timeout"] == 30.0
+
+
+def test_sync_contained_defaults_stdin_to_devnull(monkeypatch, tmp_path):
+    """Without a stdin script the child never inherits the parent's input."""
+    import lingtai.tools.bash as bash_module
+
+    monkeypatch.setattr(bash_module, "_sync_run_contained", lambda: True)
+    process = _StdinProcess()
+    events = []
+    monkeypatch.setattr(
+        win32_job, "spawn_into_job",
+        lambda args, kwargs: events.append(kwargs) or (process, 9),
+    )
+    monkeypatch.setattr(win32_job, "close_handle", lambda handle: None)
+
+    manager = _manager(tmp_path)
+    result = manager._run_sync(
+        "echo hi", str(tmp_path), 30.0, ShellInvocation(script="echo hi")
+    )
+    assert result["status"] == "ok"
+    assert events[0]["stdin"] is subprocess.DEVNULL
+    assert "input" not in events[0]
+    assert process.calls["input"] is None
+
+
+def test_sync_contained_forwards_process_kwargs_input(monkeypatch, tmp_path):
+    """#1191's ``process_kwargs["input"]`` wiring is honored by the contained path."""
+    import lingtai.tools.bash as bash_module
+
+    monkeypatch.setattr(bash_module, "_sync_run_contained", lambda: True)
+    process = _StdinProcess()
+    events = []
+    monkeypatch.setattr(
+        win32_job, "spawn_into_job",
+        lambda args, kwargs: events.append(kwargs) or (process, 9),
+    )
+    monkeypatch.setattr(win32_job, "close_handle", lambda handle: None)
+
+    manager = _manager(tmp_path)
+    result = manager._run_sync_contained(
+        "bootstrap", str(tmp_path), 30.0,
+        ShellInvocation(script="bootstrap"),
+        ["pwsh", "-NoProfile", "-Command", "bootstrap"],
+        {"input": "Write-Output 'via-kwargs'", "shell": False},
+    )
+    assert result["status"] == "ok"
+    assert events[0]["stdin"] is subprocess.PIPE
+    assert "input" not in events[0]
+    assert process.calls["input"] == "Write-Output 'via-kwargs'"
+
+
+def test_sync_spawn_file_not_found_reports_without_retry(monkeypatch, tmp_path):
+    """A genuine spawn failure is reported, not retried through plain run."""
+    import lingtai.tools.bash as bash_module
+
+    monkeypatch.setattr(bash_module, "_sync_run_contained", lambda: True)
+    monkeypatch.setattr(
+        win32_job, "spawn_into_job",
+        lambda args, kwargs: (_ for _ in ()).throw(FileNotFoundError(2, "pwsh")),
+    )
+    run_calls = []
+    monkeypatch.setattr(
+        bash_module.subprocess, "run",
+        lambda *args, **kwargs: run_calls.append(kwargs)
+        or SimpleNamespace(stdout="", stderr="", returncode=0),
+    )
+
+    manager = _manager(tmp_path)
+    result = manager._run_sync(
+        "pwsh -c x", str(tmp_path), 30.0, ShellInvocation(script="pwsh -c x")
+    )
+    assert result["status"] == "error"
+    assert "pwsh" in result["message"]
+    assert run_calls == []  # no doubled spawn attempt

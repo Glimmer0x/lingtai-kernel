@@ -32,11 +32,6 @@ _PROCESS_TERMINATE = 0x0001
 _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-# BREAKAWAY_OK lets a contained child opt out with CREATE_BREAKAWAY_FROM_JOB
-# when it must manage its own job (e.g. Windows Update / installer service
-# hosts); kill-on-close still owns every process that stays in the job.  This
-# matches Codex CLI's Job Object flags (codex-rs/utils/pty/src/win/job.rs).
-_JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00001000
 
 
 @functools.lru_cache(maxsize=1)
@@ -141,12 +136,14 @@ def _set_kill_on_close(job_handle) -> None:
         ]
 
     info = _ExtendedLimitInformation()
-    # KILL_ON_JOB_CLOSE + BREAKAWAY_OK mirrors Codex CLI's Job Object flags
-    # (codex-rs/utils/pty/src/win/job.rs): closing the last job handle kills the
-    # owned tree, while a child that needs its own job may opt out explicitly.
-    info.BasicLimitInformation.LimitFlags = (
-        _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | _JOB_OBJECT_LIMIT_BREAKAWAY_OK
-    )
+    # KILL_ON_JOB_CLOSE only.  The async adapter's containment invariant is
+    # "no descendant can exist outside the job": ActiveProcesses accounting
+    # is its ownership/quiescence source of truth, and a BREAKAWAY_OK escape
+    # hatch would silently let a requesting descendant leave the job (escaping
+    # tree-kill, kill-on-close, and that accounting).  The sync shell path
+    # (``win32_job.create_job_handle``) is the Codex-parity breakaway-ok
+    # variant, for installer/service hosts that must manage their own job.
+    info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     if not _kernel32().SetInformationJobObject(
         job_handle,
         _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,

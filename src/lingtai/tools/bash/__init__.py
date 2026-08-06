@@ -486,14 +486,31 @@ class ShellManager:
 
     def _run_sync(self, command: str, cwd: str, timeout: float, invocation: ShellInvocation) -> dict:
         """Run the selected invocation; timeout/capture/result policy stays here."""
-        process_args, process_kwargs = invocation.process_args()
+        try:
+            process_args, process_kwargs = invocation.process_args()
+        except Exception as e:
+            # Historical safety net: a dialect-construction failure (e.g. the
+            # #1191 "stdin_script requires the argv form" ValueError) surfaces
+            # as a result on every platform, never as an exception to the
+            # tool caller.
+            return {"status": "error", "message": f"Command failed: {e}"}
         if invocation.encoding is not None:
             process_kwargs["encoding"] = invocation.encoding
         if invocation.errors is not None:
             process_kwargs["errors"] = invocation.errors
+        # #1191 stdin bootstrap: a dialect that delivers the real script via
+        # stdin (``invocation.stdin_script``) carries it as the ``input``
+        # process kwarg, consumed by ``subprocess.run`` here and forwarded to
+        # ``communicate(input=...)`` by the contained path.  The getattr guard
+        # keeps this inert until #1191 lands on this branch.
+        stdin_script = getattr(invocation, "stdin_script", None)
+        if stdin_script is not None:
+            process_kwargs["input"] = stdin_script
         if _sync_run_contained():
             try:
-                return self._run_sync_contained(command, cwd, timeout, process_args, process_kwargs)
+                return self._run_sync_contained(
+                    command, cwd, timeout, invocation, process_args, process_kwargs,
+                )
             except Exception as e:
                 # Keep the historical safety net: an unexpected contained-path
                 # failure is reported, never raised to the tool caller.
@@ -534,7 +551,7 @@ class ShellManager:
 
     def _run_sync_contained(
         self, command: str, cwd: str, timeout: float,
-        process_args: object, process_kwargs: dict,
+        invocation: ShellInvocation, process_args: object, process_kwargs: dict,
     ) -> dict:
         """Windows sync run: Job Object containment plus bounded pipe drain.
 
@@ -547,20 +564,47 @@ class ShellManager:
         ``io_drain_timeout`` window (Codex ``exec.rs``).  If Job containment is
         unavailable on the host, fall back to the historical plain
         ``subprocess.run`` behavior.
+
+        Containment is deliberate: the Job Object is kill-on-close, so closing
+        the job handle on the success path also terminates any surviving
+        descendant (e.g. a daemon the script started with ``Start-Process``
+        and detached stdio from).  Background work that must outlive the
+        command belongs to the async path (``async: true``).
         """
         from lingtai.adapters.windows import win32_job
 
+        spawn_kwargs = {
+            **process_kwargs,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "cwd": cwd,
+        }
+        # #1191 stdin bootstrap integration: the dialect delivers the real
+        # script through stdin (``invocation.stdin_script``, surfaced as the
+        # ``input`` kwarg by ``_run_sync``).  ``Popen`` has no ``input``
+        # parameter, so pop it and feed ``communicate(input=...)``; without
+        # this, the bootstrap's ``ReadToEnd()`` never sees EOF and every sync
+        # command would time out and be tree-killed.  The invocation-attribute
+        # fallback keeps the contained path correct even if a later merge
+        # drops the ``_run_sync`` wiring line.
+        input_data = spawn_kwargs.pop("input", None)
+        if input_data is None:
+            input_data = getattr(invocation, "stdin_script", None)
+        if input_data is not None:
+            spawn_kwargs["stdin"] = subprocess.PIPE
+        else:
+            # Never inherit the parent console stdin: a sync run must not read
+            # from or pin the supervisor's input handle, and a background
+            # child cannot keep our stdin open after the command completes.
+            spawn_kwargs["stdin"] = subprocess.DEVNULL
         try:
-            process, job = win32_job.spawn_into_job(
-                process_args,
-                {
-                    **process_kwargs,
-                    "stdout": subprocess.PIPE,
-                    "stderr": subprocess.PIPE,
-                    "text": True,
-                    "cwd": cwd,
-                },
-            )
+            process, job = win32_job.spawn_into_job(process_args, spawn_kwargs)
+        except FileNotFoundError:
+            # A genuine spawn failure (missing executable) must be reported,
+            # not retried through the plain path as if the Job machinery had
+            # failed.
+            raise
         except OSError:
             # Job containment unavailable (host job policy / sandboxed
             # environment): keep the pre-existing plain subprocess.run path.
@@ -574,16 +618,21 @@ class ShellManager:
             return self._sync_result_from(result.stdout, result.stderr, result.returncode)
         try:
             try:
-                stdout, stderr = process.communicate(timeout=timeout)
+                stdout, stderr = process.communicate(input=input_data, timeout=timeout)
                 returncode = process.returncode
             except subprocess.TimeoutExpired:
                 win32_job.terminate_owned_tree(job, process.pid)
                 # Bounded drain: a grandchild that survived the kill and still
                 # holds the pipe write ends must not block this supervisor on
-                # EOF forever (Codex io_drain_timeout; Goose PR #7689).
+                # EOF forever (Codex io_drain_timeout; Goose PR #7689).  The
+                # process is never ``wait()``-ed on this double-timeout path;
+                # the bounded drain plus handle close is the documented bound.
                 win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
                 return _timeout_error(command, timeout)
         finally:
+            # Closing the last job handle fires KILL_ON_JOB_CLOSE, terminating
+            # any surviving descendant — this is the containment contract of
+            # the sync path (see module/CONTRACT docs).
             win32_job.close_handle(job)
         return self._sync_result_from(stdout, stderr, returncode)
 

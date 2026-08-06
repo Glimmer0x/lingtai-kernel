@@ -317,6 +317,19 @@ those Ports.
 
 - POSIX sync execution consumes a script-form `ShellInvocation`, equivalent to
   `subprocess.run(command, shell=True, ...)` — POSIX shell string semantics.
+- Windows sync execution runs inside a kill-on-close Job Object
+  (`win32_job.spawn_into_job`, Codex `process_group` `win/job.rs`): on timeout
+  the whole contained tree is terminated and the stdout/stderr pipes are
+  drained for a bounded window only (`io_drain_timeout`, Goose PR #7689), so a
+  grandchild that survived the kill cannot hang the caller on pipe EOF.  On
+  success, closing the job handle also terminates any surviving descendant — a
+  background process started by a sync command (e.g. `Start-Process` with
+  redirected output) does NOT outlive the command.  Work that must outlive the
+  command belongs to the async path (`async: true`), the sanctioned way to run
+  background work.  A dialect that delivers the script via stdin
+  (`invocation.stdin_script`) is fed through the contained path with
+  `stdin=PIPE` + `communicate(input=...)`; otherwise the child gets
+  `stdin=DEVNULL` and never inherits the supervisor's console input.
 - The Bash-local process Port exposes neutral refs and opaque owned handles. The
   POSIX process adapter implements detached launch, `ShellInvocation` spawn,
   identity observation, exact waits, process-group cancellation, and quiescence;
