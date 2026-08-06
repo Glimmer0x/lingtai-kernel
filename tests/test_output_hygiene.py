@@ -99,9 +99,18 @@ class TestStripShellStartupNoise:
         lines = ["tcsetattr: Inappropriate ioctl for device", "ok"]
         assert strip_shell_startup_noise(lines) == ["ok"]
 
-    def test_drops_warning_banner_head_lines(self):
-        lines = ["warning: command substitution: ignored null byte in input", "data"]
-        assert strip_shell_startup_noise(lines) == ["data"]
+    def test_preserves_generic_warning_head_lines(self):
+        # Regression: git checkout/add stderr on Windows routinely starts with
+        # "warning: LF will be replaced by CRLF"; a generic ^warning: pattern
+        # would silently delete genuine command output.
+        lines = ["warning: LF will be replaced by CRLF", "data"]
+        assert strip_shell_startup_noise(lines) == lines
+
+    def test_preserves_head_lines_merely_containing_noise_text(self):
+        # Regression: grep output lines start with a filename, not the search
+        # string, so they must survive the (line-anchored) noise stripping.
+        lines = ["./src:no job control in this shell", "data"]
+        assert strip_shell_startup_noise(lines) == lines
 
     def test_stops_at_first_non_noise_line(self):
         lines = [
@@ -134,20 +143,21 @@ class TestStripShellStartupNoise:
 class TestTruncateOutput:
     def test_under_cap_unchanged(self):
         assert truncate_output("short", max_chars=100) == "short"
-        assert truncate_output("exactly twenty!", max_chars=14) == "exactly twenty!"
+        # "exactly twenty!" is 15 chars; a cap at 15 must leave it untouched.
+        assert truncate_output("exactly twenty!", max_chars=15) == "exactly twenty!"
 
     def test_over_cap_gets_explicit_marker(self):
         text = "x" * 30
         result = truncate_output(text, max_chars=10)
-        assert result == "x" * 10 + "\n... [output truncated at 10 chars]"
+        assert result == "x" * 10 + "\n... (truncated, 30 chars total)"
 
-    def test_marker_reports_the_cap(self):
+    def test_marker_reports_original_length(self):
         result = truncate_output("y" * 5_001, max_chars=5_000)
-        assert "... [output truncated at 5000 chars]" in result
+        assert "... (truncated, 5001 chars total)" in result
 
     def test_default_max_chars_is_applied(self):
         result = truncate_output("z" * (100_001), max_chars=100_000)
-        assert "output truncated at 100000 chars" in result
+        assert "... (truncated, 100001 chars total)" in result
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +174,31 @@ class TestSanitizeOutput:
         result = sanitize_output(text, max_chars=100_000)
         assert result == "payload \\x07 bell\n"
 
-    def test_ansi_stripped_before_warning_banner_match(self):
-        # Banner wrapped in color codes must still be dropped from the head.
+    def test_ansi_stripped_but_warning_head_lines_preserved(self):
+        # ANSI is stripped first; the warning line itself is genuine output
+        # and must be preserved, not dropped as startup noise.
         text = "\x1b[33mwarning: thing\x1b[0m\npayload\n"
-        assert sanitize_output(text) == "payload\n"
+        assert sanitize_output(text) == "warning: thing\npayload\n"
 
     def test_truncation_marker_survives_pipeline(self):
         result = sanitize_output("a" * 200, max_chars=50)
         assert result.startswith("a" * 50)
-        assert "... [output truncated at 50 chars]" in result
+        assert "... (truncated, 200 chars total)" in result
+
+    def test_huge_input_is_pre_capped_before_sanitizing(self):
+        # Regression: sanitization must not run full regex passes over the
+        # entire untruncated stream; the pre-cap bounds the work and the
+        # marker still reports the original size.
+        big = "\x07" * 2_000_000
+        result = sanitize_output(big, max_chars=100)
+        assert "... (truncated, 2000000 chars total)" in result
+        assert len(result) < 500
+
+    def test_huge_plain_text_keeps_head_and_reports_size(self):
+        big = "a" * 5_000_000
+        result = sanitize_output(big, max_chars=100)
+        assert result.startswith("a" * 100)
+        assert "... (truncated, 5000000 chars total)" in result
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +235,14 @@ class TestBashManagerHygiene:
         assert "real output" in result["stdout"]
         assert "no job control" not in result["stdout"]
 
+    def test_warning_head_lines_are_not_stripped(self):
+        mgr = self._manager()
+        result = mgr.handle(
+            {"command": "printf 'warning: LF will be replaced by CRLF\\nreal output\\n'"}
+        )
+        assert "warning: LF will be replaced by CRLF" in result["stdout"]
+        assert "real output" in result["stdout"]
+
     def test_output_is_capped_with_explicit_marker(self):
         mgr = self._manager(max_output=20)
         result = mgr.handle(
@@ -216,7 +250,8 @@ class TestBashManagerHygiene:
         )
         first_line = result["stdout"].split("\n", 1)[0]
         assert len(first_line) == 20
-        assert "... [output truncated at 20 chars]" in result["stdout"]
+        # printf output is 36 chars; the marker reports the original size.
+        assert "... (truncated, 36 chars total)" in result["stdout"]
 
     def test_plain_output_passes_through_unchanged(self):
         mgr = self._manager()

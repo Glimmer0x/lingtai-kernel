@@ -3,7 +3,7 @@
 Raw terminal output frequently carries ANSI/CSI color and cursor sequences,
 C0/C1 control bytes (bell, backspace, OSC title sequences, DEL), and
 shell-startup noise lines (``bash: no job control in this shell``,
-``warning: ...`` banners). Left verbatim, these pollute tool results, waste
+``tcsetattr: ...``). Left verbatim, these pollute tool results, waste
 context window, and can confuse downstream parsers that expect plain text.
 
 This module provides the small, dependency-free helpers the shell tool
@@ -13,10 +13,13 @@ applies before returning output:
   moves, OSC titles, single-char ESC sequences).
 - :func:`escape_controls` -- escape C0/C1 control characters as ``\\xNN``
   while keeping ``\\t``, ``\\n`` and ``\\r`` readable.
-- :func:`strip_shell_startup_noise` -- drop known startup-warning lines from
-  the head of a line list (Hermes ``_clean_shell_noise`` semantics: substring
-  noise list plus a ``^warning: `` banner pattern).
-- :func:`truncate_output` -- cap output with an explicit truncation marker.
+- :func:`strip_shell_startup_noise` -- drop known shell-init noise lines
+  (``bash: no job control in this shell``, ``tcsetattr: ...``) from the head
+  of a line list, using only specific line-anchored patterns so genuine
+  ``warning:`` command output (git checkout/add on Windows) is never
+  silently deleted.
+- :func:`truncate_output` -- cap output with an explicit truncation marker
+  that reports the original length.
 
 The shell tool composes these in :func:`sanitize_output`, applied to both
 stdout and stderr before a result is returned.
@@ -45,7 +48,7 @@ _ANSI_ESCAPE_RE = re.compile(
     \x1b\[[0-9;:?]*[ -/]*[@-~]            # CSI
     | \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)  # OSC, terminated by BEL or ESC \\
     | \x1b[()][0-9A-Za-z]                 # character-set designation
-    | \x1b[@-Z\\-_]                       # other single-char ESC sequences
+    | \x1b[0-9@-Z\\^_a-z{|}~]              # single-char ESC (incl. ESC 7/8, ESC c reset)
     """,
     re.VERBOSE,
 )
@@ -53,20 +56,25 @@ _ANSI_ESCAPE_RE = re.compile(
 # C0 (0x00-0x1F minus tab/LF/CR, plus DEL 0x7F) and C1 (0x80-0x9F) controls.
 _C0_C1_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
-# Shell-startup noise substrings, mirroring Hermes ProcessRegistry.
-_SHELL_NOISE_SUBSTRINGS = (
-    "bash: cannot set terminal process group",
-    "bash: no job control in this shell",
-    "no job control in this shell",
-    "cannot set terminal process group",
-    "tcsetattr: Inappropriate ioctl for device",
+# Shell-startup noise lines, mirrored from Hermes ProcessRegistry, anchored to
+# the *start* of a head line.  Anchoring (and dropping the generic
+# "^warning: " banner pattern) ensures genuine command output survives:
+# git checkout/add stderr on Windows routinely begins with "warning: LF will
+# be replaced by CRLF...", and `grep -r "no job control in this shell" .`
+# output lines start with a filename, not the search string.
+_STARTUP_NOISE_LINE_RE = re.compile(
+    r"^(?:"
+    r"bash: cannot set terminal process group"
+    r"|bash: no job control in this shell"
+    r"|no job control in this shell"
+    r"|cannot set terminal process group"
+    r"|tcsetattr: Inappropriate ioctl for device"
+    r")"
 )
 
-# Leading banner pattern (bash warning lines, toolchain startup warnings).
-_STARTUP_NOISE_RE = re.compile(r"^warning: ")
 
-
-_TRUNCATION_MARKER = "... [output truncated at {max_chars} chars]"
+# The truncation marker (``... (truncated, N chars total)``) is built inline
+# in truncate_output so it can report the original length.
 
 
 # ---------------------------------------------------------------------------
@@ -95,13 +103,15 @@ def escape_controls(text: str) -> str:
 
 
 def strip_shell_startup_noise(lines: list[str]) -> list[str]:
-    """Drop known shell-startup noise lines from the head of *lines*.
+    """Drop known shell-init noise lines from the head of *lines*.
 
     Only the *head* is examined (Hermes ``_clean_shell_noise`` semantics): a
-    line is dropped while it is the first remaining line and either matches
-    ``^warning: `` or contains a known startup-noise substring (bash job
-    control / tcsetattr messages).  Genuine output lines that merely contain
-    such text later in the stream are preserved.
+    line is dropped while it is the first remaining line and matches a
+    specific, line-anchored noise pattern (``bash: no job control in this
+    shell``, ``tcsetattr: Inappropriate ioctl for device``, ...).  Generic
+    ``warning:`` head lines are *not* dropped -- they are usually genuine
+    command output (git checkout/add on Windows) -- and lines merely
+    *containing* a noise substring later in the stream are preserved.
     """
     result = list(lines)
     while result and _is_startup_noise_line(result[0]):
@@ -109,40 +119,56 @@ def strip_shell_startup_noise(lines: list[str]) -> list[str]:
     return result
 
 
-def truncate_output(text: str, max_chars: int = 100_000) -> str:
+def truncate_output(
+    text: str, max_chars: int = 100_000, *, total_chars: int | None = None
+) -> str:
     """Cap *text* at *max_chars* characters with an explicit marker.
 
     Outputs at or under the cap are returned unchanged.  Longer outputs are
     cut to ``max_chars`` characters and suffixed with a newline and
-    ``... [output truncated at N chars]`` so the truncation is explicit and
-    unambiguous to the model.
+    ``... (truncated, N chars total)`` where *N* is the *original* length
+    (``total_chars`` when the caller passes a pre-capped slice, otherwise
+    ``len(text)``) so the model can tell whether it lost 1 KB or 500 MB.
     """
-    if len(text) <= max_chars:
+    if total_chars is None:
+        total_chars = len(text)
+    if len(text) <= max_chars and total_chars <= max_chars:
         return text
-    marker = _TRUNCATION_MARKER.format(max_chars=max_chars)
-    return text[:max_chars] + "\n" + marker
+    return text[:max_chars] + f"\n... (truncated, {total_chars} chars total)"
 
 
 # ---------------------------------------------------------------------------
 # Composed pipeline
 # ---------------------------------------------------------------------------
 
+# Pre-cap bound for sanitize_output: escape_controls can expand each control
+# byte to four chars, so before running the regex passes the input is sliced
+# to max_chars * 4 plus slack for head noise lines and the marker.  This
+# restores the old work bound (pre-PR code sliced to _max_output immediately)
+# for async log files that can be hundreds of MB or binary.
+_PRE_CAP_FACTOR = 4
+_PRE_CAP_SLACK = 4096
+
+
 def sanitize_output(text: str, max_chars: int = 100_000) -> str:
     """Apply the full output-hygiene pipeline to one output stream.
 
     Order: strip ANSI/CSI, escape remaining C0/C1 controls, drop shell
-    startup noise from the head, then cap with the truncation marker.
-    Stripping ANSI first lets the ``^warning: `` head pattern match banner
-    lines that arrived wrapped in color codes.
+    startup noise from the head, then cap with the truncation marker.  The
+    input is pre-capped to ``max_chars * 4 + slack`` before the regex passes
+    so pathological streams never cost multiple full-size passes, and the
+    marker reports the *original* length (captured before the pre-cap).
     """
+    original_len = len(text)
+    pre_cap = max_chars * _PRE_CAP_FACTOR + _PRE_CAP_SLACK
+    if original_len > pre_cap:
+        text = text[:pre_cap]
     text = strip_ansi(text)
     text = escape_controls(text)
     text = "\n".join(strip_shell_startup_noise(text.split("\n")))
-    return truncate_output(text, max_chars=max_chars)
+    return truncate_output(text, max_chars=max_chars, total_chars=original_len)
 
 
 def _is_startup_noise_line(line: str) -> bool:
-    """Return whether a single head line is startup noise."""
-    if _STARTUP_NOISE_RE.match(line):
-        return True
-    return any(noise in line for noise in _SHELL_NOISE_SUBSTRINGS)
+    """Return whether a single head line is startup noise (line-anchored)."""
+    return _STARTUP_NOISE_LINE_RE.match(line) is not None
