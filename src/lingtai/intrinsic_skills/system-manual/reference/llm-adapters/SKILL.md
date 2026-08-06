@@ -47,6 +47,7 @@ LingTai registers the following provider keys (each usable in presets / `init.js
 | `openrouter` | `OpenRouterAdapter` | REST | OpenRouter-compatible endpoint |
 | `claude-code`, `claude_code` | `ClaudeCodeAdapter` (in `claude_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Claude Code harness); used as a main-agent/preset provider |
 | `kimi-code`, `kimi_code` | `KimiCodeAdapter` (in `kimi_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Kimi Code harness); used as a main-agent/preset provider |
+| `opencode` | `OpenCodeAdapter` (in `opencode/adapter.py`) | REST (local OpenAI-compatible `opencode serve`, Chat Completions by default) | Local preset provider — talks to the local `opencode serve` endpoint (`http://127.0.0.1:4050/v1`); opencode owns provider auth (`opencode auth login`); models addressed as `provider/model` |
 
 Each adapter is lazy-imported on first use, so an unconfigured provider's SDK
 is never loaded. Prefer the provider's own section below when operating a

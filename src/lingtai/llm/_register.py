@@ -202,6 +202,39 @@ def register_all_adapters() -> None:
     for name in ("codex", "codex-pool", "codex_pool"):
         LLMService.register_adapter(name, _codex)
 
+    # -- opencode -------------------------------------------------------------
+    #
+    # OpenCode (github.com/sst/opencode) powers LingTai as a preset the same
+    # way Codex does: the user runs the local CLI's headless server
+    # (``opencode serve``, OpenAI-compatible on http://127.0.0.1:4050 by
+    # default) and the adapter talks to it. Provider/model strings
+    # (``provider/model``) and CLI-side auth replace a LingTai API key.
+
+    def _opencode(*, model=None, defaults=None, **kw):
+        """Build the adapter for a local ``opencode serve`` endpoint.
+
+        OpenCode authenticates providers inside its own CLI (auth.json / env /
+        project .env); the OpenAI-compatible serve endpoint needs no
+        LingTai-side key, so the adapter substitutes a localhost placeholder.
+        An explicit manifest ``base_url`` overrides the default
+        http://127.0.0.1:4050/v1 (e.g. a custom ``opencode serve --port``).
+        """
+        from .opencode.adapter import OpenCodeAdapter
+
+        kw.pop("model", None)
+        adapter_kw = {k: v for k, v in kw.items() if v is not None}
+        d = defaults or {}
+        if "wire_api" in d:
+            adapter_kw["wire_api"] = d["wire_api"]
+        if "use_responses_api" in d:
+            adapter_kw["use_responses"] = d["use_responses_api"]
+        if "compact_threshold" in d:
+            # Preserve explicit None after the general None-pruning pass above.
+            adapter_kw["compact_threshold"] = d["compact_threshold"]
+        return OpenCodeAdapter(**adapter_kw)
+
+    LLMService.register_adapter("opencode", _opencode)
+
     def _claude_code(*, model=None, defaults=None, **kw):
         from .claude_code.adapter import ClaudeCodeAdapter
         kw.pop("model", None)

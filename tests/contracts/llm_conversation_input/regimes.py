@@ -749,6 +749,9 @@ REGISTRY_EDGES: list[RegistryEdge] = [
     # --- OpenAI-compatible single-session providers ---------------------
     RegistryEdge("openrouter", "OpenRouterAdapter", "OpenAIChatSession"),
     RegistryEdge("deepseek", "DeepSeekAdapter", "DeepSeekChatSession"),
+    # OpenCode: local ``opencode serve`` OpenAI-compatible endpoint, Chat
+    # Completions wire by default (OpenCodeAdapter inherits OpenAIChatSession).
+    RegistryEdge("opencode", "OpenCodeAdapter", "OpenAIChatSession"),
     # MiMo defaults to the native Responses wire; Chat Completions remains an explicit escape hatch.
     RegistryEdge("mimo", "MimoAdapter", "MimoResponsesSession"),
     RegistryEdge("glm", "ZhipuAdapter", "ZhipuChatSession"),

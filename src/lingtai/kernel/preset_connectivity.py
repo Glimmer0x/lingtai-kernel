@@ -47,6 +47,9 @@ _PROVIDER_DEFAULT_URLS = {
     "codex":      "https://chatgpt.com",
     "mimo":       "https://api.xiaomimimo.com",
     "kimi":       "https://api.kimi.com",
+    # Local ``opencode serve`` (default port). Probe succeeds only while the
+    # user's opencode headless server is actually running.
+    "opencode":   "http://127.0.0.1:4050",
 }
 
 

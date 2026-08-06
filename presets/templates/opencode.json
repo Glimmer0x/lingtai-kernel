@@ -1,0 +1,23 @@
+{
+  "name": "opencode",
+  "description": {
+    "summary": "OpenCode (local opencode serve) — any Models.dev provider, tool calls"
+  },
+  "manifest": {
+    "capabilities": {
+      "skills": {
+        "paths": [
+          "../.library_shared",
+          "~/.lingtai-tui/utilities"
+        ]
+      }
+    },
+    "llm": {
+      "api_key": null,
+      "api_key_env": "",
+      "base_url": "http://127.0.0.1:4050/v1",
+      "model": "anthropic/claude-sonnet-4-5",
+      "provider": "opencode"
+    }
+  }
+}
