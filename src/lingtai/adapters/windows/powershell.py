@@ -8,8 +8,10 @@ a sentinel command so a configured allowlist/denylist fails closed; trusted
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import sys
 
 from lingtai.tools.bash._shell_dialect import (
     ShellDialect,
@@ -269,14 +271,49 @@ def _commands(script: str) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _well_known_pwsh_paths() -> tuple[str, ...]:
+    r"""Return the registry-free well-known PowerShell 7 install locations.
+
+    Mirrors OpenClaw's ``resolvePowerShellPath`` order on Windows:
+    ``%ProgramFiles%\PowerShell\7\pwsh.exe`` then
+    ``%ProgramW6432%\PowerShell\7\pwsh.exe``.  Only consulted on Windows;
+    other platforms rely on the PATH lookup alone.
+    """
+    if sys.platform != "win32":
+        return ()
+    paths: list[str] = []
+    for env_var in ("ProgramFiles", "ProgramW6432"):
+        root = os.environ.get(env_var)
+        if root:
+            paths.append(os.path.join(root, "PowerShell", "7", "pwsh.exe"))
+    return tuple(paths)
+
+
+def _find_pwsh() -> str | None:
+    """Locate the PowerShell 7 executable (``pwsh``).
+
+    Checks the well-known PowerShell 7 install directories first (Windows
+    only), then a PATH lookup via ``shutil.which``.  Windows PowerShell 5.1
+    (``powershell.exe``) is intentionally never used as a fallback.
+    """
+    for candidate in _well_known_pwsh_paths():
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("pwsh")
+
+
 class PowerShellDialect(ShellDialect):
     """PowerShell 7 (``pwsh``) invocation and policy extraction."""
 
     def __init__(self, executable: str | None = None) -> None:
-        self._executable = executable or shutil.which("pwsh")
+        self._executable = executable or _find_pwsh()
         if not self._executable:
+            searched = ", ".join((*_well_known_pwsh_paths(), "'pwsh' on PATH"))
             raise FileNotFoundError(
-                "PowerShell 7 executable 'pwsh' was not found; Windows shell requires pwsh and never falls back to Windows PowerShell 5.1"
+                "PowerShell 7 executable 'pwsh' was not found. Searched: "
+                f"{searched}. Windows shell requires pwsh and never falls "
+                "back to Windows PowerShell 5.1. Install PowerShell 7: "
+                "winget install Microsoft.PowerShell"
             )
 
     def extract_commands(self, script: str) -> tuple[str, ...]:
