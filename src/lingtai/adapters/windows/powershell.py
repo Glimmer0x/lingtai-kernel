@@ -461,7 +461,7 @@ WINDOWS_UNSUPPORTED_TOKENS = frozenset(
 # Stay unsafe even inside double quotes: newlines break parsing, cmd.exe
 # expands %VAR%, and PowerShell treats ` as an escape character.
 WINDOWS_ALWAYS_UNSAFE_TOKENS = frozenset({"\n", "\r", "%", "`"})
-_WINDOWS_VAR_HEAD_RE = re.compile(r"[A-Za-z_{(?$]")
+_WINDOWS_VAR_HEAD_RE = re.compile(r"[A-Za-z0-9_{(?$]")
 
 
 def _unsafe_reason(token: str) -> str:
@@ -479,8 +479,9 @@ def is_unsafe_windows_command(command: str) -> tuple[bool, str]:
     Quote-aware state machine over the OpenClaw token table: ``& | < > ; ^ ( )
     % ! ` \\n \\r`` are flagged outside quotes; ``%`` / backtick / newlines
     are flagged even inside double quotes; and ``$`` followed by
-    ``[A-Za-z_{(?$]`` (PowerShell variable expansion) is flagged anywhere
-    except inside single quotes, where PowerShell treats it as literal text.
+    ``[A-Za-z0-9_{(?$]`` (PowerShell variable expansion, including ``$1``..``$9``
+    positional variables) is flagged anywhere except inside single quotes,
+    where PowerShell treats it as literal text.
 
     Returns ``(unsafe, reason)``.  ``reason`` is a stable string naming the
     first flagged token when ``unsafe`` is true, otherwise ``""``.
@@ -716,8 +717,16 @@ class PowerShellDialect(ShellDialect):
         # PR-5: a quote-aware metachar scan fails closed before extraction so
         # flagged commands (pipes, chaining, %VAR%, variable expansion, and
         # -EncodedCommand / -File / profile-startup wrappers) require human
-        # confirmation instead of being reviewed token-by-token.  Trusted
-        # (yolo) execution still passes the original script to pwsh.
+        # confirmation instead of being reviewed token-by-token.  Unbalanced-
+        # quote (unparseable) scripts fail closed too, via the wrapper walk's
+        # "unbalanced quoting" result.  This is a deliberate, signed-off
+        # capability regression: the recursive extractor below previously
+        # validated such scripts command-by-command (including ``$()``/``{}``
+        # and parenthesized nesting), but scanner simplicity and the OpenClaw
+        # fail-closed model win over that precision, so any flagged or
+        # unparseable script is refused outright under a configured
+        # allow/deny policy.  Trusted (yolo) execution still passes the
+        # original script to pwsh.
         unsafe, _reason = is_unsafe_windows_command(script)
         if unsafe:
             return (_UNSUPPORTED,)

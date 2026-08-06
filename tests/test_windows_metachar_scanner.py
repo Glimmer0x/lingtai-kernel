@@ -61,6 +61,11 @@ UNSAFE_CASES = [
     ("Write-Output $?", "variable expansion"),
     ("Write-Output $$", "variable expansion"),
     ("Write-Output $_", "variable expansion"),
+    # $<digit> positional variables are valid PowerShell and must fail closed
+    # too (sibling PR #1189 flags the same class in its shim scanner).
+    ("Write-Output $1", "variable expansion"),
+    ("Get-Process $5", "variable expansion"),
+    ('Write-Output "$1"', "variable expansion"),
 ]
 
 ESCALATION_CASES = [
@@ -146,6 +151,11 @@ def test_dialect_extract_commands_fails_closed_on_flagged_commands():
         "__powershell_unsupported__",
     )
     assert dialect.extract_commands("pwsh -NoProfile -Command Get-Process") == ("pwsh",)
+    # Unparseable (unbalanced-quote) input fails closed as well: the scanner
+    # sentinel is the documented response to input it cannot analyze safely.
+    assert dialect.extract_commands('Get-Process "unterminated') == (
+        "__powershell_unsupported__",
+    )
 
 
 @pytest.mark.parametrize(
@@ -181,9 +191,14 @@ def test_flagged_commands_require_human_confirmation_under_policy(tmp_path, poli
 
 
 def test_flagged_commands_still_run_under_yolo_policy(tmp_path):
-    dialect = PowerShellDialect(executable="pwsh")
+    # PowerShellDialect never probes PATH when an executable is passed, so a
+    # guaranteed-missing path keeps this test independent of whether pwsh is
+    # installed on the host (GitHub ubuntu runners ship pwsh; this host may
+    # not).  The scanner must not block flagged commands under yolo regardless.
+    missing_pwsh = "/definitely/not/installed/pwsh"
+    dialect = PowerShellDialect(executable=missing_pwsh)
     dialect.make_invocation = MagicMock(
-        return_value=PowerShellDialect(executable="pwsh").make_invocation("Get-Process")
+        return_value=PowerShellDialect(executable=missing_pwsh).make_invocation("Get-Process")
     )
     manager = ShellManager(
         policy=ShellPolicy.yolo(),
@@ -195,4 +210,7 @@ def test_flagged_commands_still_run_under_yolo_policy(tmp_path):
     # yolo mode deliberately passes the original script to pwsh; the scanner
     # only escalates when a policy is configured.
     dialect.make_invocation.assert_called_once_with("Get-Process; Stop-Process")
-    assert result["status"] == "error"  # pwsh is not installed on this host
+    # The run itself deterministically fails because the executable is
+    # guaranteed missing; pwsh presence on the host must not change the outcome.
+    assert result["status"] == "error"
+    assert "Command failed" in result["message"]
