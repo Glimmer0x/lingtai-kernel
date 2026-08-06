@@ -32,10 +32,13 @@ capturing piped output (node-based tools write UTF-8).
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
 import subprocess
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "build_cmd_exe_invocation",
@@ -93,6 +96,12 @@ def escape_for_windows_cmd_exe(arg: str) -> str:
         )
     escaped = arg.replace("^", "^^")
     if '"' in escaped:
+        # NOTE: on the trusted-shim calling path this branch (and the ``^``
+        # branch above) is dead: ``reject_unsafe_metachars`` rejects ``^``
+        # first, and ``split_simple_command`` refuses tokens containing ``"``.
+        # They are kept so this remains a correct general-purpose cmd.exe
+        # escaper; a future caller that reorders the checks would silently
+        # change semantics.
         escaped = '"' + escaped.replace('"', '""') + '"'
     return escaped
 
@@ -186,7 +195,18 @@ def _which(name: str, path: str | None) -> str | None:
 
 
 def _default_cmd_exe() -> str:
-    """Return the trusted cmd.exe path (``COMSPEC``) or a bare fallback name."""
+    """Return the trusted cmd.exe path or a bare fallback name.
+
+    Prefers ``%SystemRoot%\\System32\\cmd.exe`` when that file exists (the
+    hardened path, independent of the ambient ``COMSPEC``); falls back to
+    ``COMSPEC`` and finally a bare ``cmd.exe`` name so minimal environments
+    and tests keep working.
+    """
+    system_root = os.environ.get("SystemRoot")
+    if system_root:
+        candidate = os.path.join(system_root, "System32", "cmd.exe")
+        if os.path.isfile(candidate):
+            return candidate
     return os.environ.get("COMSPEC") or "cmd.exe"
 
 
@@ -296,6 +316,21 @@ def try_cmd_shim_plan(
     """
     argv = split_simple_command(script)
     if not argv:
+        # Falls back to pwsh: complex scripts and scripts containing
+        # PowerShell variables (``$var``/``$(...)``) keep PowerShell
+        # semantics.  A .cmd/.bat shim in that position then runs through the
+        # *ambient* cmd.exe, so log it for diagnosis -- unlike unsafe
+        # metachars on the shim path, which raise :class:`ValueError`.
+        first = script.split(None, 1)[0] if script.strip() else ""
+        if first and (
+            is_cmd_bat_shim(first) or resolve_cmd_bat_shim(first, path=path)
+        ):
+            logger.debug(
+                "cmd shim command %r not shimmed (falls back to pwsh -> "
+                "ambient cmd.exe): %s",
+                first,
+                script,
+            )
         return None
     npm_argv = resolve_npm_argv(argv, path=path)
     if npm_argv is not None:

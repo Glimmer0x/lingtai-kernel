@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import subprocess
 import sys
 
 from lingtai.tools.bash._shell_dialect import (
@@ -44,6 +43,27 @@ _CONTROL_WORDS = {
     "end", "finally", "for", "foreach", "function", "if", "param", "process",
     "return", "switch", "throw", "trap", "try", "until", "using", "while",
 }
+
+
+def _pwsh_single_quote(arg: str) -> str:
+    """Emit ``arg`` as a PowerShell single-quoted literal (embedded ``'`` doubled)."""
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def _pwsh_quote_argv(argv: list[str]) -> str:
+    """Render ``argv`` as PowerShell source for ``pwsh -Command``.
+
+    Uses the call operator with every element single-quoted, so the result is
+    valid PowerShell for *any* argument: paths with spaces
+    (``C:\\Program Files\\nodejs\\node.exe``), apostrophes (``it's`` via
+    ``'it''s'``), and ``$``/backtick/``--%`` tokens all stay literal.
+    ``subprocess.list2cmdline`` must never be used to generate PS source: its
+    C-runtime quoting emits a quoted string in command position, which
+    PowerShell rejects with an "Unexpected token" parse error.
+    """
+    return "& " + " ".join(_pwsh_single_quote(arg) for arg in argv)
+
+
 _ASSIGNMENT_RE = re.compile(r"^(?:\$[A-Za-z_][\w:]*|[A-Za-z_][\w-]*)$")
 _TOKEN_RE = re.compile(
     r"(?:'[^']*(?:''[^']*)*'|\"(?:`.|[^\"])*\"|&(?=\s|$)|\.(?=\s|$)|[^\s|;&(){}]+)"
@@ -345,10 +365,13 @@ class PowerShellDialect(ShellDialect):
                     errors="replace",
                 )
             # npm/npx: direct node invocation of the CLI script, still wrapped
-            # in the pwsh exit-code envelope (no cmd.exe involved).  Args are
-            # quote-free by construction, so ``list2cmdline`` output is also
-            # valid PowerShell syntax.
-            script = subprocess.list2cmdline(argv)
+            # in the pwsh exit-code envelope (no cmd.exe involved).  The
+            # payload is PowerShell *source*, so it is built with the call
+            # operator plus PS-native single-quoting (see ``_pwsh_quote_argv``)
+            # -- never ``subprocess.list2cmdline``, whose C-runtime quoting
+            # produces a quoted string in command position and breaks on the
+            # default Windows layout ``C:\Program Files\nodejs\``.
+            script = _pwsh_quote_argv(argv)
         return self._pwsh_invocation(script)
 
     def _pwsh_invocation(self, script: str) -> ShellInvocation:

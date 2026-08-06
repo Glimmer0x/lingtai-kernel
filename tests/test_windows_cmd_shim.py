@@ -5,6 +5,7 @@ identification, cmd.exe escaping, unsafe metachar rejection, the simple
 command tokenizer, and the PowerShellDialect wiring.
 """
 import os
+import shutil
 import stat
 
 import pytest
@@ -37,6 +38,10 @@ def npm_prefix(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "node").write_bytes(b"#!/bin/sh\nexit 0\n")
     (bin_dir / "node").chmod(0o755)
+    # Windows resolves bare ``node`` through PATHEXT to ``node.exe``; provide
+    # both so the fixtures behave on POSIX CI and on Windows hosts.
+    (bin_dir / "node.exe").write_bytes(b"#!/bin/sh\nexit 0\n")
+    (bin_dir / "node.exe").chmod(0o755)
     _make_executable(bin_dir / "npm.cmd")
     _make_executable(bin_dir / "npx.cmd")
     npm_bin = bin_dir / "node_modules" / "npm" / "bin"
@@ -128,7 +133,7 @@ def test_split_simple_command():
 
 def test_resolve_npm_argv(npm_prefix):
     path = str(npm_prefix)
-    node = str(npm_prefix / "node")
+    node = shutil.which("node", path=path)
     cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
     npx_cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npx-cli.js")
     assert resolve_npm_argv(["npm", "run", "build"], path=path) == [
@@ -170,7 +175,7 @@ def test_resolve_cmd_bat_shim_pathext_bare_name(monkeypatch, tmp_path):
 
 def test_try_cmd_shim_plan(npm_prefix, tmp_path, monkeypatch):
     path = str(npm_prefix)
-    node = str(npm_prefix / "node")
+    node = shutil.which("node", path=path)
     cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
 
     # npm/npx -> direct node invocation (no cmd.exe involved)
@@ -186,6 +191,8 @@ def test_try_cmd_shim_plan(npm_prefix, tmp_path, monkeypatch):
     # other .cmd/.bat shims -> trusted cmd.exe /d /s /c wrapper
     _make_executable(tmp_path / "tool.cmd")
     monkeypatch.setenv("COMSPEC", _FAKE_CMD_EXE)
+    # neutralise the SystemRoot preference on hosts that set it (e.g. Windows)
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "no-such-root"))
     kind, argv = try_cmd_shim_plan("tool.cmd run --flag", path=str(tmp_path))
     assert kind == "cmd"
     assert argv[0] == _FAKE_CMD_EXE
@@ -215,6 +222,8 @@ def test_powershell_dialect_uses_trusted_cmd_shim(npm_prefix, tmp_path, monkeypa
         + os.environ.get("PATH", ""),
     )
     monkeypatch.setenv("COMSPEC", _FAKE_CMD_EXE)
+    # neutralise the SystemRoot preference on hosts that set it (e.g. Windows)
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "no-such-root"))
     dialect = PowerShellDialect(executable="pwsh")
 
     # .cmd first token -> trusted cmd.exe invocation, pwsh never runs
@@ -223,12 +232,15 @@ def test_powershell_dialect_uses_trusted_cmd_shim(npm_prefix, tmp_path, monkeypa
     assert kwargs == {"shell": False}
     assert args == [_FAKE_CMD_EXE, "/d", "/s", "/c", "tool.cmd run build"]
 
-    # npm -> direct node invocation inside the normal pwsh envelope
+    # npm -> direct node invocation inside the normal pwsh envelope, emitted
+    # as PS source via the call operator + single-quoted literals
     invocation = dialect.make_invocation("npm run build")
     args, kwargs = invocation.process_args()
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-    assert "npm-cli.js" in args[-1]
-    assert "node" in args[-1]
+    node = shutil.which("node", path=str(npm_prefix))
+    cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
+    assert f"& '{node}' '{cli}' 'run' 'build'" in args[-1]
+    assert '"' not in args[-1]  # PS source: never list2cmdline C-runtime quoting
     assert "$global:__lingtai_success" in args[-1]
 
     # unsafe metachars on a shim command -> clean ValueError
@@ -241,3 +253,64 @@ def test_powershell_dialect_uses_trusted_cmd_shim(npm_prefix, tmp_path, monkeypa
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
     assert "Write-Output hi" in args[-1]
     assert kwargs == {"shell": False}
+
+
+# --- PS quoting of the npm/npx rewrite (PR #1189 blocker fixes) -------------
+
+
+def _fake_nodejs_prefix(tmp_path):
+    r"""A node prefix whose path contains spaces, like ``C:\Program Files\nodejs``."""
+    prefix = tmp_path / "Program Files" / "nodejs"
+    prefix.mkdir(parents=True)
+    for name in ("node", "node.exe"):
+        script = prefix / name
+        script.write_bytes(b"#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+    _make_executable(prefix / "npm.cmd")
+    _make_executable(prefix / "npx.cmd")
+    npm_bin = prefix / "node_modules" / "npm" / "bin"
+    npm_bin.mkdir(parents=True)
+    (npm_bin / "npm-cli.js").write_text("// npm-cli\n", encoding="utf-8")
+    (npm_bin / "npx-cli.js").write_text("// npx-cli\n", encoding="utf-8")
+    return prefix
+
+
+def test_npm_script_with_spaces_in_path(tmp_path, monkeypatch):
+    r"""Default Windows layout (path with spaces) yields valid PS source.
+
+    Regression for the PR #1189 blocker: ``subprocess.list2cmdline`` quoting
+    (``"C:\Program Files\nodejs\node.exe" ...``) is rejected by PowerShell
+    as a quoted string in command position; the rewrite must use the call
+    operator with PS single-quoted elements instead.
+    """
+    prefix = _fake_nodejs_prefix(tmp_path)
+    monkeypatch.setenv(
+        "PATH", str(prefix) + os.pathsep + os.environ.get("PATH", ""),
+    )
+    dialect = PowerShellDialect(executable="pwsh")
+    invocation = dialect.make_invocation("npm run build")
+    args, kwargs = invocation.process_args()
+    node = shutil.which("node", path=str(prefix))
+    cli = str(prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
+    assert " " in node  # the spacey path is genuinely exercised
+    assert f"& '{node}' '{cli}' 'run' 'build'" in args[-1]
+    assert '"' not in args[-1]  # no list2cmdline C-runtime quoting
+    assert args[-1].count("'") % 2 == 0  # balanced quotes -> no parse error
+
+
+def test_npm_script_with_single_quote_arg(npm_prefix, monkeypatch):
+    """An argument containing an apostrophe stays balanced in the PS source.
+
+    Regression for the PR #1189 must-fix: ``npm view "it's"`` must become
+    ``... view 'it''s'`` (PS ``''`` doubling), not leak an unbalanced quote.
+    """
+    monkeypatch.setenv(
+        "PATH", str(npm_prefix) + os.pathsep + os.environ.get("PATH", ""),
+    )
+    dialect = PowerShellDialect(executable="pwsh")
+    invocation = dialect.make_invocation('npm view "it\'s"')
+    args, kwargs = invocation.process_args()
+    node = shutil.which("node", path=str(npm_prefix))
+    cli = str(npm_prefix / "node_modules" / "npm" / "bin" / "npm-cli.js")
+    assert f"& '{node}' '{cli}' 'view' 'it''s'" in args[-1]
+    assert args[-1].count("'") % 2 == 0  # balanced quotes -> no parse error
