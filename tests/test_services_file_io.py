@@ -80,15 +80,17 @@ class TestLocalFileIOService:
         svc.write("sub/other.txt", "nested, wrong extension")
 
         results = svc.glob("**/*")
-        assert any(r.endswith("/STAGE_A_STATUS.md") for r in results)
-        assert any(r.endswith("/sub/nested.md") for r in results)
-        assert any(r.endswith("/sub/other.txt") for r in results)
+        relative_results = [Path(r).relative_to(tmp_dir).as_posix() for r in results]
+        assert set(relative_results) == {
+            "STAGE_A_STATUS.md",
+            "sub/nested.md",
+            "sub/other.txt",
+        }
         assert results == sorted(results)
 
         md_results = svc.glob("**/*.md")
-        assert any(r.endswith("/STAGE_A_STATUS.md") for r in md_results)
-        assert any(r.endswith("/sub/nested.md") for r in md_results)
-        assert not any(r.endswith("/sub/other.txt") for r in md_results)
+        relative_md_results = [Path(r).relative_to(tmp_dir).as_posix() for r in md_results]
+        assert set(relative_md_results) == {"STAGE_A_STATUS.md", "sub/nested.md"}
         assert md_results == sorted(md_results)
 
     def test_grep(self, svc, tmp_dir):
