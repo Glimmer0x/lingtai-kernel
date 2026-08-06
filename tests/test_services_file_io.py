@@ -71,6 +71,26 @@ class TestLocalFileIOService:
         results = svc.glob("src/*.py")
         assert len(results) == 2
 
+    def test_glob_recursive_includes_zero_depth_files(self, svc, tmp_dir):
+        # `**/` is documented as "recursive search" (zero or more directory
+        # levels), so a top-level file with no `/` in its relative path must
+        # be included alongside deeper descendants.
+        svc.write("STAGE_A_STATUS.md", "top-level")
+        svc.write("sub/nested.md", "nested")
+        svc.write("sub/other.txt", "nested, wrong extension")
+
+        results = svc.glob("**/*")
+        assert any(r.endswith("/STAGE_A_STATUS.md") for r in results)
+        assert any(r.endswith("/sub/nested.md") for r in results)
+        assert any(r.endswith("/sub/other.txt") for r in results)
+        assert results == sorted(results)
+
+        md_results = svc.glob("**/*.md")
+        assert any(r.endswith("/STAGE_A_STATUS.md") for r in md_results)
+        assert any(r.endswith("/sub/nested.md") for r in md_results)
+        assert not any(r.endswith("/sub/other.txt") for r in md_results)
+        assert md_results == sorted(md_results)
+
     def test_grep(self, svc, tmp_dir):
         svc.write("a.txt", "hello world\ngoodbye world\nhello again")
         results = svc.grep("hello")
