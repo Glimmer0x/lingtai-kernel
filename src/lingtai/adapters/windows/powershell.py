@@ -11,7 +11,12 @@ from __future__ import annotations
 import re
 import shutil
 
-from lingtai.tools.bash._shell_dialect import ShellDialect, ShellInvocation
+from lingtai.tools.bash._shell_dialect import (
+    ShellDialect,
+    ShellInvocation,
+    ShellKind,
+    make_invocation_for_kind,
+)
 
 _UNSUPPORTED = "__powershell_unsupported__"
 
@@ -333,20 +338,28 @@ class PowerShellDialect(ShellDialect):
             "}\n"
             "exit 1\n"
         )
+        # Spawn shape comes from the single ShellKind-keyed authority so the
+        # argv template stays in lockstep with the model-facing description.
+        invocation = make_invocation_for_kind(
+            ShellKind.POWERSHELL, wrapped, executable=self._executable,
+        )
+        # Layer the ASCII stdin bootstrap on top of the authority shape: the
+        # wrapped script must travel over UTF-8 stdin (never the ``-Command``
+        # line) to dodge the Windows console code page and the 32,768-character
+        # process command-line limit.  ``stdin_script`` tells the spawner to
+        # feed the child from stdin; the bootstrap is the final ``-Command``
+        # argument that reads stdin and runs the script.
         return ShellInvocation(
             script=wrapped,
-            # The wrapped script is delivered over UTF-8 stdin; see
-            # ``_ASCII_BOOTSTRAP``.  The argv is the complete fixed command
-            # line: bootstrap is its final ``-Command`` argument.
             stdin_script=wrapped,
-            executable=self._executable,
-            argv=("-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _ASCII_BOOTSTRAP),
-            encoding="utf-8",
-            errors="replace",
+            executable=invocation.executable,
+            argv=invocation.argv + (_ASCII_BOOTSTRAP,),
+            encoding=invocation.encoding,
+            errors=invocation.errors,
         )
 
     def state_key(self) -> str:
-        return "powershell"
+        return ShellKind.POWERSHELL.value
 
 
 __all__ = ["PowerShellDialect"]

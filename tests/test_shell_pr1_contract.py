@@ -160,6 +160,72 @@ def test_powershell_backtick_escaped_command_fails_closed_before_invocation(
     dialect.make_invocation.assert_not_called()
 
 
+def test_cmd_normalized_command_names_are_denied_by_policy(tmp_path):
+    from lingtai.adapters.windows.cmd import CmdDialect
+
+    dialect = CmdDialect()
+    dialect.make_invocation = MagicMock(side_effect=AssertionError("cmd must not run"))
+    manager = ShellManager(
+        policy=ShellPolicy(deny=["del"]),
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=dialect,
+    )
+    # cmd.exe runs ``del`` for all of these; the extractor must normalize
+    # them so the deny-list cannot be bypassed.
+    for command in (
+        "d^el victim.txt",
+        '"del" victim.txt',
+        "del,victim.txt",
+        "del;victim.txt",
+        "if 1==1 (del victim.txt)",
+    ):
+        denied = manager.handle({"command": command})
+        assert denied["status"] == "error"
+        assert "not allowed" in denied["message"]
+        assert "del" in denied["message"]
+    dialect.make_invocation.assert_not_called()
+
+
+def test_cmd_percent_expansion_fails_closed_before_invocation(tmp_path):
+    from lingtai.adapters.windows.cmd import CmdDialect
+
+    dialect = CmdDialect()
+    dialect.make_invocation = MagicMock(side_effect=AssertionError("cmd must not run"))
+    manager = ShellManager(
+        policy=ShellPolicy(deny=["del"]),
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=dialect,
+    )
+    # ``%comspec%`` expands before cmd parses, so the command identity is
+    # unknowable; a configured policy must refuse rather than guess.
+    denied = manager.handle({"command": "%comspec% /c del victim.txt"})
+    assert denied["status"] == "error"
+    assert "does not support this syntax" in denied["message"]
+    assert "refusing to run" in denied["message"]
+    dialect.make_invocation.assert_not_called()
+
+
+def test_cmd_percent_expansion_is_allowed_without_policy(tmp_path):
+    from lingtai.adapters.windows.cmd import CmdDialect
+    from lingtai.tools.bash._shell_dialect import ShellInvocation
+
+    dialect = CmdDialect()
+    dialect.make_invocation = MagicMock(return_value=ShellInvocation(script="echo x"))
+    manager = ShellManager(
+        policy=ShellPolicy.yolo(),
+        working_dir=str(tmp_path),
+        agent=SimpleNamespace(),
+        dialect=dialect,
+    )
+    # yolo mode has no policy to protect; the unsupported marker is inert and
+    # the command proceeds to invocation instead of being refused.
+    assert dialect.extract_commands("echo %PATH%") == ("__cmd_unsupported__",)
+    manager.handle({"command": "echo %PATH%"})
+    dialect.make_invocation.assert_called_once_with("echo %PATH%")
+
+
 def test_powershell_policy_is_case_insensitive_and_dynamic_syntax_fails_closed(tmp_path):
     policy = ShellPolicy(deny=["Remove-Item"])
     manager = ShellManager(

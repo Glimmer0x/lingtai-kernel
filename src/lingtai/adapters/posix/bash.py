@@ -4,7 +4,9 @@ from __future__ import annotations
 from lingtai.tools.bash._shell_dialect import (
     ShellDialect,
     ShellInvocation,
+    ShellKind,
     extract_posix_commands,
+    make_invocation_for_kind,
 )
 
 
@@ -13,8 +15,9 @@ class PosixBashDialect(ShellDialect):
         return extract_posix_commands(script)
 
     def make_invocation(self, script: str) -> ShellInvocation:
-        # None/None preserve subprocess's historical POSIX text decoding.
-        return ShellInvocation(script=script)
+        # POSIX keeps the historical subprocess ``shell=True`` form; the
+        # None/None fields preserve subprocess's historical text decoding.
+        return make_invocation_for_kind(ShellKind.POSIX, script)
 
     def state_key(self) -> str:
-        return "posix"
+        return ShellKind.POSIX.value

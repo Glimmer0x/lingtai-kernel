@@ -22,7 +22,12 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ._shell_dialect import ShellDialect, ShellInvocation, extract_posix_commands
+from ._shell_dialect import (
+    ShellDialect,
+    ShellInvocation,
+    ShellKind,
+    extract_posix_commands,
+)
 
 from ._async_supervisor import (
     load_state,
@@ -79,11 +84,20 @@ def _working_dir_contained(resolved: str, sandbox: str) -> bool:
     return resolved == sandbox or resolved.startswith(sandbox + os.sep)
 
 
-def _select_shell_dialect() -> ShellDialect:
+def _select_shell_dialect(kind: ShellKind | None = None) -> ShellDialect:
     """Load the canonical outer selector lazily to keep imports acyclic."""
     from lingtai.adapters.shell import select_shell_dialect
 
-    return select_shell_dialect()
+    return select_shell_dialect(shell_kind=kind)
+
+
+def _resolve_shell_kind(kind: ShellKind | None = None) -> ShellKind:
+    """Resolve the classifier result, honoring an explicit kind override."""
+    if kind is not None:
+        return kind
+    from lingtai.adapters.shell import resolve_shell_kind
+
+    return resolve_shell_kind()
 
 
 def _describe_host_os() -> str:
@@ -353,12 +367,17 @@ class ShellManager:
         max_output: int = 50_000,
         dialect: ShellDialect | None = None,
         async_process: BashAsyncProcessPort | None = None,
+        shell_kind: "ShellKind | str | None" = None,
     ):
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
         self._agent = agent
         self._dialect = dialect or _select_shell_dialect()
+        # Runtime shell-family metadata: classifier override when provided,
+        # otherwise derived from the dialect.  Unknown dialects (test mocks)
+        # fall back to the POSIX kind for metadata purposes only.
+        self._shell_kind = ShellKind.coerce(shell_kind) or self._dialect.kind() or ShellKind.POSIX
         self._async_process = async_process or _select_shell_async_process()
         self._jobs_dir: Path | None = None
         self._reminder_lock = threading.Lock()
@@ -366,6 +385,11 @@ class ShellManager:
         self._completion_lock = threading.Lock()
         self._completion_watchers: set[str] = set()
         self._rehydrate_async_jobs()
+
+    @property
+    def shell_kind(self) -> ShellKind:
+        """Runtime shell-family metadata (drives model-facing description)."""
+        return self._shell_kind
 
     def _jobs_path(self) -> Path:
         return self._jobs_dir or Path(self._working_dir) / "system" / "jobs"
@@ -404,15 +428,34 @@ class ShellManager:
             commands = self._dialect.extract_commands(command)
         except (NotImplementedError, ValueError) as exc:
             return {"status": "error", "message": f"Shell dialect cannot validate command safely: {exc}"}
-        powershell = self._dialect.state_key() == "powershell"
-        if powershell and "__powershell_unsupported__" in commands and (
+        state_key = self._dialect.state_key()
+        # PowerShell and cmd.exe command names are case-insensitive; POSIX
+        # retains its historical case-sensitive matching. The manager supplies
+        # the dialect fact rather than making this policy object inspect the host.
+        case_insensitive = state_key in {"powershell", "cmd"}
+        powershell = state_key == "powershell"
+        cmd = state_key == "cmd"
+        # PowerShell and cmd.exe both fail closed on syntax the static
+        # extractor cannot prove (dynamic invocation, ``%`` expansion): the
+        # refusal marker is only enforced when a policy is actually
+        # configured -- yolo mode has nothing to protect.
+        unsupported = (
+            (powershell and "__powershell_unsupported__" in commands)
+            or (cmd and "__cmd_unsupported__" in commands)
+        )
+        if unsupported and (
             self._policy._allow is not None or self._policy._deny is not None
         ):
             return {
                 "status": "error",
-                "message": "PowerShell policy validation does not support this syntax; refusing to run it",
+                "message": (
+                    "cmd.exe policy validation does not support this syntax; "
+                    "refusing to run it"
+                    if cmd
+                    else "PowerShell policy validation does not support this syntax; refusing to run it"
+                ),
             }
-        if not all(self._policy._check_single(cmd, case_insensitive=powershell) for cmd in commands):
+        if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
             denied = commands
             return {
                 "status": "error",
@@ -527,7 +570,6 @@ class ShellManager:
                 # text mode lets subprocess encode it with the dialect encoding
                 # (UTF-8) and feed it while concurrently draining the pipes.
                 process_kwargs["input"] = invocation.stdin_script
- (fix(windows): Job Object tree-kill + io drain timeout for shell sync runs)
             result = subprocess.run(
                 process_args, capture_output=True, text=True,
                 timeout=timeout, cwd=cwd, **process_kwargs,
@@ -691,6 +733,7 @@ class ShellManager:
             "job_id": job_id,
             "command": command,
             "shell_dialect": self._dialect.state_key(),
+            "shell_kind": self._shell_kind.value,
             "invocation": invocation.to_dict(),
             "cwd": cwd,
             "status": "launching",
@@ -1613,6 +1656,7 @@ def setup(
     agent: "BaseAgent",
     policy_file: str | None = None,
     yolo: bool = False,
+    shell_kind: "ShellKind | str | None" = None,
 ) -> ShellManager:
     """Set up the canonical shell capability on an agent.
 
@@ -1620,13 +1664,17 @@ def setup(
         agent: The agent to extend.
         policy_file: Path to JSON policy file (required unless yolo=True).
         yolo: If True, allow all commands (no policy file needed).
+        shell_kind: Optional ShellKind override (init.json
+            ``manifest.capabilities.shell.shell_kind`` or ``LINGTAI_SHELL``).
+            Defaults to the platform classifier result.
 
     Returns:
         The BashManager instance for programmatic access.
     """
     # Resolve the dialect before the default policy so PowerShell does not
     # silently reuse a POSIX denylist.  An explicit policy remains authoritative.
-    dialect = _select_shell_dialect()
+    kind = _resolve_shell_kind(ShellKind.coerce(shell_kind))
+    dialect = _select_shell_dialect(kind)
     resolved_policy_file = policy_file
     if yolo:
         policy = ShellPolicy.yolo()
@@ -1641,10 +1689,14 @@ def setup(
         working_dir=str(agent._working_dir),
         agent=agent,
         dialect=dialect,
+        shell_kind=kind,
     )
     # Description is setup-time metadata derived from the injected adapter and
-    # host, documenting the registered action-separated call shape.
-    desc = get_description(dialect=dialect.state_key(), host_os=_describe_host_os())
+    # host, documenting the registered action-separated call shape.  The shell
+    # kind + sequencing guidance tells the model which dialect it is using.
+    desc = get_description(
+        dialect=dialect.state_key(), host_os=_describe_host_os(), shell_kind=kind,
+    )
     policy_summary = policy.describe()
     if policy_summary:
         desc = f"{desc}\n\n{policy_summary}"
