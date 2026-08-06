@@ -533,7 +533,13 @@ class ShellManager:
         err = self._validate_working_dir(cwd)
         if err:
             return err
-        invocation = self._dialect.make_invocation(command)
+        # The powershell dialect may reject cmd.exe-shim commands whose
+        # metacharacters would be unsafe under cmd.exe; surface that as a
+        # regular error instead of an unhandled exception.
+        try:
+            invocation = self._dialect.make_invocation(command)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
         if args.get("async", False):
             reminder, err = self._validate_reminder(args.get("reminder"))
             if err:

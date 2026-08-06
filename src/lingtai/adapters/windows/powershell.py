@@ -20,6 +20,8 @@ from lingtai.tools.bash._shell_dialect import (
     make_invocation_for_kind,
 )
 
+from .windows_cmd_shim import try_cmd_shim_plan
+
 _UNSUPPORTED = "__powershell_unsupported__"
 
 # ASCII-only ``pwsh -Command`` bootstrap (Cline's technique,
@@ -41,6 +43,27 @@ _CONTROL_WORDS = {
     "end", "finally", "for", "foreach", "function", "if", "param", "process",
     "return", "switch", "throw", "trap", "try", "until", "using", "while",
 }
+
+
+def _pwsh_single_quote(arg: str) -> str:
+    """Emit ``arg`` as a PowerShell single-quoted literal (embedded ``'`` doubled)."""
+    return "'" + arg.replace("'", "''") + "'"
+
+
+def _pwsh_quote_argv(argv: list[str]) -> str:
+    """Render ``argv`` as PowerShell source for ``pwsh -Command``.
+
+    Uses the call operator with every element single-quoted, so the result is
+    valid PowerShell for *any* argument: paths with spaces
+    (``C:\\Program Files\\nodejs\\node.exe``), apostrophes (``it's`` via
+    ``'it''s'``), and ``$``/backtick/``--%`` tokens all stay literal.
+    ``subprocess.list2cmdline`` must never be used to generate PS source: its
+    C-runtime quoting emits a quoted string in command position, which
+    PowerShell rejects with an "Unexpected token" parse error.
+    """
+    return "& " + " ".join(_pwsh_single_quote(arg) for arg in argv)
+
+
 _ASSIGNMENT_RE = re.compile(r"^(?:\$[A-Za-z_][\w:]*|[A-Za-z_][\w-]*)$")
 _TOKEN_RE = re.compile(
     r"(?:'[^']*(?:''[^']*)*'|\"(?:`.|[^\"])*\"|&(?=\s|$)|\.(?=\s|$)|[^\s|;&(){}]+)"
@@ -320,6 +343,38 @@ class PowerShellDialect(ShellDialect):
         return _commands(script)
 
     def make_invocation(self, script: str) -> ShellInvocation:
+        # Trusted cmd.exe shim handling: when the script is one simple command
+        # whose first token resolves to a .cmd/.bat shim (or npm/npx), do not
+        # let pwsh call the shim through the ambient cmd.exe.  npm/npx are
+        # rewritten to a direct ``node .../npm-cli.js`` invocation that still
+        # runs inside the normal pwsh exit-code envelope below; other shims are
+        # wrapped in a trusted ``cmd.exe /d /s /c`` invocation with
+        # metacharacter rejection (see ``windows_cmd_shim``).  A ``ValueError``
+        # here rejects metacharacters that are unsafe under cmd.exe instead of
+        # silently reinterpreting them; anything not a simple shim command
+        # falls through to the pwsh wrapper unchanged.
+        plan = try_cmd_shim_plan(script)
+        if plan is not None:
+            kind, argv = plan
+            if kind == "cmd":
+                return ShellInvocation(
+                    script=argv[-1],
+                    executable=argv[0],
+                    argv=tuple(argv[1:-1]),
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            # npm/npx: direct node invocation of the CLI script, still wrapped
+            # in the pwsh exit-code envelope (no cmd.exe involved).  The
+            # payload is PowerShell *source*, so it is built with the call
+            # operator plus PS-native single-quoting (see ``_pwsh_quote_argv``)
+            # -- never ``subprocess.list2cmdline``, whose C-runtime quoting
+            # produces a quoted string in command position and breaks on the
+            # default Windows layout ``C:\Program Files\nodejs\``.
+            script = _pwsh_quote_argv(argv)
+        return self._pwsh_invocation(script)
+
+    def _pwsh_invocation(self, script: str) -> ShellInvocation:
         # ``pwsh -Command`` otherwise collapses an external program's native
         # exit status to PowerShell's generic 0/1 process status.  PowerShell
         # 7.3+ can expose non-zero native results as a typed ErrorRecord without
