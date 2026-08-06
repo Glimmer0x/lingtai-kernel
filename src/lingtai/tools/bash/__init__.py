@@ -231,7 +231,155 @@ def _timeout_error(command: str, timeout: float) -> dict:
     return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
 
 
-def _augment_command_result(result: dict) -> dict:
+# =============================================================================
+# Exit-code interpretation (benign non-zero codes)
+# =============================================================================
+# Many Unix commands use non-zero exit codes for informational purposes, not
+# failure.  The model sees a raw exit_code=1 from `grep` and wastes a turn
+# investigating something that just means "no matches".  Port of Hermes'
+# ``_interpret_exit_code``: when the *last* pipeline/chain segment is one of
+# these commands and its exit code is a known benign code, a human-readable
+# note is appended to the result so the agent can move on.  The exit_code
+# field itself is never rewritten — this is a presentation/guidance layer
+# only (the native-exit wrapper keeps $LASTEXITCODE fidelity).
+#
+# ``last segment`` means the last *top-level* segment: a ``|``/``;`` inside a
+# ``$(...)`` or backtick command substitution is not a chain operator — only
+# the substitution's result participates in the outer pipeline.  The splitter
+# therefore treats substitution bodies as opaque, so a pipe feeding grep
+# inside a substitution can never be mistaken for the command whose exit
+# code we are annotating (e.g. ``pytest $(git diff --name-only | grep test_)``
+# must never get a "no matches" note on a real pytest failure).
+_BENIGN_EXIT_NOTES: dict[str, dict[int, str]] = {
+    # grep/rg/ag/ack: 1 = no matches found (normal), 2+ = real error
+    "grep":   {1: "No matches found (not an error)"},
+    "egrep":  {1: "No matches found (not an error)"},
+    "fgrep":  {1: "No matches found (not an error)"},
+    "rg":     {1: "No matches found (not an error)"},
+    "ag":     {1: "No matches found (not an error)"},
+    "ack":    {1: "No matches found (not an error)"},
+}
+
+
+def _split_on_chain_operators(command: str) -> list[str]:
+    """Split a shell command on chain/pipeline operators outside quotes.
+
+    Splits on ``;``, ``&&``, ``||`` and ``|`` while respecting single quotes,
+    double quotes and backslash escapes, so ``echo 'a | b'`` stays one
+    segment. Command substitutions (``$(...)`` and backticks) are opaque:
+    operators inside them are *not* top-level chain operators — only the
+    substitution's result participates in the outer pipeline, so
+    ``pytest $(git diff --name-only | grep test_)`` stays a single segment
+    whose command is ``pytest`` (a ``|`` inside ``$(...)`` must never make
+    ``grep`` look like the last command). ``|&`` (stdout+stderr pipe) is a
+    two-character operator like ``||``. A bare ``&`` (backgrounding) is not a
+    chain operator and stays inside its segment. Deliberately simple: used
+    only to pick the last segment whose exit status the shell reports —
+    never to execute anything.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    paren_subst = 0  # nesting depth of $( ... ) command substitutions
+    backtick_subst = False  # inside ` ... ` command substitution (no nesting)
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if escaped:
+            current.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            current.append(ch)
+            escaped = True
+            i += 1
+            continue
+        if quote is not None:
+            current.append(ch)
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            current.append(ch)
+            i += 1
+            continue
+        if ch == "`":
+            backtick_subst = not backtick_subst
+            current.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and command[i + 1] == "(":
+            paren_subst += 1
+            current.append(ch)
+            i += 1
+            continue
+        if paren_subst > 0 or backtick_subst:
+            current.append(ch)
+            if ch == ")" and paren_subst > 0:
+                paren_subst -= 1
+            i += 1
+            continue
+        if ch in (";", "|", "&"):
+            if ch == "&" and (i + 1 >= n or command[i + 1] != "&"):
+                # Bare `&` backgrounds the command; keep it in the segment so
+                # the segment's first word still names the command.
+                current.append(ch)
+                i += 1
+                continue
+            if ch == "&":
+                operator = "&&"
+            elif ch == "|" and i + 1 < n and command[i + 1] in ("|", "&"):
+                operator = command[i : i + 2]  # ``||`` or ``|&``
+            else:
+                operator = ch
+            segments.append("".join(current))
+            current = []
+            i += len(operator)
+            continue
+        current.append(ch)
+        i += 1
+    segments.append("".join(current))
+    return segments
+
+
+def interpret_exit_code(command: str, exit_code: int) -> tuple[int, str | None]:
+    """Return ``(exit_code, note)`` when a non-zero exit is benign.
+
+    Inspects only the *last* pipeline/compound segment (split on
+    ``;``/``&&``/``||``/``|`` respecting quotes; ``$(...)``/backtick
+    substitution bodies are opaque and never split) — that is the command
+    whose exit status the shell reports. Maps known benign non-zero codes
+    (``grep``/``egrep``/``fgrep``/``rg``/``ag``/``ack`` exit 1 = "No matches")
+    to a guidance note; returns the original code with ``None`` otherwise.
+    Never changes ``exit_code`` — presentation/guidance only.  Caveat: under
+    ``set -o pipefail`` the reported exit may come from an earlier pipeline
+    stage, in which case a "no matches" note can misattribute the failure;
+    the note is guidance text, not a rewrite, so the raw exit code stays
+    visible.
+    """
+    if exit_code == 0:
+        return exit_code, None
+    segments = _split_on_chain_operators(command)
+    last_segment = (segments[-1] if segments else command).strip()
+    if not last_segment:
+        return exit_code, None
+    # Base command name = first word of the last segment, skipping env-var
+    # assignments (``VAR=val cmd``) and stripping path prefixes
+    # (``/usr/bin/grep`` -> ``grep``).
+    base_cmd = ""
+    for word in last_segment.split():
+        if "=" in word and not word.startswith("-"):
+            continue
+        base_cmd = word.split("/")[-1]
+        break
+    return exit_code, _BENIGN_EXIT_NOTES.get(base_cmd, {}).get(exit_code)
+
+
+def _augment_command_result(result: dict, command: str | None = None) -> dict:
     """Add explicit pass/fail fidelity fields to a completed-command result.
 
     The top-level ``status`` of a bash result reflects only that the shell
@@ -263,7 +411,12 @@ def _augment_command_result(result: dict) -> dict:
     signature = _detect_failure_signature(
         result.get("stdout", "") or "", result.get("stderr", "") or ""
     )
-    if not failed and signature is None:
+    # Benign non-zero exit (e.g. grep/rg no-match) → guidance note, only when
+    # the originating command is known. Presentation-only: exit_code is kept.
+    exit_note: str | None = None
+    if command:
+        _, exit_note = interpret_exit_code(command, exit_code)
+    if not failed and signature is None and exit_note is None:
         return result
 
     parts: list[str] = []
@@ -275,6 +428,8 @@ def _augment_command_result(result: dict) -> dict:
         parts.append(f"command exited 0 but output contains a {signature}")
     if failed and signature is not None:
         parts.append(f"detected {signature}")
+    if exit_note is not None:
+        parts.append(f"note: {exit_note}")
     stderr = (result.get("stderr") or "").strip()
     if stderr:
         tail = stderr[-_WARNING_STDERR_TAIL:]
@@ -603,13 +758,13 @@ class ShellManager:
             return _augment_command_result({
                 "status": "ok", "exit_code": result.returncode,
                 "stdout": stdout, "stderr": stderr,
-            })
+            }, command=command)
         except subprocess.TimeoutExpired:
             return _timeout_error(command, timeout)
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
-    def _sync_result_from(self, stdout: str, stderr: str, returncode: int) -> dict:
+    def _sync_result_from(self, stdout: str, stderr: str, returncode: int, command: str | None = None) -> dict:
         """Cap captured output and apply the shared pass/fail fidelity fields."""
         if len(stdout) > self._max_output:
             stdout = stdout[: self._max_output] + f"\n... (truncated, {len(stdout)} chars total)"
@@ -618,7 +773,7 @@ class ShellManager:
         return _augment_command_result({
             "status": "ok", "exit_code": returncode,
             "stdout": stdout, "stderr": stderr,
-        })
+        }, command=command)
 
     def _run_sync_contained(
         self, command: str, cwd: str, timeout: float,
@@ -686,7 +841,7 @@ class ShellManager:
                 )
             except subprocess.TimeoutExpired:
                 return _timeout_error(command, timeout)
-            return self._sync_result_from(result.stdout, result.stderr, result.returncode)
+            return self._sync_result_from(result.stdout, result.stderr, result.returncode, command)
         try:
             try:
                 stdout, stderr = process.communicate(input=input_data, timeout=timeout)
@@ -705,7 +860,7 @@ class ShellManager:
             # any surviving descendant — this is the containment contract of
             # the sync path (see module/CONTRACT docs).
             win32_job.close_handle(job)
-        return self._sync_result_from(stdout, stderr, returncode)
+        return self._sync_result_from(stdout, stderr, returncode, command)
 
     @staticmethod
     def _terminal(status: object) -> bool:
@@ -1402,7 +1557,7 @@ class ShellManager:
             return _augment_command_result({
                 "status": "done", "exit_status_known": True,
                 "exit_code": state["exit_code"], "stdout": stdout, "stderr": stderr,
-            })
+            }, command=str(state.get("command") or ""))
         return {
             "status": "done", "job_id": job_id, "exit_status_known": False,
             "exit_code": None, "stdout": stdout, "stderr": stderr,
