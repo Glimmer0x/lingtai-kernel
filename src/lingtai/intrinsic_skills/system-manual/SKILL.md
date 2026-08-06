@@ -3,18 +3,13 @@ name: system-manual
 description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
-  right lower reference. Route here for the expanded substrate/runtime model,
-  lifecycle and `system` tool actions, the init.json composition and preset
-  runtime model route, action/procedure discipline and skill routing, tool-result
-  summarization, SQLite/`log.sqlite` trace inspection and trajectory mining,
-  runtime/kernel update checks and nudges, environment variables, goal
-  notifications, POSIX workdir rename/recovery, molt/memory questions,
-  MCP/addon ownership, collaboration topology, resident prompt design, and the
-  built-in LLM adapters (provider inventory, Codex REST vs WebSocket transport,
-  adapter environment variables). The nested catalog below names each reference
-  and its exact trigger.
+  right lower reference. Routes to expanded substrate/runtime, lifecycle and
+  `system` actions, preset runtime, procedures/skills, summarization, SQLite
+  traces, updates/nudges, env vars, goals, name changes, molt/memory, MCP/addon
+  ownership, collaboration, resident prompt design, and the built-in LLM
+  adapters (provider inventory, Codex REST vs WebSocket, adapter env vars).
 version: 1.10.0
-last_changed_at: "2026-08-06"
+last_changed_at: "2026-08-06T00:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md

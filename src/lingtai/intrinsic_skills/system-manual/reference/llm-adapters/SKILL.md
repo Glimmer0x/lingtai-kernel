@@ -5,7 +5,7 @@ description: >
   named adapter is, how it is configured and dispatched, its special transport
   or protocol behaviors, and the environment variables that control it.
 version: 0.1.0
-last_changed_at: "2026-08-06"
+last_changed_at: "2026-08-06T00:00:00Z"
 related_files:
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/service.py
