@@ -11,6 +11,7 @@ on:
       - "tests/test_shell_pr1_contract.py"
       - "tests/test_shell_windows_native.py"
       - "tests/test_windows_taskkill_fallback.py"
+      - "tests/test_windows_regression.py"
   workflow_dispatch:
 
 permissions:
@@ -50,4 +51,4 @@ jobs:
         env:
           PYTHONUTF8: "1"
         run: |
-          python -m pytest -q tests/test_shell_pr1_contract.py tests/test_shell_windows_native.py tests/test_windows_taskkill_fallback.py
+          python -m pytest -q tests/test_shell_pr1_contract.py tests/test_shell_windows_native.py tests/test_windows_taskkill_fallback.py tests/test_windows_regression.py
