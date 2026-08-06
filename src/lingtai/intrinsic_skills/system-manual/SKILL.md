@@ -110,6 +110,13 @@ selects that topic.
     Nested system-manual reference for changing a live agent workdir/address on
     POSIX. Read this after loading system-manual for suspend, an atomic
     no-replace rename, and a verified resume.
+- name: llm-adapters
+  location: reference/llm-adapters/SKILL.md
+  description: |
+    Nested system-manual reference for the built-in LLM adapters: named
+    adapter inventory, per-provider configuration/dispatch, the Codex REST vs
+    WebSocket transport opt-in and its environment variables, and provider
+    special behaviors.
 ```
 
 ## Router table
@@ -126,6 +133,7 @@ selects that topic.
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
+| LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |

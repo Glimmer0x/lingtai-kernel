@@ -317,11 +317,12 @@ def test_ws_explicitly_disabled_uses_http():
 
 
 # ---------------------------------------------------------------------------
-# Transport axis: REST is hardcoded for normal runtime. There is NO environment
-# variable that selects the transport — an inherited ``LINGTAI_CODEX_WS=1`` or
-# ``LINGTAI_CODEX_TRANSPORT=websocket`` must NOT flip the adapter to WebSocket.
-# WebSocket is reachable only via the explicit ``transport=``/``ws_enabled=``
-# constructor kwarg (tests / internal / future).
+# Transport axis: REST is the normal-runtime default. WebSocket is an OPT-IN
+# selector: an operator may flip a Codex agent onto the WebSocket wire with
+# ``LINGTAI_CODEX_TRANSPORT=websocket`` (legacy ``LINGTAI_CODEX_WS=1`` also
+# works), but unset / invalid values always keep REST. Explicit
+# ``transport=``/``ws_enabled=`` constructor kwargs take precedence over the
+# environment.
 # ---------------------------------------------------------------------------
 
 
@@ -376,10 +377,38 @@ def test_default_session_is_rest_and_does_not_touch_ws_transport():
         {"LINGTAI_CODEX_WS": "1", "LINGTAI_CODEX_TRANSPORT": "websocket"},
     ],
 )
-def test_env_vars_do_not_flip_runtime_to_websocket(monkeypatch, env):
-    """No transport env var switches the runtime: even ``LINGTAI_CODEX_WS=1`` and/or
-    ``LINGTAI_CODEX_TRANSPORT=websocket`` leave the default session on REST and never
-    touch the WS transport."""
+def test_env_vars_opt_in_to_websocket(monkeypatch, env):
+    """A Codex agent is opted onto the WebSocket wire by ``LINGTAI_CODEX_WS=1``
+    and/or ``LINGTAI_CODEX_TRANSPORT=websocket`` when no explicit transport kwarg
+    is passed."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    session, transport = _make_default_session()
+
+    assert session._transport == "websocket"
+    assert session._ws_enabled is True
+    session.send("hello")
+
+    # WS path used: the injected transport saw the frame, HTTP fallback untouched.
+    assert transport.sent_frames
+    assert len(session._client.responses.kwargs) == 0
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"LINGTAI_CODEX_WS": "0"},
+        {"LINGTAI_CODEX_WS": "false"},
+        {"LINGTAI_CODEX_TRANSPORT": "rest"},
+        {"LINGTAI_CODEX_TRANSPORT": "http"},
+        {"LINGTAI_CODEX_TRANSPORT": "bogus"},
+    ],
+)
+def test_env_vars_do_not_flip_runtime_to_websocket_when_not_opted_in(monkeypatch, env):
+    """Unset, falsey, or invalid transport env values keep the REST default; the
+    default session never touches the WS transport factory."""
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 

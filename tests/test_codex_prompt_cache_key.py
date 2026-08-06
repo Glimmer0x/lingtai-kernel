@@ -29,10 +29,10 @@ from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock
 
 
 # NOTE: these HTTP-path prompt-cache tests build Codex sessions WITHOUT an
-# explicit ``transport=`` kwarg, so they use the hardcoded normal-runtime default
-# (REST). The transport is no longer environment-controlled, so no env pinning is
-# needed to keep them on the REST/HTTP path — an inherited ``LINGTAI_CODEX_WS`` /
-# ``LINGTAI_CODEX_TRANSPORT`` cannot flip them onto a real websocket connect.
+# explicit ``transport=`` kwarg, so they use the runtime default (REST) unless an
+# env var opts in. No env pinning is done here, so the default session stays on
+# the REST/HTTP path; an explicit ``LINGTAI_CODEX_WS`` / ``LINGTAI_CODEX_TRANSPORT``
+# would only opt in (never force REST off), which these tests do not set.
 
 
 @dataclass
