@@ -102,19 +102,18 @@ class TestExtractCommandsTokenBoundaries:
     @pytest.mark.parametrize(
         "script, expected",
         [
-            # Substitutions recurse into the nested command.
-            ("Write-Output $(Remove-Item victim)", ("Write-Output", "Remove-Item")),
-            # Script blocks recurse into the nested command.
+            # PR-5 fail-closed contract: $(), {}, pipes, and variable expansion
+            # are flagged by the quote-aware metachar scanner, so extraction
+            # returns the sentinel instead of recursing token-by-token.
+            ("Write-Output $(Remove-Item victim)", (_UNSUPPORTED,)),
+            # Plain script blocks still recurse (only $()/pipes/&/variables flag).
             ("ForEach-Object { Remove-Item victim }", ("ForEach-Object", "Remove-Item")),
-            # Mixed pipeline, block, and substitution keep boundary order.
             (
                 "Write-Output hi | ForEach-Object { $_ }; Write-Output $(Get-Date)",
-                ("Write-Output", "ForEach-Object", "Write-Output", "Get-Date"),
+                (_UNSUPPORTED,),
             ),
-            # Control-flow keywords are skipped but the guarded body is inspected.
-            ("if ($true) { Remove-Item victim }", ("Remove-Item",)),
-            # A statically-known quoted call target is accepted.
-            ("& 'Remove-Item' victim", ("Remove-Item",)),
+            ("if ($true) { Remove-Item victim }", (_UNSUPPORTED,)),
+            ("& 'Remove-Item' victim", (_UNSUPPORTED,)),
             # Dynamic invocation targets fail closed with the sentinel.
             ("& $command", (_UNSUPPORTED,)),
             ('& "$command" victim', (_UNSUPPORTED,)),
@@ -134,7 +133,7 @@ class TestExtractCommandsTokenBoundaries:
         # The sentinel must never be admitted through policy; a regression here
         # would let deny/allow lists treat dynamic syntax as a command name.
         extracted = dialect.extract_commands("& $command; Remove-Item victim")
-        assert extracted == (_UNSUPPORTED, "Remove-Item")
+        assert extracted == (_UNSUPPORTED,)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="no-window spawn flags are a Windows-only contract")
