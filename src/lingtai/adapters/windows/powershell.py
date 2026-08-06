@@ -444,6 +444,259 @@ def decode_windows_output(data: bytes) -> str:
     # line endings (a trailing newline survives via the empty final part).
     parts = data.split(b"\n")
     return "\n".join(_decode_windows_line(part) for part in parts)
+# ---------------------------------------------------------------------------
+# PR-5: quote-aware Windows metachar safety scanner.
+#
+# Mirrors OpenClaw's findWindowsUnsupportedToken / WINDOWS_UNSUPPORTED_TOKENS
+# with PowerShell quote semantics: single quotes ARE quoting for PowerShell
+# (unlike cmd.exe), double quotes protect most metacharacters, and
+# % / backtick / newlines stay unsafe in every quote state because cmd.exe
+# expands %VAR% and re-parses quoted payloads while PowerShell treats ` as an
+# escape character.
+# ---------------------------------------------------------------------------
+
+WINDOWS_UNSUPPORTED_TOKENS = frozenset(
+    {"&", "|", "<", ">", ";", "^", "(", ")", "%", "!", "`", "\n", "\r"}
+)
+# Stay unsafe even inside double quotes: newlines break parsing, cmd.exe
+# expands %VAR%, and PowerShell treats ` as an escape character.
+WINDOWS_ALWAYS_UNSAFE_TOKENS = frozenset({"\n", "\r", "%", "`"})
+_WINDOWS_VAR_HEAD_RE = re.compile(r"[A-Za-z0-9_{(?$]")
+
+
+def _unsafe_reason(token: str) -> str:
+    """Stable human-readable reason for a flagged scanner token."""
+    if token in "\n\r":
+        return "newline"
+    if token == "$":
+        return "variable expansion"
+    return f"metachar {token!r}"
+
+
+def is_unsafe_windows_command(command: str) -> tuple[bool, str]:
+    """Scan ``command`` for PowerShell metacharacters that can hide execution.
+
+    Quote-aware state machine over the OpenClaw token table: ``& | < > ; ^ ( )
+    % ! ` \\n \\r`` are flagged outside quotes; ``%`` / backtick / newlines
+    are flagged even inside double quotes; and ``$`` followed by
+    ``[A-Za-z0-9_{(?$]`` (PowerShell variable expansion, including ``$1``..``$9``
+    positional variables) is flagged anywhere except inside single quotes,
+    where PowerShell treats it as literal text.
+
+    Returns ``(unsafe, reason)``.  ``reason`` is a stable string naming the
+    first flagged token when ``unsafe`` is true, otherwise ``""``.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+    while i < n:
+        char = command[i]
+        if in_single:
+            # Single-quoted PowerShell strings are literal, but the always-
+            # unsafe tokens stay flagged: a quoted segment may later reach
+            # cmd.exe or Invoke-Expression where %VAR% and backticks execute.
+            if char in WINDOWS_ALWAYS_UNSAFE_TOKENS:
+                return True, _unsafe_reason(char)
+            if char == "'":
+                if i + 1 < n and command[i + 1] == "'":
+                    i += 2
+                    continue
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if char in WINDOWS_ALWAYS_UNSAFE_TOKENS:
+                return True, _unsafe_reason(char)
+            if char == "$" and i + 1 < n and _WINDOWS_VAR_HEAD_RE.fullmatch(command[i + 1]):
+                return True, _unsafe_reason("$")
+            if char == '"':
+                in_double = False
+            i += 1
+            continue
+        if char in {"'", '"'}:
+            if char == "'":
+                in_single = True
+            else:
+                in_double = True
+            i += 1
+            continue
+        if char == "$" and i + 1 < n and _WINDOWS_VAR_HEAD_RE.fullmatch(command[i + 1]):
+            return True, _unsafe_reason("$")
+        if char in WINDOWS_UNSUPPORTED_TOKENS:
+            return True, _unsafe_reason(char)
+        i += 1
+    return False, ""
+
+
+def _expand_power_switch_prefix_forms(match: str, smallest: str) -> frozenset[str]:
+    """Bare prefix forms PowerShell accepts for a switch (mirrors OpenClaw)."""
+    return frozenset(match[:length] for length in range(len(smallest), len(match) + 1))
+
+
+_POWERSHELL_WRAPPER_NAMES = frozenset({"pwsh", "pwsh.exe", "powershell", "powershell.exe"})
+_POWERSHELL_INLINE_COMMAND_FLAGS = (
+    _expand_power_switch_prefix_forms("command", "c")
+    | _expand_power_switch_prefix_forms("commandwithargs", "cwa")
+    | frozenset({"cwa"})
+)
+_POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS = (
+    _expand_power_switch_prefix_forms("encodedcommand", "e")
+    | _expand_power_switch_prefix_forms("ec", "e")
+)
+_POWERSHELL_INLINE_FILE_FLAGS = _expand_power_switch_prefix_forms("file", "f")
+_POWERSHELL_NO_PROFILE_FLAGS = _expand_power_switch_prefix_forms("noprofile", "nop")
+_POWERSHELL_UNREVIEWED_STARTUP_FLAGS = frozenset().union(
+    _expand_power_switch_prefix_forms("configurationfile", "conf"),
+    _expand_power_switch_prefix_forms("configurationname", "config"),
+    _expand_power_switch_prefix_forms("custompipename", "cus"),
+    _expand_power_switch_prefix_forms("encodedarguments", "encodeda"),
+    frozenset({"ea"}),
+    _expand_power_switch_prefix_forms("interactive", "i"),
+    _expand_power_switch_prefix_forms("login", "l"),
+    _expand_power_switch_prefix_forms("namedpipeservermode", "nam"),
+    _expand_power_switch_prefix_forms("noexit", "noe"),
+    _expand_power_switch_prefix_forms("psconsolefile", "pscf"),
+    frozenset({"pscf"}),
+    _expand_power_switch_prefix_forms("servermode", "s"),
+    _expand_power_switch_prefix_forms("settingsfile", "settings"),
+    _expand_power_switch_prefix_forms("socketservermode", "so"),
+    _expand_power_switch_prefix_forms("sshservermode", "ssh"),
+    _expand_power_switch_prefix_forms("v2socketservermode", "v2so"),
+)
+
+
+def _tokenize_windows_command(command: str) -> list[str] | None:
+    """Split a command into argv-like tokens honoring PowerShell quoting.
+
+    Double quotes and single quotes group text; ``''`` escapes a quote inside
+    single quotes and `` ` `` escapes the next character inside double quotes.
+    Returns None when quotes are unbalanced (callers must fail closed).
+    """
+    tokens: list[str] = []
+    buf: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+    while i < n:
+        char = command[i]
+        if in_single:
+            if char == "'":
+                if i + 1 < n and command[i + 1] == "'":
+                    buf.append("'")
+                    i += 2
+                    continue
+                in_single = False
+            else:
+                buf.append(char)
+            i += 1
+            continue
+        if in_double:
+            if char == '"':
+                in_double = False
+            elif char == "`" and i + 1 < n:
+                buf.append(command[i + 1])
+                i += 2
+                continue
+            else:
+                buf.append(char)
+            i += 1
+            continue
+        if char in " \t":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            i += 1
+            continue
+        if char == "'":
+            in_single = True
+            i += 1
+            continue
+        if char == '"':
+            in_double = True
+            i += 1
+            continue
+        buf.append(char)
+        i += 1
+    if in_single or in_double:
+        return None
+    if buf:
+        tokens.append("".join(buf))
+    return tokens
+
+
+def _normalize_power_flag(token: str) -> str | None:
+    """Return the bare lowercase form of a PowerShell switch token.
+
+    Accepts ``-flag``, ``--flag``, and ``/flag`` prefixes; returns None for
+    tokens that are not switches.
+    """
+    if not token:
+        return None
+    if token.startswith("--"):
+        body = token[2:]
+    elif token.startswith(("-", "/")):
+        body = token[1:]
+    else:
+        return None
+    return body.casefold()
+
+
+def windows_wrapper_escalation_reason(command: str) -> str | None:
+    """Return a reason when ``command`` wraps pwsh in a payload that is not
+    bound to the approval text, else None.
+
+    Mirrors OpenClaw ``isBlockedShellWrapperCommand`` for the PowerShell
+    wrapper kind: ``-EncodedCommand`` and ``-File`` have no reviewable content,
+    and profile startup before the inline command runs unreviewed code.
+    """
+    tokens = _tokenize_windows_command(command)
+    if tokens is None:
+        return "unbalanced quoting"
+    first = 1 if tokens and tokens[0] in ("&", ".") else 0
+    if first >= len(tokens):
+        return None
+    executable = tokens[first].casefold()
+    executable = executable.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+    if executable not in _POWERSHELL_WRAPPER_NAMES:
+        return None
+    argv = tokens[first + 1 :]
+    profiles_disabled = False
+    command_index: int | None = None
+    for index, raw in enumerate(argv):
+        if raw == "--":
+            return "-- stop-parsing marker"
+        if raw == "-":
+            return "stdin payload"
+        flag = _normalize_power_flag(raw)
+        if flag is None:
+            # A positional token before any inline-command flag is a mutable
+            # script file whose contents are not bound to the approval.
+            return "script file argument before inline command"
+        if flag in _POWERSHELL_INLINE_ENCODED_COMMAND_FLAGS:
+            return "-EncodedCommand"
+        if flag in _POWERSHELL_INLINE_FILE_FLAGS:
+            return "-File"
+        if flag in _POWERSHELL_INLINE_COMMAND_FLAGS:
+            command_index = index
+            break
+        if flag in _POWERSHELL_NO_PROFILE_FLAGS:
+            profiles_disabled = True
+            continue
+        if flag in _POWERSHELL_UNREVIEWED_STARTUP_FLAGS:
+            return f"unreviewed startup flag {raw}"
+        # Other pwsh switches (-NoLogo, -NonInteractive, -Sta, -Version, ...)
+        # do not execute unreviewed code; keep scanning for the command flag.
+    if command_index is None:
+        # A bare pwsh/powershell invocation runs profiles and keeps consuming
+        # stdin; no payload is bound to this approval.
+        return "bare wrapper invocation (profile/stdin)"
+    if command_index + 1 < len(argv) and argv[command_index + 1] == "-":
+        return "stdin payload"
+    if not profiles_disabled:
+        return "profile startup before inline command"
+    return None
 
 
 class PowerShellDialect(ShellDialect):
@@ -461,6 +714,24 @@ class PowerShellDialect(ShellDialect):
             )
 
     def extract_commands(self, script: str) -> tuple[str, ...]:
+        # PR-5: a quote-aware metachar scan fails closed before extraction so
+        # flagged commands (pipes, chaining, %VAR%, variable expansion, and
+        # -EncodedCommand / -File / profile-startup wrappers) require human
+        # confirmation instead of being reviewed token-by-token.  Unbalanced-
+        # quote (unparseable) scripts fail closed too, via the wrapper walk's
+        # "unbalanced quoting" result.  This is a deliberate, signed-off
+        # capability regression: the recursive extractor below previously
+        # validated such scripts command-by-command (including ``$()``/``{}``
+        # and parenthesized nesting), but scanner simplicity and the OpenClaw
+        # fail-closed model win over that precision, so any flagged or
+        # unparseable script is refused outright under a configured
+        # allow/deny policy.  Trusted (yolo) execution still passes the
+        # original script to pwsh.
+        unsafe, _reason = is_unsafe_windows_command(script)
+        if unsafe:
+            return (_UNSUPPORTED,)
+        if windows_wrapper_escalation_reason(script) is not None:
+            return (_UNSUPPORTED,)
         return _commands(script)
 
     def make_invocation(self, script: str) -> ShellInvocation:
@@ -583,4 +854,11 @@ class PowerShellDialect(ShellDialect):
         return ShellKind.POWERSHELL.value
 
 
-__all__ = ["PowerShellDialect", "decode_windows_output"]
+__all__ = [
+    "PowerShellDialect",
+    "decode_windows_output",
+    "WINDOWS_UNSUPPORTED_TOKENS",
+    "WINDOWS_ALWAYS_UNSAFE_TOKENS",
+    "is_unsafe_windows_command",
+    "windows_wrapper_escalation_reason",
+]

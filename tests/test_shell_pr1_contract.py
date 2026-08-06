@@ -76,9 +76,12 @@ def test_host_os_description_uses_human_readable_versions(monkeypatch):
 def test_powershell_invocation_and_extractor_are_not_posix():
     dialect = PowerShellDialect(executable="pwsh")
     assert dialect.state_key() == "powershell"
+    assert dialect.extract_commands("Write-Output hi") == ("Write-Output",)
+    # PR-5: metachar pipelines fail closed under policy enforcement instead of
+    # extracting their constituent commands (the scanner flags | ; and $( ).
     assert dialect.extract_commands(
         "Write-Output hi | ForEach-Object { $_ }; Write-Output $(Get-Date)"
-    ) == ("Write-Output", "ForEach-Object", "Write-Output", "Get-Date")
+    ) == ("__powershell_unsupported__",)
     invocation = dialect.make_invocation("Write-Output hi")
     args, kwargs = invocation.process_args()
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
@@ -99,10 +102,15 @@ def test_powershell_invocation_and_extractor_are_not_posix():
 
 def test_powershell_parentheses_are_recursive_and_malformed_syntax_fails_closed():
     dialect = PowerShellDialect(executable="pwsh")
-    assert dialect.extract_commands(r"(Remove-Item -LiteralPath .\victim)") == ("Remove-Item",)
+    # PR-5: unquoted parentheses are metachars, so parenthesized commands fail
+    # closed under policy enforcement; recursion remains available for quoted
+    # and paren-free scripts.
+    assert dialect.extract_commands(r"(Remove-Item -LiteralPath .\victim)") == (
+        "__powershell_unsupported__",
+    )
     assert dialect.extract_commands(
         r"Write-Output (Remove-Item -LiteralPath .\victim)"
-    ) == ("Write-Output", "Remove-Item")
+    ) == ("__powershell_unsupported__",)
     assert dialect.extract_commands(r"(Remove-Item -LiteralPath .\victim") == (
         "__powershell_unsupported__",
     )
@@ -123,9 +131,12 @@ def test_powershell_parenthesized_policy_rejects_before_invocation(tmp_path, pol
         dialect=dialect,
     )
     denied = manager.handle({"command": r"Write-Output (Remove-Item -LiteralPath .\victim)"})
+    # PR-5: unquoted parentheses are flagged metachars, so the command fails
+    # closed before invocation (human confirmation) rather than being reviewed
+    # as an extractable Remove-Item call.
     assert denied["status"] == "error"
-    assert "not allowed" in denied["message"]
-    assert "Remove-Item" in denied["message"]
+    assert "does not support this syntax" in denied["message"]
+    assert "refusing to run" in denied["message"]
     dialect.make_invocation.assert_not_called()
 
 
