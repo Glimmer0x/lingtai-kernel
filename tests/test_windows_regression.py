@@ -53,8 +53,10 @@ class TestWrapperFlags:
         # executable + argv + script; argv carries the four pwsh switches.
         assert args[0] == _PWSH
         assert args[1:5] == ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-        # The wrapped script is the final argv element and is never shell=True.
-        assert args[-1] == invocation.script
+        # The wrapped script travels over UTF-8 stdin (never the command
+        # line); argv ends in the ASCII bootstrap and is never shell=True.
+        assert invocation.stdin_script == invocation.script
+        assert "[Console]::In.ReadToEnd()" in args[-1]
         assert kwargs == {"shell": False}
         assert invocation.encoding == "utf-8"
         assert invocation.errors == "replace"
