@@ -40,7 +40,7 @@ def test_posix_policy_extraction_and_invocation_are_compatible():
     invocation = dialect.make_invocation("echo hello")
     assert invocation.to_dict() == {
         "script": "echo hello", "executable": None, "argv": None,
-        "encoding": None, "errors": None,
+        "command_line": None, "encoding": None, "errors": None,
     }
     assert ShellInvocation.from_dict(invocation.to_dict()) == invocation
 

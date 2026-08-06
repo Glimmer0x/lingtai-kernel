@@ -59,7 +59,11 @@ class ShellKind(enum.Enum):
 # ``make_invocation_for_kind`` so the shape can never drift between the
 # model-facing description and ``subprocess``.  POSIX keeps the historical
 # ``shell=True`` form (empty template, handled in ``make_invocation_for_kind``)
-# so the default platform path is byte-for-byte unchanged.
+# so the default platform path is byte-for-byte unchanged.  cmd.exe is the one
+# exception: its switches stay in this table, but the actual spawn form is a
+# raw pre-joined command-line string (see ``build_cmd_command_line``) because
+# cmd cannot parse the MSVC ``list2cmdline`` quoting an argv list would
+# produce on Windows.
 _SPAWN_ARGV_BY_KIND: dict[ShellKind, tuple[str, ...]] = {
     ShellKind.POSIX: (),
     ShellKind.POWERSHELL: ("-NoLogo", "-NoProfile", "-NonInteractive", "-Command"),
@@ -98,6 +102,30 @@ _SEQUENCING_GUIDANCE: dict[ShellKind, str] = {
 }
 
 
+def build_cmd_command_line(
+    executable: str, switches: tuple[str, ...], script: str,
+) -> str:
+    """Pre-join the raw command line cmd.exe must receive for *script*.
+
+    cmd.exe is spawned with a raw command-line string, never an argv list:
+    on Windows ``subprocess`` joins an argv list with ``list2cmdline``, which
+    escapes embedded quotes as MSVC ``\\"`` sequences that cmd.exe does not
+    understand (cmd only knows caret ``^`` escaping).  A script as simple as
+    ``echo "hello world"`` would otherwise reach cmd corrupted.  The ``/s``
+    switch plus a leading space inside the wrapping quotes make cmd's quote
+    handling deterministic: under ``/s`` the "exactly two quotes, no specials"
+    preserve path never applies, and the wrapper's first/last quotes are the
+    only ones the strip rule removes, so the script reaches the shell verbatim
+    -- quotes, ``&``/``|`` separators, and all.
+    """
+    exe_arg = (
+        f'"{executable}"'
+        if (" " in executable or "\t" in executable)
+        else executable
+    )
+    return f'{exe_arg} {" ".join(switches)} " {script}"'
+
+
 def make_invocation_for_kind(
     kind: ShellKind, script: str, executable: str | None = None,
 ) -> "ShellInvocation":
@@ -106,9 +134,11 @@ def make_invocation_for_kind(
     POSIX keeps the historical subprocess ``shell=True`` form so the default
     platform path is byte-for-byte unchanged.  Every other family uses an
     explicit argv template with ``shell=False`` and UTF-8-tolerant text
-    decoding, exactly like the PowerShell 7 adapter does today.  cmd.exe
-    falls back to ``%COMSPEC%`` (then ``cmd.exe``) when no executable is
-    supplied; the other argv families require a discovered executable.
+    decoding, exactly like the PowerShell 7 adapter does today.  cmd.exe is
+    the exception: it gets a raw pre-joined command-line string (see
+    :func:`build_cmd_command_line`) so embedded quotes survive ``Popen``.
+    cmd.exe falls back to ``%COMSPEC%`` (then ``cmd.exe``) when no executable
+    is supplied; the other argv families require a discovered executable.
     """
     if kind is ShellKind.POSIX:
         return ShellInvocation(script=script)
@@ -117,6 +147,16 @@ def make_invocation_for_kind(
     if executable is None:
         raise ValueError(
             f"{kind.value} spawn form requires a discovered executable"
+        )
+    if kind is ShellKind.CMD:
+        return ShellInvocation(
+            script=script,
+            executable=executable,
+            command_line=build_cmd_command_line(
+                executable, _SPAWN_ARGV_BY_KIND[ShellKind.CMD], script,
+            ),
+            encoding="utf-8",
+            errors="replace",
         )
     return ShellInvocation(
         script=script,
@@ -144,11 +184,19 @@ def extract_posix_commands(command: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ShellInvocation:
-    """Serializable shell execution form; no cwd, timeout, or result policy."""
+    """Serializable shell execution form; no cwd, timeout, or result policy.
+
+    ``argv`` and ``command_line`` are mutually exclusive spawn forms:
+    ``argv`` is the explicit list form (POSIX/PowerShell/Git Bash/WSL) and
+    ``command_line`` is the raw pre-joined string form used only for cmd.exe,
+    which cannot parse the backslash-quote escaping ``list2cmdline`` would
+    produce from an argv list.
+    """
 
     script: str
     executable: str | None = None
     argv: tuple[str, ...] | None = None
+    command_line: str | None = None
     encoding: str | None = None
     errors: str | None = None
     # When set, ``script`` is NOT placed on the child command line; instead the
@@ -166,6 +214,12 @@ class ShellInvocation:
             value = getattr(self, name)
             if value is not None and (not isinstance(value, str) or not value):
                 raise ValueError(f"{name} must be a non-empty string when present")
+        if self.command_line is not None:
+            if not isinstance(self.command_line, str) or not self.command_line.strip():
+                raise ValueError("command_line must be a non-empty string when present")
+            if self.argv is not None:
+                raise ValueError("argv and command_line are mutually exclusive spawn forms")
+            return
         if self.stdin_script is not None and (
             not isinstance(self.stdin_script, str) or not self.stdin_script.strip()
         ):
@@ -185,6 +239,7 @@ class ShellInvocation:
             "script": self.script,
             "executable": self.executable,
             "argv": list(self.argv) if self.argv is not None else None,
+            "command_line": self.command_line,
             "encoding": self.encoding,
             "errors": self.errors,
         }
@@ -194,18 +249,27 @@ class ShellInvocation:
 
     @classmethod
     def from_dict(cls, value: object) -> "ShellInvocation | None":
-        base = {"script", "executable", "argv", "encoding", "errors"}
-        optional = {"stdin_script"}
-        if (
-            not isinstance(value, dict)
-            or not base.issubset(value)
-            or not set(value).issubset(base | optional)
+        keys = {"script", "executable", "argv", "encoding", "errors"}
+        if not isinstance(value, dict):
+            return None
+        # ``command_line`` (cmd.exe raw-string form) and ``stdin_script``
+        # (PowerShell stdin bootstrap) are the new (batch-B) keys; legacy
+        # 5-key records without them still load so durable async state written
+        # by an older kernel is not rejected.
+        if set(value) not in (
+            keys,
+            keys | {"command_line"},
+            keys | {"stdin_script"},
+            keys | {"command_line", "stdin_script"},
         ):
             return None
         argv = value.get("argv")
         if argv is not None and (
             not isinstance(argv, (list, tuple)) or not all(isinstance(item, str) for item in argv)
         ):
+            return None
+        command_line = value.get("command_line")
+        if command_line is not None and not isinstance(command_line, str):
             return None
         executable = value.get("executable")
         encoding = value.get("encoding")
@@ -219,13 +283,19 @@ class ShellInvocation:
         try:
             return cls(
                 script=value["script"], executable=executable, argv=argv,
-                encoding=encoding, errors=errors, stdin_script=stdin_script,
+                command_line=command_line, encoding=encoding, errors=errors,
+                stdin_script=stdin_script,
             )
         except (TypeError, ValueError):
             return None
 
     def process_args(self) -> tuple[object, dict[str, object]]:
         """Return only dialect process arguments; callers add lifecycle policy."""
+        if self.command_line is not None:
+            kwargs: dict[str, object] = {"shell": False}
+            if self.executable is not None:
+                kwargs["executable"] = self.executable
+            return self.command_line, kwargs
         if self.argv is not None:
             args = [self.executable, *self.argv]
             if self.stdin_script is None:

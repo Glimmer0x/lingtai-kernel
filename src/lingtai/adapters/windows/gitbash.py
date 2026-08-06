@@ -27,11 +27,35 @@ _GIT_BASH_CANDIDATES = (
 
 
 def discover_git_bash() -> str | None:
-    """Return a runnable Git Bash ``bash.exe`` path, or ``None``."""
+    """Return a runnable Git Bash ``bash.exe`` path, or ``None``.
+
+    The PATH fallback is deliberately narrowed: on a WSL-enabled host,
+    ``%SystemRoot%\\System32\\bash.exe`` (the WSL launcher) shadows ``bash``
+    on PATH, and spawning it would silently run WSL bash while the
+    classifier and durable state report ``gitbash``.  WSL is opt-in only
+    (never auto-selected), so any ``bash.exe`` resolved under the Windows
+    system directory is rejected and the caller falls back to cmd.exe.
+    """
     for candidate in _GIT_BASH_CANDIDATES:
         if os.path.isfile(candidate):
             return candidate
-    return shutil.which("bash")
+    resolved = shutil.which("bash")
+    if resolved and _is_windows_system_bash(resolved):
+        return None
+    return resolved
+
+
+def _is_windows_system_bash(path: str) -> bool:
+    """True when *path* is the WSL ``bash.exe`` launcher, never Git Bash.
+
+    ``%SystemRoot%\\System32\\bash.exe`` (and the SysWOW64 twin) is the WSL
+    launcher that ships with Windows Subsystem for Linux.  String-level
+    comparison (no ``os.path`` calls) keeps the check identical when unit
+    tests run on non-Windows hosts with Windows-style paths.
+    """
+    return path.replace("/", "\\").lower().endswith(
+        ("\\system32\\bash.exe", "\\syswow64\\bash.exe")
+    )
 
 
 class GitBashDialect(ShellDialect):

@@ -434,12 +434,26 @@ class ShellManager:
         # the dialect fact rather than making this policy object inspect the host.
         case_insensitive = state_key in {"powershell", "cmd"}
         powershell = state_key == "powershell"
-        if powershell and "__powershell_unsupported__" in commands and (
+        cmd = state_key == "cmd"
+        # PowerShell and cmd.exe both fail closed on syntax the static
+        # extractor cannot prove (dynamic invocation, ``%`` expansion): the
+        # refusal marker is only enforced when a policy is actually
+        # configured -- yolo mode has nothing to protect.
+        unsupported = (
+            (powershell and "__powershell_unsupported__" in commands)
+            or (cmd and "__cmd_unsupported__" in commands)
+        )
+        if unsupported and (
             self._policy._allow is not None or self._policy._deny is not None
         ):
             return {
                 "status": "error",
-                "message": "PowerShell policy validation does not support this syntax; refusing to run it",
+                "message": (
+                    "cmd.exe policy validation does not support this syntax; "
+                    "refusing to run it"
+                    if cmd
+                    else "PowerShell policy validation does not support this syntax; refusing to run it"
+                ),
             }
         if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
             denied = commands

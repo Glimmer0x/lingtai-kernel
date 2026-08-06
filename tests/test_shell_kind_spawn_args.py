@@ -16,7 +16,7 @@ def test_posix_kind_preserves_historical_shell_true_form():
     invocation = make_invocation_for_kind(ShellKind.POSIX, "echo hi")
     assert invocation.to_dict() == {
         "script": "echo hi", "executable": None, "argv": None,
-        "encoding": None, "errors": None,
+        "command_line": None, "encoding": None, "errors": None,
     }
     assert invocation.process_args() == ("echo hi", {"shell": True})
 
@@ -35,20 +35,33 @@ def test_powershell_kind_spawn_argv_golden():
     assert invocation.errors == "replace"
 
 
-def test_cmd_kind_spawn_argv_golden(monkeypatch):
+def test_cmd_kind_spawn_raw_command_line_golden(monkeypatch):
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     invocation = make_invocation_for_kind(ShellKind.CMD, "dir")
+    assert invocation.to_dict()["argv"] is None
     args, kwargs = invocation.process_args()
-    assert args == [r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c", "dir"]
-    assert kwargs == {"shell": False}
+    # cmd.exe must receive a raw command-line string, never an argv list:
+    # ``list2cmdline`` would escape embedded quotes as ``\\"`` which cmd
+    # cannot parse.  The wrapper is ``/d /s /c " <script>"``.
+    assert args == "C:\\Windows\\System32\\cmd.exe /d /s /c \" dir\""
+    assert kwargs == {"shell": False, "executable": r"C:\Windows\System32\cmd.exe"}
     assert invocation.encoding == "utf-8"
+
+
+def test_cmd_kind_raw_command_line_preserves_embedded_quotes(monkeypatch):
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+    invocation = make_invocation_for_kind(ShellKind.CMD, 'echo "hello world"')
+    args, _kwargs = invocation.process_args()
+    assert args == "C:\\Windows\\System32\\cmd.exe /d /s /c \" echo \"hello world\"\""
 
 
 def test_cmd_kind_defaults_to_cmd_exe_when_comspec_unset(monkeypatch):
     monkeypatch.delenv("COMSPEC", raising=False)
     invocation = make_invocation_for_kind(ShellKind.CMD, "dir")
-    args, _kwargs = invocation.process_args()
-    assert args[0] == "cmd.exe"
+    assert invocation.executable == "cmd.exe"
+    args, kwargs = invocation.process_args()
+    assert args == "cmd.exe /d /s /c \" dir\""
+    assert kwargs == {"shell": False, "executable": "cmd.exe"}
 
 
 def test_gitbash_kind_spawn_argv_golden():
@@ -100,9 +113,84 @@ def test_cmd_dialect_make_invocation_and_extraction():
     assert dialect.extract_commands("dir & del x") == ("dir", "del")
     assert dialect.extract_commands("echo a | findstr b") == ("echo", "findstr")
     args, kwargs = dialect.make_invocation("dir").process_args()
-    assert args[1:4] == ["/d", "/s", "/c"]
-    assert args[-1] == "dir"
-    assert kwargs == {"shell": False}
+    assert args == "cmd.exe /d /s /c \" dir\""
+    assert kwargs == {"shell": False, "executable": "cmd.exe"}
+
+
+def test_cmd_extractor_normalizes_delimiters_escapes_and_quotes():
+    from lingtai.adapters.windows.cmd import extract_cmd_commands
+
+    assert extract_cmd_commands("del,x.txt") == ("del",)
+    assert extract_cmd_commands("del;x.txt") == ("del",)
+    assert extract_cmd_commands("d^el x.txt") == ("del",)
+    assert extract_cmd_commands('"del" x.txt') == ("del",)
+    assert extract_cmd_commands("if 1==1 (del x)") == ("if", "del")
+    assert extract_cmd_commands("(del x & echo done)") == ("del", "echo")
+
+
+def test_cmd_extractor_fails_closed_on_percent_expansion():
+    from lingtai.adapters.windows.cmd import extract_cmd_commands
+
+    assert extract_cmd_commands("echo %PATH%") == ("__cmd_unsupported__",)
+    assert extract_cmd_commands("%comspec% /c del x") == ("__cmd_unsupported__",)
+
+
+def test_gitbash_discovery_rejects_wsl_launcher_on_path(monkeypatch):
+    from lingtai.adapters.windows.gitbash import discover_git_bash
+
+    monkeypatch.setattr(
+        "shutil.which", lambda name: r"C:\Windows\System32\bash.exe"
+    )
+    # The WSL launcher on PATH must never satisfy Git Bash discovery: WSL is
+    # opt-in only and would otherwise be silently auto-selected.
+    assert discover_git_bash() is None
+
+
+def test_gitbash_discovery_accepts_git_bash_from_path(monkeypatch):
+    from lingtai.adapters.windows.gitbash import discover_git_bash
+
+    monkeypatch.setattr(
+        "shutil.which", lambda name: r"C:\Program Files\Git\bin\bash.exe"
+    )
+    assert discover_git_bash() == r"C:\Program Files\Git\bin\bash.exe"
+
+
+def test_gitbash_discovery_rejects_syswow64_launcher_too(monkeypatch):
+    from lingtai.adapters.windows.gitbash import discover_git_bash
+
+    monkeypatch.setattr(
+        "shutil.which", lambda name: "C:/Windows/SysWOW64/bash.exe"
+    )
+    assert discover_git_bash() is None
+
+
+def test_shell_invocation_command_line_round_trip_and_legacy_dict():
+    from lingtai.tools.bash._shell_dialect import ShellInvocation
+
+    invocation = ShellInvocation(
+        script="dir", executable=r"C:\Windows\System32\cmd.exe",
+        command_line=r'C:\Windows\System32\cmd.exe /d /s /c " dir"',
+    )
+    assert ShellInvocation.from_dict(invocation.to_dict()) == invocation
+    # A legacy 5-key record (no command_line) must still load so durable
+    # async state written by an older kernel is not rejected.
+    legacy = {
+        "script": "dir", "executable": r"C:\Windows\System32\cmd.exe",
+        "argv": None, "encoding": None, "errors": None,
+    }
+    loaded = ShellInvocation.from_dict(legacy)
+    assert loaded is not None
+    assert loaded.command_line is None
+    # A legacy record without argv/command_line keeps the historical
+    # ``shell=True`` spawn form with the executable hint.
+    assert loaded.process_args() == (
+        "dir",
+        {"shell": True, "executable": r"C:\Windows\System32\cmd.exe"},
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        ShellInvocation(
+            script="dir", executable="cmd.exe", argv=("/d",), command_line="x",
+        )
 
 
 def test_gitbash_dialect_make_invocation_and_extraction():

@@ -51,6 +51,22 @@ def test_windows_never_auto_selects_wsl(monkeypatch):
     assert resolve_shell_kind(os_name="nt") is ShellKind.CMD
 
 
+def test_windows_system32_bash_launcher_is_not_git_bash(monkeypatch):
+    # A WSL-enabled host without pwsh and without Git for Windows has
+    # ``C:\Windows\System32\bash.exe`` (the WSL launcher) on PATH.  The
+    # discovery rejection must make the classifier land on cmd.exe, not
+    # silently select WSL through the gitbash branch.
+    monkeypatch.setattr("lingtai.adapters.shell._discover_pwsh", lambda: None)
+    monkeypatch.setattr(
+        "lingtai.adapters.windows.gitbash.shutil.which",
+        lambda name: r"C:\Windows\System32\bash.exe",
+    )
+    monkeypatch.setattr(
+        "lingtai.adapters.windows.gitbash.os.path.isfile", lambda path: False
+    )
+    assert resolve_shell_kind(os_name="nt") is ShellKind.CMD
+
+
 @pytest.mark.parametrize(
     "override, expected",
     [
