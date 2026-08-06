@@ -136,6 +136,13 @@ def _set_kill_on_close(job_handle) -> None:
         ]
 
     info = _ExtendedLimitInformation()
+    # KILL_ON_JOB_CLOSE only.  The async adapter's containment invariant is
+    # "no descendant can exist outside the job": ActiveProcesses accounting
+    # is its ownership/quiescence source of truth, and a BREAKAWAY_OK escape
+    # hatch would silently let a requesting descendant leave the job (escaping
+    # tree-kill, kill-on-close, and that accounting).  The sync shell path
+    # (``win32_job.create_job_handle``) is the Codex-parity breakaway-ok
+    # variant, for installer/service hosts that must manage their own job.
     info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
     if not _kernel32().SetInformationJobObject(
         job_handle,

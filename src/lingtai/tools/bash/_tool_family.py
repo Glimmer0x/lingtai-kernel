@@ -140,7 +140,8 @@ def get_description(
         "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
         "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
         "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
-        "Supports async mode (input.async=true → job_id, then poll/cancel). Before ordinary shell work, read the manual — it covers async hygiene and advanced usage; no exceptions."
+        "Supports async mode (input.async=true → job_id, then poll/cancel). Before ordinary shell work, read the manual — it covers async hygiene and advanced usage; no exceptions. "
+        "On Windows, sync runs are contained in a kill-on-close Job Object: a background process started by a sync command (e.g. Start-Process with redirected output) is terminated when the command completes — use input.async=true for work that must outlive the command."
     )
 
 
