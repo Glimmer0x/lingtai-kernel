@@ -198,6 +198,14 @@ def _broad_scan_hint(command: str) -> str | None:
 # note is appended to the result so the agent can move on.  The exit_code
 # field itself is never rewritten — this is a presentation/guidance layer
 # only (the native-exit wrapper keeps $LASTEXITCODE fidelity).
+#
+# ``last segment`` means the last *top-level* segment: a ``|``/``;`` inside a
+# ``$(...)`` or backtick command substitution is not a chain operator — only
+# the substitution's result participates in the outer pipeline.  The splitter
+# therefore treats substitution bodies as opaque, so a pipe feeding grep
+# inside a substitution can never be mistaken for the command whose exit
+# code we are annotating (e.g. ``pytest $(git diff --name-only | grep test_)``
+# must never get a "no matches" note on a real pytest failure).
 _BENIGN_EXIT_NOTES: dict[str, dict[int, str]] = {
     # grep/rg/ag/ack: 1 = no matches found (normal), 2+ = real error
     "grep":   {1: "No matches found (not an error)"},
@@ -214,14 +222,23 @@ def _split_on_chain_operators(command: str) -> list[str]:
 
     Splits on ``;``, ``&&``, ``||`` and ``|`` while respecting single quotes,
     double quotes and backslash escapes, so ``echo 'a | b'`` stays one
-    segment. A bare ``&`` (backgrounding) is not a chain operator and stays
-    inside its segment. Deliberately simple: used only to pick the last
-    segment whose exit status the shell reports — never to execute anything.
+    segment. Command substitutions (``$(...)`` and backticks) are opaque:
+    operators inside them are *not* top-level chain operators — only the
+    substitution's result participates in the outer pipeline, so
+    ``pytest $(git diff --name-only | grep test_)`` stays a single segment
+    whose command is ``pytest`` (a ``|`` inside ``$(...)`` must never make
+    ``grep`` look like the last command). ``|&`` (stdout+stderr pipe) is a
+    two-character operator like ``||``. A bare ``&`` (backgrounding) is not a
+    chain operator and stays inside its segment. Deliberately simple: used
+    only to pick the last segment whose exit status the shell reports —
+    never to execute anything.
     """
     segments: list[str] = []
     current: list[str] = []
     quote: str | None = None
     escaped = False
+    paren_subst = 0  # nesting depth of $( ... ) command substitutions
+    backtick_subst = False  # inside ` ... ` command substitution (no nesting)
     i, n = 0, len(command)
     while i < n:
         ch = command[i]
@@ -246,6 +263,22 @@ def _split_on_chain_operators(command: str) -> list[str]:
             current.append(ch)
             i += 1
             continue
+        if ch == "`":
+            backtick_subst = not backtick_subst
+            current.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and command[i + 1] == "(":
+            paren_subst += 1
+            current.append(ch)
+            i += 1
+            continue
+        if paren_subst > 0 or backtick_subst:
+            current.append(ch)
+            if ch == ")" and paren_subst > 0:
+                paren_subst -= 1
+            i += 1
+            continue
         if ch in (";", "|", "&"):
             if ch == "&" and (i + 1 >= n or command[i + 1] != "&"):
                 # Bare `&` backgrounds the command; keep it in the segment so
@@ -255,8 +288,8 @@ def _split_on_chain_operators(command: str) -> list[str]:
                 continue
             if ch == "&":
                 operator = "&&"
-            elif ch == "|" and i + 1 < n and command[i + 1] == "|":
-                operator = "||"
+            elif ch == "|" and i + 1 < n and command[i + 1] in ("|", "&"):
+                operator = command[i : i + 2]  # ``||`` or ``|&``
             else:
                 operator = ch
             segments.append("".join(current))
@@ -273,11 +306,16 @@ def interpret_exit_code(command: str, exit_code: int) -> tuple[int, str | None]:
     """Return ``(exit_code, note)`` when a non-zero exit is benign.
 
     Inspects only the *last* pipeline/compound segment (split on
-    ``;``/``&&``/``||``/``|`` respecting quotes) — that is the command whose
-    exit status the shell reports. Maps known benign non-zero codes
+    ``;``/``&&``/``||``/``|`` respecting quotes; ``$(...)``/backtick
+    substitution bodies are opaque and never split) — that is the command
+    whose exit status the shell reports. Maps known benign non-zero codes
     (``grep``/``egrep``/``fgrep``/``rg``/``ag``/``ack`` exit 1 = "No matches")
     to a guidance note; returns the original code with ``None`` otherwise.
-    Never changes ``exit_code`` — presentation/guidance only.
+    Never changes ``exit_code`` — presentation/guidance only.  Caveat: under
+    ``set -o pipefail`` the reported exit may come from an earlier pipeline
+    stage, in which case a "no matches" note can misattribute the failure;
+    the note is guidance text, not a rewrite, so the raw exit code stays
+    visible.
     """
     if exit_code == 0:
         return exit_code, None
