@@ -256,3 +256,41 @@ def test_native_job_object_cancel_terminates_descendant_tree(tmp_path):
 
     time.sleep(1.5)
     assert not survived.exists(), "a descendant escaped the owned Windows Job Object"
+
+
+def test_native_stdin_bootstrap_long_command_over_32kb(tmp_path):
+    """A >32KB source command still runs: it travels over stdin, not the cmdline."""
+    manager = _manager(tmp_path)
+    command = "Write-Output '" + ("y" * 40_000) + "'"
+    assert len(command) > 32_768
+
+    result = manager.handle({"command": command, "timeout": 20})
+
+    assert result["status"] == "ok", result
+    assert result["exit_code"] == 0
+    assert result["ok"] is True
+    assert "y" * 40_000 in result["stdout"]
+
+
+def test_native_stdin_bootstrap_utf8_round_trip(tmp_path):
+    """UTF-8 source in, UTF-8 output out: no codepage mangling on the cmdline."""
+    manager = _manager(tmp_path)
+    text = "héllo 世界 🚀"
+
+    result = manager.handle({"command": f"Write-Output '{text}'", "timeout": 10})
+
+    assert result["status"] == "ok", result
+    assert result["exit_code"] == 0
+    assert text in result["stdout"]
+
+
+def test_native_stdin_bootstrap_exit_code_reflects_native_failure(tmp_path):
+    """A failed native command still yields its exact exit code through stdin."""
+    manager = _manager(tmp_path)
+
+    result = manager.handle({"command": "& $env:ComSpec /d /c exit 7", "timeout": 10})
+
+    assert result["status"] == "ok", result
+    assert result["exit_code"] == 7
+    assert result["ok"] is False
+    assert result["command_status"] == "failed"

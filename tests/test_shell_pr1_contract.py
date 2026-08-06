@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import lingtai.adapters.shell as shell_adapter
-from lingtai.adapters.windows.powershell import PowerShellDialect
+from lingtai.adapters.windows.powershell import PowerShellDialect, _ASCII_BOOTSTRAP
 from lingtai.adapters.windows.powershell_process import _Owned, WindowsShellAsyncProcessAdapter
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
 from lingtai.tools.bash._async_process import ProcessRef
@@ -82,9 +82,17 @@ def test_powershell_invocation_and_extractor_are_not_posix():
     invocation = dialect.make_invocation("Write-Output hi")
     args, kwargs = invocation.process_args()
     assert args[:5] == ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-    assert "Write-Output hi" in args[-1]
-    assert "$global:__lingtai_success = $?" in args[-1]
-    assert "exit $global:__lingtai_native_exit" in args[-1]
+    # The command line is fixed and ASCII-only: the last argument is the
+    # stdin bootstrap, and the user script is NOT on the command line.
+    assert args[-1] == _ASCII_BOOTSTRAP
+    assert args[-1].isascii()
+    assert "Write-Output hi" not in args
+    # The exit-code wrapper (existing escape/quote handling) travels unchanged
+    # as the UTF-8 stdin payload instead of the code-page-mangled cmdline.
+    assert invocation.stdin_script == invocation.script
+    assert "Write-Output hi" in invocation.stdin_script
+    assert "$global:__lingtai_success = $?" in invocation.stdin_script
+    assert "exit $global:__lingtai_native_exit" in invocation.stdin_script
     assert kwargs == {"shell": False}
     assert invocation.encoding == "utf-8"
 
