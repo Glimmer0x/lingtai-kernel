@@ -1317,12 +1317,35 @@ class ShellManager:
             return False
 
     def _read_logs(self, job_dir: Path) -> tuple[str, str]:
+        def read_log(name: str) -> str:
+            raw = (job_dir / name).read_bytes()
+            if os.name != "nt":
+                # POSIX async logs keep the historical replacement-character
+                # decode; the Windows OEM fallback below is console-specific.
+                text = raw.decode("utf-8", errors="replace")
+            else:
+                # The PowerShell wrapper forces the child's console encoding
+                # to UTF-8, but a native tool can still emit OEM-codepage
+                # bytes; re-decode those instead of corrupting them with
+                # errors="replace".  The fallback is decided per line, so a
+                # mostly-UTF-8 log with one invalid byte run is not re-decoded
+                # wholesale as OEM (which would garble the whole log).
+                from lingtai.adapters.windows.powershell import decode_windows_output
+
+                text = decode_windows_output(raw)
+            # Restore the universal-newlines translation the previous
+            # read_text() provided: pwsh emits CRLF-terminated lines, and
+            # without this every async stdout/stderr line would carry a
+            # stray "\r" into results, truncation accounting, and
+            # newline-based splitting.
+            return text.replace("\r\n", "\n").replace("\r", "\n")
+
         try:
-            stdout = (job_dir / "stdout.log").read_text(encoding="utf-8", errors="replace")
+            stdout = read_log("stdout.log")
         except OSError:
             stdout = ""
         try:
-            stderr = (job_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
+            stderr = read_log("stderr.log")
         except OSError:
             stderr = ""
         # Same hygiene as the sync path: async logs are surfaced to the model

@@ -164,6 +164,17 @@ spawn. No adapter here persists state beyond those capability-owned files.
 
 ## Notes
 
+**Console encoding:** the PowerShell wrapper prepends
+`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $OutputEncoding = [System.Text.UTF8Encoding]::new($false)`
+so native commands (ipconfig, chcp-sensitive tools) write UTF-8 to the pipe.
+Async `stdout.log`/`stderr.log` bytes are decoded at the bash read-back
+boundary with `decode_windows_output` (strict UTF-8 first; the OEM codepage
+guesses cp437/cp850/cp1252 are applied *per line* so a mostly-UTF-8 log with
+one invalid byte run keeps its valid text) instead of `errors="replace"`,
+which silently corrupts OEM-encoded output.  The read-back boundary also
+restores the universal-newlines translation (CRLF/CR -> LF) the previous
+`read_text` provided, so async output never carries stray `\r` characters.
+
 The workdir-lease byte range (`.agent.lock`, byte 0, length 1) is a
 cross-repository interop invariant with the TUI duplicate-launch probe; the
 normative statement lives in `src/lingtai/kernel/workdir_lease/CONTRACT.md`.

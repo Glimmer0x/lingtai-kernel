@@ -8,6 +8,7 @@ a sentinel command so a configured allowlist/denylist fails closed; trusted
 """
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import shutil
@@ -325,6 +326,126 @@ def _find_pwsh() -> str | None:
     return shutil.which("pwsh")
 
 
+_OEM_CODEPAGE_GUESSES = ("cp437", "cp850", "cp1252")
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def _oem_text_score(text: str) -> int:
+    """Lower is better: penalize C0 controls and non-Latin characters.
+
+    Every single-byte codepage decodes every byte, so a first-successful-decode
+    fallback would always pick ``cp437`` and never reach ``cp850``/``cp1252``.
+    Scoring instead prefers the candidate whose bytes look most like text: C0
+    controls signal binary data, and characters beyond Latin Extended-B (box
+    drawing, Greek, ...) are rarely produced by OEM text tools.  U+FFFD
+    replacement characters score too, so the same metric can compare an OEM
+    interpretation against a mostly-intact UTF-8 interpretation of a line.
+    """
+    score = 0
+    for char in text:
+        value = ord(char)
+        if value < 32 and char not in "\t\n\r":
+            score += 5
+        elif value > 0x24F:
+            score += 2
+        elif value > 0xFF:
+            score += 1
+    return score
+
+
+def _is_tail_truncation(line: bytes) -> bool:
+    """True when ``line`` ends with an incomplete multibyte UTF-8 sequence.
+
+    A log read that catches the child mid-write can tear a multibyte character
+    at the end of the file.  The incremental decoder only reports that at
+    finalization, after successfully consuming every byte as a valid prefix;
+    mid-line invalid bytes (the genuine OEM case) fail during consumption and
+    return False.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        decoder.decode(line)
+    except UnicodeDecodeError:
+        return False
+    try:
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _decode_windows_line(line: bytes) -> str:
+    """Decode one captured line: strict UTF-8, then per-line OEM fallback.
+
+    A whole-file OEM fallback is deliberately avoided: as soon as *any* byte
+    run in a mostly-UTF-8 log is invalid (one native tool that re-enabled the
+    OEM codepage, or a torn multibyte character from a read that caught the
+    child mid-write), re-decoding the entire file as cp437/cp850/cp1252 turns
+    the previously valid Chinese/emoji text into box-drawing mojibake.
+    Deciding per line confines the fallback to the lines that actually contain
+    non-UTF-8 bytes, and the remaining heuristics keep sparse damage sparse:
+
+    - a torn multibyte character at the end of the line is replaced (one
+      U+FFFD), never re-interpreted as OEM bytes;
+    - a line that still decodes to genuine non-ASCII UTF-8 text keeps that
+      text even when it also contains invalid bytes (only those bytes are
+      replaced);
+    - only otherwise-Latin lines with invalid bytes are re-decoded with the
+      OEM codepage guesses, and only when the OEM text scores better than the
+      ``errors="replace"`` version of the same bytes.
+    """
+    try:
+        return line.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    utf8_replaced = line.decode("utf-8", errors="replace")
+    if _is_tail_truncation(line):
+        return utf8_replaced
+    if any(ch != "\ufffd" and ord(ch) > 127 for ch in utf8_replaced):
+        return utf8_replaced
+    best: tuple[int, str] | None = None
+    for codepage in _OEM_CODEPAGE_GUESSES:
+        try:
+            text = line.decode(codepage)
+        except UnicodeDecodeError:
+            continue
+        score = _oem_text_score(text)
+        if best is None or score < best[0]:
+            best = (score, text)
+    if best is not None and best[0] < _oem_text_score(utf8_replaced):
+        return best[1]
+    return utf8_replaced
+
+
+def decode_windows_output(data: bytes) -> str:
+    """Decode captured child output: strict UTF-8 first, then OEM per line.
+
+    The PowerShell wrapper forces ``[Console]::OutputEncoding`` and
+    ``$OutputEncoding`` to UTF-8, so native commands normally emit valid UTF-8
+    bytes.  A leading UTF-8 BOM is stripped, and a buffer that is entirely
+    valid UTF-8 is returned as-is.  If any byte run is invalid, the fallback
+    is decided *per line* (see ``_decode_windows_line``) with the common
+    Windows OEM codepages (cp437/cp850/cp1252 heuristics) instead of
+    re-decoding the whole file or corrupting the invalid bytes with
+    ``errors="replace"``.  Line endings are preserved byte-for-byte; callers
+    normalize CRLF (the bash read-back boundary translates ``\r\n``/``\r`` to
+    ``\n`` exactly like the historical ``read_text``).  This function never
+    raises.
+    """
+    if data.startswith(_UTF8_BOM):
+        data = data[len(_UTF8_BOM):]
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    # 0x0A is a line break in UTF-8 and in every OEM codepage and never
+    # occurs inside a multibyte sequence, so the split never tears a
+    # character.  Re-join with the same separators, preserving the original
+    # line endings (a trailing newline survives via the empty final part).
+    parts = data.split(b"\n")
+    return "\n".join(_decode_windows_line(part) for part in parts)
+
+
 class PowerShellDialect(ShellDialect):
     """PowerShell 7 (``pwsh``) invocation and policy extraction."""
 
@@ -392,7 +513,15 @@ class PowerShellDialect(ShellDialect):
         # which avoids code-page mangling of the ``-Command`` argument, the
         # 32,768-character process command-line limit, and UTF-8 in/out
         # problems (the bootstrap forces Input/OutputEncoding to UTF-8).
+        # Windows console utilities (ipconfig, chcp-sensitive tools) write
+        # through WriteConsole; PowerShell redirects that output, but only if
+        # the console encoding matches what the pipe consumer expects.  Force
+        # the child's console and pipeline encodings to UTF-8 up front so
+        # captured bytes decode cleanly at the boundary instead of arriving in
+        # the OEM codepage (which ``errors="replace"`` would corrupt).
         wrapped = (
+            "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+            "$OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
             "$global:__lingtai_success = $false\n"
             "$global:__lingtai_native_exit = 0\n"
             "$global:__lingtai_final_native_failure = $false\n"
@@ -454,4 +583,4 @@ class PowerShellDialect(ShellDialect):
         return ShellKind.POWERSHELL.value
 
 
-__all__ = ["PowerShellDialect"]
+__all__ = ["PowerShellDialect", "decode_windows_output"]

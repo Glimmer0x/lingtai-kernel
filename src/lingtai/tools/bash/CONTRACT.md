@@ -279,6 +279,17 @@ POSIX script-form job. If either field is present, both must be valid; malformed
 or incomplete new state becomes an explicit unrecoverable launch failure and
 never falls back to the raw display command.
 
+Decoding policy: sync execution decodes inside `subprocess` text mode with the
+dialect's `encoding`/`errors` (the PowerShell wrapper forces UTF-8 console
+output, so `errors="replace"` rarely corrupts). Async output files are bytes;
+on Windows the read-back boundary decodes them with
+`lingtai.adapters.windows.powershell.decode_windows_output` (strict UTF-8,
+then OEM codepage fallback decided per line) so OEM-codepage output is not
+replaced and a mostly-UTF-8 log with one invalid byte run keeps its valid
+text.  The read-back boundary then translates `\r\n`/`\r` to `\n`,
+preserving the universal-newlines semantics of the previous `read_text`
+decode (async output never carries stray CR characters).
+
 `ShellInvocation` serializes five keys by default (`script`, `executable`,
 `argv`, `encoding`, `errors`) plus an optional sixth `stdin_script` when the
 dialect transports the command through stdin. Script form uses `argv: null`
@@ -295,6 +306,12 @@ selected and validated by outer composition; the detached supervisor executes
 this self-contained invocation and does not use the key for adapter dispatch.
 This is fail-loud schema/semantic validation, not cryptographic integrity for
 user-rewritable durable state.
+unrecoverable. `shell_dialect` is non-empty provenance selected and validated
+by outer composition; the detached supervisor executes this self-contained
+invocation and does not use the key for adapter dispatch. This is fail-loud
+schema/semantic validation, not cryptographic integrity for user-rewritable
+durable state.
+>>>>>>> e98ae4e9 (feat(windows): enforce UTF-8 console output and OEM fallback decode (ps/pr-2))
 
 The registered description is setup-time metadata and always includes
 `Active shell dialect: posix` or `Active shell dialect: powershell`, plus a
