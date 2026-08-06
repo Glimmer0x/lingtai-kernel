@@ -9,11 +9,13 @@ description: >
   summarization, SQLite/`log.sqlite` trace inspection and trajectory mining,
   runtime/kernel update checks and nudges, environment variables, goal
   notifications, POSIX workdir rename/recovery, molt/memory questions,
-  MCP/addon ownership, collaboration topology, and resident prompt design. The
-  nested catalog below names each reference and its exact trigger.
-version: 1.9.1
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
-last_changed_at: 2026-07-27T00:00:00Z
+  MCP/addon ownership, collaboration topology, resident prompt design, and the
+  built-in LLM adapters (provider inventory, Codex REST vs WebSocket transport,
+  adapter environment variables). The nested catalog below names each reference
+  and its exact trigger.
+version: 1.10.0
+last_changed_at: "2026-08-06"
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -24,6 +26,9 @@ related_files:
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+- src/lingtai/llm/_register.py
+- src/lingtai/llm/openai/adapter.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---

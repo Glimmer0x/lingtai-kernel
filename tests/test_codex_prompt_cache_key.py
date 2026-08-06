@@ -18,6 +18,8 @@ import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import pytest
+
 from lingtai.llm.openai.adapter import (
     CodexOpenAIAdapter,
     CodexResponsesSession,
@@ -30,9 +32,17 @@ from lingtai.kernel.llm.interface import TextBlock, ThinkingBlock
 
 # NOTE: these HTTP-path prompt-cache tests build Codex sessions WITHOUT an
 # explicit ``transport=`` kwarg, so they use the runtime default (REST) unless an
-# env var opts in. No env pinning is done here, so the default session stays on
-# the REST/HTTP path; an explicit ``LINGTAI_CODEX_WS`` / ``LINGTAI_CODEX_TRANSPORT``
-# would only opt in (never force REST off), which these tests do not set.
+# env var opts in. The autouse fixture below pins that default by removing both
+# selector variables, keeping the HTTP boundary hermetic even on a host that has
+# deliberately opted in to WebSocket.
+
+
+@pytest.fixture(autouse=True)
+def _clear_codex_transport_env(monkeypatch):
+    """Pin these HTTP-path tests to REST regardless of inherited selectors."""
+
+    monkeypatch.delenv("LINGTAI_CODEX_TRANSPORT", raising=False)
+    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
 
 
 @dataclass

@@ -800,10 +800,10 @@ def _default_codex_ws_transport_factory(url: str, headers: dict[str, str]):
     Lazily imports the optional ``websockets`` package; if it is not installed
     (the kernel does not hard-depend on it), the websocket path is treated as an
     unsupported runtime and the caller falls back to HTTP. The real transport is
-    intentionally NOT exercised by the unit tests (which inject a fake), and the
-    WebSocket transport is not selected by normal runtime — it is reached only via
-    an explicit ``transport="websocket"`` constructor kwarg (tests / internal /
-    a live smoke test with parent approval).
+    intentionally NOT exercised by the unit tests (which inject a fake). The
+    WebSocket wire is selected when a Codex session opts in via the explicit
+    ``transport="websocket"`` / ``ws_enabled=True`` constructor kwarg or the
+    ``LINGTAI_CODEX_TRANSPORT`` / ``LINGTAI_CODEX_WS`` environment selector.
     """
     try:  # pragma: no cover - import guard, exercised only with the dep present
         import websockets  # noqa: F401

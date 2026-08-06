@@ -30,26 +30,30 @@ source remains the behavioral authority.
 
 ## Named adapters
 
-LingTai currently registers the following named adapters (each maps to a
-provider key usable in presets / `init.json`):
+LingTai registers the following provider keys (each usable in presets / `init.json`
+`llm` blocks; source of truth: `src/lingtai/llm/_register.py`):
 
-| Provider key | Adapter | Transport(s) | Notes |
+| Provider keys (aliases) | Factory / adapter | Transport(s) | Notes |
 |---|---|---|---|
-| `codex` / `codex-pool` | `CodexOpenAIAdapter` (in `openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; account selection + token pool; `store=false` forced; streaming forced |
+| `codex`, `codex-pool`, `codex_pool` | `CodexOpenAIAdapter` (in `openai/adapter.py`) | REST (default), WebSocket (opt-in) | Official ChatGPT Codex backend; account selection + token pool; `store=false` forced; streaming forced |
 | `openai` | `OpenAIAdapter` | REST (Chat Completions / Responses) | Responses API optional via `wire_api` / `use_responses_api` |
 | `anthropic` | `AnthropicAdapter` | REST | Anthropic Messages API |
 | `gemini` | `GeminiAdapter` | REST | Google Gemini API |
 | `minimax` | `MiniMaxAdapter` | REST | MiniMax API |
 | `deepseek` | `DeepSeekAdapter` | REST | DeepSeek API |
-| `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
-| `mimo` | `MiMoAdapter` | REST | Xiaomi MiMo API |
-| `custom` | `CustomAdapter` | REST | Generic OpenAI-compatible endpoint; see `llm/custom/` |
+| `glm`, `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
+| `mimo` | `MimoAdapter` | REST | Xiaomi MiMo API |
+| `custom`, `grok`, `qwen`, `kimi` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi` are custom-backed aliases) |
 | `openrouter` | `OpenRouterAdapter` | REST | OpenRouter-compatible endpoint |
-| `claude_code` / `kimi_code` | CLI-backend adapters | n/a (external CLI) | Code-workspace CLI backends used by daemons |
+| `claude-code`, `claude_code` | `ClaudeCodeAdapter` (in `claude_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Claude Code harness); used as a main-agent/preset provider |
+| `kimi-code`, `kimi_code` | `KimiCodeAdapter` (in `kimi_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Kimi Code harness); used as a main-agent/preset provider |
 
 Each adapter is lazy-imported on first use, so an unconfigured provider's SDK
 is never loaded. Prefer the provider's own section below when operating a
-specific provider.
+specific provider. The CLI-backed providers above (`claude-code`, `kimi-code`)
+are registered LLM providers/preset paths; they are distinct from the daemon
+CLI backend dispatch system (see `daemon-manual`), which can run external
+coding CLIs as subprocesses for a task.
 
 ## Codex adapter
 
@@ -88,7 +92,7 @@ testing showed REST prompt-prefix caching is sufficient. Resolution priority:
 |---|---|---|---|
 | `LINGTAI_CODEX_TRANSPORT` | Opt a Codex agent onto the WebSocket wire | `websocket` / `ws` (opt-in); `rest` / `http` / `https` (explicit REST); anything else → REST | unset → REST |
 | `LINGTAI_CODEX_WS` | Legacy boolean opt-in for the WebSocket wire | `1` / `true` / `yes` / `on` → websocket; anything else → REST | unset → REST |
-| `LINGTAI_CODEX_WS_EPOCH_RESET_TURNS` | Explicit WS response-chain epoch reset interval (turns); `0` disables | non-negative integer | `0` |
+| `LINGTAI_CODEX_WS_EPOCH_RESET_TURNS` | Explicit WS response-chain epoch reset interval (turns); `0` disables the turn-count reset | non-negative integer | `0` |
 
 These variables are read at session construction time (per process). The
 selector is deliberately opt-in: an inherited or accidentally-set variable
@@ -120,9 +124,11 @@ user-defined third-party routers (see the provider-additions rule: do not
 propose adding such intermediaries as core built-in providers; use
 custom/user-defined presets).
 
-## CLI-backend adapters (`claude_code`, `kimi_code`, …)
+## CLI-backed LLM providers (`claude-code`, `kimi-code`)
 
-These adapters wrap external code-workspace CLIs (Claude Code, Kimi Code, …)
-rather than speaking a wire protocol directly. They are used by the daemon
-CLI backends; see `daemon-manual` for backend selection and `shell-manual` for
-long-lived CLI hygiene.
+`claude_code` and `kimi_code` are registered LLM providers whose adapters wrap
+local code-workspace CLIs (`ClaudeCodeAdapter`, `KimiCodeAdapter`) rather than
+speaking a wire protocol directly. They are valid main-agent/preset providers
+and are lazy-imported like every other adapter. They are **not** the daemon CLI
+backend axis: the daemon system can dispatch external coding CLIs as task
+subprocesses (`daemon-manual`), independent of these registered providers.
