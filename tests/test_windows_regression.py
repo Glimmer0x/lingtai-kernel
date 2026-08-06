@@ -173,6 +173,8 @@ class TestSpawnNoWindowFlags:
             # Suspended spawn closes the spawn-to-Job-assignment ownership race.
             assert creationflags & _CREATE_SUSPENDED == _CREATE_SUSPENDED
             assert kwargs["close_fds"] is True
-            assert kwargs["stdin"] is subprocess.DEVNULL
+            # The wrapped script is delivered over a UTF-8 stdin pipe (the
+            # ASCII bootstrap reads it); never DEVNULL for the pwsh child.
+            assert kwargs["stdin"] is subprocess.PIPE
         finally:
             owned.close()
