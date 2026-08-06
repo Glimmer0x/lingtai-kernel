@@ -384,12 +384,14 @@ _CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
 #      ``_codex_plan_continuation``). This is transport-independent.
 #   B. Transport — ``rest`` vs ``websocket``: how the planned request is sent.
 #
-# REST is the normal-runtime transport and is HARDCODED — there is intentionally
-# NO environment variable that selects the transport. Live testing confirmed REST
-# prompt-prefix caching is sufficient, so the runtime never needs the WebSocket
-# wire. In particular, an inherited ``LINGTAI_CODEX_WS=1`` (or any
-# ``LINGTAI_CODEX_TRANSPORT`` value) must NOT flip the adapter to WebSocket; those
-# env vars are no longer read.
+# REST is the normal-runtime transport. WebSocket is an OPT-IN path: the
+# runtime never selects it by default, but an operator may flip a Codex agent
+# onto the WebSocket wire with the ``LINGTAI_CODEX_TRANSPORT=websocket``
+# environment variable (legacy boolean ``LINGTAI_CODEX_WS=1`` also works).
+# Explicit ``transport=``/``ws_enabled=`` constructor kwargs still take
+# precedence over the environment. Live testing confirmed REST prompt-prefix
+# caching is sufficient for the normal path, so WebSocket remains a deliberate
+# opt-in for operators who want the delta/``previous_response_id`` wire.
 #
 # REST runs the SAME full->incremental planner, but only to choose the ``full`` vs
 # ``incremental`` label (the cache-epoch semantic): ``full`` marks a
@@ -399,12 +401,19 @@ _CODEX_TURN_STATE_HEADER = "x-codex-turn-state"
 # ``previous_response_id`` — the label only annotates cache affinity, it does not
 # change the wire payload.
 #
-# The WebSocket transport code is retained for tests / internal / future use only.
-# It is reachable ONLY via the explicit ``transport="websocket"`` (or legacy
-# ``ws_enabled=True``) constructor kwarg — never via the environment. When
-# selected, WebSocket ``incremental`` transmits a strict-additive delta plus
+# The WebSocket transport code is retained for tests / opt-in runtime use. It is
+# reachable via the explicit ``transport="websocket"`` (or legacy
+# ``ws_enabled=True``) constructor kwarg, or via the ``LINGTAI_CODEX_TRANSPORT``
+# environment variable (see ``_codex_transport_from_env``). When selected,
+# WebSocket ``incremental`` transmits a strict-additive delta plus
 # ``previous_response_id`` and WebSocket ``full`` sends the full input frame.
 _CODEX_TRANSPORT_DEFAULT = "rest"
+# Environment-variable transport selector. ``LINGTAI_CODEX_TRANSPORT=websocket``
+# (or legacy ``LINGTAI_CODEX_WS=1``) opts a Codex agent onto the WebSocket wire;
+# anything else (unset, ``rest``, invalid) leaves the REST default. Explicit
+# constructor kwargs win over this selector (see ``CodexResponsesSession``).
+_CODEX_TRANSPORT_ENV = "LINGTAI_CODEX_TRANSPORT"
+_CODEX_WS_BOOL_ENV = "LINGTAI_CODEX_WS"
 _CODEX_WS_EPOCH_RESET_TURNS_ENV = "LINGTAI_CODEX_WS_EPOCH_RESET_TURNS"
 # The mandatory turn-count epoch reset is CANCELLED (Jason, 2026-06-25): there is
 # no need to force a fresh full epoch purely by turn count. A full/fresh epoch is
@@ -433,6 +442,31 @@ def _codex_ws_epoch_reset_turns() -> int:
     except ValueError:
         return _CODEX_WS_EPOCH_RESET_TURNS_DEFAULT
     return max(0, value)
+
+
+def _codex_transport_from_env() -> str:
+    """Resolve the optional environment-variable transport selector.
+
+    Returns ``"websocket"`` when the operator opted a Codex agent onto the
+    WebSocket wire via ``LINGTAI_CODEX_TRANSPORT=websocket`` (or the legacy
+    boolean ``LINGTAI_CODEX_WS=1``), otherwise ``"rest"``. This is an OPT-IN
+    selector: unset, ``rest``, or any invalid value keeps the REST default.
+    Explicit constructor kwargs (``transport=`` / ``ws_enabled=``) are resolved
+    by the caller and take precedence over this helper.
+    """
+
+    raw = os.getenv(_CODEX_TRANSPORT_ENV, "").strip().lower()
+    if raw:
+        if raw in {"websocket", "ws"}:
+            return "websocket"
+        if raw in {"rest", "http", "https"}:
+            return "rest"
+        # Unknown value — keep the safe REST default.
+        return _CODEX_TRANSPORT_DEFAULT
+    legacy = os.getenv(_CODEX_WS_BOOL_ENV, "").strip().lower()
+    if legacy in {"1", "true", "yes", "on"}:
+        return "websocket"
+    return _CODEX_TRANSPORT_DEFAULT
 
 
 @dataclass
@@ -766,10 +800,10 @@ def _default_codex_ws_transport_factory(url: str, headers: dict[str, str]):
     Lazily imports the optional ``websockets`` package; if it is not installed
     (the kernel does not hard-depend on it), the websocket path is treated as an
     unsupported runtime and the caller falls back to HTTP. The real transport is
-    intentionally NOT exercised by the unit tests (which inject a fake), and the
-    WebSocket transport is not selected by normal runtime — it is reached only via
-    an explicit ``transport="websocket"`` constructor kwarg (tests / internal /
-    a live smoke test with parent approval).
+    intentionally NOT exercised by the unit tests (which inject a fake). The
+    WebSocket wire is selected when a Codex session opts in via the explicit
+    ``transport="websocket"`` / ``ws_enabled=True`` constructor kwarg or the
+    ``LINGTAI_CODEX_TRANSPORT`` / ``LINGTAI_CODEX_WS`` environment selector.
     """
     try:  # pragma: no cover - import guard, exercised only with the dep present
         import websockets  # noqa: F401
@@ -3109,11 +3143,12 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         #   * explicit ``transport=`` kwarg (``rest``/``websocket``) wins;
         #   * else the legacy ``ws_enabled=`` kwarg (True -> websocket) for
         #     back-compat with existing tests/wiring;
+        #   * else the environment-variable OPT-IN selector
+        #     (``LINGTAI_CODEX_TRANSPORT=websocket`` / legacy ``LINGTAI_CODEX_WS=1``);
         #   * else the hardcoded normal-runtime default: ``rest``.
-        # There is intentionally NO environment-variable transport selector: an
-        # inherited ``LINGTAI_CODEX_WS`` / ``LINGTAI_CODEX_TRANSPORT`` does NOT flip
-        # the runtime to WebSocket. WebSocket is reachable only via the explicit
-        # kwargs above (tests / internal / future).
+        # The env selector is deliberately opt-in: unset or any invalid value
+        # keeps REST, so an inherited variable can never accidentally flip a
+        # Codex agent onto the WebSocket wire.
         # ``ws_transport_factory`` is an injection seam used by the mock tests;
         # when ``None`` and the websocket transport is selected, the real factory
         # is used (and itself falls back to HTTP if ``websockets`` is missing).
@@ -3125,7 +3160,7 @@ class CodexResponsesSession(_StandaloneCompactionMixin, OpenAIResponsesSession):
         elif ws_enabled is not None:
             self._transport = "websocket" if bool(ws_enabled) else "rest"
         else:
-            self._transport = _CODEX_TRANSPORT_DEFAULT
+            self._transport = _codex_transport_from_env()
         # True when the WebSocket wire is selected. The REST transport leaves this
         # False but STILL runs the full/incremental state machine below.
         self._ws_enabled = self._transport == "websocket"

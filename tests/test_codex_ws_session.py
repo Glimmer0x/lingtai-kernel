@@ -317,12 +317,27 @@ def test_ws_explicitly_disabled_uses_http():
 
 
 # ---------------------------------------------------------------------------
-# Transport axis: REST is hardcoded for normal runtime. There is NO environment
-# variable that selects the transport — an inherited ``LINGTAI_CODEX_WS=1`` or
-# ``LINGTAI_CODEX_TRANSPORT=websocket`` must NOT flip the adapter to WebSocket.
-# WebSocket is reachable only via the explicit ``transport=``/``ws_enabled=``
-# constructor kwarg (tests / internal / future).
+# Transport axis: REST is the normal-runtime default. WebSocket is an OPT-IN
+# selector: an operator may flip a Codex agent onto the WebSocket wire with
+# ``LINGTAI_CODEX_TRANSPORT=websocket`` (legacy ``LINGTAI_CODEX_WS=1`` also
+# works), but unset / invalid values always keep REST. Explicit
+# ``transport=``/``ws_enabled=`` constructor kwargs take precedence over the
+# environment.
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_codex_transport_env(monkeypatch):
+    """Hermetic baseline for every test in this module.
+
+    The transport selector env vars are live session-construction inputs now, so
+    an inherited host value would make default-REST assertions and negative env
+    cases non-deterministic. Every test starts with both selectors removed;
+    env-matrix tests then set exactly the keys they intend.
+    """
+
+    monkeypatch.delenv("LINGTAI_CODEX_TRANSPORT", raising=False)
+    monkeypatch.delenv("LINGTAI_CODEX_WS", raising=False)
 
 
 def _make_default_session(**kwargs):
@@ -376,10 +391,38 @@ def test_default_session_is_rest_and_does_not_touch_ws_transport():
         {"LINGTAI_CODEX_WS": "1", "LINGTAI_CODEX_TRANSPORT": "websocket"},
     ],
 )
-def test_env_vars_do_not_flip_runtime_to_websocket(monkeypatch, env):
-    """No transport env var switches the runtime: even ``LINGTAI_CODEX_WS=1`` and/or
-    ``LINGTAI_CODEX_TRANSPORT=websocket`` leave the default session on REST and never
-    touch the WS transport."""
+def test_env_vars_opt_in_to_websocket(monkeypatch, env):
+    """A Codex agent is opted onto the WebSocket wire by ``LINGTAI_CODEX_WS=1``
+    and/or ``LINGTAI_CODEX_TRANSPORT=websocket`` when no explicit transport kwarg
+    is passed."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    session, transport = _make_default_session()
+
+    assert session._transport == "websocket"
+    assert session._ws_enabled is True
+    session.send("hello")
+
+    # WS path used: the injected transport saw the frame, HTTP fallback untouched.
+    assert transport.sent_frames
+    assert len(session._client.responses.kwargs) == 0
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {},
+        {"LINGTAI_CODEX_WS": "0"},
+        {"LINGTAI_CODEX_WS": "false"},
+        {"LINGTAI_CODEX_TRANSPORT": "rest"},
+        {"LINGTAI_CODEX_TRANSPORT": "http"},
+        {"LINGTAI_CODEX_TRANSPORT": "bogus"},
+    ],
+)
+def test_env_vars_do_not_flip_runtime_to_websocket_when_not_opted_in(monkeypatch, env):
+    """Unset, falsey, or invalid transport env values keep the REST default; the
+    default session never touches the WS transport factory."""
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -390,6 +433,95 @@ def test_env_vars_do_not_flip_runtime_to_websocket(monkeypatch, env):
     session.send("hello")
 
     # Still REST: WS transport factory never used, HTTP client saw the request.
+    assert transport.sent_frames == []
+    assert len(session._client.responses.kwargs) == 1
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"LINGTAI_CODEX_WS": "yes"},
+        {"LINGTAI_CODEX_WS": "on"},
+        {"LINGTAI_CODEX_TRANSPORT": "https"},
+        # Primary outranks legacy: a REST primary suppresses a legacy true.
+        {"LINGTAI_CODEX_TRANSPORT": "rest", "LINGTAI_CODEX_WS": "1"},
+        {"LINGTAI_CODEX_TRANSPORT": "https", "LINGTAI_CODEX_WS": "1"},
+        # Invalid primary suppresses legacy true.
+        {"LINGTAI_CODEX_TRANSPORT": "bogus", "LINGTAI_CODEX_WS": "1"},
+        # Legacy true still works when primary is blank.
+        {"LINGTAI_CODEX_TRANSPORT": "   ", "LINGTAI_CODEX_WS": "1"},
+    ],
+)
+def test_env_truth_table_legacy_and_conflicts(monkeypatch, env):
+    """Documented truth table: legacy `yes`/`on` opt in; primary `https` is
+    explicit REST; primary beats legacy; invalid primary suppresses legacy true;
+    blank primary falls through to legacy."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    session, transport = _make_default_session()
+    transport_is_ws = session._transport == "websocket"
+
+    # Only the legacy-true-with-blank-primary case opts in.
+    legacy_true = env.get("LINGTAI_CODEX_WS", "") in {"1", "true", "yes", "on"}
+    primary = env.get("LINGTAI_CODEX_TRANSPORT", "").strip().lower()
+    expect_ws = legacy_true and primary == ""
+    assert transport_is_ws is expect_ws
+    session.send("hello")
+    if expect_ws:
+        assert transport.sent_frames
+        assert len(session._client.responses.kwargs) == 0
+    else:
+        assert transport.sent_frames == []
+        assert len(session._client.responses.kwargs) == 1
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"transport": "rest", "ws_enabled": True},
+        {"transport": "websocket", "ws_enabled": False},
+    ],
+)
+def test_explicit_kwarg_conflict_transport_wins(monkeypatch, kwargs):
+    """When both explicit kwargs are supplied and conflict, `transport` wins over
+    the legacy `ws_enabled` (constructor resolution order)."""
+    session, transport = _make_default_session(**kwargs)
+
+    expect_ws = str(kwargs["transport"]).strip().lower() in {"websocket", "ws"}
+    assert session._transport == ("websocket" if expect_ws else "rest")
+    assert session._ws_enabled is expect_ws
+    session.send("hello")
+    if expect_ws:
+        assert transport.sent_frames
+        assert len(session._client.responses.kwargs) == 0
+    else:
+        assert transport.sent_frames == []
+        assert len(session._client.responses.kwargs) == 1
+
+
+def test_ws_enabled_kwarg_true_selects_ws(monkeypatch):
+    """Legacy explicit `ws_enabled=True` selects WebSocket even with a REST env
+    and no transport kwarg."""
+    monkeypatch.setenv("LINGTAI_CODEX_TRANSPORT", "rest")
+    session, transport = _make_default_session(ws_enabled=True)
+
+    assert session._transport == "websocket"
+    assert session._ws_enabled is True
+    session.send("hello")
+    assert transport.sent_frames
+    assert len(session._client.responses.kwargs) == 0
+
+
+def test_ws_enabled_kwarg_false_selects_rest(monkeypatch):
+    """Legacy explicit `ws_enabled=False` selects REST even with a WS env and no
+    transport kwarg."""
+    monkeypatch.setenv("LINGTAI_CODEX_TRANSPORT", "websocket")
+    session, transport = _make_default_session(ws_enabled=False)
+
+    assert session._transport == "rest"
+    assert session._ws_enabled is False
+    session.send("hello")
     assert transport.sent_frames == []
     assert len(session._client.responses.kwargs) == 1
 

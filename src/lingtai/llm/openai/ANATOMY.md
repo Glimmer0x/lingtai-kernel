@@ -131,14 +131,14 @@ Two orthogonal axes drive each Codex turn:
 - **Transport** — `rest` (normal runtime, hardcoded) vs `websocket`. Selects how
   the planned request is sent, never *whether* incremental continuation is used.
 
-**Transport selection:** REST is **hardcoded** for normal runtime
-(`_CODEX_TRANSPORT_DEFAULT = "rest"`). There is intentionally **no environment
-variable** that selects the transport — an inherited `LINGTAI_CODEX_WS` or
-`LINGTAI_CODEX_TRANSPORT` is ignored and cannot flip the runtime to WebSocket
-(live testing confirmed REST prompt-prefix caching is sufficient). The WebSocket
-transport code is retained for tests / internal / future use and is reachable
-**only** via an explicit `transport="websocket"` (or legacy `ws_enabled=True`)
-constructor kwarg.
+**Transport selection:** REST is the normal-runtime default
+(`_CODEX_TRANSPORT_DEFAULT = "rest"`). WebSocket is an **opt-in** selector:
+`LINGTAI_CODEX_TRANSPORT=websocket` (or legacy `LINGTAI_CODEX_WS=1`) flips a
+Codex agent onto the WebSocket wire; unset, `rest`, or invalid values keep REST.
+Live testing confirmed REST prompt-prefix caching is sufficient, so the runtime
+never selects WebSocket unless the operator opts in. Explicit
+`transport="websocket"` (or legacy `ws_enabled=True`) constructor kwargs still
+take precedence over the environment.
 
 Flow:
 

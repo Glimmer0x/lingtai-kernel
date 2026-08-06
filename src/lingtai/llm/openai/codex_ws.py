@@ -2,9 +2,10 @@
 
 This is the real wire driver for the experimental websocket path mirrored from
 the official Codex CLI (repo openai/codex, tag ``rust-v0.130.0``). Normal runtime
-is hardcoded to REST and never selects this transport; it is reached ONLY when a
-session is built with an explicit ``transport="websocket"`` kwarg (tests /
-internal / a live smoke run) — there is no environment-variable selector. The
+defaults to REST; the WebSocket wire is an opt-in selected when a session is
+built with an explicit ``transport="websocket"`` kwarg (tests / internal / a live
+smoke run) or via the ``LINGTAI_CODEX_TRANSPORT`` / ``LINGTAI_CODEX_WS``
+environment selector (see ``_codex_transport_from_env`` in ``adapter.py``). The
 unit tests in ``tests/test_codex_ws_session.py`` inject a fake transport and never
 import this module. It is deliberately kept out of the hot ``adapter`` import path
 and only loaded lazily by ``_default_codex_ws_transport_factory``.

@@ -3,17 +3,14 @@ name: system-manual
 description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
-  right lower reference. Route here for the expanded substrate/runtime model,
-  lifecycle and `system` tool actions, the init.json composition and preset
-  runtime model route, action/procedure discipline and skill routing, tool-result
-  summarization, SQLite/`log.sqlite` trace inspection and trajectory mining,
-  runtime/kernel update checks and nudges, environment variables, goal
-  notifications, POSIX workdir rename/recovery, molt/memory questions,
-  MCP/addon ownership, collaboration topology, and resident prompt design. The
-  nested catalog below names each reference and its exact trigger.
-version: 1.9.1
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset]
-last_changed_at: 2026-07-27T00:00:00Z
+  right lower reference. Routes to expanded substrate/runtime, lifecycle and
+  `system` actions, preset runtime, procedures/skills, summarization, SQLite
+  traces, updates/nudges, env vars, goals, name changes, molt/memory, MCP/addon
+  ownership, collaboration, resident prompt design, and the built-in LLM
+  adapters (provider inventory, Codex REST vs WebSocket, adapter env vars).
+version: 1.10.0
+last_changed_at: "2026-08-06T00:00:00Z"
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -24,6 +21,9 @@ related_files:
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+- src/lingtai/llm/_register.py
+- src/lingtai/llm/openai/adapter.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -110,6 +110,13 @@ selects that topic.
     Nested system-manual reference for changing a live agent workdir/address on
     POSIX. Read this after loading system-manual for suspend, an atomic
     no-replace rename, and a verified resume.
+- name: llm-adapters
+  location: reference/llm-adapters/SKILL.md
+  description: |
+    Nested system-manual reference for the built-in LLM adapters: named
+    adapter inventory, per-provider configuration/dispatch, the Codex REST vs
+    WebSocket transport opt-in and its environment variables, and provider
+    special behaviors.
 ```
 
 ## Router table
@@ -126,6 +133,7 @@ selects that topic.
 | Environment variables; Nudge controls; accepted values; read/reload behavior; invalid-value fallback; security cautions | `reference/environment-variables/SKILL.md` |
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
+| LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
