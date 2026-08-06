@@ -327,6 +327,15 @@ class LocalFileIOBackend(FileIOBackend):
         self.last_traversal = TraversalStats()
         search_root = Path(root) if root else (self._root or Path("."))
         results: list[str] = []
+        # fnmatch's translation of a leading "**/" requires a literal "/"
+        # in the matched string, so it never matches a zero-depth relative
+        # path (a direct child of search_root). Standard recursive-glob
+        # semantics (stdlib glob.glob(recursive=True), pathlib.Path.glob)
+        # treat "**/" as zero-or-more directory levels, so also try the
+        # pattern with that prefix stripped.
+        zero_depth_pattern = (
+            pattern[3:] if pattern.startswith("**/") else None
+        )
         for path in self._walk_files(
             search_root,
             exclude_dirs=exclude_dirs,
@@ -340,7 +349,11 @@ class LocalFileIOBackend(FileIOBackend):
             except ValueError:
                 # cross-volume on Windows — fall back to absolute.
                 rel = str(path)
-            if fnmatch.fnmatch(rel, pattern):
+            if fnmatch.fnmatch(rel, pattern) or (
+                zero_depth_pattern is not None
+                and "/" not in rel
+                and fnmatch.fnmatch(rel, zero_depth_pattern)
+            ):
                 results.append(str(path))
                 if max_results is not None and len(results) >= max_results:
                     self.last_traversal.truncated_reason = (
