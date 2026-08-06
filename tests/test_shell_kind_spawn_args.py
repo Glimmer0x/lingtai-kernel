@@ -97,8 +97,11 @@ def test_powershell_dialect_wraps_script_and_spawns_through_kind():
     assert args[:5] == [
         "pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
     ]
-    assert "$global:__lingtai_success" in args[-1]
-    assert "Write-Output hi" in args[-1]
+    # The wrapped script travels over UTF-8 stdin (never the command line);
+    # argv ends in the ASCII bootstrap that reads stdin and runs the script.
+    assert "[Console]::In.ReadToEnd()" in args[-1]
+    assert "$global:__lingtai_success" in invocation.stdin_script
+    assert "Write-Output hi" in invocation.stdin_script
     assert kwargs == {"shell": False}
     assert dialect.state_key() == "powershell"
     assert dialect.kind() is ShellKind.POWERSHELL
