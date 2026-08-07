@@ -111,6 +111,50 @@ def test_lingtai_doctor_addon_timeout_becomes_warning(monkeypatch):
     ]
 
 
+def test_lingtai_doctor_probes_every_curated_addon():
+    """``ADDON_MODULES`` must track ``mcp_catalog.json``.
+
+    An addon missing here is a diagnostic blind spot: a configured entry whose
+    args do not literally carry ``-m lingtai.mcp_servers.<name>`` is never
+    import-probed, so a broken install passes doctor clean.
+    """
+    doctor = load_doctor_module()
+    catalog = json.loads(
+        (ROOT / "src" / "lingtai" / "mcp_catalog.json").read_text(encoding="utf-8")
+    )
+
+    expected = {
+        name: entry["args"][entry["args"].index("-m") + 1]
+        for name, entry in catalog.items()
+        if not name.startswith("_") and "-m" in entry.get("args", [])
+    }
+
+    assert expected, "expected curated stdio addons in mcp_catalog.json"
+    assert doctor.ADDON_MODULES == expected
+
+
+def test_lingtai_doctor_addon_modules_are_importable_packages():
+    doctor = load_doctor_module()
+
+    for name, module in doctor.ADDON_MODULES.items():
+        package = ROOT / "src" / Path(*module.split("."))
+        assert package.is_dir(), f"{name} -> {module} is not a shipped package"
+
+
+def test_lingtai_doctor_skill_doc_lists_every_probed_addon():
+    skill = (
+        ROOT / "src" / "lingtai" / "intrinsic_skills" / "lingtai-doctor" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    doctor = load_doctor_module()
+
+    section = skill.split("**First-party MCP server imports**", 1)
+    assert len(section) == 2, "SKILL.md no longer documents the import probe"
+    probe_text = section[1].split("\n\n", 1)[0]
+
+    for name in doctor.ADDON_MODULES:
+        assert f"`{name}`" in probe_text, f"SKILL.md omits probed addon {name}"
+
+
 def test_lingtai_doctor_type_hints_resolve():
     doctor = load_doctor_module()
 
