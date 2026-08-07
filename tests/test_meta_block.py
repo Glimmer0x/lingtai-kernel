@@ -1514,6 +1514,23 @@ def test_session_half_honors_custom_budget():
     assert session["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
 
 
+def test_session_half_honors_env_budget_override(monkeypatch):
+    # The session half shares _resolve_cache_miss_budget with the context guard,
+    # so a positive-int LINGTAI_CACHE_MISS_BUDGET wins over config here too — and
+    # cache_miss_remaining_tokens is recomputed against the env budget.
+    monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, "500000")
+    agent = _session_agent_with_budget(
+        input_tokens=300_000, cached_tokens=100_000, budget=250_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 200_000
+    assert session["cache_miss_budget"] == 500_000  # env, not the 250k config
+    assert session["cache_miss_remaining_tokens"] == 300_000  # 500k - 200k
+
+
 def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
     # Jason FINAL: the always-on cache-miss telemetry is SINCE LAST MOLT — it
     # derives from the cumulative/restored get_token_usage() totals so a refresh

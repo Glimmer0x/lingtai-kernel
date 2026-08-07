@@ -19,6 +19,20 @@ def make_agent_dir():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_cache_miss_budget_env(monkeypatch):
+    """Keep the suite hermetic w.r.t. the live cache-miss budget env override.
+
+    ``meta_block._resolve_cache_miss_budget`` reads ``LINGTAI_CACHE_MISS_BUDGET``
+    from ``os.environ`` at every budget resolution, so an ambient value (an
+    operator's shell, or a LingTai agent's own ``env_file``) would otherwise
+    leak into every budget assertion.  Tests that exercise the override opt back
+    in with ``monkeypatch.setenv``.
+    """
+
+    monkeypatch.delenv("LINGTAI_CACHE_MISS_BUDGET", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_notification_dismiss_guards():
     """Keep generic notification-dismiss guard registration test-local."""
 

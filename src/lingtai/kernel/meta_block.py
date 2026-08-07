@@ -313,19 +313,23 @@ TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 # cumulative cache miss and how much budget remains without recomputing
 # ``input_tokens - cached_tokens`` or remembering the default budget:
 #   * ``cache_miss_tokens``            = max(input_tokens - cached_tokens, 0)
-#   * ``cache_miss_budget``            = agent._config.cache_miss_budget
+#   * ``cache_miss_budget``            = the effective budget (see
+#                                        :func:`_resolve_cache_miss_budget`:
+#                                        ``LINGTAI_CACHE_MISS_BUDGET`` env
+#                                        override, then agent config)
 #   * ``cache_miss_remaining_tokens``  = max(cache_miss_budget - cache_miss_tokens, 0)
 # The two budget-derived fields are omitted (never invented) when no positive-int
-# budget is resolvable from the agent config; ``cache_miss_tokens`` — derivable
+# budget is resolvable from either source; ``cache_miss_tokens`` — derivable
 # from session data alone — is always emitted with the session half.
 TOKEN_USAGE_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
 
 # Env-var override for the cache-miss budget. When set to a positive int, it
-# overrides agent._config.cache_miss_budget at every budget resolution (live
-# read, no restart), matching the nudge env-var pattern. An invalid value
-# (missing, non-int, bool, <= 0) falls back to the configured/default budget.
+# overrides agent._config.cache_miss_budget at every budget resolution (live-read,
+# like the nudge env vars — no restart needed). An invalid value (missing,
+# non-int, bool, <= 0) falls back SILENTLY to the configured/default budget:
+# unlike the nudge vars there is no bounded diagnostic for a rejected value.
 CACHE_MISS_BUDGET_ENV = "LINGTAI_CACHE_MISS_BUDGET"
 
 # Current context state carried under the ``session`` half of
@@ -1178,8 +1182,9 @@ def build_context_overflow_warning(agent) -> str | None:
 def _resolve_cache_miss_budget(agent) -> int | None:
     """Return the effective positive-int cache-miss budget, or ``None``.
 
-    Resolution order (same semantics at every call site, matching the nudge
-    env-var pattern):
+    Resolution order (same semantics at every call site; live-read, like the
+    nudge env vars — but the fallback here is silent, with no bounded
+    diagnostic for a rejected value):
 
     1. ``LINGTAI_CACHE_MISS_BUDGET`` env var — live ``os.environ`` read at each
        budget resolution, so the operator (or the agent itself via its env_file
@@ -1201,6 +1206,9 @@ def _resolve_cache_miss_budget(agent) -> int | None:
             env_budget = int(env_raw)
         except (TypeError, ValueError):
             env_budget = None
+        # The bool check can never fire here — env values are always ``str`` and
+        # ``int(str)`` never yields a ``bool``. Kept for symmetry with the config
+        # check below, where a ``bool`` genuinely can arrive.
         if (
             env_budget is not None
             and not isinstance(env_budget, bool)
@@ -1226,7 +1234,9 @@ def build_cache_miss_budget_context(agent) -> dict | None:
 
         cache_miss = max(input_tokens - cached_tokens, 0)
 
-    When ``cache_miss >= agent._config.cache_miss_budget`` (inclusive), return a
+    When ``cache_miss >=`` the effective budget (inclusive) — see
+    :func:`_resolve_cache_miss_budget`: the ``LINGTAI_CACHE_MISS_BUDGET`` env
+    override first, then ``agent._config.cache_miss_budget`` — return a
     dict destined for the SAME ``_tool_meta_context`` transit sub-object as the
     sustained-pressure ``molt`` reminder::
 
@@ -1578,11 +1588,12 @@ def _build_session_token_economy(agent) -> dict:
       since-last-molt cumulative cache miss, on the same cumulative basis as
       :func:`build_cache_miss_budget_context`, so a refresh does not reset it.
       Always emitted here, since it needs only the aggregate counters.
-    * ``cache_miss_budget`` = ``agent._config.cache_miss_budget`` and
+    * ``cache_miss_budget`` = the effective budget (see
+      :func:`_resolve_cache_miss_budget`: the ``LINGTAI_CACHE_MISS_BUDGET`` env
+      override first, then ``agent._config.cache_miss_budget``) and
       ``cache_miss_remaining_tokens`` = ``max(cache_miss_budget - cache_miss_tokens, 0)``
-      — emitted only when a positive-int budget is resolvable from the agent
-      config (see :func:`_resolve_cache_miss_budget`); omitted, never invented,
-      for config-less stubs.
+      — emitted only when a positive-int budget is resolvable from either
+      source; omitted, never invented, for env-less/config-less stubs.
 
     Returns ``{}`` when no aggregate usage is available; numeric zeros are preserved.
     """

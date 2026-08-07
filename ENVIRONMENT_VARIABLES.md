@@ -4,7 +4,7 @@ description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
 version: 1.0.0
-last_changed_at: "2026-08-04"
+last_changed_at: "2026-08-07"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -53,7 +53,7 @@ reports, prompts, or this registry.
 | `LINGTAI_NUDGE_REPEAT_INTERVAL` | `24h` | Positive duration using `s`, `m`, `h`, or `d`; global | Repeated unresolved Nudge findings | Each Nudge operation; no restart | Zero, negative, or malformed values fall back to `24h` | `src/lingtai/kernel/nudge/__init__.py` | Changes reminder timing only, not resolution or authority |
 | `LINGTAI_ACTIVE_STUCK_THRESHOLD_S` | `600` seconds | Numeric seconds; values below `30` clamp to `30` | ACTIVE no-progress watchdog | When the watchdog evaluates a turn | Invalid values fall back to `600` | `src/lingtai/kernel/base_agent/lifecycle.py` | Watchdog tuning can affect availability; it grants no capability |
 | `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` | `0.4` | Finite float strictly greater than `0` and less than `1` | Main-agent and daemon metadata snapshots | Every metadata snapshot through the shared renderer | Missing, blank, non-numeric, non-finite, zero, negative, or `>=1` values fall back to `0.4` | `src/lingtai/kernel/config.py`, `src/lingtai/kernel/meta_block.py` | Advisory metadata only; never authorizes access or exposes prompt text |
-| `LINGTAI_CACHE_MISS_BUDGET` | unset; `1_000_000` from `manifest.cache_miss_budget` | Positive integer; one agent/process | Soft since-last-molt cache-miss budget guard (restamps the `cache miss budget {N} reached, molt now` reminder and surfaces budget/remaining under `agent_meta.agent_state`) | Every cache-miss budget resolution (each meta snapshot) | Missing, non-int, bool, zero, or negative values fall back to the configured/default budget; the env never disables the guard below a positive int | `src/lingtai/kernel/meta_block.py` | Soft molt steering only; never blocks; not an authorization boundary |
+| `LINGTAI_CACHE_MISS_BUDGET` | unset; `1_000_000` from `manifest.cache_miss_budget` | Positive integer; one agent/process | Soft since-last-molt cache-miss budget guard (restamps the `cache miss budget {N} reached, molt now` reminder and surfaces budget/remaining under `agent_meta.agent_state`) | Every cache-miss budget resolution (each meta snapshot) | Missing, non-int, bool, zero, or negative values fall back to the configured/default budget; the env never disables the guard below a positive int | `src/lingtai/kernel/meta_block.py` | Soft molt steering only; never blocks; not an authorization boundary. Governance delta: a budget that previously required a config-owner edit to schema-validated `manifest.cache_miss_budget` is now additionally agent-writable via `env_file`, with no upper bound and no validation feedback — an agent can set a huge value and silence its own molt nudge |
 | `LINGTAI_REFRESH_ENV_OVERWRITE` | unset and off | `1` enables one refresh overwrite | One refresh handoff | Boot or refresh setup; consumed and removed after use | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/agent.py` | Do not log inherited or env-file contents |
 | `LINGTAI_RUNTIME_PYTHON` | unset; caller uses `sys.executable` | Local executable path | Runtime self-check and host-tool routing | When the consumer is invoked; relaunch to change interpreter | Missing or invalid is a caller/configuration error | `src/lingtai/cli.py` and runtime checks | A path is not a credential or a trust decision |
 | `LINGTAI_RUNTIME_VENV` | unset | Local virtualenv directory path | Host-tool runtime hint | When a host tool is invoked; new process sees changes | Missing is tolerated when another interpreter is available | `src/lingtai/cli.py` | Do not infer package trust or freshness from an unrelated shell |
@@ -110,11 +110,14 @@ surface is explicit; do not set test hooks in a production agent environment.
 ## Reading and ownership notes
 
 - `LINGTAI_CACHE_MISS_BUDGET` is read live at each cache-miss budget resolution
-  (matching the nudge env-var pattern), so setting it in the agent's `env_file`
+  (live-read, like the nudge env vars), so setting it in the agent's `env_file`
   and refreshing applies it without editing `init.json`. The agent itself may
   tune it (e.g. raise the budget on a long, cache-expensive session) the same
   way. It is a soft steer: nothing is blocked, and an invalid value simply falls
-  back to the configured/default budget.
+  back to the configured/default budget. Note that *deleting* the line from
+  `env_file` does not unset it — a refresh relaunches inheriting the old
+  `os.environ`, and `load_env_file` only writes keys it finds in the file; to
+  fall back to the configured budget in-band, set the value to `0` or blank.
 - Environment values are process input, not authorization grants. Human or
   configuration-owner approval remains required for writes, refreshes, downloads,
   sends, and other consequential actions.
