@@ -15,6 +15,35 @@ related_files:
   - src/lingtai/services/websearch/ANATOMY.md
   - src/lingtai/kernel/tool_result_artifacts.py
   - src/lingtai/kernel/workdir.py
+  - src/lingtai/tools/web_search/glossary-en.md
+  - src/lingtai/tools/web_search/glossary-wen.md
+  - src/lingtai/tools/web_search/glossary-zh.md
+  - src/lingtai/tools/web_search/manual/assets/api-endpoints.json
+  - src/lingtai/tools/web_search/manual/assets/css-selectors.json
+  - src/lingtai/tools/web_search/manual/assets/extraction-pipeline.json
+  - src/lingtai/tools/web_search/manual/assets/regex-patterns.json
+  - src/lingtai/tools/web_search/manual/assets/search-providers.json
+  - src/lingtai/tools/web_search/manual/assets/site-templates.json
+  - src/lingtai/tools/web_search/manual/reference/academic-pipeline.md
+  - src/lingtai/tools/web_search/manual/reference/agent-native-browser.md
+  - src/lingtai/tools/web_search/manual/reference/maintenance-bundles/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/migration-from-v2.md
+  - src/lingtai/tools/web_search/manual/reference/news-and-rss.md
+  - src/lingtai/tools/web_search/manual/reference/realtime-data.md
+  - src/lingtai/tools/web_search/manual/reference/routing-and-sites/SKILL.md
+  - src/lingtai/tools/web_search/manual/reference/search-strategies.md
+  - src/lingtai/tools/web_search/manual/reference/social-media.md
+  - src/lingtai/tools/web_search/manual/reference/stealth.md
+  - src/lingtai/tools/web_search/manual/reference/tier-0-pdf.md
+  - src/lingtai/tools/web_search/manual/reference/tier-1-5-trafilatura.md
+  - src/lingtai/tools/web_search/manual/reference/tier-1-apis.md
+  - src/lingtai/tools/web_search/manual/reference/tier-2-beautifulsoup.md
+  - src/lingtai/tools/web_search/manual/reference/tier-3-playwright.md
+  - src/lingtai/tools/web_search/manual/reference/tier-4-jina-firecrawl.md
+  - src/lingtai/tools/web_search/manual/reference/tier-5-ai-search.md
+  - src/lingtai/tools/web_search/manual/reference/tier-quick-refs/SKILL.md
+  - src/lingtai/tools/web_search/manual/scripts/cached_get.py
+  - src/lingtai/tools/web_search/manual/scripts/extract_page.py
 maintenance: |
   Keep this public web Anatomy and its Contract reciprocal, keep the parent
   link bidirectional, and keep the sole web-manual edge on both owner twins.
@@ -103,7 +132,16 @@ action implementations, settings, and diagnostics.
 - `SearchService` adapters — provider implementations behind the internal
   service boundary (`src/lingtai/services/websearch/__init__.py:20-70`).
 - `manual/SKILL.md` — sole installed `web-manual` route
-  (`src/lingtai/tools/web_search/manual/SKILL.md:1-91`).
+  (`src/lingtai/tools/web_search/manual/SKILL.md:1-91`). It progressively
+  discloses into three sidecar trees, all packaged and all enumerated in
+  `related_files`: `manual/reference/*.md` (per-tier extraction guides
+  `tier-0-pdf` … `tier-5-ai-search`, plus the strategy/domain notes
+  `academic-pipeline`, `agent-native-browser`, `news-and-rss`, `realtime-data`,
+  `search-strategies`, `social-media`, `stealth`, and `migration-from-v2`),
+  the nested sub-skills `manual/reference/{maintenance-bundles,
+  routing-and-sites,tier-quick-refs}/SKILL.md`, `manual/assets/*.json`
+  (provider, selector, endpoint, regex, pipeline, and site-template data), and
+  `manual/scripts/{cached_get,extract_page}.py` procedure fallbacks.
 
 ## Connections
 

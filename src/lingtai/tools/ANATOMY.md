@@ -37,6 +37,13 @@ related_files:
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/tools/__init__.py
+  - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/i18n/__init__.py
+  - src/lingtai/tools/i18n/en.json
+  - src/lingtai/tools/i18n/wen.json
+  - src/lingtai/tools/i18n/zh.json
 maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
   Browser is an internal browse child, not a second public capability. The
@@ -121,8 +128,20 @@ capability names and lazy adapters.
 - `lingtai/` — mandatory manual-only identity signpost. Private
   `_lingtai_load` composes character during canonical reconstruction; generic
   durable mutation is owned by `file` (`src/lingtai/tools/lingtai/ANATOMY.md`).
+- `email/` — the filesystem-based `email` intrinsic: mailbox I/O, composition,
+  search, contacts, and delivery, migrated to the LTP v2 family envelope
+  (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
+  layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
+  `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
+- `i18n/` — the tool locale catalog (`en`/`zh`/`wen`) holding the *human-facing
+  manager prose* concrete tools resolve through `lingtai.kernel.i18n.t(lang, key)`
+  (`soul.system_prompt`, `knowledge.preamble`, `email.unread_digest`, …). It owns
+  no model-facing schema or description text: that lives in canonical English tool
+  source plus the per-package `glossary-{en,zh,wen}.md` resources
+  (`src/lingtai/tools/i18n/__init__.py:1-14`).
 
 ## Connections
 

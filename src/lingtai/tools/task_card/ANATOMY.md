@@ -14,6 +14,9 @@ related_files:
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
   - tests/test_feishu_programmable_task_cards.py
+  - src/lingtai/tools/task_card/glossary-en.md
+  - src/lingtai/tools/task_card/glossary-wen.md
+  - src/lingtai/tools/task_card/glossary-zh.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and manual. Update

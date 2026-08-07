@@ -1,7 +1,5 @@
 ---
 related_files:
-  - src/lingtai/i18n/ANATOMY.md
-  - src/lingtai/i18n/__init__.py
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/i18n/__init__.py
   - src/lingtai/kernel/i18n/en.json
@@ -41,7 +39,7 @@ The kernel's message catalog — a flat key-value string table covering system n
 | `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
 | `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:223`, `src/lingtai/tools/system/karma.py:71`, `src/lingtai/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
 | `lingtai/tools/context/` | `src/lingtai/tools/context/_molt.py:490`, `src/lingtai/tools/context/_molt.py:562-566`, `src/lingtai/tools/context/_molt.py:708` | `psyche.*` runtime manager prose |
-| `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:375`, `src/lingtai/tools/soul/config.py:385`, `src/lingtai/tools/soul/consultation.py:372` | `soul.*` runtime manager prose |
+| `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:374`, `src/lingtai/tools/soul/config.py:384`, `src/lingtai/tools/soul/consultation.py:389`, `src/lingtai/tools/soul/consultation.py:645` | `soul.*` runtime manager prose |
 | `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:288` | `email.*` runtime manager prose |
 
 **Inbound — tools bridge.** The tools string catalog `src/lingtai/tools/i18n/__init__.py` loads every locale table (`src/lingtai/tools/i18n/__init__.py:31`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/lingtai/tools/i18n/__init__.py:38`, calling `register_strings` at `src/lingtai/tools/i18n/__init__.py:45`), triggered on import of `lingtai.tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).

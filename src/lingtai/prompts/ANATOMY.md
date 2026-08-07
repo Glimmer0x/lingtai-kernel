@@ -14,6 +14,26 @@ related_files:
   - src/lingtai/kernel/tool_glossary.py
   - tests/test_prompt_catalog.py
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/prompts/brief/brief.yaml
+  - src/lingtai/prompts/character/character.yaml
+  - src/lingtai/prompts/comment/comment.yaml
+  - src/lingtai/prompts/covenant/covenant.yaml
+  - src/lingtai/prompts/identity/identity.yaml
+  - src/lingtai/prompts/knowledge/knowledge.yaml
+  - src/lingtai/prompts/mcp/mcp.yaml
+  - src/lingtai/prompts/meta_guidance/catalog/notification_handling.md
+  - src/lingtai/prompts/meta_guidance/catalog/review_delegation_instruction_check.md
+  - src/lingtai/prompts/meta_guidance/catalog/summarize_best_practice.md
+  - src/lingtai/prompts/meta_guidance/catalog/summarize_reconstruction_threshold.md
+  - src/lingtai/prompts/meta_guidance/catalog/token_efficiency.md
+  - src/lingtai/prompts/meta_guidance/meta_guidance.yaml
+  - src/lingtai/prompts/pad/pad.yaml
+  - src/lingtai/prompts/procedures/procedures.md
+  - src/lingtai/prompts/procedures/procedures.yaml
+  - src/lingtai/prompts/rules/rules.yaml
+  - src/lingtai/prompts/skills/skills.yaml
+  - src/lingtai/prompts/substrate/substrate.md
+  - src/lingtai/prompts/substrate/substrate.yaml
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -66,7 +86,7 @@ sources, catalog INDEX ↔ catalog sections).
 
 | Path | Role |
 |---|---|
-| `<section>/` | One directory per prompt section (e.g. `principle/`, `covenant/`, `pad/`). Holds `<section>.yaml` and, for body-backed sections, `<section>.md`. |
+| `<section>/` | One directory per prompt section. The complete set is `brief`, `character`, `comment`, `covenant`, `identity`, `knowledge`, `mcp`, `meta_guidance`, `pad`, `principle`, `procedures`, `rules`, `skills`, `substrate`, and `tools` — every one holds `<section>.yaml`, and the three body-backed ones also hold `<section>.md`. `related_files` enumerates each packaged payload individually, so no prompt source is reachable only by directory convention. |
 | `<section>/<section>.yaml` | `prompt-section-definition` YAML: `name_definition`, `purpose`, `scope`, `injection_contract`, `related_files`, `maintenance`. Present for every section. |
 | `principle/principle.md`, `substrate/substrate.md`, `procedures/procedures.md` | The three kernel-owned, packaged section bodies (skill-style frontmatter + Markdown body; frontmatter stripped on render). |
 | `meta_guidance/catalog/` | Runtime-guidance Markdown catalog: `INDEX.md` (manifest frontmatter) + one `<id>.md` per section, nested under the `meta_guidance` section it generates. Assembled into the `meta_guidance` body; order is code-owned in `GUIDANCE_SECTION_ORDER`. |

@@ -37,7 +37,6 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/kernel/daemon_supervisor/__init__.py
-  - src/lingtai/kernel/daemon_supervisor/supervisor.py
   - src/lingtai/kernel/daemon_supervisor/manifest.py
   - src/lingtai/kernel/daemon_supervisor/control.py
   - src/lingtai/kernel/daemon_supervisor/agent_stub.py
@@ -46,9 +45,24 @@ related_files:
   - src/lingtai/adapters/posix/daemon_execution_child_entrypoint.py
   - src/lingtai/adapters/posix/daemon_resume_owner_entrypoint.py
   - src/lingtai/adapters/posix/process_identity.py
+  - src/lingtai/adapters/windows/daemon_supervisor.py
+  - src/lingtai/tools/daemon/runtime.py
   - src/lingtai/tools/daemon/glossary-en.md
   - src/lingtai/tools/daemon/glossary-zh.md
   - src/lingtai/tools/daemon/glossary-wen.md
+  - src/lingtai/tools/daemon/manual/reference/cleanup/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/inspection/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/claude-p/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/codex/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/cursor/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/kimicode/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/lingtai/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/mimocode/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/oh-my-pi/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/opencode/SKILL.md
+  - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/qwen-code/SKILL.md
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -320,7 +334,7 @@ intentional omission of the parent notification axis.
 - `lingtai.kernel.llm.base.FunctionSchema` — tool schema type
 - `BaseAgent._enqueue_system_notification` — compact daemon completion/failure events
 - `lingtai.kernel.token_ledger` — `append_token_entry` for token accounting
-- `lingtai.i18n` — `t()` for localized strings
+- `lingtai.kernel.i18n` — `t()` for localized strings
 - `lingtai.tools.registry` — `setup_capability`, `canonical_capability_name` for preset sandbox instantiation
 - `lingtai.presets` — `load_preset`, `expand_inherit` for per-emanation preset resolution
 - `lingtai.kernel.preset_connectivity` — `check_connectivity` for LLM reachability pre-flight
@@ -337,6 +351,12 @@ intentional omission of the parent notification axis.
   `DaemonRunDir`; `_run_emanation` injects it into the kernel `ToolExecutor`.
   The executor retains raw-log and replacement ownership; the daemon logger
   exposes its run-local raw-result locator to the worker.
-- **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM.
+- **Manual:** `daemon/manual/SKILL.md` — skill documentation for the LLM. It
+  progressively discloses into `manual/reference/`: the operational bundles
+  `cleanup/`, `forensics/`, and `inspection/`, plus `cli-backends/`, whose own
+  `reference/backends/<backend>/SKILL.md` leaves document one CLI backend each
+  (`claude-p`, `codex`, `cursor`, `kimicode`, `lingtai`, `mimocode`,
+  `oh-my-pi`, `opencode`, `qwen-code`) and pair with the `_BackendSpec` runners
+  in `daemon/runtime.py`.
 - **Contract:** `daemon/CONTRACT.md` — unified daemon contract for tool-surface behavior, selected skills, one-run MCP registrations, completion, artifacts, backend support status, review triggers, and acceptance gates.
 - **Kernel hooks:** `setup()` is called during capability initialization; `DaemonFamilyDispatcher.handle()` (`daemon/_tool_family.py`) is registered as the `daemon` tool handler, and translates one envelope call into `DaemonManager.handle()`'s unchanged flat shape. `daemon` is on `kernel/tool_result_summary.py`'s `_LTP_V2_MIGRATED_FAMILIES` allowlist, so the canonical root `summarize` control it advertises is actually honored.

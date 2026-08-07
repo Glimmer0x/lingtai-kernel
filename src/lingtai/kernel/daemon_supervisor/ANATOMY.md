@@ -5,8 +5,9 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/__init__.py
   - src/lingtai/kernel/daemon_supervisor/manifest.py
   - src/lingtai/kernel/daemon_supervisor/control.py
-  - src/lingtai/kernel/daemon_supervisor/supervisor.py
+  - src/lingtai/kernel/daemon_supervisor/agent_stub.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
+  - src/lingtai/adapters/windows/daemon_supervisor.py
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
   - src/lingtai/adapters/posix/process_identity.py
@@ -30,7 +31,8 @@ The supervisor Port and durable run schemas define the narrow process boundary; 
 - `__init__.py:34-134` — immutable request wire schema and spawn Port.
 - `manifest.py:44-190` — secret-free manifest build/write/read and identity validation.
 - `control.py:12-96` — UUID request spool with schema/run identity and ack markers.
-- `supervisor.py:1-13` — deliberately empty Core boundary marker; concrete lifetime composition stays outside Core.
+- `agent_stub.py:1-58` — the minimal agent surface a detached run composes against, so Core owns no live Agent.
+- `adapters/windows/daemon_supervisor.py:117-247` — the Windows launch adapter for the same Port.
 - `tools/daemon/supervisor_runtime.py:77-138` — detached startup identity, run attachment, and terminal dispatch.
 - `tools/daemon/supervisor_runtime.py:219-394` — execution-child ownership plus the exact control/deadline watcher.
 - `adapters/posix/daemon_supervisor.py:27-77` — concrete interpreter/session/log launch adapter.

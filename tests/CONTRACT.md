@@ -1,9 +1,10 @@
 ---
 related_files:
 - CONTRACT.md
+- tests/ANATOMY.md
 - tests/test_architecture_documents.py
 maintenance: |
-  Self-declared methodology/workflow charter, explicitly NOT a governed component Contract under the root CONTRACT.md system (no related_files entry there, no paired tests/ANATOMY.md); update it only when the testing methodology itself changes, and do not promote it into the governed Contract graph without giving tests/ a real implemented Port. This generic docs.yaml two-field baseline applies independently of that opt-out.
+  Self-declared methodology/workflow charter, explicitly NOT a governed component Contract under the root CONTRACT.md system (no related_files entry there; the sibling tests/ANATOMY.md is a navigation-only inventory, not a governed twin); update it only when the testing methodology itself changes, and do not promote it into the governed Contract graph without giving tests/ a real implemented Port. This generic docs.yaml two-field baseline applies independently of that opt-out.
 ---
 
 # Test Methodology Charter
@@ -11,11 +12,18 @@ maintenance: |
 > **This is a methodology/workflow charter, not a governed component Contract.**
 > It is deliberately **not** a root-governed Ports-and-Adapters child of the
 > distributed [`CONTRACT.md`](../CONTRACT.md) system: it is **not** listed in the
-> root contract's `related_files`, has **no** paired `tests/ANATOMY.md`, carries
-> **no** governed frontmatter, and does **not** follow the governed 7-heading
-> template. `tests/` is a validation surface, not an architectural component with
-> its own Port/Adapters promise. This file records *how we test*; it does not
-> define an interface anyone implements.
+> root contract's `related_files`, carries **no** governed frontmatter, and does
+> **not** follow the governed 7-heading template. `tests/` is a validation
+> surface, not an architectural component with its own Port/Adapters promise.
+> This file records *how we test*; it does not define an interface anyone
+> implements.
+>
+> The sibling [`ANATOMY.md`](ANATOMY.md) is a **navigation-only inventory**, not
+> this file's governed twin. It exists so every tracked file under `tests/`
+> is reachable from the root anatomy graph; it maps the directory's structure
+> and deliberately restates none of the methodology below. A governed pair
+> would require giving `tests/` a real implemented Port — that has not happened
+> and is not implied by the anatomy's existence.
 
 It also does not restate the change workflow. The **how** lives in the workflow
 owners; read them first and apply them:

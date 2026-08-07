@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -51,6 +52,86 @@ def _root_governed_contracts() -> set[str]:
         for path in root_meta["related_files"]
         if path.endswith("/CONTRACT.md") and path != "CONTRACT.md"
     }
+
+
+def _tracked_files() -> set[str]:
+    """Every tracked path in the repository, as repo-relative POSIX strings."""
+    proc = subprocess.run(
+        ["git", "-c", "core.quotepath=false", "ls-files"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {line for line in proc.stdout.splitlines() if line}
+
+
+def _climb_anatomy_graph() -> tuple[set[str], set[str]]:
+    """BFS the `related_files` graph outward from the root anatomy.
+
+    Returns `(reachable_files, visited_anatomies)`. A path is reachable when
+    some anatomy already reachable from the root lists it; when that path is
+    itself an `ANATOMY.md`, its own `related_files` are traversed in turn. This
+    is the descend-the-graph navigation model the root anatomy defines, run
+    mechanically.
+    """
+    reachable: set[str] = set()
+    visited: set[str] = set()
+    queue = ["ANATOMY.md"]
+    while queue:
+        anatomy = queue.pop()
+        if anatomy in visited:
+            continue
+        visited.add(anatomy)
+        meta, _ = _read_document(ROOT / anatomy)
+        _assert_related_files(meta)
+        for linked in meta["related_files"]:
+            reachable.add(linked)
+            if linked.endswith("ANATOMY.md") and linked not in visited:
+                queue.append(linked)
+    return reachable, visited
+
+
+def _sample(paths: list[str], limit: int = 20) -> str:
+    shown = "\n".join(f"  - {path}" for path in paths[:limit])
+    if len(paths) > limit:
+        shown += f"\n  ... and {len(paths) - limit} more"
+    return shown
+
+
+def test_every_tracked_file_climbs_the_anatomy_graph() -> None:
+    """No orphan files: the whole tree must be reachable from the root anatomy.
+
+    `ANATOMY.md` is the distributed navigation system's entry point, so a
+    tracked file that appears in no `related_files` list cannot be found by
+    descending the graph — it is invisible to the navigation model even when it
+    is described in prose. Prose is not a substitute for an entry.
+
+    To fix a failure, add the file to the `related_files` of the anatomy that
+    naturally owns it (usually the nearest ancestor directory's `ANATOMY.md`),
+    or create that anatomy and link it from its parent.
+    """
+    reachable, visited = _climb_anatomy_graph()
+
+    # Check unlinked ANATOMY.md files first: any unvisited tracked anatomy is
+    # also unreachable, so this check gives a precise diagnostic before the
+    # orphan sweep (which would otherwise absorb it into the generic count).
+    anatomies = {
+        path
+        for path in _tracked_files()
+        if path == "ANATOMY.md" or path.endswith("/ANATOMY.md")
+    }
+    unreachable = sorted(anatomies - visited)
+    assert not unreachable, (
+        f"{len(unreachable)} ANATOMY.md file(s) exist but are not linked into "
+        f"the graph from the root:\n{_sample(unreachable)}"
+    )
+
+    orphans = sorted(_tracked_files() - reachable)
+    assert not orphans, (
+        f"{len(orphans)} tracked file(s) are not reachable from ANATOMY.md via "
+        f"related_files:\n{_sample(orphans)}"
+    )
 
 
 def test_root_architecture_documents_are_reciprocal_and_well_formed() -> None:

@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/init_reader.py
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/init_schema.py
+  - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/intrinsic_skills/__init__.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
@@ -47,6 +48,8 @@ related_files:
   - tests/test_preset_materialization.py
   - tests/test_presets.py
   - tests/test_venv_resolve.py
+  - src/lingtai/adapters/__init__.py
+  - src/lingtai/adapters/workdir_lease.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -69,6 +72,8 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `agent.py` | **THE key file.** `Agent(BaseAgent)` — layer-2 agent with capability composition, preset swap, MCP, init.json refresh, and default POSIX event-journal + notification-store + agent-presence + workdir-lease + snapshot/source-revision injection for outer callers (it selects the platform lease via `lingtai.adapters.workdir_lease.select_workdir_lease` when `working_dir` is present and no `workdir_lease` was passed, and constructs `PosixAgentPresenceStoreAdapter(working_dir)` when no `agent_presence` was passed — see `kernel/agent_presence/CONTRACT.md`). It selects the refresh-watcher capability through `lingtai.adapters.refresh_watcher.select_refresh_watcher` when no watcher is injected. It also constructs the portable `SystemLifecycleClockAdapter()` when no `lifecycle_clock` was passed (no `working_dir` needed — see `kernel/lifecycle_clock/CONTRACT.md`). Selection and `BaseAgent` construction share one guard that closes the wrapper-owned journal best-effort while preserving the original failure. Mounted MCP tools whose package-owned schema has the exact closed LTP-v2 family root receive a wrapper-boundary `_reasoning` → `reasoning` restoration before inherited handler dispatch; legacy MCP argument shapes stay unchanged. Tool schemas registered here carry package ownership into the inherited BaseAgent inventory renderer; `Agent` no longer duplicates tool-inventory rendering, so package glossaries are appended once in the kernel path. |
 | `adapters/posix/` | Narrow production POSIX adapter package for the JSONL + SQLite event journal, filesystem mail transport, notification store, POSIX workdir lease, refresh-watcher trio, duplicate-launch process scan, fixed-command Git snapshot/source-revision adapter, and POSIX avatar launcher. See `adapters/posix/ANATOMY.md`. |
 | `adapters/windows/` | Narrow production native-Windows adapter package: `msvcrt` byte-range workdir lease, refresh-watcher trio (detached handoff, entrypoint, CIM/`.suspend` process mechanism), CIM duplicate-launch process scan, avatar launcher, detached daemon supervisor with inherited-handle capsule wire and entrypoint mirrors, process-incarnation identity, PowerShell shell dialect, Job Object async shell process adapter, `msvcrt` shell state lock, and the shared `_win32` ctypes surface. See `adapters/windows/ANATOMY.md`. |
+| `adapters/__init__.py` | The adapter package marker: "Production adapters for Core-owned ports." No wiring lives here — each Port's outer selector is its own module. |
+| `adapters/workdir_lease.py` | Outer platform selector for the `WorkdirLeasePort` adapter: composition-root wiring that reads the running platform, selects the concrete adapter, and constructs it. Deliberately the only place that branches on the OS for leasing — Core never imports it; `lingtai.agent` and `lingtai.cli` call `select_workdir_lease` and inject the returned Port into `BaseAgent` and the SQLite rebuild. An unsupported platform fails loudly rather than silently degrading. |
 | `adapters/browser_transport.py` | Production static HTTP(S) Adapter for the internal browse Core-owned `BrowserPort`; bounds DNS wait with one in-flight resolver job, pins vetted IPs, and preserves Host/SNI, selected lazily by unified web setup. |
 | `adapters/lifecycle_clock.py` | The one portable production `SystemLifecycleClockAdapter` for the Core-owned `LifecycleClockPort` — direct `wall_seconds()`→`time.time()` / `monotonic_seconds()`→`time.monotonic()`, no caching or policy. Not POSIX (no filesystem/`fcntl`/platform selection), so it sits at the top of `adapters/` rather than under `adapters/posix/`; its promise/navigation are owned by the kernel `lifecycle_clock/` governed pair (`src/lingtai/kernel/lifecycle_clock/CONTRACT.md` + `ANATOMY.md`). |
 | `cli.py` | `lingtai-agent run <dir>` / `lingtai-agent check-caps` / `lingtai-agent log ...` / `lingtai-agent maintenance cleanup <target>` entry points; the `run` composition root performs a post-stop hard exit only when existing worker-poison state would otherwise keep the old process alive and block the refresh watcher |
@@ -76,7 +81,7 @@ PyPI wrapper package — `Agent(BaseAgent)` with composable capabilities, preset
 | `presets.py` | Compatibility shim re-exporting the kernel preset library (`lingtai.kernel.presets`) |
 | `init.jsonc` / `init_reader.py` / `init_schema.py` | Kernel canonical shape plus the one real parse → materialize → validate → resolve reader. `InitReadOutcome` reports fully-effective, ignored-field, or failed reads with typed PASS/NUDGE/BLOCKED/UNKNOWN shape evidence without rewriting user-owned init.json; `validate_init()` remains the schema validator. See `CONTRACT.md`. |
 | `venv_resolve.py` | Python venv resolution — explicit `init.json` venv → global runtime → auto-create, plus kernel-owned `.lingtai-env.json` marker check/stamp semantics for TUI and kernel callers |
-| `intrinsic_skills/__init__.py` | Standalone skill bundles (manuals plus sidecar scripts/assets, e.g. the `lingtai-kernel-anatomy` checker and benchmark) copied verbatim into `.library/intrinsic/capabilities/` |
+| `intrinsic_skills/` | Standalone skill bundles (manuals plus sidecar scripts/assets, e.g. the `lingtai-kernel-anatomy` checker and benchmark) copied verbatim into `.library/intrinsic/capabilities/`; see `intrinsic_skills/ANATOMY.md` for the full bundle inventory and the packaging rule its `reference/`/`assets/` levels depend on |
 | `mcp_servers/` | Curated MCP server implementations shipped in the `lingtai` distribution and launched by `mcp_catalog.json` via `python -m lingtai.mcp_servers.<name>`; see `mcp_servers/ANATOMY.md` for the bundled `SKILL.md` manual-action and sidecar packaging contract. Stateful curated servers may own per-agent sidecars: the WeChat manager checkpoints `wechat/state.json` cursor progress and `wechat/inbox_seen.json` replay guards in `mcp_servers/wechat/manager.py:266` and `mcp_servers/wechat/manager.py:912`. |
 
 ### Key functions / classes

@@ -16,6 +16,9 @@ related_files:
   - src/lingtai/tools/context/_snapshots.py
   - src/lingtai/agent.py
   - src/lingtai/kernel/base_agent/prompt.py
+  - src/lingtai/tools/context/glossary-en.md
+  - src/lingtai/tools/context/glossary-wen.md
+  - src/lingtai/tools/context/glossary-zh.md
 maintenance: |
   Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
   Contract and connected anatomies. Update this graph with schema, lifecycle,

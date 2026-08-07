@@ -13,6 +13,10 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - src/lingtai/mcp_servers/telegram/task_card/__init__.py
+  - src/lingtai/mcp_servers/telegram/task_card/_family.py
+  - src/lingtai/mcp_servers/telegram/task_card/controller.py
+  - src/lingtai/mcp_servers/telegram/task_card/interface.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and packaged manual.
