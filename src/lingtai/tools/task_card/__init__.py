@@ -48,6 +48,11 @@ _MIN_TIMEOUT_S = 0.1
 _DEFAULT_MAX_REFRESHES = 2000
 _DEFAULT_REMINDER_TURNS = 10
 _TASKCARD_DIR = "taskcard"
+# Hard ceiling for the rendered card body (Jason #taskcard-resident). A renderer
+# output longer than this is REFUSED, never truncated, so the resident
+# ``_meta.agent_meta.taskcard`` projection can stay a bounded high-attention
+# goal. Complex progress belongs in files behind the card.
+_MAX_BODY_CHARS = 2000
 _STATUS_FILENAME = "status"
 _BODY_FILENAME = "taskcard.md"
 _CONFIG_FILENAME = "taskcard.json"
@@ -79,10 +84,15 @@ class _Config(NamedTuple):
     timeout_s: float
     max_refreshes: int
     reminder_turns: int
+    max_body_chars: int
 
 
 _BUILTIN_CONFIG = _Config(
-    _DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, _DEFAULT_MAX_REFRESHES, _DEFAULT_REMINDER_TURNS
+    _DEFAULT_INTERVAL_S,
+    _DEFAULT_TIMEOUT_S,
+    _DEFAULT_MAX_REFRESHES,
+    _DEFAULT_REMINDER_TURNS,
+    _MAX_BODY_CHARS,
 )
 
 
@@ -509,7 +519,21 @@ class TaskCardManager:
                 return
             if shutdown is not None and shutdown.is_set():
                 return
-            self._tick(watch)
+            try:
+                self._tick(watch)
+            except Exception:
+                # A background watch must never die without a trace: mark the
+                # error (and notify) instead of letting the thread vanish.
+                self._mark_error(
+                    watch,
+                    {
+                        "code": "watch_crash",
+                        "retryable": True,
+                        "message": "task card watch crashed in refresh loop",
+                    },
+                    emit_notification=True,
+                )
+                return
 
     def _tick(self, watch: _Watch) -> None:
         with watch.attempt_lock:
@@ -531,6 +555,19 @@ class TaskCardManager:
                 return
             try:
                 self._write_body(body)
+            except TaskCardError as exc:
+                self._mark_error(
+                    watch,
+                    {
+                        "code": "body_too_large",
+                        "retryable": False,
+                        "message": str(exc),
+                    },
+                    emit_notification=not exhausted,
+                )
+                if exhausted:
+                    self._exhaust(watch)
+                return
             except OSError as exc:
                 self._mark_error(
                     watch,
@@ -586,6 +623,13 @@ class TaskCardManager:
         self._write_status("active")
 
     def _write_body(self, body: str) -> None:
+        limit = self._load_config().max_body_chars
+        if len(body) > limit:
+            raise TaskCardError(
+                f"taskcard body exceeds the {limit}-char cap "
+                f"({len(body)} chars); keep the card a progressive-disclosure "
+                "summary and move complex progress into files"
+            )
         self._atomic_write_text(self._body_path, body, trailing_newline=False)
 
     def _write_status(self, status: str) -> None:
@@ -1003,6 +1047,7 @@ class TaskCardManager:
             self._config_number(data.get("timeout_s"), _MIN_TIMEOUT_S, _DEFAULT_TIMEOUT_S),
             self._config_max_refreshes(data.get("max_refreshes")),
             self._config_reminder_turns(data.get("reminder_turns")),
+            self._config_max_body_chars(data.get("max_body_chars")),
         )
 
     def _migrate_legacy_config(self) -> _Config:
@@ -1040,7 +1085,13 @@ class TaskCardManager:
         ):
             resolved = _BUILTIN_CONFIG
         else:
-            resolved = _Config(_DEFAULT_INTERVAL_S, _DEFAULT_TIMEOUT_S, legacy_max, _DEFAULT_REMINDER_TURNS)
+            resolved = _Config(
+                _DEFAULT_INTERVAL_S,
+                _DEFAULT_TIMEOUT_S,
+                legacy_max,
+                _DEFAULT_REMINDER_TURNS,
+                _MAX_BODY_CHARS,
+            )
         try:
             atomic_write_json(
                 self._config_path,
@@ -1069,6 +1120,10 @@ class TaskCardManager:
     @staticmethod
     def _config_reminder_turns(value: Any) -> int:
         return value if type(value) is int and value > 0 else _DEFAULT_REMINDER_TURNS
+
+    @staticmethod
+    def _config_max_body_chars(value: Any) -> int:
+        return value if type(value) is int and value >= 100 else _MAX_BODY_CHARS
 
     def _reminder_turns(self) -> int:
         try:

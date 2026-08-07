@@ -46,6 +46,43 @@ dead watch.
 
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
 
+## Resident meta projection and the 2000-char cap
+
+The card body is projected into the agent's own meta block as
+`_meta.agent_meta.taskcard`, so the human (via Telegram/Feishu/etc) and the
+agent always see the same card. Projection is **change-gated**: an unchanged
+body is not re-injected every turn; only material body/status changes or the
+first appearance attach a fresh payload. When no card is present the meta block
+carries a generic hint (`no taskcard present, consider maintaining one, see
+task_card manual`).
+
+A rendered body longer than **2000 chars is refused**, never truncated. This
+keeps the card a bounded, high-attention goal. Treat the card itself as a
+progressive-disclosure summary: keep the top of the card to the current goal,
+status, and the single next step, and push complex progress detail into files
+(reports, logs, checklists) referenced from the card rather than into the card
+body. If a renderer tries to publish more than 2000 chars, `start`/`retry`
+refuse that update and keep the last valid body.
+
+## Absent / stale reminders
+
+After every `reminder_turns` completed text turns (default **10**, configured
+at `taskcard/taskcard.json`), the producer emits a system notification
+("Task Card reminder") telling the agent to check whether the card is **absent
+or stale**, then update it or retire it only if useful. This is the loop that
+keeps the shared agent-human view honest without re-injecting the card body
+itself: the resident meta projection stays change-gated (identical bytes are
+not re-sent every turn), while the reminder re-surfaces the *question* on a
+coarse cadence. When a card is absent, treat the reminder as the prompt to
+decide whether the current work is meaningful enough to warrant a card; when a
+card is present but its body has not changed for many turns, treat it as the
+prompt to update it or `remove` it if the underlying task is done.
+
+The counter resets whenever the card is successfully published (`start`, a
+successful watch refresh, or restart resume), so an actively refreshing watch
+never reaches the threshold — the reminder surfaces only when the card is
+absent, retired, or its updates have stopped landing.
+
 `start` runs a Python renderer under your working directory. The renderer must
 exit `0` and print a nonempty full body to stdout; that body is written to
 `taskcard/taskcard.md`. After the body is written atomically, the capability
@@ -78,8 +115,8 @@ updater is actually stopped.
 `start` accepts optional `interval_s`, `timeout_s` (one renderer execution,
 not the watch's whole lifetime), and `max_refreshes`. Omitted values use this
 agent's configured defaults, persisted at `taskcard/taskcard.json`: `interval_s:
-5`, `timeout_s: 10`, `max_refreshes: 2000`, unless an operator has configured
-different values in that file.
+5`, `timeout_s: 10`, `max_refreshes: 2000`, `reminder_turns: 10`, unless an
+operator has configured different values in that file.
 
 `timeout_s` and `max_refreshes` are safety ceilings: an explicit value may
 lower the configured ceiling but never exceed it — a request above the
