@@ -27,6 +27,10 @@ related_files:
   - tests/test_llm_identity_headers.py
   - tests/test_wire_tool_description.py
   - tests/test_mimo_responses_compaction.py
+  - src/lingtai/llm/claude_code/__init__.py
+  - src/lingtai/llm/kimi_code/__init__.py
+  - src/lingtai/llm/zhipu/__init__.py
+  - src/lingtai/llm/zhipu/adapter.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -47,7 +51,9 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | `__init__.py` | 20 | Re-exports kernel types (`ChatSession`, `LLMResponse`, `ToolCall`, `FunctionSchema`, `ChatInterface`) + `LLMAdapter` from `base.py`. Triggers `register_all_adapters()` on import. |
 | `_register.py` | 241 | Registers adapter factories for all providers with `LLMService.register_adapter()`. Module constant `CODEX_OFFICIAL_BASE_URL` is the Codex default endpoint; `_normalize_service_tier` (`_register.py:28-50`) is the common Codex `service_tier` boundary (`fast` → wire `priority`). The one `_codex` factory (`_register.py:133-192`) supplies either `FixedAccountSource` or live `WeightedAccountSource` to one native `CodexOpenAIAdapter`; `codex`, `codex-pool`, and `codex_pool` are registry aliases for that exact factory (`_register.py:194-198`), not separate implementations. |
 | `identity_headers.py` | 53 | Shared non-secret LingTai HTTP identity/version header helper for SDK-backed LLM adapters. |
-| `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). |
+| `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). `claude_code/__init__.py` carries the provider's rationale — it is the Claude analogue of the Codex provider, calling the CLI binary rather than the Anthropic API with a key. |
+| `kimi_code/` | — | `kimi-code` provider: drives the local `kimi` CLI as a LingTai brain. Deliberately distinct from both the generic HTTP `kimi` provider and the `kimicode` daemon backend — the adapter owns canonical history, requires LingTai JSON actions back from the CLI, and uses the CLI's opaque resume identity for provider cache affinity (`kimi_code/__init__.py:1-6`). |
+| `zhipu/` | — | Zhipu (GLM) provider: a thin OpenAI-compat wrapper whose sole deviation is a `_build_messages` session override merging consecutive same-role messages, because GLM rejects them with error 1214. The workaround is provider-local by design and must not migrate into the generic OpenAI adapter (`zhipu/adapter.py:1-8`). |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
 | `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |

@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/services/vision/ANATOMY.md
+  - src/lingtai/tools/vision/settings.py
 maintenance: |
   Keep related_files as repo-relative paths to real files and keep anatomy links
   reciprocal. Update citations with structural code changes and run the document
@@ -33,6 +34,8 @@ result shape.
 - `__init__.py:152-199` — `_build_family`, the one canonical child declaration consumed by both the module-level schema-only family and every `VisionManager`, plus `get_description`/`get_schema`; the reserved `manual` child registers the generic `tool_family.manual.MANUAL_INPUT_SCHEMA` rather than a local copy, and the composed root exposes both exact child inputs and correlates each `action` const with its own `input`.
 - `__init__.py:202-316` — `VisionManager`; builds its family through `_build_family` with the `analyze` handler bound to instance state and the reserved `manual` child from `tool_family.manual.build_manual_child`, `handle()` owns the canonical dispatch/presentation ordering and flattens the manual child's canonical result afterwards, `_dispatch_analyze` validates and reads the image.
 - `__init__.py:319-614` — `setup`; resolves only the same current model/endpoint/credential/headers/wire, routes active Codex-family services by the bucket-driven direct (trimmed `codex_auth_path`) vs pool (pool-selected candidate token path) rule, creates supported services, fails closed to manual guidance when identity is incomplete, and always registers the one public `vision` tool.
+
+- `settings.py` — strict per-Agent settings for the `provider: local` route. `settings/vision.json` is the family-owned provider configuration holding the operator-configured local OpenAI-compatible endpoint (`base_url`, `model`, optional `api_key`/`max_tokens`). It mirrors the `settings/web.json` pattern from `lingtai.tools.web_search.settings`: a bounded, race-checked read with a stable digest, so "default applied" is a truthful, verifiable fact (`src/lingtai/tools/vision/settings.py:1-8`).
 
 ## Connections
 

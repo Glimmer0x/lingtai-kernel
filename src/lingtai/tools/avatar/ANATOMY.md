@@ -131,7 +131,7 @@ avatar/__init__.py
 
 ## Dependencies
 
-- `lingtai.i18n` — `t()` for localized strings
+- `lingtai.kernel.i18n` — `t()` for localized strings
 - `lingtai.kernel.agent_presence` + `lingtai.adapters.posix.agent_presence` — ordered Core liveness policy and the target-bound production presence adapter
 - `lingtai.kernel.handshake` — `resolve_address()` for ledger-based tree walking
 - `lingtai.venv_resolve` — `resolve_venv()`, `venv_python()` for resolving the Python executable to launch the avatar

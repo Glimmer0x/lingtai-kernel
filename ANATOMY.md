@@ -7,15 +7,37 @@ related_files:
   - CONTRIBUTING.md
   - ENVIRONMENT_VARIABLES.md
   - GLOSSARY.md
+  - LICENSE
   - MANIFEST.in
+  - NOTICE
   - README.md
   - RELEASING.md
   - SECURITY.md
   - SUPPORT.md
+  - .gitignore
+  - docs.yaml
+  - .github/PULL_REQUEST_TEMPLATE.md
+  - .github/ISSUE_TEMPLATE/bug_report.yml
+  - .github/ISSUE_TEMPLATE/config.yml
+  - .github/ISSUE_TEMPLATE/feature_request.yml
+  - .github/workflows/kernel-windows-pr.yml
+  - .github/workflows/shell-windows-pr.yml
+  - .github/workflows/wheels.yml
+  - crates/lingtai-search-sidecar/ANATOMY.md
   - dev-guide-skill/SKILL.md
+  - discussions/headless-runtime-contract.md
+  - docs/plans/2026-06-25-fsutil-migration.md
+  - docs/plans/2026-07-14-powershell-adapter-readiness.md
+  - docs/readmes/README.wen.md
+  - docs/readmes/README.zh.md
+  - docs/references/acknowledgements.md
   - docs/references/claude-code-guide.md
+  - docs/references/runtime-vs-agent-session-objects.md
+  - migration/migration.md
   - pyproject.toml
+  - reports/ANATOMY.md
   - setup.py
+  - scripts/check_docs_governance.py
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
   - scripts/sync_gitee_mirror.py
@@ -27,6 +49,8 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
+  - tests/ANATOMY.md
+  - tests/CONTRACT.md
   - tests/test_architecture_documents.py
 maintenance: |
   This file is both the repository-root anatomy and the normative
@@ -179,16 +203,36 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   `release.published` event (or an explicit `workflow_dispatch` with
   `publish: true`) — every other trigger shape stays dry-run.
 - [`.github/`](.github/) — GitHub Actions, issue templates, and pull request
-  templates.
+  templates. `workflows/wheels.yml` is the release build/verify/manifest
+  pipeline; `kernel-windows-pr.yml` and `shell-windows-pr.yml` are the native
+  Windows PR gates. `ISSUE_TEMPLATE/{bug_report,feature_request}.yml` plus
+  `config.yml` and `PULL_REQUEST_TEMPLATE.md` are the contributor intake forms —
+  the pull-request template carries its governance metadata in an HTML comment
+  rather than a `---` fence, because GitHub injects its raw bytes into every new
+  PR description (`docs.yaml` `metadata_mode_overrides`).
 - [`crates/lingtai-search-sidecar/`](crates/lingtai-search-sidecar/) — Rust file
-  search sidecar packaged with the Python runtime.
+  search sidecar packaged with the Python runtime; descend through
+  [`crates/lingtai-search-sidecar/ANATOMY.md`](crates/lingtai-search-sidecar/ANATOMY.md).
 - [`docs/`](docs/) — durable documentation, plans, language-specific readmes,
-  and long-form references.
+  and long-form references: `plans/` holds dated migration plans, `readmes/`
+  the translated `README.{zh,wen}.md`, and `references/` the long-form guides
+  (`claude-code-guide.md`, `runtime-vs-agent-session-objects.md`,
+  `acknowledgements.md`).
+- [`discussions/`](discussions/) and [`migration/`](migration/) — narrative
+  design records kept beside the code they argue about:
+  `discussions/headless-runtime-contract.md` and `migration/migration.md`.
+- [`reports/`](reports/) — append-only archive of generated release bundles and
+  standalone investigation explainers; descend through
+  [`reports/ANATOMY.md`](reports/ANATOMY.md).
 - [`src/lingtai/`](src/lingtai/) — public package, compatibility surfaces,
   services, and the kernel implementation; descend through
   [`src/lingtai/ANATOMY.md`](src/lingtai/ANATOMY.md).
 - [`tests/`](tests/) — pytest suite for runtime, services, tools, packaging, and
-  architecture-document validation.
+  architecture-document validation; descend through
+  [`tests/ANATOMY.md`](tests/ANATOMY.md). Its
+  [`CONTRACT.md`](tests/CONTRACT.md) is a methodology charter that deliberately
+  stays outside the governed contract graph, and that anatomy is a
+  navigation-only inventory rather than its governed twin.
 
 ## Root files
 
@@ -217,6 +261,11 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   commands and the validation checklist coding agents must satisfy before a
   change is called done.
 - [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) — legal metadata.
+- [`.gitignore`](.gitignore) — the tracked/untracked boundary. It matters to
+  this system because docs governance discovers *untracked-but-not-ignored*
+  Markdown too, so what this file ignores decides what must carry frontmatter.
+  `docs/` and `reports/` are ignored by default: durable files there are tracked
+  only because they were force-added.
 - [`pyproject.toml`](pyproject.toml), [`setup.py`](setup.py), and
   [`MANIFEST.in`](MANIFEST.in) — Python packaging and Rust-sidecar build hooks.
 

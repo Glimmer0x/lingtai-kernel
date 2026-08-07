@@ -16,6 +16,10 @@ related_files:
   - src/lingtai/tools/mcp/glossary-zh.md
   - src/lingtai/tools/mcp/glossary-wen.md
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/tools/mcp/manual/reference/curated-addons.md
+  - src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md
+  - src/lingtai/tools/mcp/manual/reference/troubleshooting.md
+  - src/lingtai/tools/mcp/manual/scripts/find_readme.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -172,7 +176,7 @@ mcp/licc.py  (client-side producer; mirrors inbox.py's consumer)
 ## Dependencies
 
 - `yaml` (PyYAML) — used by the skills capability's frontmatter parser (imported transitively; not directly used here)
-- `lingtai.i18n` — `t()` for localized strings (imported but the description is hardcoded English)
+- `lingtai.kernel.i18n` — `t()` for localized strings (imported but the description is hardcoded English)
 - `lingtai.kernel.notifications` — `submit` (as `publish_notification`) for `.notification/` dispatch (in `inbox.py`)
 - `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.mcp_catalog.json` — kernel-shipped MCP catalog file (read at runtime)

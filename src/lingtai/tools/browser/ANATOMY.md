@@ -12,6 +12,11 @@ related_files:
   - src/lingtai/tools/browser/refstore.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/browser/__init__.py
+  - src/lingtai/tools/browser/glossary-en.md
+  - src/lingtai/tools/browser/glossary-wen.md
+  - src/lingtai/tools/browser/glossary-zh.md
+  - src/lingtai/tools/browser/manual/SKILL.md
 maintenance: |
   This map describes only the internal browse subcomponent of unified web.
   Keep its Contract edge and parent/child links reciprocal. Browser files are
@@ -39,6 +44,14 @@ public `web` manager. It is deliberately not registered independently.
   `src/lingtai/tools/browser/refstore.py:8-37`).
 - `VettedHttpTransport` — production adapter outside this package
   (`src/lingtai/adapters/browser_transport.py:17-165`).
+- `__init__.py` — the internal-subcomponent surface. Only the parent `web`
+  manager exposes model-facing actions; the concrete network adapter is
+  imported inside `setup` so importing the registry stays lazy, and this
+  retained module never registers a public browser tool.
+- `manual/SKILL.md` — the retained browser manual. `browser` is an internal
+  browse child rather than a public capability, so agent manual installation
+  deliberately skips it and installs only the `web` owner's manual; the file
+  stays packaged as navigation for the internal Core.
 
 ## Connections
 

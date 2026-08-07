@@ -29,6 +29,8 @@ related_files:
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/CONTRACT.md
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/adapters/windows/cmd.py
+  - src/lingtai/adapters/windows/windows_cmd_shim.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep parent/child anatomy links bidirectional. Code is the structural source of
@@ -94,6 +96,21 @@ only method execution requires Windows.
   delegate to the mechanism-free POSIX read/dispatch logic
   (`daemon_supervisor_entrypoint.py`, `daemon_execution_child_entrypoint.py`,
   `daemon_resume_owner_entrypoint.py`).
+- `CmdDialect` — the `cmd.exe` shell-language dialect, reachable only through
+  the ShellKind classifier (`LINGTAI_SHELL=cmd`, an `init.json` `shell_kind`
+  override, or the last-resort fallback when neither `pwsh` nor Git Bash is
+  discoverable). Policy extraction normalizes caret escapes, quotes, `,`/`;`/`=`
+  delimiters, and `(...)` blocks so the deny-list cannot be bypassed with
+  `d^el`, `"del"`, or `if ... (del ...)`; any `%`-expansion fails closed with an
+  `__cmd_unsupported__` marker `ShellManager` refuses under a configured policy.
+  Over-splitting only ever denies more (`src/lingtai/adapters/windows/cmd.py`).
+- `windows_cmd_shim` — trusted `.cmd`/`.bat` shim handling for tools pwsh
+  invokes implicitly. `npm`/`npx` resolve to a direct `node <dir>/bin/npm-cli.js`
+  call that bypasses the shim entirely; any other PATH-resolved `.cmd`/`.bat`
+  first token is wrapped in `cmd.exe /d /s /c` with a single command string, and
+  metacharacters unsafe under cmd.exe (`%`, backtick, `^`, `$var`) are rejected
+  rather than silently reinterpreted
+  (`src/lingtai/adapters/windows/windows_cmd_shim.py`).
 - `process_identity` — Windows process-incarnation token
   (`windows:<creation_filetime>`) reached by delegation from
   `adapters/posix/process_identity.py`

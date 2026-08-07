@@ -49,6 +49,67 @@ related_files:
   - tests/test_telegram_task_card_last_message.py
   - tests/test_feishu_control_cards.py
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/mcp_servers/_config.py
+  - src/lingtai/mcp_servers/_entrypoint.py
+  - src/lingtai/mcp_servers/_licc_compat.py
+  - src/lingtai/mcp_servers/cloud_mail/SKILL.md
+  - src/lingtai/mcp_servers/cloud_mail/__init__.py
+  - src/lingtai/mcp_servers/cloud_mail/__main__.py
+  - src/lingtai/mcp_servers/cloud_mail/_watermark.py
+  - src/lingtai/mcp_servers/cloud_mail/client.py
+  - src/lingtai/mcp_servers/cloud_mail/licc.py
+  - src/lingtai/mcp_servers/cloud_mail/server.py
+  - src/lingtai/mcp_servers/daemon_common/__init__.py
+  - src/lingtai/mcp_servers/daemon_common/__main__.py
+  - src/lingtai/mcp_servers/feishu/SKILL.md
+  - src/lingtai/mcp_servers/feishu/__init__.py
+  - src/lingtai/mcp_servers/feishu/__main__.py
+  - src/lingtai/mcp_servers/feishu/_errors.py
+  - src/lingtai/mcp_servers/feishu/account.py
+  - src/lingtai/mcp_servers/feishu/licc.py
+  - src/lingtai/mcp_servers/feishu/notification_header.md
+  - src/lingtai/mcp_servers/feishu/reference/capability-matrix.md
+  - src/lingtai/mcp_servers/feishu/reference/diagnostics.md
+  - src/lingtai/mcp_servers/feishu/reference/setup.md
+  - src/lingtai/mcp_servers/feishu/server.py
+  - src/lingtai/mcp_servers/imap/SKILL.md
+  - src/lingtai/mcp_servers/imap/__init__.py
+  - src/lingtai/mcp_servers/imap/__main__.py
+  - src/lingtai/mcp_servers/imap/_migrate.py
+  - src/lingtai/mcp_servers/imap/_watermark.py
+  - src/lingtai/mcp_servers/imap/account.py
+  - src/lingtai/mcp_servers/imap/bridge.py
+  - src/lingtai/mcp_servers/imap/licc.py
+  - src/lingtai/mcp_servers/imap/server.py
+  - src/lingtai/mcp_servers/imap/service.py
+  - src/lingtai/mcp_servers/task_card/__init__.py
+  - src/lingtai/mcp_servers/telegram/__init__.py
+  - src/lingtai/mcp_servers/telegram/__main__.py
+  - src/lingtai/mcp_servers/telegram/licc.py
+  - src/lingtai/mcp_servers/telegram/notification_header.md
+  - src/lingtai/mcp_servers/telegram/updates.py
+  - src/lingtai/mcp_servers/wechat/SKILL.md
+  - src/lingtai/mcp_servers/wechat/__init__.py
+  - src/lingtai/mcp_servers/wechat/__main__.py
+  - src/lingtai/mcp_servers/wechat/api.py
+  - src/lingtai/mcp_servers/wechat/licc.py
+  - src/lingtai/mcp_servers/wechat/lockfile.py
+  - src/lingtai/mcp_servers/wechat/login.py
+  - src/lingtai/mcp_servers/wechat/media.py
+  - src/lingtai/mcp_servers/wechat/notification_header.md
+  - src/lingtai/mcp_servers/wechat/server.py
+  - src/lingtai/mcp_servers/wechat/types.py
+  - src/lingtai/mcp_servers/whatsapp/SKILL.md
+  - src/lingtai/mcp_servers/whatsapp/__init__.py
+  - src/lingtai/mcp_servers/whatsapp/__main__.py
+  - src/lingtai/mcp_servers/whatsapp/client.py
+  - src/lingtai/mcp_servers/whatsapp/licc.py
+  - src/lingtai/mcp_servers/whatsapp/notification_header.md
+  - src/lingtai/mcp_servers/whatsapp/redaction.py
+  - src/lingtai/mcp_servers/whatsapp/resources.py
+  - src/lingtai/mcp_servers/whatsapp/server.py
+  - src/lingtai/mcp_servers/whatsapp/webhook.py
+  - src/lingtai/mcp_servers/whatsapp/webhook_server.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -66,6 +127,9 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 |---|---|
 | `_skill.py` | Shared bundled-skill helper: re-exports the kernel-owned `split_frontmatter` from `lingtai.kernel._frontmatter` (one impl shared with the prompt-section catalog; kernel never imports the wrapper), `load_skill()` loads package `SKILL.md`, `manual_action_description()` injects frontmatter into the schema, and `manual_payload()` returns the manual body + absolute path without sidecar lists (`_skill.py:36-79`). |
 | `_identity.py` | Shared public-identity envelope/path/write helper for curated messaging MCPs: builds the `lingtai.mcp.identity.v1` document, computes `system/mcp_identities/<name>.json`, and performs the newline-terminated atomic JSON write. Provider-specific account fields and redaction stay in each provider. |
+| `_config.py` | Shared env-var → path → strict-JSON config loading sequence for the simple addon loaders; each addon keeps its own public `load_config()` wrapper and return type. WeChat deliberately opts out (two-candidate resolver, status diagnostics, second credentials file). |
+| `_entrypoint.py` | The single copy of the stdio entrypoint every curated `__main__.py` used to duplicate: INFO logging to **stderr** so JSON-RPC stdout stays clean, `asyncio.run(serve())`, and a swallowed `KeyboardInterrupt`. |
+| `_licc_compat.py` | LICC v1 producer compatibility wrapper. Each server's `<name>/licc.py` shim delegates here, which delegates to the canonical `lingtai.services.mcp_licc` when present and otherwise falls back to writing the same LICC v1 filesystem event shape for standalone or pre-upgrade runtimes. |
 | `_results.py` | Shared typed-result builders for the SDK v2 low-level server, which no longer wraps handler return values: `json_tool_result()` builds the canonical `CallToolResult` (JSON text block + `structured_content`, with `is_error` tracking the provider payload's `status`), and `text_resource_result()` builds the single-text-block `ReadResourceResult`. One implementation instead of seven. |
 | `local_commands/` | Channel-neutral local messaging command core. It owns the command catalog, Agent dashboard/brief/system reads, established `.refresh`/`.sleep`/`.clear` signal writes, and injected Task Card preference parsing. Provider adapters retain actor admission, command/callback dispatch, localization/rendering, recipient IDs, and transport. |
 | `task_card/` | Channel-neutral Task Card cores. `event_projection.py` owns the canonical safe event allowlist, redaction/budgets, API-call grouping, safe result merge, metadata/timestamps, and bounded text rendering. `resident.py` owns `TaskCardRoute` (`account + chat + optional thread`), automatic/programmable slot composition, per-route serialization, commit-after-success, in-place edit, conservative supersession rotation, exact-old delete/missing confirmation, peer adoption, and explicit partial/indeterminate failure outcomes. Provider adapters still own journal I/O, route-specific ID validation/high-water policy, API classification, real edit/delete/send, and persistence. |
@@ -74,6 +138,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 | `telegram/task_card/` | Telegram-owned **adapter + programmable projection** unit (governed component with paired `ANATOMY.md`/`CONTRACT.md` + packaged docs). Its `resident.py` is a compatibility re-export of the shared core; `TelegramManager` supplies compound-ID binding, last-message high-water policy, Telegram error classification, transport, and persistence callbacks. The public `task_card` tool lives in `src/lingtai/tools/task_card/`; Telegram reads the intrinsic artifact and projects it read-only. |
 | `feishu/task_card.py` | Feishu-owned resident bindings plus lifecycle workers for the shared automatic event projection and the read-only intrinsic programmable artifact projection. `FeishuManager` supplies account+chat+optional-thread routing, conservative process-local high-water policy, Feishu card transport, and exact resident persistence. |
 | `feishu/control_cards.py` | Feishu-owned schema-2.0 renderer and bounded hashed-event claim store for local `/help`, `/status`, `/kanban`, `/system`, `/brief`, `/refresh`, `/sleep`, `/clear`, and `/taskcard` cards. Shared command semantics stay in `local_commands/core.py`; actor admission, routing, callback dispatch, and transport stay in the account/manager adapter. |
+| Per-server standard layout | Each curated server package repeats the same file shape: `__init__.py` (package surface), `__main__.py` (`python -m lingtai.mcp_servers.<name>`, delegating to `_entrypoint.py`), `server.py` (the SDK v2 low-level `Server` and its handlers), `manager.py` and/or `_family.py` (the flat action boundary and the LTP-v2 envelope), `account.py`/`client.py`/`service.py` (provider transport and session), `licc.py` (the `_licc_compat.py` shim), and `notification_header.md` (the model-facing "how to read this conversation preview" header the manager injects). Provider extras follow the same rule — `imap/_migrate.py` and `imap/bridge.py`, `cloud_mail/_watermark.py` and `imap/_watermark.py`, `feishu/_errors.py`, `wechat/{api,login,media,types,lockfile}.py`, `whatsapp/{redaction,resources,webhook,webhook_server}.py`. |
 | Per-package `SKILL.md` | The human/agent-facing bundled manual. If a manual has sidecars, the sidecar inventory and relative paths live in this markdown, not in the tool payload. |
 | `feishu/reference/` | Packaged operator references for Feishu app permissions/events/card callbacks, complete account config and canary/rollback, safe diagnostic flows, and the Telegram comparison/non-goal matrix. `feishu/SKILL.md` is their progressive-disclosure catalog. |
 | `pyproject.toml` package-data entries | Ships every curated MCP `SKILL.md`; `reference/**/*` and `assets/**/*` are also packaged for future sidecar files (`pyproject.toml:81-86`). |

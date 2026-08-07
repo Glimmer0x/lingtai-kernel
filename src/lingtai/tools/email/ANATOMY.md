@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/email/glossary-en.md
   - src/lingtai/tools/email/glossary-zh.md
   - src/lingtai/tools/email/glossary-wen.md
+  - src/lingtai/tools/email/manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -37,6 +38,8 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
   - `boot(agent)` — idempotent boot hook wiring a fresh `EmailManager` onto the agent.
 
 - `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
+
+- `manual/SKILL.md` — the installed `email-manual` bundle the reserved `manual` child returns; `Agent._install_intrinsic_manuals()` copies it to `.library/intrinsic/capabilities/email/`.
 
 - `primitives.py` — Mailbox I/O and display helpers. Module-level functions operating on the agent's `mailbox/` directory tree.
   - ID and path helpers: `_new_mailbox_id` (re-exported from the kernel mail service — `primitives.py:20` imports `from lingtai.kernel.services.mail import _new_mailbox_id`), `mode_field` (`primitives.py:29-35`), `_mailbox_dir` / `_inbox_dir` / `_outbox_dir` / `_sent_dir` (`primitives.py:38-51`).

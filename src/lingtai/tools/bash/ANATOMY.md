@@ -30,6 +30,11 @@ related_files:
   - src/lingtai/tools/bash/glossary-en.md
   - src/lingtai/tools/bash/glossary-zh.md
   - src/lingtai/tools/bash/glossary-wen.md
+  - src/lingtai/tools/bash/_output_hygiene.py
+  - src/lingtai/tools/bash/manual/reference/debugging-cleanup/SKILL.md
+  - src/lingtai/tools/bash/manual/reference/notification-reminders/SKILL.md
+  - src/lingtai/tools/bash/manual/reference/scheduled-work/SKILL.md
+  - src/lingtai/tools/bash/powershell_policy.json
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -57,6 +62,8 @@ be explicitly opted into.
 - `adapters/windows/powershell.py`, `powershell_process.py`, and `powershell_state_lock.py` — PowerShell 7 dialect (ASCII-only cmdline + UTF-8 stdin bootstrap), Job Object process-tree ownership, and native cross-process byte-range locking.
 - `adapters/windows/gitbash.py` — Git Bash (Git for Windows) fallback dialect with an explicit `bash -lc` spawn form and a WSL-launcher-rejecting `discover_git_bash`; see the Git Bash / MSYS pitfall list (path mangling, `/c/...` translation, `usr\bin` PATH prepend, login-shell coreutils gap, ASLR spawn-failure retry class, WSL-bash ambiguity) in the Notes of `adapters/windows/ANATOMY.md`.
 - `bash/_async_supervisor.py` — private detached policy runner that selects the same Ports, claims leases, delegates spawn/wait, and atomically persists terminal truth.
+- `bash/_output_hygiene.py` — output hygiene at the shell-tool boundary. Small dependency-free helpers applied before output is returned, stripping ANSI/CSI color and cursor sequences, C0/C1 control bytes (bell, backspace, OSC title sequences, DEL), and shell-startup noise lines (`bash: no job control in this shell`, `tcsetattr: ...`) that would otherwise pollute tool results, waste context, and confuse plain-text parsers.
+- `bash/powershell_policy.json` — the PowerShell-dialect counterpart to `bash_policy.json`, denying the cmdlet/alias spellings of the same classes (`Remove-Item`/`ri`/`rm`/`del`, `Format-Volume`/`Clear-Disk`, `Stop-Computer`/`Stop-Process`, `Invoke-Expression`/`iex`, `Set-Acl`/`icacls`/`takeown`, `Invoke-WebRequest`/`iwr`, `Set-ExecutionPolicy`, `reg`/`sc`).
 - `bash/bash_policy.json` — default denylist policy shipped with the kernel. Denies destructive (`rm`, `rmdir`, `shred`, `dd`), privilege escalation (`sudo`, `su`, `doas`), permission changes (`chmod`, `chown`, `chgrp`), disk management (`mount`, `umount`, `mkfs`, `fdisk`), package managers (`apt`, `apt-get`, `yum`, `dnf`, `brew`), process control (`kill`, `killall`, `pkill`, `shutdown`, `reboot`, `systemctl`), network (`nc`, `ncat`), and code execution (`eval`, `exec`).
 
 ## Public API
@@ -154,7 +161,7 @@ bash/__init__.py
 
 ## Dependencies
 
-- `lingtai.i18n` — `t()` for localized strings
+- `lingtai.kernel.i18n` — `t()` for localized strings
 - `lingtai.kernel.base_agent.BaseAgent` — agent type (TYPE_CHECKING only)
 - `lingtai.kernel.base_agent.messaging._enqueue_system_notification` — canonical `.notification/system.json` multi-event append path when Bash is installed on an agent (`src/lingtai/kernel/base_agent/messaging.py:66-180`).
 - `lingtai.kernel.notification_store.NotificationStore` — serialized compare/update ownership for direct-manager reminder appends and sink-idempotent Bash completion writes; injected through `agent._notification_store` (`__init__.py:937`, `:1012`).
@@ -164,5 +171,5 @@ bash/__init__.py
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `avatar/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog).
-- **Manual:** `bash/manual/SKILL.md` — operational guide for agents covering async/poll/reminder durability plus scheduled / cron-driven work, wake-by-mailbox-drop, hygiene rules, OS-specific scheduler recipes, and debugging walkthroughs.
+- **Manual:** `bash/manual/SKILL.md` — operational guide for agents covering async/poll/reminder durability plus scheduled / cron-driven work, wake-by-mailbox-drop, hygiene rules, OS-specific scheduler recipes, and debugging walkthroughs. It progressively discloses into three nested sub-skills under `manual/reference/`: `bash-debugging-cleanup`, `bash-notification-reminders`, and `bash-scheduled-work`.
 - **Kernel hooks:** `setup()` is called during capability initialization; `ShellManager.handle()` is registered as the canonical `shell` tool handler.

@@ -19,6 +19,9 @@ related_files:
   - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/tools/pad/ANATOMY.md
   - src/lingtai/tools/lingtai/ANATOMY.md
+  - src/lingtai/tools/tool_family/glossary-en.md
+  - src/lingtai/tools/tool_family/glossary-wen.md
+  - src/lingtai/tools/tool_family/glossary-zh.md
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep

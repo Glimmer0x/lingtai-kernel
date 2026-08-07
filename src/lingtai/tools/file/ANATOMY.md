@@ -13,6 +13,9 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
+  - src/lingtai/tools/file/glossary-en.md
+  - src/lingtai/tools/file/glossary-wen.md
+  - src/lingtai/tools/file/glossary-zh.md
 maintenance: |
   Keep this public file Anatomy and its Contract reciprocal, and keep the
   parent link bidirectional. This package is the single owner of the file
