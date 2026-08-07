@@ -180,7 +180,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
    Adapter, or behavioral-promise change updates contract and contract tests in
    the same PR. A change affecting both updates the pair together.
 6. Orphans, missing targets, duplicate links, one-way pair links, and unpaired
-   governed components are defects and MUST fail validation.
+   governed components are defects and MUST fail validation. Every tracked file
+   must appear in some `related_files` list so the whole tree climbs from this
+   root anatomy; a tracked file in no list is an orphan.
 7. A capability's manual is a navigation target linked from **both** owner twins:
    the paired `ANATOMY.md` lists it in `related_files` as a route to the manual,
    and the capability `CONTRACT.md` lists the same manual as its interface owner.

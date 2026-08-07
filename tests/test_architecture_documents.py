@@ -113,12 +113,9 @@ def test_every_tracked_file_climbs_the_anatomy_graph() -> None:
     """
     reachable, visited = _climb_anatomy_graph()
 
-    orphans = sorted(_tracked_files() - reachable)
-    assert not orphans, (
-        f"{len(orphans)} tracked file(s) are not reachable from ANATOMY.md via "
-        f"related_files:\n{_sample(orphans)}"
-    )
-
+    # Check unlinked ANATOMY.md files first: any unvisited tracked anatomy is
+    # also unreachable, so this check gives a precise diagnostic before the
+    # orphan sweep (which would otherwise absorb it into the generic count).
     anatomies = {
         path
         for path in _tracked_files()
@@ -128,6 +125,12 @@ def test_every_tracked_file_climbs_the_anatomy_graph() -> None:
     assert not unreachable, (
         f"{len(unreachable)} ANATOMY.md file(s) exist but are not linked into "
         f"the graph from the root:\n{_sample(unreachable)}"
+    )
+
+    orphans = sorted(_tracked_files() - reachable)
+    assert not orphans, (
+        f"{len(orphans)} tracked file(s) are not reachable from ANATOMY.md via "
+        f"related_files:\n{_sample(orphans)}"
     )
 
 
