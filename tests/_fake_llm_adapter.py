@@ -69,7 +69,11 @@ class _FakeChatSession(ChatSession):
                     text="Finishing...",
                     tool_calls=[ToolCall(
                         name="finish",
-                        args={"status": "done", "summary": "Found 3 TODOs."},
+                        args={
+                            "action": "finish",
+                            "input": {"status": "done", "summary": "Found 3 TODOs."},
+                            "reasoning": "fake scenario finish",
+                        },
                         id="fake-finish",
                     )],
                 )
@@ -88,7 +92,11 @@ class _FakeChatSession(ChatSession):
                 text="finalizing fake task",
                 tool_calls=[ToolCall(
                     name="finish",
-                    args={"status": "done", "summary": "fake finished"},
+                    args={
+                        "action": "finish",
+                        "input": {"status": "done", "summary": "fake finished"},
+                        "reasoning": "fake finish",
+                    },
                     id="fake-finish",
                 )],
             )

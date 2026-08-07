@@ -580,7 +580,15 @@ class TestSchemaInvariance:
         assert zh_body not in daemon_prompt
         assert WIRE_TOOL_DESCRIPTION not in daemon_prompt
 
-    def test_daemon_intrinsic_collector_preserves_glossary_owner(self):
+    def test_daemon_intrinsic_surface_bridges_no_intrinsic(self):
+        """No intrinsic (``email`` included) is wired onto a daemon anymore.
+
+        ``email`` moved from a narrow intrinsic exception to an MCP tool
+        (``mcp_servers/daemon_email/``, gated by ``_with_daemon_email_mcp``);
+        ``_daemon_intrinsic_surface`` synthesizes only the always-on
+        ``compact`` schema now, regardless of what the agent's own intrinsic
+        registry happens to contain.
+        """
         import lingtai.tools.email as email_tool
         from lingtai.tools.daemon import DaemonManager
 
@@ -589,9 +597,9 @@ class TestSchemaInvariance:
             _intrinsics={"email": object()},
             _intrinsic_modules={"email": email_tool},
         )
-        schemas, _handlers = manager._daemon_intrinsic_surface()
-        assert schemas["email"].glossary_package == "lingtai.tools.email"
-        assert schemas["email"].description == email_tool.get_description()
+        schemas, handlers = manager._daemon_intrinsic_surface()
+        assert set(schemas) == {"compact"}
+        assert set(handlers) == set()
 
     def test_glossary_metadata_and_body_never_reach_provider_wire(self):
         from lingtai.llm.anthropic.adapter import _build_tools as build_anthropic_tools

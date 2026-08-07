@@ -413,6 +413,19 @@ _DAEMON_COMPACT_MANUAL_PROCEDURES = (
 
 
 _DAEMON_COMMON_MCP_NAME = "daemon_common"
+_DAEMON_EMAIL_MCP_NAME = "email"
+# Tool names satisfied by a LingTai-auto-mounted, task-scoped MCP server
+# (``_with_daemon_email_mcp``) rather than by the parent's already-connected
+# capability/MCP surface. Pre-flight tool-surface validation
+# (``_build_tool_surface``) runs against a placeholder empty ``mcp_surface``
+# — the owning detached supervisor connects task MCP servers for real only
+# after pre-flight passes — so a name from this set must be tolerated as
+# "available" there even though it is not literally present in any schema
+# dict yet. It costs nothing at real dispatch time: by then the connected
+# server's schema/handler are already in ``mcp_schemas``/``mcp_handlers``,
+# so this only ever widens ``available``, never ``tool_names`` — a daemon
+# that never requested ``email`` still never gets it.
+_DAEMON_AUTO_MCP_TOOL_NAMES = frozenset({_DAEMON_EMAIL_MCP_NAME})
 _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
@@ -1570,27 +1583,17 @@ class DaemonManager:
     def _daemon_intrinsic_surface(self) -> tuple[dict[str, FunctionSchema], dict]:
         """Return daemon-eligible intrinsic schemas/handlers.
 
-        Daemons do not inherit the whole intrinsic layer: identity/lifecycle and
-        recursive mutation tools stay unavailable.  Email is the deliberately
-        narrow exception so a parent can grant a running daemon local-network
-        communication when the task prompt calls for it.
+        Daemons do not inherit the intrinsic layer at all: identity/lifecycle
+        and recursive mutation tools stay unavailable, and communication
+        (``email``) is no longer an intrinsic exception here — it is provided
+        as an MCP tool identical to every other daemon backend, auto-mounted
+        by ``_with_daemon_email_mcp`` when a task explicitly requests
+        ``tools: ["email"]`` (see ``_daemon_email_mcp_registration``). The
+        only thing still synthesized here is ``compact``, a daemon-runtime
+        primitive with no parent-intrinsic equivalent.
         """
-        allowed = {"email"}
         schemas: dict[str, FunctionSchema] = {}
         handlers: dict = {}
-        for name in sorted(allowed):
-            if name not in self._agent._intrinsics:
-                continue
-            module = self._agent._intrinsic_modules.get(name)
-            if not module:
-                continue
-            schemas[name] = FunctionSchema(
-                name=name,
-                description=module.get_description(),
-                parameters=module.get_schema(),
-                glossary_package=getattr(module, "__package__", None),
-            )
-            handlers[name] = self._agent._intrinsics[name]
         schemas["compact"] = FunctionSchema(
             name="compact",
             description=(
@@ -1811,6 +1814,49 @@ class DaemonManager:
                 f"MCP registration name {_DAEMON_COMMON_MCP_NAME!r} is reserved"
             )
         return [DaemonManager._daemon_common_mcp_registration(run_dir), *rows]
+
+    @staticmethod
+    def _daemon_email_mcp_registration(
+        run_dir: DaemonRunDir,
+        parent_working_dir: Path,
+    ) -> dict:
+        """MCP registration for the daemon-facing ``email`` tool.
+
+        Mounted only when a task explicitly requests ``tools: ["email"]``
+        (see call sites in ``_handle_emanate``/``_handle_emanate_cli``), the
+        same explicit-opt-in gate the removed intrinsic exception enforced —
+        a `tools=[]` result-only daemon never gets this registration, so it
+        never gets email. ``LINGTAI_AGENT_DIR`` points the server at the
+        *parent* agent's own working directory (its live, handshake-able
+        mailbox), not this run's own nested run-dir, which the parent
+        subsystem never gives an ``.agent.json``/heartbeat.
+        """
+        return {
+            "name": _DAEMON_EMAIL_MCP_NAME,
+            "transport": "stdio",
+            "command": sys.executable,
+            "args": ["-m", "lingtai.mcp_servers.daemon_email"],
+            "env": {
+                "LINGTAI_AGENT_DIR": str(parent_working_dir),
+                "PYTHONPATH": _dev_pythonpath_with_source_root(),
+            },
+        }
+
+    @staticmethod
+    def _with_daemon_email_mcp(
+        registrations: list[dict],
+        run_dir: DaemonRunDir,
+        parent_working_dir: Path,
+    ) -> list[dict]:
+        rows = list(registrations)
+        if any(r.get("name") == _DAEMON_EMAIL_MCP_NAME for r in rows):
+            raise ValueError(
+                f"MCP registration name {_DAEMON_EMAIL_MCP_NAME!r} is reserved"
+            )
+        return [
+            DaemonManager._daemon_email_mcp_registration(run_dir, parent_working_dir),
+            *rows,
+        ]
 
     @staticmethod
     def _daemon_common_context() -> str:
@@ -2320,14 +2366,18 @@ class DaemonManager:
             parent_host_names = (set(parent_schema_map)
                                  & _parent_host_tool_floor()) - parent_mcp_names
             # Available surface = preset capabilities ∪ parent host-floor tools
-            # ∪ task-scoped MCP tools ∪ explicitly requestable daemon intrinsics
-            # (email). Only task MCP tools are auto-included below.
+            # ∪ task-scoped MCP tools ∪ names satisfied by a LingTai-auto-
+            # mounted MCP server (email — see _DAEMON_AUTO_MCP_TOOL_NAMES).
+            # Only task MCP tools are auto-included below.
             available = (set(preset_schemas.keys()) | parent_host_names
-                         | set(mcp_schemas) | set(intrinsic_schemas))
+                         | set(mcp_schemas) | set(intrinsic_schemas)
+                         | _DAEMON_AUTO_MCP_TOOL_NAMES)
             # Task MCP tools are auto-included for this one run because the
-            # task supplied full one-run registrations. Daemon intrinsics such
-            # as email remain available, but must be explicitly requested via
-            # `tools` so result-only `tools=[]` daemons cannot communicate.
+            # task supplied full one-run registrations. Auto-mounted daemon
+            # MCP tools such as email remain available, but must be
+            # explicitly requested via `tools` (which gates whether
+            # _with_daemon_email_mcp mounts the server at all) so result-only
+            # `tools=[]` daemons cannot communicate.
             tool_names |= set(mcp_schemas)
 
             missing = tool_names - available
@@ -2365,7 +2415,8 @@ class DaemonManager:
 
         # Validate requested tools exist
         available = ({s.name for s in self._agent._tool_schemas}
-                     | set(intrinsic_schemas) | set(mcp_schemas))
+                     | set(intrinsic_schemas) | set(mcp_schemas)
+                     | _DAEMON_AUTO_MCP_TOOL_NAMES)
         missing = tool_names - available
         if missing:
             raise ValueError(f"Unknown tools for emanation: {missing}")
@@ -2453,7 +2504,7 @@ class DaemonManager:
             name = canonical_capability_name(name)
             if name in EMANATION_BLACKLIST:
                 continue
-            # Tolerate non-capability names (intrinsics like 'email', 'psyche',
+            # Tolerate non-capability names (intrinsics like 'psyche',
             # 'system', 'soul' — kernel always-on, not composable). The TUI
             # preset wizard writes these into manifest.capabilities and the
             # main Agent.__init__ tolerates them via try/except (agent.py:91-94);
@@ -4393,6 +4444,10 @@ class DaemonManager:
             # specification; no future or CLI process remains in the parent.
             try:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
+                if "email" in (spec.get("tools") or []):
+                    task_mcp_regs = self._with_daemon_email_mcp(
+                        task_mcp_regs, run_dir, self._agent._working_dir,
+                    )
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
                     None, task_skill_catalog, task_mcp_catalog
@@ -4581,6 +4636,10 @@ class DaemonManager:
                     if _cli_backend_loads_common_mcp(backend)
                     else list(context.mcp_regs)
                 )
+                if _cli_backend_loads_common_mcp(backend) and "email" in (spec.get("tools") or []):
+                    mcp_regs = self._with_daemon_email_mcp(
+                        mcp_regs, run_dir, self._agent._working_dir,
+                    )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
                     None, context.skill_catalog, mcp_catalog
