@@ -122,9 +122,6 @@ Collect all results before primary-agent triage.
 
 ## Prompt templates
 
-Each template below expects redacted input and returns YAML only — no prose
-before or after the YAML block.
-
 ### Classifier prompt
 
 ```
@@ -140,6 +137,8 @@ For each category you identify, output one YAML block:
 
 METRICS:
 {metrics_block}
+
+Output ONLY valid YAML. No prose before or after.
 ```
 
 ### Anomaly summarizer prompt
@@ -161,6 +160,8 @@ Rules:
 
 EXCERPT (redacted):
 {excerpt_block}
+
+Output ONLY valid YAML. No prose before or after.
 ```
 
 ### Observability-gap prompt
@@ -175,6 +176,8 @@ For each significant gap, output YAML:
   why_needed: <what class of problem it would help diagnose>
   suggested_event: <what event type or field would close the gap>
   priority: low | medium | high
+
+Output ONLY valid YAML. No prose before or after.
 ```
 
 ### Cross-run pattern prompt
@@ -194,6 +197,8 @@ For each cross-run pattern, output YAML:
 
 SUMMARIES:
 {summaries_block}
+
+Output ONLY valid YAML. No prose before or after.
 ```
 
 ## Finding schema

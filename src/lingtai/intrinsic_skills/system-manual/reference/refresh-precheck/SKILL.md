@@ -119,7 +119,7 @@ cat "$SP"/lingtai-*.dist-info/direct_url.json 2>/dev/null
 
 Resolve the interpreter through `LINGTAI_RUNTIME_PYTHON` / the runtime venv and read module
 `__file__`, never a PATH `python` — the version/provenance rule is owned by
-`substrate-manual` §I runtime/version checks; this step only sequences it.
+resident substrate §I runtime/version checks; this step only sequences it.
 
 **Refuse to refresh if:** more than one lingtai path marker is live; any `.pth` entry does
 not exist on disk; or the marker and `lingtai.__file__` disagree. Repairing an install is a
@@ -324,7 +324,7 @@ the expected surface — the third attempt is not the answer.
    Explicitly: "the pre-flight passed" is never a reason to skip asking.
 4. **It does not restate owned facts.** Preset runtime model → `substrate-manual` §11.
    Runtime/version provenance probe (`LINGTAI_RUNTIME_PYTHON` / module `__file__`, never a
-   PATH `python`) → `substrate-manual` §I; step 2 sequences that rule, it does not restate it.
+   PATH `python`) → resident substrate §I; step 2 sequences that rule, it does not restate it.
    Env var catalogue → `environment-variables`. Update/nudge lifecycle →
    `runtime-update-checks`. MCP registry mechanics → `mcp-manual`. Molt/rebuild →
    `context-manual`. Notification dismissal safety → `notification-manual`. Each check

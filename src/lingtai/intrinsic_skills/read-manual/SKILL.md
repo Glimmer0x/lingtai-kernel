@@ -59,9 +59,14 @@ This replaces a dedicated `read(dry_run=true)` mode.
 python - <<'PY'
 from pathlib import Path
 p = Path('/path/to/file')
-lines = p.read_text(encoding='utf-8', errors='replace').splitlines()
-print({'bytes': p.stat().st_size, 'lines': len(lines),
-       'longest_chars': max(map(len, lines), default=0)})
+count = max_len = max_line = 0
+with p.open('r', encoding='utf-8', errors='replace') as f:
+    for i, line in enumerate(f, 1):
+        count = i
+        if len(line) > max_len:
+            max_len, max_line = len(line), i
+print({'bytes': p.stat().st_size, 'lines': count,
+       'longest_line': max_line, 'longest_chars': max_len})
 PY
 ```
 

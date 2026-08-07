@@ -188,9 +188,14 @@ a third copy here.
 
 ## 8. Web, files, media, and local artifacts
 
-Use existing producer/tool capabilities before inventing workflows — the
-`system-manual` router names the owner for web (`web-manual`), images (`vision`),
-audio/media, and files (`file-manual`).
+Use existing producer/tool capabilities before inventing workflows. Resident
+`procedures` ("Skill Routing — When to Load What") names the owner for web
+fetching/search/scraping (`web-manual`) and image understanding (`vision`); that
+table does not carry the two below, so they live here:
+
+- For shell audio/media work, load the relevant media/listen/minimax skill.
+- For tricky file encodings, large files, binary-like data, or careful edit
+  workflows, read `file-manual`.
 
 When giving humans local artifacts, include a usable path and a short summary.
 Do not expose private internal IDs as if they are user-accessible artifacts.
