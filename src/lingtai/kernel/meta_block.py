@@ -51,6 +51,7 @@ from __future__ import annotations
 import hashlib as _hashlib
 import json as _json
 import copy as _copy
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, NamedTuple
@@ -320,6 +321,12 @@ TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
+
+# Env-var override for the cache-miss budget. When set to a positive int, it
+# overrides agent._config.cache_miss_budget at every budget resolution (live
+# read, no restart), matching the nudge env-var pattern. An invalid value
+# (missing, non-int, bool, <= 0) falls back to the configured/default budget.
+CACHE_MISS_BUDGET_ENV = "LINGTAI_CACHE_MISS_BUDGET"
 
 # Current context state carried under the ``session`` half of
 # ``agent_meta.agent_state.token_usage`` (moved off ``current_call``, since context usage is
@@ -1169,15 +1176,37 @@ def build_context_overflow_warning(agent) -> str | None:
 
 
 def _resolve_cache_miss_budget(agent) -> int | None:
-    """Return the configured positive-int cache-miss budget, or ``None``.
+    """Return the effective positive-int cache-miss budget, or ``None``.
 
-    Reads ``agent._config.cache_miss_budget``.  ``bool`` is an ``int`` subclass,
-    so it is rejected explicitly (a ``True`` budget must never mean ``1``); any
-    non-int or non-positive value disables the budget-derived telemetry.  Shared
-    by :func:`build_cache_miss_budget_context` (the at/above-budget guard) and
+    Resolution order (same semantics at every call site, matching the nudge
+    env-var pattern):
+
+    1. ``LINGTAI_CACHE_MISS_BUDGET`` env var — live ``os.environ`` read at each
+       budget resolution, so the operator (or the agent itself via its env_file
+       + refresh) can override the budget without a restart. An invalid value
+       (missing, non-int, bool, <= 0) is treated as unset.
+    2. ``agent._config.cache_miss_budget`` (hydrated from
+       ``manifest.cache_miss_budget``; default 1_000_000).
+
+    ``bool`` is an ``int`` subclass, so it is rejected explicitly (a ``True``
+    budget must never mean ``1``); any non-int or non-positive value disables
+    the budget-derived telemetry.  Shared by
+    :func:`build_cache_miss_budget_context` (the at/above-budget guard) and
     :func:`_build_session_token_economy` (the always-on session-half fields) so
     both read the budget with identical semantics.
     """
+    env_raw = os.environ.get(CACHE_MISS_BUDGET_ENV, "").strip()
+    if env_raw:
+        try:
+            env_budget = int(env_raw)
+        except (TypeError, ValueError):
+            env_budget = None
+        if (
+            env_budget is not None
+            and not isinstance(env_budget, bool)
+            and env_budget > 0
+        ):
+            return env_budget
     config = getattr(agent, "_config", None)
     budget = getattr(config, "cache_miss_budget", None)
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:

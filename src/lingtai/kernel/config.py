@@ -152,6 +152,12 @@ class AgentConfig:
     # since-refresh get_runtime_session_token_usage delta. Validated as a positive
     # int (bool and <= 0 rejected) in lingtai/init_schema.py and hydrated from
     # manifest.cache_miss_budget by lingtai/agent.py build_agent_config.
+    #
+    # The effective budget may also be overridden at runtime by the
+    # LINGTAI_CACHE_MISS_BUDGET env var (see meta_block._resolve_cache_miss_budget):
+    # a positive-int env value wins over this config/default at every budget
+    # resolution (live read, no restart). This lets the operator or the agent
+    # itself (via its env_file + refresh) tune the budget without editing init.json.
     cache_miss_budget: int = 1_000_000
     # Legacy molt-threshold fields, retained ONLY for backward compatibility
     # (old AgentConfig constructions / serialized state still set them). They are
