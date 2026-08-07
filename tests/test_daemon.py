@@ -535,7 +535,18 @@ def test_cli_backend_serializes_task_mcp_context(tmp_path, monkeypatch):
 
 
 def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
-    """Result-only tools=[] daemons must not receive communication tools."""
+    """Result-only tools=[] daemons must not receive communication tools.
+
+    ``email`` is provided as an MCP tool (``mcp_servers/daemon_email/``), not
+    an intrinsic — it is only auto-mounted (and only then present in a real
+    ``mcp_surface``) when a task's ``tools`` explicitly requests it. A bare
+    ``_build_tool_surface(["email"])`` call with no connected MCP surface
+    (as at the parent-side pre-flight, before the owning supervisor connects
+    task MCP servers) must not raise "Unknown tools for emanation" — the
+    name is tolerated as pre-connection-available — but also must not
+    fabricate a schema/handler for it; those only appear once the server is
+    actually connected and its real schema is passed via ``mcp_surface``.
+    """
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
 
@@ -546,11 +557,30 @@ def test_build_tool_surface_requires_explicit_email_tool(tmp_path):
     assert "email" not in names
     assert "email" not in dispatch
 
+    # No connected MCP surface yet: passes validation, but email's
+    # schema/handler are not fabricated out of thin air.
     schemas, dispatch = mgr._build_tool_surface(["email"])
     names = {s.name for s in schemas}
     assert "compact" in names
+    assert "email" not in names
+    assert "email" not in dispatch
+
+    # Once the daemon-email MCP server is actually connected (execution_host.py
+    # does this for real via _connect_task_mcp_registrations), its schema and
+    # handler resolve through the ordinary mcp_surface path.
+    email_schema = FunctionSchema(
+        name="email",
+        description="Daemon email MCP tool",
+        parameters={"type": "object", "properties": {}},
+    )
+    email_handler = lambda args: {"status": "ok"}
+    schemas, dispatch = mgr._build_tool_surface(
+        ["email"], mcp_surface=({"email": email_schema}, {"email": email_handler}),
+    )
+    names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" in names
-    assert "email" in dispatch
+    assert dispatch["email"] is email_handler
 
 
 def test_compact_is_auto_present_on_lingtai_surfaces(tmp_path):
@@ -961,14 +991,33 @@ def test_build_tool_surface_preset_requires_explicit_email_tool(tmp_path):
     assert "email" not in names
     assert "email" not in dispatch
 
-    # Explicitly requesting email on the preset path opts in.
+    # Explicitly requesting email on the preset path opts in to validation
+    # passing, but (with no connected MCP surface yet) still fabricates no
+    # schema/handler — see test_build_tool_surface_requires_explicit_email_tool.
     schemas, dispatch = mgr._build_tool_surface(
         ["email"], preset_surface=preset_surface
     )
     names = {s.name for s in schemas}
     assert "compact" in names
+    assert "email" not in names
+    assert "email" not in dispatch
+
+    # Once the daemon-email MCP server is connected, its schema/handler
+    # resolve on the preset path too.
+    email_schema = FunctionSchema(
+        name="email",
+        description="Daemon email MCP tool",
+        parameters={"type": "object", "properties": {}},
+    )
+    email_handler = lambda args: {"status": "ok"}
+    schemas, dispatch = mgr._build_tool_surface(
+        ["email"], preset_surface=preset_surface,
+        mcp_surface=({"email": email_schema}, {"email": email_handler}),
+    )
+    names = {s.name for s in schemas}
+    assert "compact" in names
     assert "email" in names
-    assert "email" in dispatch
+    assert dispatch["email"] is email_handler
 
 
 def test_build_emanation_prompt_includes_oneshot_system_prompt(tmp_path):

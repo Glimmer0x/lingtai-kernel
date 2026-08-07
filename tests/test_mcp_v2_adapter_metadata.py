@@ -293,7 +293,12 @@ def test_real_stdio_start_lists_tools_over_a_live_subprocess(real_stdio_client):
 
 def test_real_stdio_call_tool_round_trips(real_stdio_client, tmp_path):
     result = real_stdio_client.call_tool(
-        "finish", {"status": "done", "summary": "lifecycle probe"}
+        "finish",
+        {
+            "action": "finish",
+            "input": {"status": "done", "summary": "lifecycle probe"},
+            "reasoning": "lifecycle probe",
+        },
     )
 
     assert result["status"] == "ok"

@@ -1,8 +1,10 @@
 """LingTai daemon common MCP server.
 
-The model-visible contract is the ``finish`` tool. The JSON file it writes is
-an internal daemon transport and is validated again by the daemon runner before
-any backend is allowed to mark a run done.
+The model-visible contract is the ``finish`` tool, in the LTP v2
+``action``/``input``/``reasoning`` envelope every curated LingTai MCP tool
+uses (``tools/CONTRACT.md``) rather than bare MCP params. The JSON file it
+writes is an internal daemon transport and is validated again by the daemon
+runner before any backend is allowed to mark a run done.
 """
 from __future__ import annotations
 
@@ -21,7 +23,9 @@ from .._results import unknown_tool_error as _unknown_tool
 
 STATUSES = {"done", "failed", "incomplete"}
 
-FINISH_SCHEMA = {
+_ACTIONS = ("finish",)
+
+_FINISH_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "status": {
@@ -47,8 +51,30 @@ FINISH_SCHEMA = {
     "additionalProperties": False,
 }
 
+FINISH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(_ACTIONS),
+            "description": "Required operation. Only 'finish' exists today.",
+        },
+        "input": {
+            "description": "Strict action-specific input; re-validated at dispatch.",
+            **_FINISH_INPUT_SCHEMA,
+        },
+        "reasoning": {
+            "type": "string",
+            "description": "Brief explanation of why you are calling this tool (recorded in your diary).",
+        },
+    },
+    "required": ["action", "input", "reasoning"],
+    "additionalProperties": False,
+}
+
 DESCRIPTION = (
-    "Finish this LingTai daemon run. Call exactly once before your final answer. "
+    "Finish this LingTai daemon run. Call exactly once before your final answer: "
+    "finish(action='finish', input={'status': ...}, reasoning='...'). "
     "Use status='done' only when the task is complete; use status='failed' or "
     "status='incomplete' when blocked, unvalidated, or unable to finish."
 )
@@ -64,12 +90,30 @@ def _completion_path() -> Path:
 def _validate_finish(arguments: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(arguments, dict):
         raise ValueError("finish arguments must be an object")
-    status = arguments.get("status")
+    action = arguments.get("action")
+    if action not in _ACTIONS:
+        raise ValueError(f"action must be one of: {', '.join(_ACTIONS)}")
+    input_ = arguments.get("input")
+    if not isinstance(input_, dict):
+        raise ValueError("input must be an object")
+    # A real MCP wire call carries ``reasoning`` verbatim. A same-process
+    # dispatch (``execution_host.py``'s local ``finish`` shortcut for the
+    # LingTai backend) goes through ``kernel.tool_executor``, which extracts
+    # and logs ``reasoning`` before re-adding it as ``_reasoning`` — the same
+    # dual-spelling tolerance ``ToolFamily``'s generic envelope validator
+    # uses (``tool_family/__init__.py`` ``_ROOT_FIELDS``).
+    reasoning = arguments.get("reasoning", arguments.get("_reasoning"))
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        raise ValueError("reasoning is required")
+    if set(arguments) - {"action", "input", "reasoning", "_reasoning"}:
+        raise ValueError("unsupported finish argument")
+
+    status = input_.get("status")
     if status not in STATUSES:
         raise ValueError("status must be one of: done, failed, incomplete")
-    summary = arguments.get("summary")
-    reason = arguments.get("reason")
-    artifacts = arguments.get("artifacts")
+    summary = input_.get("summary")
+    reason = input_.get("reason")
+    artifacts = input_.get("artifacts")
     if summary is not None and not isinstance(summary, str):
         raise ValueError("summary must be a string")
     if reason is not None and not isinstance(reason, str):
