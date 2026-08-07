@@ -265,5 +265,5 @@ def register_all_adapters() -> None:
 
     LLMService.register_adapter("mimo", _mimo)
 
-    for name in ("grok", "qwen", "kimi"):
+    for name in ("grok", "qwen", "kimi", "opencode-go", "opencode_go"):
         LLMService.register_adapter(name, _custom)

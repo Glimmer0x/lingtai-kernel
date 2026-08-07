@@ -43,7 +43,7 @@ LingTai registers the following provider keys (each usable in presets / `init.js
 | `deepseek` | `DeepSeekAdapter` | REST | DeepSeek API |
 | `glm`, `zhipu` | `ZhipuAdapter` | REST | Zhipu / GLM API |
 | `mimo` | `MimoAdapter` | REST | Xiaomi MiMo API |
-| `custom`, `grok`, `qwen`, `kimi` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi` are custom-backed aliases) |
+| `custom`, `grok`, `qwen`, `kimi`, `opencode-go`, `opencode_go` | `create_custom_adapter` (in `custom/adapter.py`) | REST | Generic OpenAI-compatible endpoint (`custom` is the canonical key; `grok`/`qwen`/`kimi`/`opencode-go` are custom-backed aliases). `opencode-go` points at the OpenCode Go subscription cloud endpoint (`https://opencode.ai/zen/go/v1`) |
 | `openrouter` | `OpenRouterAdapter` | REST | OpenRouter-compatible endpoint |
 | `claude-code`, `claude_code` | `ClaudeCodeAdapter` (in `claude_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Claude Code harness); used as a main-agent/preset provider |
 | `kimi-code`, `kimi_code` | `KimiCodeAdapter` (in `kimi_code/adapter.py`) | n/a (external CLI) | Local CLI-backed LLM provider (Kimi Code harness); used as a main-agent/preset provider |

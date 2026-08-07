@@ -47,6 +47,8 @@ _PROVIDER_DEFAULT_URLS = {
     "codex":      "https://chatgpt.com",
     "mimo":       "https://api.xiaomimimo.com",
     "kimi":       "https://api.kimi.com",
+    "opencode-go": "https://opencode.ai/zen/go/v1",
+    "opencode_go": "https://opencode.ai/zen/go/v1",
 }
 
 
