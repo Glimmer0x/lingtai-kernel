@@ -1,19 +1,14 @@
 ---
 name: procedures-manual
 description: >
-  Nested system-manual reference for expanded LingTai procedure/action guidance.
-  Read via the `system-manual` router when resident procedures are too compact
-  and you need details about progressive disclosure, responsiveness, external
-  side-effect authorization, choosing bash vs daemon vs avatar vs MCP, depositing
-  work into pad/knowledge/skills/character, idle/lifecycle procedure, molt
-  checklist, skill routing, web/file/media/artifact handling, standalone HTML
-  deliverables, sharing artifacts, issue reporting, and resident procedures
-  maintenance. This is a nested skill-reference under `system-manual`, not a
-  standalone catalog skill; its folder may carry scripts/assets as procedure
-  guidance grows.
-version: 1.3.0
+  Nested system-manual reference: the expanded form of the resident procedures
+  prompt — progressive disclosure, responsiveness and side-effect authorization,
+  the daemon workflow methodology, depositing work, idle/lifecycle, skill
+  routing, deliverables, artifact sharing, and issue reporting. Route via
+  `system-manual` when it is unclear whether this is the right node.
+version: 1.4.0
 tags: [lingtai, system-manual, procedures, progressive-disclosure, responsiveness, deliverables, issue-reporting]
-last_changed_at: "2026-07-27T17:02:00-07:00"
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/procedures/procedures.md
@@ -24,14 +19,10 @@ maintenance: |
 
 # Procedures Manual
 
-The resident `procedures` prompt is the compact action checklist every LingTai
-agent keeps in memory. This reference is its expanded form. Read it when the
-short procedure tells you *what* to do but you need the routing logic, examples,
-edge-case discipline, or deliverable checklist behind it.
-
-This file is a **nested skill-reference owned by `system-manual`**, not a top-level catalog skill.
-Start at `system-manual` when routing is unclear; return here for the expanded
-action discipline.
+This is the expanded form of the resident `procedures` action checklist — a
+nested skill-reference owned by `system-manual`, not a top-level catalog skill.
+Read it when the short procedure tells you *what* to do but you need the routing
+logic, edge-case discipline, or deliverable checklist behind it.
 
 ## 1. Progressive disclosure
 
@@ -54,61 +45,35 @@ not bloat the resident prompt with one-off details.
 
 ### Tool-result digestion
 
-Progressive disclosure applies to tool results as much as to manuals. A raw tool
-result is useful while you inspect it; after you have consumed it and no longer
-need the raw text visible, the better active-context form is an index-style
-summary. Strongly prefer summarizing already-digested completed tool results
-regardless of length unless you still need raw details for inspection, quotation,
-or comparison. This reduces token per API call and helps cache/continuation
-efficiency. Batch already-digested results instead of discharging each
-immediately when batching is practical. If an adapter/provider comment is present,
-follow its adapter-specific summarize rules on top of these general ones.
+Progressive disclosure applies to tool results as much as to manuals. The
+summarize cadence itself is resident (summarize already-digested results, batch
+rather than discharging each one); the addition here: **if an adapter/provider
+comment is present, follow its adapter-specific summarize rules on top of the
+general ones.**
 
 The first economy move is to avoid pulling bulky raw output into main context at
 all. Bulky, mechanical, or repetitive work — full test suites, large log scans,
-large diffs, issue sweeps, batch edits/validation — should usually be delegated to
-a daemon (`claude-p` or an appropriate daemon body): frame the task, give exact
-paths/commands and the expected artifacts, then review the daemon's concise report
-instead of ingesting noisy output you would only have to summarize later. Use
-daemons to keep the raw bulk out of main context; use summarize for the bulk that
-already landed there. See `## 3. Use the right body` for the full daemon workflow
-methodology.
+large diffs, issue sweeps, batch edits/validation — belongs in a daemon: frame the
+task, give exact paths/commands and the expected artifacts, then review the
+concise report. Use daemons to keep raw bulk out of main context; use summarize
+for the bulk that already landed there. §3 owns the daemon workflow methodology.
 
 ### Delayed summarization reconstruction threshold
 
-Summarize records compact replacements in runtime history immediately, but
-provider-side reconstruction is deliberately delayed. Below the full-context
-boundary, keep working: pending summarized history is not a failure, and
-`refresh` is reserved for emergencies (broken/stale context), never a way to
-force a rebuild.
-
-`reference/summarize-manual/SKILL.md` §3a owns this mechanism in full — the 0.85
-`context.rebuild` stamp and the one proactive `context(action="rebuild")` call
-it permits, the 1.0 once-per-episode forced provider replay, the
-`reconstruction.warning`, the persistent overflow `Molt IMMEDIATELY` line, and
-the task-boundary molt threshold. The public rebuild is the one active full
-reconstruction: canonical prompt sources first, pending/new summaries second,
-provider replay last; bare `{}` remains valid with zero pending. Do not loop
-rebuild/summarize. If summarize or a rebuild still cannot bring context below
+`context-manual` → `reference/summarize-manual/SKILL.md` §3a owns this mechanism
+in full (the 0.85 stamp, the 1.0 forced replay, the reconstruction warning, the
+persistent-overflow line, the task-boundary threshold). The procedural invariants:
+pending summarized history is not a failure, `refresh` is not a way to force a
+rebuild, do not loop rebuild/summarize, and if you still cannot get below
 `0.75 * context_window`, tend durable stores and molt deliberately.
 
 ## 2. Action and responsiveness
 
-When need arises, act. If you can do the task safely, do it; if a tool fails, try
-another; if capability is missing, learn, install, delegate, or spawn. Do not use
-uncertainty as a reason to stall when evidence can be gathered.
+When need arises, act — the acknowledge/progress-message/report-blockers
+discipline is resident. Two things it does not spell out:
 
-For human-facing work:
-
-- Acknowledge human instructions promptly on the same channel.
-- If the next action may take more than a few seconds, send a short progress
-  message first with the communication tool directly. When a notification
-  preview is not enough, read the producer channel first — the conditions are
-  listed in `reference/substrate-manual/SKILL.md` §4.
-- During long work, report meaningful progress, blockers, or completion evidence.
-- Never reply to humans via diary text.
-- Do not infer approval for external side effects when standing rules require
-  explicit confirmation.
+- When a notification preview is not enough, read the producer channel first;
+  the conditions are listed in `reference/substrate-manual/SKILL.md` §4.
 - Before delegating a PR, diff, or implementation for GLM/Claude/daemon
   review, re-check recent human-channel instructions for missed scope,
   boundary, or authorization changes. Use the producer channel, not memory
@@ -136,22 +101,10 @@ that tool's manual.
 
 ### Daemon workflow methodology
 
-Protect the main agent's context and use tokens deliberately. The parent agent
-should stay in the strategic seat: define the objective, negate the first plan
-before acting, design the workflow, choose the bodies, and synthesize the result.
-Daemons should carry the execution: file scans, deterministic transformations,
-read-only reviews, batch conversion, log mining, and other noisy work whose
-details would pollute the main context. Be proactive rather than waiting for an
-explicit delegation request: if the useful output is a conclusion or artifact,
-not the full transcript, isolate the work in a daemon.
-
-Daemon turns do not carry the full resident system prompt, so they are often the
-more token-efficient body for temporary exploration. Choose the daemon/model by
-exercising judgment about the task: match capability, cost, latency, privacy, and
-expected output to the work instead of blindly mirroring the parent. When the
-human gives an explicit instruction about which daemon/model to use, follow it.
-
-Use this methodology for substantial daemon work:
+The resident prompt owns the framing (parent stays strategic, daemons carry
+noisy execution, daemon turns carry no resident prompt so choose the model by
+judgment, follow an explicit human instruction about which daemon/model to use).
+This section owns the *methodology* for substantial daemon work:
 
 1. **Plan in pad first.** Record the objective, assumptions to test, daemon task
    split, expected artifacts, stop criteria, and who/what waits on the result. If
@@ -173,14 +126,9 @@ Use this methodology for substantial daemon work:
    daemon transcript back into the main conversation.
 
 Daemon usage is cultivated from observed practice, not mandated by a daemon-first
-rule. Watch how humans route work to daemons and subagents — which tasks they hand
-off, what they correct, and what they approve or reject — and treat that as the
-training signal for your own routing. After a meaningful daemon workflow, deposit
-the lesson into the layer that fits its lifetime: pad for active workflow state,
-lingtai/character for durable operating style, knowledge for private project facts
-and patterns, skills for reusable procedures. The parent remains responsible for
-framing, review, synthesis, and human-facing decisions; the daemon protects the
-main context by executing bounded work.
+rule: watch how humans route work to daemons and subagents — which tasks they hand
+off, what they correct, what they approve — and treat that as the training signal
+for your own routing. Depositing the lesson afterwards is §4.
 
 Tool results may carry `_advisory.type == "duplicate_tool_call"` when the same
 semantic tool call repeats more than the free-pass threshold. This is
@@ -193,17 +141,14 @@ same call.
 
 ## 4. Write skills and knowledge as you work
 
-After non-trivial work, deposit the grain:
+After non-trivial work, deposit the grain into the layer that fits its lifetime
+— the pad / knowledge / skill / character routing is resident, and `psyche-manual`
+carries the canonical store table. What this section adds:
 
-- Active state and next steps → pad.
-- Private durable facts, local paths, decisions, journals → knowledge.
-- Reusable workflow/checklist/script → skill.
-- Stable changes in identity, relationships, or capabilities → character.
-- Broadly useful skill → consider publishing/shared library, if appropriate and
-  authorized.
-
-Before authoring skills, read `skills-manual`. Before authoring knowledge, read
-`knowledge-manual`. Do not put private project facts into a portable skill.
+- A broadly useful skill is worth publishing to a shared library, if appropriate
+  and authorized.
+- Before authoring skills read `skills-manual`; before authoring knowledge read
+  `knowledge-manual`. Do not put private project facts into a portable skill.
 
 ## 5. Idle, sleep, and lifecycle procedure
 
@@ -230,14 +175,10 @@ lifecycle.
 
 ## 6. Molt and durable stores
 
-**The molt procedure lives in `context-manual`, not here.** It owns durable-store
+**The molt procedure lives in `context-manual`, not here** — durable-store
 tending, the session-journal / molt-history record, the successor summary, and
-the consequential-handoff templates. Read it before molting — while context is
-still cheap, not at the last moment.
-
-The invariant in this procedures reference is routing: do not reconstruct molt
-mechanics here. For the checklist, templates, and summary rules, go to
-`context-manual`.
+the consequential-handoff templates. Read it before molting, while context is
+still cheap. Do not reconstruct molt mechanics in this reference.
 
 ## 7. Skill routing
 
@@ -245,19 +186,11 @@ The situation→manual table is resident in `procedures`, and the `system-manual
 router table owns routing into this manual's sibling references. Do not maintain
 a third copy here.
 
-Read the named manual before using tools whose developer instructions require it
-(e.g. bash, daemon, skills, knowledge, MCP, web browsing).
-
 ## 8. Web, files, media, and local artifacts
 
-Use existing producer/tool capabilities before inventing workflows:
-
-- For web fetching/search/scraping, read `web-manual` before using web search
-  or ad-hoc scraping.
-- For image understanding, use the `vision` skill/tool route.
-- For shell audio/media work, load the relevant media/listen/minimax skill.
-- For tricky file encodings, large files, binary-like data, or careful edit
-  workflows, read `file-manual`.
+Use existing producer/tool capabilities before inventing workflows — the
+`system-manual` router names the owner for web (`web-manual`), images (`vision`),
+audio/media, and files (`file-manual`).
 
 When giving humans local artifacts, include a usable path and a short summary.
 Do not expose private internal IDs as if they are user-accessible artifacts.
@@ -266,7 +199,8 @@ Do not expose private internal IDs as if they are user-accessible artifacts.
 
 For substantial human-facing deliverables—design previews, dashboards, readiness
 matrices, PR/issue triage, research memos, before/after comparisons—prefer
-standalone HTML unless the human asks otherwise.
+standalone HTML unless the human asks otherwise; plain text stays best for quick
+acknowledgements, short status, small diffs, or explicit text requests.
 
 Checklist:
 
@@ -277,9 +211,6 @@ Checklist:
 - clear risks/blockers/next steps;
 - no secrets or private tokens;
 - path and summary in the message to the human.
-
-Plain text is best for quick acknowledgements, short status, small diffs, or
-explicit text requests.
 
 ## 10. Sharing artifacts and reports
 

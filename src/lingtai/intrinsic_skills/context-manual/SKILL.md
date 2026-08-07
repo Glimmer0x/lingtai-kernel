@@ -1,9 +1,9 @@
 ---
 name: context-manual
 description: |
-  Router and operational guide for the context tool — molt, tool-result summarize/rebuild, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to compact or rebuild your provider context; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls and keep_last. Routes consequential molt handoffs to assets/molt-template.md and summarize/rebuild procedure to reference/summarize-manual, keeping routine guidance compact.
-version: 2.0.0
-last_changed_at: 2026-08-07T00:00:00-07:00
+  Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
+version: 2.1.0
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
@@ -17,8 +17,6 @@ maintenance: |
 
 This manual is the router for `context` operations — `molt`, `summarize`, and `rebuild`. Keep routine guidance here; load the supporting asset or reference only when you need the full scaffold or the detailed summarize/rebuild procedure.
 
-Your name is not a context operation: use `system(action='name_set')` / `system(action='name_nickname')`.
-
 ## Reference catalog
 
 | Reference | When to load |
@@ -27,9 +25,9 @@ Your name is not a context operation: use `system(action='name_set')` / `system(
 
 ## Full context rebuild
 
-`context(action="rebuild", input={}, reasoning="...")` is the **one active full reconstruction operation**. Every call first re-reads and recomposes all canonical system-prompt sources (configured and durable identity, base prompt, covenant, packaged layers, rules, Pad body and pinned references, the enabled Skills and Knowledge catalogs, brief, comment, tools/runtime guidance), then applies already-pending summaries, then asks the provider to replay the new prompt/history. Bare `{}` is valid and still reconstructs/replays when zero summaries are pending. With `items`, prompt composition still happens first; the new summaries are then recorded/applied before provider replay.
+`context(action="rebuild", ...)` is the **one active full reconstruction operation**: recompose every canonical prompt source → apply pending summaries → provider replay. The tool description and the `rebuild` schema carry the exact contract, including that bare `{}` is valid.
 
-Generic durable mutations do not hot-load: use `file.write` for full-file create/overwrite and `file.edit` for exact replacement, then call `context.rebuild` when changes must apply now. That is the only mutation path for all four durable stores — there is no per-store append, info, or reload action. Passive refresh and molt invoke the same internal reconstruction contract while retaining their distinct lifecycle effects. Do not loop rebuild.
+The fact that is only here: **generic durable mutations do not hot-load.** Write with `file.write`/`file.edit`, then rebuild when the change must apply now — that is the only mutation path for all four durable stores (no per-store append, info, or reload action). Passive refresh and molt invoke the same internal reconstruction contract with their own lifecycle effects. Do not loop rebuild.
 
 ## Asset catalog
 
@@ -42,9 +40,9 @@ Generic durable mutations do not hot-load: use `file.write` for full-file create
 
 Molt is yours to perform. The covenant teaches the philosophy (§V); this is the recipe.
 
-**Molt is an easy, simple task. Do it regularly if you'd like to.** Save anything you need to pad, lingtai, knowledge, and skills beforehand, then molt. No need to wait for the context window to fill up — molting early saves tokens. Keep good notes in the stores so you don't lose your way across molts.
+Save anything you need to pad, lingtai, knowledge, and skills beforehand, then molt — there is no need to wait for the context window to fill up, and molting early saves tokens.
 
-**The four stores are the real persistence. The summary is the briefing on top of them.** If you molt without tending the stores, the next you wakes with only the briefing — no character evolution, no pad state, no new knowledge, no new skills. Tend the stores *first*, every time.
+**Tend the stores first, every time.** The four stores are the real persistence and the summary is only the briefing on top of them: molt without tending them and the next you wakes with the briefing alone — no character evolution, no pad state, no new knowledge, no new skills.
 
 ## 2. Store-Tending Rhythm
 
@@ -52,17 +50,14 @@ For `lingtai` and `knowledge`, tending happens *once* per task, at the end — n
 
 Pad has a different rhythm — update it whenever the index meaningfully changes. See §5 below.
 
-All four durable stores are taught by manuals loaded through the one `psyche` root (pad + lingtai + knowledge + skills = psyche); generic mutation belongs to `file`:
-
-- **`lingtai`** — `psyche(action="lingtai", input={}, reasoning="load identity guidance")` explains identity modes and tending. Mutate `system/lingtai.md` with `file.write`/`file.edit`; no hot load.
-- **`pad`** — `psyche(action="pad", input={}, reasoning="load Pad guidance")` explains the Pad body and the pinned-reference list. Mutate `system/pad.md` and `system/pad_append.json` with `file.write`/`file.edit`; both take effect only after reconstruction.
+All four durable stores are taught by manuals loaded through the one `psyche` root (pad + lingtai + knowledge + skills = psyche); generic mutation belongs to `file`. §3 below is the per-store how-to.
 
 ## 3. Step 1 — Tend the Four Durable Stores and Session Journal
 
 - **lingtai** — carry forward your complete identity in `system/lingtai.md` using `file.write` (full rewrite) or `file.edit` (exact replacement). Read `psyche(action="lingtai", input={}, reasoning="...")` for forced/self-evolve behavior.
 - **pad** — keep the living index in `system/pad.md` via `file.write`/`file.edit`; edit `system/pad_append.json` the same way for the durable pinned-reference list. See `psyche(action="pad", input={}, reasoning="...")`.
 - **knowledge** — write to `knowledge/<name>/KNOWLEDGE.md` for long-term private context using `file.write`/`file.edit`.
-- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then call `context(action="rebuild", input={}, reasoning="rescan skills catalog")` to re-scan the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
+- **skills** — write `.library/custom/<name>/SKILL.md` (with YAML frontmatter: `name`, `description`, `version`) for any reusable procedure the next you (or a peer) might need, then rebuild to refresh the catalog. Share by sending the skill source/artifact so peers install it into their own `.library/custom/<name>/` and refresh; use `../.library_shared/<name>/` only as an explicit opt-in local-network shared root.
 - **session journal** — append a substantial sub-entry under `knowledge/session-journal/` describing what you did this session. See §4 for the full practice.
 
 All five happen *before* the molt call. They are not optional. Without them, the molt sheds everything.
@@ -135,11 +130,8 @@ own strict `input` object, and a root `reasoning`. The four actions are `molt`,
 false: `context` results are small (short-result profile), and summarizing a
 `manual` call would drop the exact procedure you called it for.
 
-Note the two levels that share the word: the **action** `summarize` is the
-domain operation that records compact replacements for bulky tool results, while
-the optional **root** `summarize` boolean is the unrelated result-presentation
-control. They never mean the same thing, and no action takes `summarize` as
-input.
+(The action-`summarize` versus root-`summarize` distinction is stated in the
+resident tool description; no action takes `summarize` as input.)
 
 `context` owns only your context. Your name is `system(action='name_set')` /
 `system(action='name_nickname')`. Your four durable stores share one read-only root: `psyche(action="pad"|"lingtai"|"knowledge"|"skills"|"manual", input={}, reasoning="...")` returns the matching manual and nothing else. Use `file.write`/`file.edit` for their durable files, then rebuild explicitly when needed.
@@ -150,24 +142,18 @@ validates it → only then does the molt proceed. `session_journal_path` is a
 **mandatory** structured argument for agent-initiated molt. If it is missing or
 the journal fails validation, the molt is **refused before any context is shed**
 and your `molt_count`/history are untouched — you get an actionable recovery
-message instead. The validator checks (intentionally simple, a signpost not a
-grader):
-
-- The path is inside your workdir and resolves to
-  `knowledge/session-journal/<entry>/KNOWLEDGE.md` — a per-segment sub-entry,
-  **not** the parent index `knowledge/session-journal/KNOWLEDGE.md`, and not a
-  scratch file like `tmp/...`.
-- The file exists, is non-empty, and is UTF-8 text.
-- It has valid YAML frontmatter with at least `name` and `description`.
-- The frontmatter carries the session-journal marker `type: session-journal`
-  (or `session_journal: true`) — see the template in §4. A generic knowledge
-  file without the marker is rejected.
+message instead. The validator (a signpost, not a grader) checks what the schema
+describes: path inside your workdir resolving to
+`knowledge/session-journal/<entry>/KNOWLEDGE.md` (the per-segment sub-entry, not
+the parent index and not a scratch file), non-empty UTF-8, frontmatter with
+`name` + `description`, and the marker `type: session-journal` or
+`session_journal: true` — see the template in §4.
 
 The accepted path is recorded in the molt result, the persisted summary
 frontmatter (`session_journal_path:`), and the post-molt notification, so later
 recovery and audits can see which journal backed each molt.
 
-The `summary` is the only *conversation-layer* thing the next you will see. Aim for ~10,000 tokens — be thorough when state is complex. The summary is not a recap of conversation. It is your charge to the self that comes after you — anchored in the four stores, which are already waiting in the fresh session.
+The `summary` is the only *conversation-layer* thing the next you will see. Aim for the ~10,000 tokens the schema suggests. The summary is not a recap of conversation. It is your charge to the self that comes after you — anchored in the four stores, which are already waiting in the fresh session.
 
 For a routine molt, include:
 
@@ -187,32 +173,33 @@ Quick routing:
 | Consequential molt / successor handoff — long-running task, multiple collaborators, pending human commitments, open worktrees/artifacts, or any handoff the next you could not reconstruct quickly | Read `assets/molt-template.md` from this skill directory; use its full scaffold and checklist. Fill every section; write `None` rather than omitting one. |
 | Unsure whether the handoff is complex | Use the asset; extra structure is cheaper than a bad handoff. |
 
-Before you call `context(action="molt", ...)`, always verify at minimum:
+Before you call `context(action="molt", ...)`, verify at minimum:
 
-- The session-journal sub-entry for the just-finished segment exists and is
+- The session-journal sub-entry for the just-finished segment exists and was
   written *before* the summary (§4) — it is the narrative the summary points
   back to, and its path is the validated `session_journal_path`.
-- Durable stores and session journal were updated where needed before writing the summary.
-- Every outstanding task has an explicit next action.
-- Collaborators, channels, approvals, and key paths are named where relevant.
-- Active background work is listed or explicitly absent.
+- Durable stores were tended before the summary was written.
 - The first five minutes after wake are obvious.
 
-**`keep_tool_calls`** — optional list of tool-call IDs to preserve across molt. Each named pair (tool_use + tool_result) is replayed into the fresh session right after the summary, in the order you list them. If any ID is not found, the molt is refused. Keep this list short — the durable stores are the primary persistence.
+`assets/molt-template.md` carries the full pre-molt verification checklist
+(outstanding tasks, collaborators, background work, key paths).
 
-**`keep_last`** — optional integer (default: 20). Requested minimum number of recent conversation entries to preserve. The retained suffix may expand backward to include one adjacent assistant tool-call/result batch whole, so it can contain more entries when needed to avoid splitting that batch. These entries are replayed so the post-molt self retains recent context. Pass 0 to explicitly disable (archive everything). Overlapping entries with `keep_tool_calls` are deduplicated.
+**`keep_tool_calls`** — see the schema description for the exact semantics (refusal on an unknown ID, replay order). Keep the list short: the durable stores are the primary persistence.
+
+**`keep_last`** — see the schema description (default 20, backward expansion to keep a tool-call batch whole, `0` to archive everything, dedupe against `keep_tool_calls`).
 
 ## 7. Context Pressure Reminder
 
 Context pressure is agent state, not a dismissible notification. Tool results surface a natural-language reminder under `_meta.agent_meta.agent_state.context.molt` only after context has stayed high for several consecutive fresh provider rounds (the sustained-pressure threshold is 85%). It rides on the current `agent_meta` snapshot (carried on the designated final result of each batch; restamped there while active) so the reminder persists. The field name is historical: the reminder is a context-pressure action, not an early staged molt order or a machine-readable tag block.
 
-When this reminder appears, batch already-digested noisy history into one `context(action='summarize')` pass rather than summarizing a small piece at a time, then run one `context(action='rebuild')` to recompose all canonical prompt sources, apply summaries, and request provider replay — the summarize cadence, rebuild semantics, and recovery target are owned by this manual's own `reference/summarize-manual/SKILL.md`. The molt decision is yours: if a batched summarize/rebuild pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
+When this reminder appears, follow the urgent cadence in `reference/summarize-manual/SKILL.md` (which owns the summarize cadence, rebuild semantics, and recovery target). The molt decision is yours: if a batched summarize/rebuild pass still leaves context above 85%, stop repeating summarize, tend durable stores, and molt deliberately. If context falls below 85% but stays above the recovery target, continue only when the current task still needs the carried context; otherwise molt at a natural task boundary.
 
 ### Cache-miss budget
 
-A second `agent_meta.agent_state.context.molt` reminder guards a soft **cache-miss token budget** — a since-last-molt cap on total cache-miss (uncached input) tokens. The cache-miss total is `max(input_tokens - cached_tokens, 0)` from the same cumulative/restored totals behind `agent_meta.agent_state.token_usage.session` — it accumulates since your last molt and SURVIVES a refresh/restart (it is not the since-refresh runtime delta), so a refresh does not reset the remaining budget. The budget defaults to **1,000,000** tokens and is set via `manifest.cache_miss_budget` in init.json, or overridden at runtime by the `LINGTAI_CACHE_MISS_BUDGET` env var (positive int; read live at every budget resolution, so your `env_file` + refresh applies it without an init.json edit — an invalid or non-positive value silently falls back to the configured budget).
+The soft **cache-miss token budget** (default 1,000,000 via `manifest.cache_miss_budget`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Two details only documented here:
 
-Once the since-last-molt cache-miss total reaches or exceeds the budget, tool results restamp `_meta.agent_meta.agent_state.context.molt` with `cache miss budget {N} reached, molt now`, and `_meta.agent_meta.agent_state.context` reports `cache_miss_budget` (the effective budget — the `LINGTAI_CACHE_MISS_BUDGET` env override if set, else the configured one) and `cache_miss_tokens` (the current cache-miss total). If the sustained context-pressure reminder above is also active, both warnings are preserved in `context.molt` (the budget line is appended). This is a soft cap — nothing is blocked — but the recommended action is to **molt now**: a large cache-miss total means the session keeps re-sending uncached context, so shedding it via molt restores cache efficiency.
+- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution, so `env_file` + refresh applies it without an init.json edit; an invalid or non-positive value silently falls back to the configured budget). `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`.
+- The total **survives a refresh/restart** — it is not the since-refresh runtime delta, so refreshing does not reset the remaining budget. If the sustained context-pressure reminder is also active, both warnings are preserved in `context.molt`.
 
 ## 8. Post-Wipe Recovery
 

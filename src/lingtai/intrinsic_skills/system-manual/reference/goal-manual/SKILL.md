@@ -145,17 +145,14 @@ the configured delay, the kernel publishes one short event into
 The reminder is intentionally brief. The actual goal and instructions stay in
 `goal.json`. Dismissing the reminder clears only the system event:
 
-```text
-notification(action="dismiss_ref",
-             input={"ref_id": "goal:<id>", "channel": null,
-                    "force": null, "reason": null},
-             reasoning="the goal reminder is handled")
-```
+Same call shape as the goal-request dismiss above, with
+`ref_id="goal:<id>"`.
 
-Dismissing the reminder does not cancel the goal. If the goal remains active, a
-fresh idle interval can generate another reminder. If `goal.json` is deleted or
-marked inactive/done while a reminder is already present, the next IDLE goal
-check clears that stale `goal.reminder` system event.
+Cancellation and completion semantics are above, under "Protected dismiss
+behavior": dismissing a reminder never cancels the goal, so if the goal remains
+active a fresh idle interval can generate another reminder. If `goal.json` is
+deleted or marked inactive/done while a reminder is already present, the next
+IDLE goal check clears that stale `goal.reminder` system event.
 
 ## Cross-reference
 

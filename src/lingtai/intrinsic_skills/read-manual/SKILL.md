@@ -1,7 +1,7 @@
 ---
 name: read-manual
-description: "Complete guide for the `file` tool's read action: continuation workflow, next_offset pagination, line_truncated handling, runtime tool-result spill vs read-level pagination, 100k read default / 200k runtime hard cap, and when to use bash/grep/sed for truncated lines. Use when implementing complete file-read workflows, handling large files, or understanding cap and truncation semantics."
-version: 0.1.0
+description: "Deep dive for the `file` tool's read action: pagination, `next_offset` continuation, `line_truncated`, the 100k default / 200k hard cap, and when to switch to bash/grep/sed."
+version: 0.2.0
 tags: [read, files, continuation, truncation, cap, pagination]
 last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
@@ -20,11 +20,9 @@ results.
 
 This is a nested reference under `file-manual`, not a separate manual action:
 `file(action="manual")` returns `file-manual`, which points here for read depth.
-For basic action choice (read vs write vs edit vs grep vs glob), UTF-8 policy,
-the `summarize` guidance, and the shared manual-versus-ordinary-call rule, see
-`file-manual` — including that repeating an identical manual call is an error
-loop, not progress. After this manual returns, continue the original task with
-an ordinary read call.
+`file-manual` owns basic action choice, the UTF-8 policy, the `summarize`
+guidance, and the manual-versus-ordinary-call rule (including that repeating an
+identical manual call is an error loop, not progress).
 
 ## Two caps
 
@@ -35,8 +33,7 @@ an ordinary read call.
 
 `max_chars` requests a smaller or larger chunk for one call. Values above the
 hard ceiling are clamped to 200 000; the effective value appears as `cap_chars`
-when the result is truncated. Do not assume the old 10 000- or 8 000-character
-limits from earlier versions.
+when the result is truncated.
 
 These two caps act at different layers:
 
@@ -62,33 +59,19 @@ This replaces a dedicated `read(dry_run=true)` mode.
 python - <<'PY'
 from pathlib import Path
 p = Path('/path/to/file')
-count = max_len = max_line = 0
-with p.open('r', encoding='utf-8', errors='replace') as f:
-    for i, line in enumerate(f, 1):
-        count = i
-        if len(line) > max_len:
-            max_len, max_line = len(line), i
-print({'bytes': p.stat().st_size, 'lines': count,
-       'longest_line': max_line, 'longest_chars': max_len})
+lines = p.read_text(encoding='utf-8', errors='replace').splitlines()
+print({'bytes': p.stat().st_size, 'lines': len(lines),
+       'longest_chars': max(map(len, lines), default=0)})
 PY
 ```
 
-Use the result to choose the window:
-
-- `offset` — where to begin or resume (1-based).
-- `limit` — how many lines to request; a tight `limit` (e.g. `50`) narrows the
-  window, and a large `offset` with a small `limit` reads an arbitrary slice.
-- `max_chars` — per-call character budget (default 100k, max 200k).
+Use the result to choose the window: `offset` (1-based start/resume), `limit`
+(lines requested), `max_chars` (per-call budget).
 
 ## Complete-content workflow
 
-For any file that may exceed the cap:
-
-1. Call `read` with the desired `offset` (default 1) and `limit`.
-2. If `truncated` is absent or `false`, the whole requested range was returned —
-   done. If `true`, continue.
-3. Re-call with `offset=next_offset`, keeping the same `limit`, until
-   `truncated` is absent or `false`.
+For any file that may exceed the cap, page with `offset=next_offset` and the
+same `limit` until `truncated` is absent or false:
 
 ```python
 offset = 1
@@ -133,15 +116,6 @@ To inspect a long line fully, use targeted local processing instead of `read`:
 sed -n '42p' /path/to/file                        # print one specific line
 awk '{print NR, length($0)}' /path/to/file | head -20   # characters per line
 grep -n "pattern" /path/to/file                   # search within a long line
-
-# Extract a byte range from a long line
-python - <<'PY'
-with open('/path/to/file') as f:
-    for i, line in enumerate(f, 1):
-        if i == 42:
-            print(line[0:2000], "...", line[-500:], sep="\n")
-            break
-PY
 ```
 
 ## Quick checklist
@@ -150,15 +124,12 @@ Before calling `read`:
 
 - Large file? Probe with `limit=100`–`200`, or run the preflight above.
 - Need the whole file? Use the continuation loop.
-- `line_truncated=true`? Switch to `bash`/`grep`/`sed`/Python.
-- `status=spilled`? Read the `spill_path` artifact or reduce `limit`.
+- Escape hatches: `line_truncated=true` → `bash`/`grep`/`sed`; `status=spilled`
+  → read the `spill_path` artifact or reduce `limit`.
 - Need a specific region? Pass `offset` and a tight `limit`.
 
 ## Manual versus ordinary reads
 
-An ordinary read is `file(action="read", input={...}, reasoning="...")`;
-`action` is always required. Use `file(action="manual", input={})` only as a
-one-time entry — it returns `file-manual`, which points here for the read depth
-above. After the manual returns, continue the original task with an ordinary
-read; do not repeat the same manual call. Repeating it is an error loop, not
-progress.
+`file-manual` owns this rule: `file(action="manual")` is a one-time entry.
+After it returns, continue the original task with an ordinary read; repeating the
+same manual call is an error loop, not progress.

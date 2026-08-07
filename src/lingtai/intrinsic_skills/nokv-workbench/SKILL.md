@@ -4,11 +4,9 @@ name: nokv-workbench
 description: >
   Thin routing manual for NoKV-controlled workbenches. Use when an agent is
   asked to persist task inputs, scripts, outputs, logs, provenance, or run
-  manifests through the `workbench_*` MCP tools instead of ordinary local
-  file writes. Covers MCP registration, directory layout, append and edit
-  discipline, conditional reads, cross-workbench queries, content-identified
-  commits, leased checkpoint snapshots with annotations, renewal, retirement,
-  discovery, point-in-time history reads, and durable restore-to-fork recovery.
+  manifests through the `workbench_*` MCP tools instead of ordinary local file
+  writes. The body covers registration, layout, write/read discipline, commits,
+  leased checkpoints, and restore-to-fork recovery.
 version: 0.5.0
 tags: [nokv, mcp, workbench, artifacts, provenance, snapshots, checkpoints, leases, restore]
 related_files:
@@ -234,12 +232,10 @@ that checkpoint** instead of its current state:
 {"id":"spedas-task-001","section":"outputs","path":"spectrum.csv","at_snapshot":"final-v1"}
 ```
 
-Historical `workbench_read` serves the checkpoint's bytes/text-lines. Reading a
-checkpoint whose lease has expired fails **loudly**. Expiry is terminal:
+Historical `workbench_read` serves the checkpoint's bytes/text-lines. Reading an
+expired checkpoint fails **loudly**, and expiry is terminal:
 expired checkpoints cannot be renewed, even if the background collector has not
-yet removed the pin. Re-mint from the current committed state when that is still
-useful; NoKV never revives a checkpoint whose historical records may already
-have been reclaimed.
+yet removed the pin — see "Expired is not the same as data lost" below.
 
 ## Restore to a new workbench
 
@@ -259,13 +255,11 @@ entry whose `state` is `alive`, and resolve the name to its numeric
 }
 ```
 
-Keep these exact three values for the duration of the workflow. If the MCP
-transport, NoKV server, or Agent connection restarts, resend the same request
-with the same numeric `snapshot_id` and `destination_id`. Do not re-resolve a
-checkpoint name during a retry: an alias can be rebound, while the numeric id
-pins the original request. A retry can return `RestoreInProgress`; use bounded
-backoff and resend the exact request. No separate LingTai restore state or
-multi-step copy protocol is needed.
+Keep these exact three values for the duration of the workflow: on any restart,
+resend the identical request with the same numeric `snapshot_id` and
+`destination_id`. Do not re-resolve a checkpoint name during a retry
+— an alias can be rebound, while the numeric id pins the original request.
+No separate LingTai restore state or multi-step copy protocol is needed.
 
 Success means `state="complete"` and `cleanup_pending=false`. The response
 contains the deterministic `operation_id`, source and destination workbench
@@ -327,9 +321,10 @@ MCP failures preserve top-level `status`, `code`, `message`, `retryable`, and
 | `SyncLogArchiveFailed` | Preserve `details.committed`. Resend the exact request when `retryable=true`; never invent a new destination to work around an ambiguous committed result. |
 | `CapabilityMismatch` | Stop deployment. The connected owner does not support `restore_to_fork_v1`; do not downgrade to a client-side copy. |
 
-Honor `retryable=false` even when a table entry otherwise permits a bounded
-retry. Preserve the original request on every retry; changing any of its three
-fields starts a different operation.
+Unless a row says **Stop**, preserve the exact request and retry with bounded
+backoff only when `retryable=true`; never re-resolve an alias during an exact
+retry. Honor `retryable=false` even when a row otherwise permits a retry —
+changing any of the three request fields starts a different operation.
 
 ### Expired is not the same as data lost
 
@@ -352,11 +347,9 @@ For the MVP, use a parent-created workbench and child-filled files:
 - Multiple writers may `workbench_append` to the same log file — appends are
   serialized by the server with automatic retry. Everything else stays
   disjoint: assign prefixes such as `outputs/agent-a/` and never let two
-  agents `put_file` or `edit` the same path. Same-path `put_file` with
-  `replace=false` intentionally fails with an exists conflict; `replace=true`
-  on a missing target intentionally fails with not-found. Neither mode is
-  upsert. Treat either race as a coordination bug, not a reason to flip the
-  flag and retry blindly.
+  agents `put_file` or `edit` the same path. A same-path collision fails by
+  design (see step 2 — neither `replace` mode is upsert); treat that race as a
+  coordination bug, not a reason to flip the flag and retry blindly.
 
 ## Read and search
 

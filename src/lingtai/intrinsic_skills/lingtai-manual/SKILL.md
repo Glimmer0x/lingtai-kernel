@@ -33,19 +33,12 @@ and no compatibility alias.
 
 ## Change durable identity with file
 
-- Full rewrite: `file(action="write", input={"file_path":
-  "system/lingtai.md", "content": <your complete identity>}, reasoning="...")`.
-- Exact replacement: `file(action="edit", input={"file_path":
-  "system/lingtai.md", "old_string": <exact>, "new_string": <replacement>,
-  "replace_all": null}, reasoning="...")`.
-
-A full rewrite must carry forward everything you intend to keep. An exact edit
-is appropriate for a bounded, unambiguous change. Neither operation hot-loads
-or otherwise mutates the current prompt.
-
-To apply the durable change now, call one explicit
-`context(action="rebuild", input={}, reasoning="apply durable identity")`.
-Otherwise it takes effect on passive refresh/molt reconstruction.
+Your durable identity is an ordinary file. Rewrite it with
+`file(action="write", input={"file_path": "system/lingtai.md", ...})` — carrying
+forward everything you intend to keep — or make a bounded, unambiguous change
+with `file(action="edit", ...)` on the same path. Neither hot-loads the prompt;
+apply with one `context(action="rebuild", ...)`. The full model is
+`psyche-manual` → "The one mutation model".
 
 ## Identity modes
 
@@ -62,5 +55,4 @@ and mechanical name/manifest `identity`. Names remain
 `system(action="name_set"|"name_nickname")`.
 
 Before molt, tend identity once when the task's lessons genuinely changed who
-you are; use `context-manual` for the journal/summary/molt procedure. LingTai has
-no settings file. Manual results are short; leave root `summarize` false.
+you are; use `context-manual` for the journal/summary/molt procedure.

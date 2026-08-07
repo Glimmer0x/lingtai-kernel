@@ -5,7 +5,7 @@ description: >
   registry. Use the registry for names, defaults, behavior, ownership, and
   security notes.
 version: 1.0.0
-last_changed_at: "2026-07-24"
+last_changed_at: "2026-07-24T00:00:00Z"
 related_files:
 - ENVIRONMENT_VARIABLES.md
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
@@ -18,7 +18,7 @@ maintenance: |
 # Environment-variable registry router
 
 The canonical environment-variable reference is the repository-root
-[`ENVIRONMENT_VARIABLES.md`](../../../../../../ENVIRONMENT_VARIABLES.md).
+repo-root `ENVIRONMENT_VARIABLES.md`.
 
 Use that registry for the complete table, defaults, accepted values, scope,
 read/reload timing, invalid-value behavior, implementation owners, and security

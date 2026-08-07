@@ -88,16 +88,15 @@ testing showed REST prompt-prefix caching is sufficient. Resolution priority:
 
 ### Environment variables
 
-| Variable | Purpose | Accepted values | Default |
-|---|---|---|---|
-| `LINGTAI_CODEX_TRANSPORT` | Opt a Codex agent onto the WebSocket wire | `websocket` / `ws` (opt-in); `rest` / `http` / `https` (explicit REST); anything else → REST | unset → REST |
-| `LINGTAI_CODEX_WS` | Legacy boolean opt-in for the WebSocket wire | `1` / `true` / `yes` / `on` → websocket; anything else → REST | unset → REST |
-| `LINGTAI_CODEX_WS_EPOCH_RESET_TURNS` | Explicit WS response-chain epoch reset interval (turns); `0` disables the turn-count reset | non-negative integer | `0` |
+The Codex variables (`LINGTAI_CODEX_TRANSPORT`, `LINGTAI_CODEX_WS`,
+`LINGTAI_CODEX_WS_EPOCH_RESET_TURNS`, and the responses-trace pair) are
+registered with their accepted values and defaults in the repo-root
+`ENVIRONMENT_VARIABLES.md`, routed via `reference/environment-variables/SKILL.md`.
 
-These variables are read at session construction time (per process). The
-selector is deliberately opt-in: an inherited or accidentally-set variable
-never flips a Codex agent onto WebSocket unless the value is explicitly the
-opt-in value.
+Two behaviors worth holding here: they are read at session construction time
+(per process), and the selector is deliberately opt-in — an inherited or
+accidentally-set variable never flips a Codex agent onto WebSocket unless the
+value is explicitly the opt-in value.
 
 ## OpenAI adapter
 
@@ -128,33 +127,18 @@ custom/user-defined presets).
 
 `claude_code` and `kimi_code` are registered LLM providers whose adapters wrap
 local code-workspace CLIs (`ClaudeCodeAdapter`, `KimiCodeAdapter`) rather than
-speaking a wire protocol directly. They are valid main-agent/preset providers
-and are lazy-imported like every other adapter. They are **not** the daemon CLI
-backend axis: the daemon system can dispatch external coding CLIs as task
-subprocesses (`daemon-manual`), independent of these registered providers.
+speaking a wire protocol directly — valid main-agent/preset providers,
+lazy-imported like every other adapter. (Not the daemon backend axis; see above.)
 
 ### External CLI harnesses (daemon backends)
 
 The daemon tool runs external coding CLIs as task subprocesses through the
-`backend` axis (`daemon-manual`). Each CLI backend has its own small
-progressive-disclosure page under
-`daemon-manual` → `reference/cli-backends` — what it is, what LingTai uses it
-for, its subscription/auth model, its official docs, and the reserved
-harness-owned flags it refuses in `backend_options`. These pages are
-entrypoints, not flag catalogs; the installed CLI's live help remains the
-authority.
+`backend` axis. The index of backends, and one page per backend, live under
+`daemon-manual` → `reference/cli-backends/SKILL.md` (each page at
+`reference/cli-backends/reference/backends/<name>/SKILL.md`). Do not maintain a
+second backend list here.
 
-| Daemon backend | Page | Subscription/auth model | Official docs |
-|---|---|---|---|
-| `claude-p` / `claude-code` | `reference/backends/claude-p/SKILL.md` | Claude subscription (Pro/Max), CLI OAuth login | https://docs.anthropic.com/en/docs/claude-code |
-| `codex` | `reference/backends/codex/SKILL.md` | ChatGPT subscription (Plus/Pro), `codex login` or codex-pool | https://developers.openai.com/codex/ |
-| `opencode` | `reference/backends/opencode/SKILL.md` | provider-agnostic auth; OpenCode Go subscription via `OPENCODE_GO_API_KEY` | https://opencode.ai/docs/ |
-| `mimocode` / `mimo` | `reference/backends/mimocode/SKILL.md` | MiMo Code provider keys | https://github.com/XiaomiMiMo/MiMo-Code |
-| `qwen-code` / `qwen` | `reference/backends/qwen-code/SKILL.md` | Qwen provider config | https://github.com/QwenLM/qwen-code |
-| `oh-my-pi` / `omp` | `reference/backends/oh-my-pi/SKILL.md` | Oh-My-Pi provider keys | https://github.com/pi-coding-agent/pi-coding-agent |
-| `kimicode` / `kimi` | `reference/backends/kimicode/SKILL.md` | Moonshot AI keys | https://github.com/MoonshotAI/kimi-code |
-| `cursor` | `reference/backends/cursor/SKILL.md` | Cursor account/subscription login | https://docs.cursor.com/agent |
-
-Each backend page carries the same small `## Subscription & auth` section so
-the question "what do I need to pay for / how does LingTai connect" is
-answered per backend without reading the vendor's full billing docs.
+Each backend page carries the same `## Subscription & auth` section, so "what do
+I need to pay for / how does LingTai connect" is answered per backend without
+reading the vendor's full billing docs. These pages are entrypoints, not flag
+catalogs; the installed CLI's live help remains the authority.

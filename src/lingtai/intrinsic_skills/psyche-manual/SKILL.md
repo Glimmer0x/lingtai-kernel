@@ -44,9 +44,8 @@ molt, summarize, and rebuild belong to `context`, and your name belongs to
 | `psyche(action="skills", input={}, reasoning="load skills guidance")` | the skills manual | `.library/{intrinsic,custom}/` plus configured skills paths |
 | `psyche(action="manual", input={}, reasoning="load the routing table")` | this routing table | — |
 
-Every action takes a strict empty `input`, and root `reasoning` is required on
-every call. Any key inside `input` is rejected before the manual is even read, so
-there is nothing to pass and nothing to smuggle.
+Every action takes a strict empty `input`; any key is rejected before the manual
+is read.
 
 ## The one mutation model
 
@@ -58,16 +57,13 @@ durable content is ordinary text, so it is changed by the ordinary text tools.
 2. **Apply** it with one explicit
    `context(action="rebuild", input={}, reasoning="apply durable changes")`.
 
-File mutation never hot-loads the prompt. A durable change you have written but
-not rebuilt is real on disk and simply not yet visible in your context — that
-separation is what makes a batch of edits land atomically instead of one
-half-composed section at a time.
-
-A full rebuild re-reads and recomposes **all** enabled canonical sections once,
-applies pending summaries, and then requests provider replay. Passive
-reconstruction — `system(action="refresh", ...)` and molt — runs that same contract,
-so the four domains are preserved identically whichever path you take. You do
-not need a per-domain reload, and there is no per-domain reload to call.
+File mutation never hot-loads the prompt: a durable change written but not
+rebuilt is real on disk and simply not yet visible in your context — which is what
+makes a batch of edits land atomically instead of one half-composed section at a
+time. A full rebuild recomposes **all** enabled canonical sections once, applies
+pending summaries, then requests provider replay; passive reconstruction
+(`system(action="refresh", ...)` and molt) runs the same contract. There is no
+per-domain reload to call.
 
 Catalog upkeep is not yours to trigger either. Skills and Knowledge catalogs are
 rescanned and recomposed by that same reconstruction path (and at setup/refresh);
@@ -82,18 +78,17 @@ procedure.
   possibly referencing local paths, mail ids, or logs → **knowledge**.
 - A reusable procedure that would help any agent, not just you → **skills**.
 
-When the choice is genuinely unclear, read the two candidate manuals before
-writing; the domain manuals own that distinction in depth and this table does not
-restate it.
+When the choice is genuinely unclear, the domain manuals own that distinction in
+depth.
 
 ## `summarize`
 
-**Short-result.** Every psyche action returns one manual body. `summarize` is
-available at root but normally unnecessary here, and a summarized manual loses
-the exact procedure and constraints you called it for — leave it `false`.
+**Short-result.** Every psyche action returns one manual body, and a summarized
+manual loses the exact procedure you called it for — leave root `summarize`
+`false`. This is the family-wide rule; the domain manuals do not restate it.
 
 ## Settings
 
-`psyche` owns no settings file at either level: there is no
-`settings/psyche.json` and no `settings/psyche.<action>.json`. Nothing to
-configure, and an unrecognized file there is not read by this family.
+No manual in this family owns a settings file at either level — there is no
+`settings/psyche.json`, no `settings/psyche.<action>.json`, and no per-domain
+equivalent. Nothing to configure; an unrecognized file there is not read.

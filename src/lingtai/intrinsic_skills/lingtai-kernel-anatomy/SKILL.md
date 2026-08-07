@@ -7,8 +7,8 @@ description: >
   explains how an agent enters and descends that graph, how it pairs with the
   distributed CONTRACT.md interface-definition graph, and what to do when code
   and navigation disagree.
-version: 0.4.0
-last_changed_at: "2026-07-28T00:00:00Z"
+version: 0.5.0
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - ANATOMY.md
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
@@ -27,13 +27,8 @@ The repository-root [`ANATOMY.md`](../../../../ANATOMY.md) is the normative
 component-grain gate, link/pairing semantics, and maintenance contract. Root
 [`CONTRACT.md`](../../../../CONTRACT.md) owns the governed-component pairing,
 ownership, mutual-progressive-disclosure, and fail-loud mismatch rule. Read
-them there; do not maintain a competing convention in this skill.
-
-- **ANATOMY** describes where code lives and how it composes. Code is the
-  structural source of truth.
-- **CONTRACT** defines each layer's Core, Ports, Adapters, promises, and
-  expected agent behavior. Contract is normative when implementation behavior
-  disagrees.
+them there; do not maintain a competing convention in this skill — including
+the ANATOMY-versus-CONTRACT distinction, which root `ANATOMY.md` states.
 
 When this skill is read from an installed package without a source checkout,
 locate the checkout you intend to modify and read *its* root `ANATOMY.md`
@@ -42,17 +37,13 @@ local checkout follows the same revision.
 
 ## Navigation workflow
 
-1. Open the repository-root `ANATOMY.md`.
-2. Read its `Components` and `Composition` sections.
-3. Choose the relevant child anatomy and descend; repeat until the local
-   anatomy points at an exact code citation.
-4. Open the cited code. Anatomy is navigation; code is evidence.
+Descend the root `ANATOMY.md` through child anatomies until one points at an
+exact `file.py:line` citation, then open the cited code — anatomy is navigation,
+code is evidence. For enumeration questions (every callsite, matching file, or
+import), search once anatomy has identified the territory.
 
-For enumeration questions — every callsite, matching file, or import — use
-search after anatomy identifies the correct territory.
-
-The current source root is `src/lingtai/`; the kernel implementation descends
-through [`src/lingtai/kernel/ANATOMY.md`](../../kernel/ANATOMY.md).
+The kernel implementation descends [`src/lingtai/ANATOMY.md`](../../ANATOMY.md)
+→ [`src/lingtai/kernel/ANATOMY.md`](../../kernel/ANATOMY.md).
 
 ## Maintenance direction
 
@@ -64,19 +55,9 @@ Who repairs drift depends on which agent you are:
 - **LingTai agents** report drift as issues, mail, or PR proposals. Do not
   silently fix.
 
-The repair direction differs by document:
-
-- **Code vs Anatomy:** code is normally the current structural fact. Repair
-  stale paths, citations, connections, composition, or state descriptions. If
-  the code move itself is defective, fix or report the code rather than
-  encoding a false map.
-- **Code vs Contract:** do not rewrite the promise to match accidental
-  behavior. Treat implementation as defective unless an authorized contract
-  change updates the Port, affected Adapters, contract version, and shared
-  tests.
-
-Verify every touched citation, then run the repository's architecture-document
-validator and the drift checker below.
+Root `ANATOMY.md` → "## Maintenance" owns the repair rules for code-vs-anatomy
+and code-vs-contract, and the requirement to verify every touched citation. Run
+the repository's architecture-document validator and the drift checker below.
 
 ## Drift checker
 
@@ -96,32 +77,27 @@ It catches only mechanical citation rot — a `file.py:line` target that is
 missing or past end-of-file. An in-range citation can still point at the wrong
 code, so an agent must open the cited line to confirm the claim.
 
-`scripts/bench_agent_session_rebuild.py` is the companion benchmark cited by
-`src/lingtai/kernel/ANATOMY.md` for the tiered `rebuild_agent_session_from_events()`
-path; it takes `--events`/`--molt-every` against a synthetic temp agent dir, or
-`--agent-dir <path>` to time an existing one.
+`scripts/bench_agent_session_rebuild.py` is the companion benchmark for the
+tiered `rebuild_agent_session_from_events()` path; `src/lingtai/kernel/ANATOMY.md`
+cites it and owns its usage.
 
 ## Reference sidecars
 
 Open one of these only when the question is actually about it; the router above
 is enough for ordinary navigation.
 
-| Reference | Read it when |
-|---|---|
-| `reference/mcp-protocol.md` | You need the supported MCP SDK range and negotiated protocol version, the split between what the official SDK owns and what LingTai owns, the low-level server handler shape, the tool-metadata sidecar, or the stdio config/env-injection boundary. It routes onward for LICC and registry details rather than restating them. |
+- `reference/mcp-protocol.md` — the supported MCP SDK range and negotiated
+  protocol version, the SDK-versus-LingTai ownership split, the low-level server
+  handler shape, the tool-metadata sidecar, and the stdio config/env-injection
+  boundary. It routes onward for LICC and registry details.
 
 ## Fallback essentials
 
-If the root convention cannot yet be opened, keep these minimal safety rules:
-
-- Each anatomy maps one architectural layer beside its code.
-- Components cite verified `repo/relative/file.py:line-line` evidence.
-- Parent/child anatomy links and governed Anatomy/Contract pair links are
-  reciprocal.
-- Pure implementation detail stays out; user manuals, rationale archives, and
-  interface promises belong elsewhere.
-- Missing files, out-of-range citations, or one-way links are defects, but only
-  reading the cited code can confirm semantic correctness.
+If the root convention cannot yet be opened: one anatomy per architectural layer
+beside its code, components citing verified `repo/relative/file.py:line-line`
+evidence, reciprocal parent/child and Anatomy/Contract links, and no pure
+implementation detail. Missing files, out-of-range citations, and one-way links
+are defects — but only reading the cited code confirms semantic correctness.
 
 Return to the root `ANATOMY.md` as soon as the checkout is available; it is the
 source of truth for the complete template and rules.

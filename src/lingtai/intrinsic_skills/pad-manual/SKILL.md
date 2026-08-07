@@ -33,19 +33,11 @@ alias.
 
 ## Mutate durable Pad content with file
 
-- Full create/overwrite: `file(action="write", input={"file_path":
-  "system/pad.md", "content": <complete body>}, reasoning="...")`.
-- Exact replacement: `file(action="edit", input={"file_path":
-  "system/pad.md", "old_string": <exact>, "new_string": <replacement>,
-  "replace_all": null}, reasoning="...")`.
-
-`file.write` is a full-file operation; include everything you intend to keep.
-`file.edit` replaces exact text and fails if the target is missing/ambiguous.
-
-**Neither file operation reloads or mutates the current prompt.** After durable
-changes, call one explicit `context(action="rebuild", input={}, reasoning="apply
-durable prompt changes")`, or let passive refresh/molt reconstruction apply
-them later.
+Pad's durable sources are ordinary files. Rewrite with
+`file(action="write", input={"file_path": "system/pad.md", ...})`; make an exact
+replacement with `file(action="edit", ...)` on the same path. Neither hot-loads
+the prompt — apply with one `context(action="rebuild", ...)`. The full model is
+`psyche-manual` → "The one mutation model".
 
 ## Pin references
 
@@ -60,10 +52,8 @@ file(action="write", input={"file_path": "system/pad_append.json",
 Write `[]` to clear the list. Reconstruction reads each listed file and appends
 its contents to the Pad section as read-only reference.
 
-**Editing the list never hot-loads the prompt**, exactly like editing
-`system/pad.md`. Run one `context.rebuild` when the new list must become visible.
-Reconstruction re-reads each pinned file every time, so later edits to a pinned
-file also appear only after the next reconstruction.
+Reconstruction re-reads each pinned file every time, so an edit to the list —
+or to a pinned file — appears only after the next rebuild.
 
 Two things to know, because nothing validates this list for you any more: a path
 that does not exist is reported as `append_not_found` at compose time rather than
@@ -76,4 +66,4 @@ knowledge, not in an ever-growing Pad. Before molt, make durable Pad state
 accurate, rebuild only if needed in the current context, then follow
 `context-manual` for the journal/summary/molt procedure.
 
-Pad has no settings file. Results are short; leave root `summarize` false.
+Results are short; leave root `summarize` false.

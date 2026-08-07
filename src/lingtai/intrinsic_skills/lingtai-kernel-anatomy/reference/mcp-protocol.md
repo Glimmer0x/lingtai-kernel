@@ -17,15 +17,12 @@ maintenance: |
 # MCP protocol compatibility
 
 What LingTai assumes about the Model Context Protocol, and where those
-assumptions live in the kernel. This is **not** a copy of the standard: the
-protocol is specified externally and the wire is owned by the official SDK.
-This reference records only the compatibility surface LingTai itself owns, so a
-reader can check the code against a fixed anchor instead of guessing.
-
-This file is the maintained target for the `lingtai-kernel-anatomy
-reference/mcp-protocol.md` route referenced by the MCP manual and
-`src/lingtai/init.jsonc`. It ships inside the wheel with the rest of the
-`intrinsic_skills` tree, so the route resolves for an installed agent.
+assumptions live in the kernel. This is **not** a copy of the standard — the
+protocol is specified externally and the wire is owned by the official SDK. It
+records only the compatibility surface LingTai itself owns, so a reader can check
+the code against a fixed anchor instead of guessing. It is the maintained target
+for the `reference/mcp-protocol.md` route used by the MCP manual and
+`src/lingtai/init.jsonc`, and ships inside the wheel.
 
 ## Supported SDK and protocol
 
@@ -43,7 +40,7 @@ must differ.
 
 ## Ownership boundary
 
-Owned by the official SDK — never reimplement locally:
+Owned by the official SDK:
 
 * JSON-RPC framing, request IDs, notifications, cancellation;
 * the `initialize` handshake, `server/discover`, and version negotiation;
@@ -149,30 +146,23 @@ Injection sites: `src/lingtai/agent.py` (initial load and the failed-retry
 respawn) and `src/lingtai/tools/daemon/__init__.py` for task-scoped
 registrations. Caller-supplied `env` wins over both.
 
-This applies to the **stdio path only**. The HTTP path passes headers, not
-environment, so an HTTP-configured server receives neither variable and cannot
-participate in LICC on this route. Treat that as a stated boundary, not an
-oversight.
+The HTTP path passes headers, not environment, so an HTTP-configured server
+receives neither variable and cannot participate in LICC on this route — a stated
+boundary, not an oversight.
 
 Registry validation is owned by `src/lingtai/services/mcp_registry.py`
-(`validate_record`), which accepts only the `stdio` and `http` transports and
-gates which configured servers may load. It is launch-configuration schema, not
-MCP wire schema: a record can be registry-valid and still fail at connect.
-
-**LICC handoff.** The filesystem notification channel these variables enable is
-specified in full by
-`src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md` — including the event
-envelope, the two-lane projection, and the `LICC_VERSION = 1` constant. This
-page deliberately does not restate it; read that contract for any LICC
-question.
+(`validate_record`): launch-configuration schema, not MCP wire schema, so a
+record can be registry-valid and still fail at connect.
 
 ## Outside this contract
 
 The LICC filesystem notification channel
-(`src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md`), the MCP registry and
-identity documents, the `mcp` presentation tool, and the private Telegram Task
-Card route are LingTai-specific. They carry their own versioned contracts and
-have no MCP wire semantics; do not file them as protocol defects.
+(`src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md` — event envelope, two-lane
+projection, `LICC_VERSION = 1`), the MCP registry and identity documents, the
+`mcp` presentation tool, and the private Telegram Task Card route are all
+LingTai-specific. They carry their own versioned contracts and have no MCP wire
+semantics; read them for those questions, and do not file them as protocol
+defects.
 
 ## Related
 

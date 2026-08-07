@@ -363,6 +363,8 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "reference/procedures-manual/SKILL.md" in system_manual_body
         assert "reference/sqlite-log-query/SKILL.md" in system_manual_body
         assert "reference/runtime-update-checks/SKILL.md" in system_manual_body
+        assert "reference/refresh-precheck/SKILL.md" in system_manual_body
+        assert "reference/trajectory-mining/SKILL.md" in system_manual_body
         assert "lingtai-agent log doctor" in system_manual_body
         assert "lingtai-agent log query" in system_manual_body
         assert "lingtai-agent log rebuild" in system_manual_body
@@ -370,6 +372,8 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: procedures-manual" in system_manual_body
         assert "name: sqlite-log-query" in system_manual_body
         assert "name: runtime-update-checks" in system_manual_body
+        assert "name: refresh-precheck" in system_manual_body
+        assert "name: trajectory-mining" in system_manual_body
         assert "Nested reference catalog" in system_manual_body
         assert "location: reference/notification-manual/SKILL.md" not in system_manual_body
 
@@ -477,12 +481,31 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "Nested system-manual reference" in sqlite_log_query_body
         assert "# SQLite Log Query" in sqlite_log_query_body
         assert "lingtai-agent log query" in sqlite_log_query_body
-        # Trajectory mining content is now in the sqlite-log-query reference
-        assert "Trajectory Mining" in sqlite_log_query_body
-        assert "trajectory mining" in sqlite_log_query_body.lower()
-        assert "Finding schema" in sqlite_log_query_body or "finding schema" in sqlite_log_query_body.lower()
-        assert "cheap model" in sqlite_log_query_body.lower() or "cheap-model" in sqlite_log_query_body.lower()
         assert "scripts/event_summary.py" in sqlite_log_query_body
+        # Trajectory mining is its own sibling reference; sqlite-log-query keeps
+        # the data layer (schema, SQL recipes, redaction) and routes to it.
+        assert "trajectory mining" in sqlite_log_query_body.lower()
+        assert "../trajectory-mining/SKILL.md" in sqlite_log_query_body
+
+        trajectory_ref = system_manual_md.parent / "reference" / "trajectory-mining" / "SKILL.md"
+        assert trajectory_ref.is_file()
+        trajectory_body = trajectory_ref.read_text(encoding="utf-8")
+        assert "name: trajectory-mining" in trajectory_body
+        assert "# Trajectory Mining" in trajectory_body
+        assert "finding schema" in trajectory_body.lower()
+        assert "cheap model" in trajectory_body.lower() or "cheap-model" in trajectory_body.lower()
+        assert "reference/sqlite-log-query/SKILL.md" in trajectory_body
+
+        refresh_precheck_ref = (
+            system_manual_md.parent / "reference" / "refresh-precheck" / "SKILL.md"
+        )
+        assert refresh_precheck_ref.is_file()
+        refresh_precheck_body = refresh_precheck_ref.read_text(encoding="utf-8")
+        assert "name: refresh-precheck" in refresh_precheck_body
+        assert "Nested system-manual reference" in refresh_precheck_body
+        assert 'system(action="refresh")' in refresh_precheck_body
+        assert 'system(action="presets")' in refresh_precheck_body
+        assert ".pth" in refresh_precheck_body
 
         # event_summary.py script exists, is referenced, and can summarize
         # a minimal SQLite sidecar using the actual events schema columns.

@@ -1,15 +1,13 @@
 ---
 name: lingtai-doctor
 description: >
-  Read-only health diagnostics for LingTai agents and bots. Use when an agent
-  appears offline or unreachable, when a machine migration may have left stale
-  MCP/addon command paths, when heartbeat/status/process/notification/log
-  surfaces disagree, or before deciding whether to mail, refresh, CPR, or edit
-  persistent configuration. Includes a bundled doctor.py script for layered
-  local checks without exposing secrets.
-version: 0.1.0
+  Read-only health diagnostics for LingTai agents and bots: when one looks dead
+  but the evidence is mixed, when a migration may have left stale MCP/addon
+  command paths, or before deciding whether to mail, refresh, CPR, or edit
+  persistent configuration. Includes a bundled read-only `doctor.py`.
+version: 0.2.0
 tags: [doctor, diagnostics, mcp, addons, heartbeat, migration, recovery]
-last_changed_at: 2026-07-19T00:00:00Z
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
 maintenance: |
@@ -69,7 +67,7 @@ Top-level severity is **OK** (no obvious local mismatch), **WARN** (at least one
 surface looks stale, missing, or inconsistent), or **FAIL** (a critical local
 file/config/path is missing or broken).
 
-The report ends with the same next steps summarized here. Triage in this order,
+Triage in this order,
 then follow the owning manual rather than improvising a repair:
 
 | Doctor evidence | Do | Owner |
