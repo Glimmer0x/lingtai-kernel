@@ -4,6 +4,8 @@ related_files:
 - dev-guide-skill/SKILL.md
 - docs/references/claude-code-guide.md
 - CLAUDE.md
+- ANATOMY.md
+- CONTRACT.md
 - docs.yaml
 maintenance: |
   Tracks the agent-facing definition-of-done checklist for lingtai-kernel (quality research P0-3). Update it whenever the repository's validation gates change: pytest/ruff/mypy configuration in pyproject.toml, the validation layers in dev-guide-skill/SKILL.md, the .github/PULL_REQUEST_TEMPLATE.md checklist, or the CI workflows under .github/workflows.
