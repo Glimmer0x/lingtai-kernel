@@ -1,5 +1,6 @@
 ---
 related_files:
+  - AGENTS.md
   - CLAUDE.md
   - CODE_OF_CONDUCT.md
   - CONTRACT.md
@@ -212,6 +213,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   [`SUPPORT.md`](SUPPORT.md) — community and safety entry points.
 - [`CLAUDE.md`](CLAUDE.md) — short Claude Code entry point; full guidance is
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md).
+- [`AGENTS.md`](AGENTS.md) — agent-facing definition of done: build/test
+  commands and the validation checklist coding agents must satisfy before a
+  change is called done.
 - [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE) — legal metadata.
 - [`pyproject.toml`](pyproject.toml), [`setup.py`](setup.py), and
   [`MANIFEST.in`](MANIFEST.in) — Python packaging and Rust-sidecar build hooks.
