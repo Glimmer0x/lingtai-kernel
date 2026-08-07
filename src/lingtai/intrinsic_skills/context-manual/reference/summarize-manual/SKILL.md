@@ -1,14 +1,12 @@
 ---
 name: summarize-manual
 description: >-
-  Detailed operational guide for tool-result summarization across LingTai's
-  three context-compression / continuation modes: a-priori reasoning-guided
-  (summary=true on bash/read/grep/daemon/glob), a-posteriori agent-guided
-  (context(action="summarize")), and molt. Covers what tool-result summarization
-  is, why it implements progressive disclosure, when to summarize urgently versus
-  during idle cleanup, how to write good summaries, how to recover the original
-  tool result by tool_call_id, and how summarize differs from molt.
-last_changed_at: "2026-07-27T17:02:00-07:00"
+  Operational guide for tool-result summarization: the three compression modes
+  (a-priori `summary=true`, a-posteriori `context(action="summarize")`, molt),
+  the urgent and idle cadences, delayed provider reconstruction and the
+  0.85/1.0 rebuild boundaries, recovery by `tool_call_id`, and summarize
+  versus molt.
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/tools/system/summarize.py
@@ -65,31 +63,19 @@ both with molt.
 - The replacement is clearly marked **generated and non-canonical** and carries
   a retrieval hint pointing back at the preserved raw by `tool_call_id`.
 
-When to set `summary=true`:
+Resident substrate §VII carries the when-to-use rule (prefer it when you can
+state the retention spec before the call and the output is large — rule of thumb
+>10k chars; leave it `false` when you need exact line/file/diff/stderr text you
+will quote, diff, patch, or compare).
 
-- Prefer it over a posteriori summarize whenever you can state before the call
-  what you need to know from the result.
-- The expected output is large (rule of thumb: >10k chars) **and** you do not
-  need the exact raw text — you need a conclusion, a count, a list of anchors,
-  or a yes/no.
-
-When to leave it `false` (the default):
-
-- You need exact line/file/diff/stderr text — anything you will quote, diff,
-  patch, or compare character-by-character. Leave `false` and read the raw.
-
-**A priori is preferred but still lossy.** `summary=true` is an
-assumption-driven compression chosen *before* you inspect the result. Prefer it
-when you can state the narrow facts to retain before the call, because it avoids
-spending context on raw bulk at all. The runtime discards everything outside what
-your `reasoning` named, with no chance for you to notice what mattered, so it is
-**not** a substitute for a-posteriori `context(action="summarize")` when the
-important facts are unknowable before inspection, especially for
-high-information-density results — daemon outputs, code reviews, long reports,
-or anything whose important facts you cannot name in advance.
-Compressing those a priori silently drops the facts you did not know to ask for.
-For them, leave `summary=false`, consume the raw, then summarize a posteriori
-once you know what to keep — or molt when the whole conversation is the pressure.
+**A priori is preferred but still lossy.** The runtime discards everything
+outside what your `reasoning` named, with no chance for you to notice what
+mattered — so it is **not** a substitute for a-posteriori
+`context(action="summarize")` on high-information-density results whose
+important facts you cannot name in advance (daemon outputs, code reviews, long
+reports). For those, leave `summary=false`, consume the raw, then summarize a
+posteriori once you know what to keep — or molt when the whole conversation is
+the pressure.
 
 **Hard cap.** If the raw visible payload exceeds **500,000 characters**, the
 runtime does **not** call the summarizer LLM. Instead you receive a small
@@ -214,20 +200,19 @@ Summarize has two decoupled effects:
    contain the old raw block. A manual `context(action="rebuild")` first re-reads
    and recomposes every canonical system-prompt source, then applies pending/new
    summaries (markers flip to `status: done`), then requests provider replay with
-   the new prompt/history. The 1.0 hard forced path is passive but uses the same
-   full prompt reconstruction contract before fresh replay.
+   the new prompt/history. The automatic 1.0 hard forced path uses the
+   same full prompt reconstruction contract before fresh replay.
 
 The dynamic pending totals in the result comment scan only `status: pending`
 markers — already-applied (`done`) markers and legacy markers without a status
 are not counted as pending.
 
-Provider-side reconstruction is delayed because runtimes usually append turns
-onto a stable cache/continuation prefix. Rebuilding that prefix on every
-summarize would discard cache benefit.
+Reconstruction is delayed because runtimes append turns onto a stable
+cache/continuation prefix, and rebuilding that prefix on every summarize would
+discard the cache benefit.
 
 - **Below 1.0 of the context window:** summarize stays pending at the provider
-  layer and the session keeps appending. This delay is normal, not a failure; do
-  not call `refresh` merely to "apply" the summary.
+  layer and the session keeps appending. This delay is normal, not a failure.
 - **At or above 0.85 of the context window:** `_meta.agent_meta.agent_state.context.rebuild`
   is stamped continuously. It is a decision prompt / permission, not an automatic
   rebuild — recording summaries never triggers a provider-context rebuild on its
@@ -281,8 +266,8 @@ summarize would discard cache benefit.
 Waiting for the 1.0 forced boundary is the emergency path — prefer the proactive
 0.85 rebuild. If no summary is pending, the forced rebuild has nothing to apply
 (the replay-preservation rule above still holds), so summarize more or molt
-instead. `refresh` remains the emergency path for broken/stale context or
-explicit human direction, not the normal way to apply summarize. If summarize or
+instead. `refresh` is the emergency path for broken/stale context or explicit
+human direction — never the way to "apply" a summary. If summarize or
 a rebuild still cannot bring context below `0.75 * context_window` (the recovery
 target), tend durable stores and molt deliberately.
 
@@ -321,16 +306,10 @@ Bad uses:
 
 ## 6 · Summarize is not molt
 
-Neither summary mode is a molt. Both a-priori (`summary=true`) and a-posteriori
-(`context(action="summarize")`) reduce active-context bulk for selected tool
-results. Neither updates pad, character, knowledge, skills, or the
-session-journal, and neither sheds the conversation.
-
-Molt is a context operation. It preserves durable stores, writes the session
-journal and molt briefing, and starts a fresh conversation context. Before
-molting, read `context-manual` and follow its required checklist.
-
-Use them together:
+Neither summary mode updates pad, character, knowledge, skills, or the
+session-journal, and neither sheds the conversation — the mini-molt framing and
+the molt boundary are resident. `context-manual` owns the molt procedure and its
+required checklist. Use them together:
 
 1. Summarize bulky consumed tool results so the active context is navigable.
 2. Tend durable stores for facts, procedures, identity changes, and current plan.

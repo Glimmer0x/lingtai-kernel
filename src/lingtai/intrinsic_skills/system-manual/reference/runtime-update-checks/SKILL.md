@@ -4,10 +4,11 @@ description: >
   Nested system-manual reference for tracing LingTai kernel update nudges:
   runtime/version/source identity, packaged versus editable/source behavior,
   heartbeat dispatch, nudge persistence and notification delivery, refresh
-  versus installation, human confirmation, and post-refresh verification.
-version: 0.2.2
+  versus installation, human confirmation, and post-refresh verification. The
+  ordered pre-flight for a refresh is the sibling `refresh-precheck`.
+version: 0.3.0
 tags: [lingtai, runtime, kernel, nudge, updates, refresh, editable, source, diagnostics]
-last_changed_at: 2026-07-27T00:00:00Z
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
@@ -17,10 +18,8 @@ related_files:
 - src/lingtai/kernel/nudge/__init__.py
 - src/lingtai/kernel/nudge/kernel_version.py
 - src/lingtai/kernel/nudge/source_drift.py
+- src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
 - scripts/lib/release_manifest.py
-- RELEASING.md
-- migration/migration.md
-- .github/workflows/wheels.yml
 - src/lingtai/kernel/base_agent/lifecycle.py
 - src/lingtai/kernel/base_agent/__init__.py
 - src/lingtai/kernel/notification_store/__init__.py
@@ -42,18 +41,10 @@ maintenance: |
 
 # Runtime Update Checks
 
-Kernel-local read-only diagnosis and refresh mechanics
-
-For a `kernel_version` nudge, use the release-manifest facts for diagnosis.
-When a newer release exists, let Shell execute the official installer at
-`https://lingtai.ai/install.sh` with `--help`; do not read or paste the large
-script source into agent context. Follow whatever the installer's own concise
-help output currently instructs rather than assuming or hardcoding a specific
-child command or subcommand name — the installer's own help is the current
-source of truth, not this reference. A `source_drift` nudge stays local to
-these mechanics and never enters release-migration routing. This is
-operational guidance, not permission to download, install, change
-configuration, or relaunch a runtime.
+Kernel-local read-only diagnosis and refresh mechanics for update nudges. The
+install/update route itself is owned by the official installer — see step 9 and
+**Boundaries** below for the split. This is operational guidance, not permission
+to download, install, change configuration, or relaunch a runtime.
 
 ## The lifecycle and its owners
 
@@ -173,7 +164,8 @@ The shared Nudge policy records finding identity and dismissal mute expiry in
 `.notification/.nudge_state.json`. The two global controls
 (`LINGTAI_NUDGE_ENABLED`, `LINGTAI_NUDGE_REPEAT_INTERVAL`) suppress publication
 and set the post-dismiss repeat window for an unresolved finding; their defaults,
-accepted values, reload behavior, and invalid-value fallback are owned by
+accepted values, reload behavior, and invalid-value fallback are registered in the
+repo-root `ENVIRONMENT_VARIABLES.md`, routed via
 `reference/environment-variables/SKILL.md`. Producer probe gates are only bounded
 observation costs, not product cadence. A producer removes an entry when its
 real fact resolves; `kernel_version` also removes its own entry when the runtime
@@ -274,9 +266,9 @@ Python as a substitute.
 
 ## Boundaries
 
-The stable `https://lingtai.ai/install.sh` entry owns normal install/update
-execution and version-interval navigation to authoritative release migrations.
-The notification-manual owns channel allowlisting, generic sync concepts, and
-dismissal safety. This bundled reference owns only kernel-local read-only
-diagnosis and refresh mechanics; `source_drift` stays local and does not enter
-release-migration routing.
+`https://lingtai.ai/install.sh` owns install/update execution and release
+migration navigation (step 9). `notification-manual` owns channel allowlisting,
+sync concepts, and dismissal safety. `reference/refresh-precheck/SKILL.md` owns
+the ordered pre-flight and post-refresh verification pass. This reference owns
+only kernel-local read-only diagnosis and refresh mechanics; `source_drift` stays
+local and does not enter release-migration routing.

@@ -33,20 +33,18 @@ The kernel accepts built-in channels including `email`, `system`, `soul`,
 `nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, and
 `goal`; MCP bridge channels use the `mcp.` prefix. Unknown JSON filenames are
 ignored by collection, and kernel publish/dismiss helpers reject names outside
-the allowlist. This prevents arbitrary workdir files from entering the
-model-visible notification lane.
+the allowlist, so arbitrary workdir files cannot enter the model-visible
+notification lane.
 
-`nudge` is the formal channel for mechanical, throttled checks. Runtime update
-checks publish `data.nudges[]` entries with `kind: kernel_version`; the sole
-normal install/update route is `https://lingtai.ai/install.sh`. Let Shell execute
-its concise `--help`, without reading or pasting the script source, and follow
-whatever it currently instructs rather than assuming a specific child command.
-The installer owns exact-tag migration navigation; real update, mutation,
-configuration writes, and refresh require explicit human/config-owner authority.
-The bundled `runtime-update-checks` reference is limited to local read-only
-diagnosis and refresh mechanics. Source-freshness checks may publish
-`kind: source_drift`, but that handling stays local and never enters
-release-migration routing. This manual owns only the generic channel protocol.
+`nudge` is the formal channel for mechanical, throttled checks: runtime update
+checks publish `data.nudges[]` entries with `kind: kernel_version`, and
+source-freshness checks may publish `kind: source_drift` — which stays local and
+never enters release-migration routing. The sole normal install/update route is
+`https://lingtai.ai/install.sh` (let Shell run its `--help` and follow that), and
+real updates, configuration writes, and refresh require
+explicit human/config-owner authority. Those rules are owned in full by
+`../../../system-manual/reference/runtime-update-checks/SKILL.md`; this manual
+owns only the generic channel protocol.
 
 ## Envelope and producer instructions
 
@@ -75,27 +73,17 @@ replacement so readers never observe a partial JSON file.
 
 ## Voluntary check and model-visible delivery
 
-`notification(action='check', input={}, reasoning=...)` returns a dict
-placeholder. The turn-loop
-post-hook stamps the canonical live payload onto that same result under
-`_meta.agent_meta.notifications.attention` and
-`_meta.agent_meta.guidance.transient`. The handler does not
-assemble a second bare channel representation and does not write notification
-state.
+`check` returns a dict placeholder that the turn-loop post-hook stamps with the
+canonical live payload; the handler assembles no second channel representation
+and writes no notification state.
 
 When notifications arrive while an agent is IDLE or ASLEEP, the kernel can
 synthesize the same `notification(action='check')` tool-call/result shape —
-including the same `action`/`input`/`reasoning` envelope, so it is
-indistinguishable from a read you issued yourself — and wake the agent. During ACTIVE work, the post-hook moves the single live payload
-to a suitable dict-shaped tool result only when required by first appearance,
-material change, or a deliberate check. Delivery fingerprints and the live
-holder belong to kernel synchronization, not to the notification tool's
-`manual` action.
-
-After handling the payload, clear it through the producer-specific action or the
-narrowest safe notification dismiss action and end the turn. Do not call `check`
-again only to confirm dismissal; sparse synchronization will expose a material
-change when needed.
+same `action`/`input`/`reasoning` envelope, indistinguishable from a read you
+issued yourself — and wake the agent. During ACTIVE work the post-hook moves the
+single live payload onto a suitable dict-shaped tool result only on first
+appearance, material change, or a deliberate check. Delivery fingerprints and
+the live holder belong to kernel synchronization, not to the `manual` action.
 
 ## Canonical producer state versus mirror
 
@@ -107,8 +95,7 @@ producer-specific verb in `instructions`.
 
 This separation is deliberate: the filesystem protocol gives the kernel one
 current high-attention surface, while canonical state remains under the
-producer's own schema and lifecycle. Read `../dismissal-safety/SKILL.md` before
-clearing guarded, stale, protected, or event-granular state.
+producer's own schema and lifecycle.
 
 ## Footprint
 

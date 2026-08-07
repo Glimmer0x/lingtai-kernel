@@ -1,9 +1,9 @@
 ---
 name: soul-manual
 description: |
-  Operational guide for the `soul` tool — your inner voice. Read this when: you need the exact call shape (one `soul` tool, six actions, each with its own strict `input` object); you call `soul(action='flow', input={})` and get a `status: disabled` result; you want to understand why soul flow is off by default and how the operator enables it; you are tuning `delay_seconds`/`consultation_past_count` with `config` and want to know whether fires will actually happen; or you need the difference between the always-available actions (inquiry/config/voice/dismiss/manual) and the opt-in `flow`. Covers the call shape and per-action inputs, the `LINGTAI_SOUL_FLOW_ENABLED` env gate, disabled-flow behavior, delay-vs-off-switch semantics, enabling/disabling, troubleshooting, and the privacy/cost rationale.
-version: 1.1.0
-last_changed_at: "2026-07-27T00:00:00Z"
+  Operational guide for the `soul` tool — your inner voice: the one-tool/six-actions call shape, the `LINGTAI_SOUL_FLOW_ENABLED` opt-in gate, disabled-flow behavior, and the delay-is-cadence-not-an-off-switch semantics. Read it before calling `flow`, tuning `config`, or troubleshooting a `status: disabled` result.
+version: 1.2.0
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
 - src/lingtai/tools/soul/CONTRACT.md
@@ -22,16 +22,12 @@ maintenance: |
 
 ## 0. How to call it
 
-One tool, six actions. Every call is `action` + that action's own `input`
-object + `reasoning`:
+One tool, six actions. Every call is `action` + that action's own strict `input`
+object + `reasoning`; another action's field is rejected before anything runs:
 
 ```json
 {"action": "inquiry", "input": {"inquiry": "What am I avoiding?"}, "reasoning": "check my own blind spot"}
 ```
-
-Each action's `input` is **strict and closed** — it accepts that action's own
-fields and nothing else. Sending another action's field (say `delay_seconds`
-inside an `inquiry` call) is rejected before anything runs:
 
 | Action | `input` |
 |---|---|
@@ -45,11 +41,9 @@ inside an `inquiry` call) is rejected before anything runs:
 Optional fields are declared nullable rather than omittable, so pass `null` for
 the ones you are not setting.
 
-**`summarize`** is a root-level boolean (never inside `input`), absent or false
-by default. Soul's results are all small — a voice, a couple of knob values, a
-status — so leave it false; there is nothing to compress and summarizing only
-risks losing the exact wording of a voice. When calling `manual`, keep it false
-so the exact enable/disable procedure below is not summarized away.
+**`summarize`** is a root-level boolean (never inside `input`). Soul's results
+are all small, and summarizing risks losing a voice's exact wording — leave it
+false, especially for `manual`.
 
 ## 1. The soul-flow gate
 
@@ -77,12 +71,7 @@ caller cannot fire while the gate is off.
 thread:
 
 ```json
-{
-  "status": "disabled",
-  "enabled": false,
-  "env_var": "LINGTAI_SOUL_FLOW_ENABLED",
-  "message": "Soul flow is disabled by default ... set LINGTAI_SOUL_FLOW_ENABLED=1 ... See soul-manual skill."
-}
+{"status": "disabled", "enabled": false, "env_var": "LINGTAI_SOUL_FLOW_ENABLED", "message": "..."}
 ```
 
 **This is expected configuration state, not an error.** Do **not** retry it in
@@ -106,14 +95,9 @@ That is *all* it does:
   disabled the result carries `soul_flow_enabled: false` and a `note` saying the
   knobs are saved but no fires will occur. Enabling is an **operator** action.
 
-Historically flow was "muted" by setting `delay_seconds` to a huge sentinel
-(e.g. `999999999`, ~31.7 years). That was a trust-based non-trigger and it was
-unsafe: the giant delay only muted the **timer**, while the **voluntary** path
-stayed live and could loop against the sleep gate, producing retry storms
-(observed in trajectory audits: repeated
-`voluntary_waiting_idle → voluntary_triggered` and simultaneous
-`soul_fire_gate_check state=asleep` bursts). The sentinel also had to be
-re-applied by hand and was easy to get wrong. The env gate replaces that
+`delay_seconds` is cadence only. A huge sentinel value (e.g. `999999999`) used to
+be the trust-based mute, but it silenced only the **timer** — the voluntary path
+stayed live and could loop against the sleep gate. The env gate replaced that
 fragile convention with an explicit opt-in covering both paths.
 
 ## 4. How to enable / disable
@@ -133,10 +117,8 @@ switch.
 
 ## 5. Checking the current state
 
-- **Is flow enabled right now?** Run `soul(action='flow', input={})` —
-  `status: ok` means enabled, `status: disabled` means the env var is not set.
-  You can also run `soul(action='config', input={...})` and read
-  `soul_flow_enabled` in the result.
+- **Is flow enabled right now?** `soul(action='config', input={...})` reports
+  `soul_flow_enabled` (or see the `flow` status in §2).
 - **Check the env from a shell:**
   `shell({"command": "printenv LINGTAI_SOUL_FLOW_ENABLED"})` — empty output
   means unset (disabled).
@@ -170,15 +152,9 @@ the flow gate lives in the process environment. Nothing here reads a
 
 ## 8. Privacy and cost rationale
 
-Soul flow is **off by default** deliberately:
-
-- **Cost.** Each fire runs `M = 1 + K` parallel LLM calls (one stepped-back
-  read of your current chat, plus `K` past-snapshot voices). Left on with a low
-  delay, this is a recurring, silent token cost on top of your own turns.
-- **Privacy / surprise.** Flow reads your current chat and past-self snapshots
-  and injects involuntary voices into your history. Making it opt-in means an
-  operator consciously decides to spend those tokens and surface that
-  reflection, rather than it happening implicitly.
-
-Enable it when the reflection is worth the cost; otherwise reach for `inquiry`
-when you specifically want a considered pause.
+Soul flow is **off by default** because each fire runs `M = 1 + K` parallel LLM
+calls — a recurring silent token cost — and because it reads your current chat
+and past-self snapshots to inject involuntary voices into your history. Opt-in
+means an operator consciously decides to spend those tokens and surface that
+reflection. Enable it when the reflection is worth the cost; otherwise reach for
+`inquiry` when you specifically want a considered pause.

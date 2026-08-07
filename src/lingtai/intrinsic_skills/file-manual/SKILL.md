@@ -1,9 +1,9 @@
 ---
 name: file-manual
-description: "Operational guide for LingTai's built-in `file` tool and its actions: read, write, edit, glob, and grep. Use when working with local text files, deciding whether to use file tools versus bash, handling large files, avoiding binary/image misuse, or reading non-UTF-8 text via explicit bash/Python/iconv instead of complicating the core read tool. Covers UTF-8 policy, safe write/edit discipline, search workflows, and examples for GBK/Shift-JIS/Latin-1 conversion."
-version: 0.2.0
+description: "Operational guide for LingTai's built-in `file` tool: read, write, edit, glob, manual; the UTF-8 policy and how to handle non-UTF-8 text via explicit bash/Python/iconv; safe write/edit discipline; search workflows. Points to `read-manual` for read pagination and truncation depth."
+version: 0.3.0
 tags: [files, read, write, edit, grep, glob, encoding, utf-8]
-last_changed_at: "2026-07-19T00:00:00Z"
+last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/__init__.py
 - src/lingtai/tools/file/CONTRACT.md
@@ -33,10 +33,6 @@ file(action="read", input={"file_path": "/abs/path/x.py"}, reasoning="why you ar
 optional root boolean (see below). Fields belonging to another action are
 rejected before anything is read or written.
 
-Do **not** use it for binary/image/audio/video content. For images, use the
-`vision` skill/tool. For arbitrary binary inspection or transcoding, use `bash`
-with explicit commands.
-
 ## Choosing the right tool
 
 | Need | Tool |
@@ -53,9 +49,8 @@ with explicit commands.
 
 ## Encoding policy
 
-LingTai's own text assets are UTF-8 — source code, prompts and system notes,
-skills and knowledge entries, and JSON/YAML/TOML/Markdown config and docs. The
-`read`/`write`/`edit` actions pin UTF-8 for exactly this reason.
+LingTai's own text assets are UTF-8, which is why the `read`/`write`/`edit`
+actions pin it.
 
 Do not rely on the host locale. Windows Chinese/Japanese/Korean locales may
 default Python text I/O to GBK/CP936/Shift-JIS-like encodings; internal LingTai
@@ -72,14 +67,9 @@ print(Path('file.txt').read_text(encoding='gbk', errors='replace'))
 PY
 ```
 
-Convert to UTF-8 with Python or `iconv`:
+Convert to UTF-8 with `iconv`:
 
 ```bash
-python - <<'PY'
-from pathlib import Path
-Path('legacy.utf8.txt').write_text(Path('legacy-gbk.txt').read_text(encoding='gbk'), encoding='utf-8')
-PY
-
 iconv -f gbk -t utf-8 legacy-gbk.txt > legacy-gbk.utf8.txt
 iconv -f shift_jis -t utf-8 legacy-sjis.txt > legacy-sjis.utf8.txt
 ```
@@ -87,13 +77,15 @@ iconv -f shift_jis -t utf-8 legacy-sjis.txt > legacy-sjis.utf8.txt
 Rule: if a file will become part of the project, convert it to UTF-8 before
 committing or storing it as a durable LingTai asset.
 
-## Reading safely
+## Search, then read a region
 
 Prefer `action="read"` for known text files; its line numbers make later edits
 and citations easier. If a file may be generated, minified, huge, or noisy,
-search first and read only the relevant region:
+start broad with `glob` (file names), narrow with `grep` (contents), and read
+only the located region:
 
 ```python
+file(action="glob", input={"pattern": "**/*.py", "path": "/abs/path/project"}, reasoning="list candidate modules")
 file(action="grep", input={"pattern": "class Agent|def handle", "path": "/abs/path/src", "glob": "*.py", "max_matches": 50}, reasoning="locate the handler")
 file(action="read", input={"file_path": "/abs/path/src/module.py", "offset": 40, "limit": 80}, reasoning="read the located region")
 ```
@@ -117,8 +109,8 @@ or ambiguous. That failure is a feature: it prevents accidental broad changes.
 the current system prompt**. The disk change takes effect at the next canonical
 reconstruction. When it must take effect now, finish the file operation first,
 then make one `context(action="rebuild", input={}, reasoning="apply durable prompt changes")`
-call; passive refresh or molt also reconstructs. Do not use rebuild for ordinary
-source-code edits, and do not loop it.
+call (passive refresh or molt also reconstructs) — not for ordinary source-code
+edits, and never in a loop.
 
 1. `read` the relevant lines.
 2. Copy an exact old-string region with enough surrounding context to be unique.
@@ -127,16 +119,6 @@ source-code edits, and do not loop it.
 
 Use `replace_all=true` only when every occurrence is supposed to change and you
 have checked the match set with `grep` first.
-
-## Search workflow
-
-Start broad with `glob` (file names), narrow with `grep` (file contents), then
-inspect with `read`.
-
-```python
-file(action="glob", input={"pattern": "**/*.py", "path": "/abs/path/project"}, reasoning="list candidate modules")
-file(action="grep", input={"pattern": "read_text\\(", "path": "/abs/path/project/src", "glob": "*.py", "max_matches": 100}, reasoning="find the call sites")
-```
 
 ## File paths and privacy
 
@@ -169,16 +151,8 @@ nothing to configure and nothing to read.
 
 ## Manual versus ordinary calls
 
-Normal file work is primary. `action` is always required and always explicit:
-
-- **Ordinary work:** `action="read"`, `"write"`, `"edit"`, `"glob"`, or
-  `"grep"`, with that action's own fields in `input`.
-- **Manual lookup:** `action="manual"` with `input={}` is a one-time entry when
-  you need the installed workflow guide. It returns documentation and performs
-  no file operation. This one manual covers all five operations; for read
-  pagination, truncation, and `line_truncated` depth it points you at
-  `read-manual`, which is a nested reference rather than a separate action.
-
-After a manual result, continue the original task with an ordinary call. Do not
-request the same manual again. Repeating an identical manual call is an error loop,
-not progress.
+`action="manual"` with `input={}` is a one-time entry that returns this guide and
+performs no file operation; `read-manual` is a nested reference reached from it,
+not a separate action. After it returns, continue the original task with an
+ordinary call — repeating an identical manual call is an error loop, not
+progress.
