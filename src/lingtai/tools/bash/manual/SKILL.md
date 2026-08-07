@@ -1,17 +1,24 @@
 ---
 name: shell-manual
 description: >
-  **Read before running a long-lived agent/coding CLI (`claude -p`, `codex exec`,
-  `opencode run`, Cursor Agent, Gemini CLI, Aider, Goose, OpenHands, Crush, or a
-  similar harness), or before setting up cron, launchd, systemd timers, crontab
-  jobs, or scheduled reminders.** Router for Shell depth beyond the tool schema:
-  async + poll discipline for long-running children, host-scheduler setup,
-  LingTai wake-by-mailbox-drop, async last-resort reminders, script hygiene,
-  one-shot `.notification/cron.json` reminders, debugging silent jobs, and safe
-  cleanup. Start here for time-driven recurring work ("every hour", "weekdays at
-  9", "remind me later") or a misbehaving scheduled job.
-version: 1.8.0
-last_changed_at: 2026-07-19T00:00:00Z
+  **Read before running a long-lived agent/coding CLI as a shell subprocess**
+  (`claude -p`, `codex exec`, `opencode run`, Cursor Agent, Gemini CLI, Aider,
+  Goose, OpenHands, Crush, or a similar harness), or before setting up cron,
+  launchd, systemd timers, crontab jobs, or scheduled reminders. Router for
+  Shell depth beyond the tool schema: async + poll discipline for long-running
+  children, host-scheduler setup, LingTai wake-by-mailbox-drop, async
+  last-resort reminders, script hygiene, one-shot `.notification/cron.json`
+  reminders, debugging silent jobs, and safe cleanup. The eight CLIs with
+  daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi)
+  are supported both as daemon backends and via `shell`; their per-backend
+  operational details (command shapes, flags, env contracts, caveats) are owned
+  by `daemon-manual` → `reference/cli-backends/SKILL.md` and its per-backend
+  submanuals, which supersede the old bash reference guides. Gemini CLI, Aider,
+  Goose, OpenHands, and Crush are shell-only harnesses with no LingTai backend
+  id. This manual owns only the shell-side supervision discipline (async +
+  poll, reminders, scheduling, debugging, cleanup).
+version: 1.10.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/bash/__init__.py
 - src/lingtai/tools/bash/CONTRACT.md
@@ -57,78 +64,26 @@ files, not standalone top-level skills.
     Debugging and cleanup for scheduled jobs: scheduler fired, script ran, work
     landed, agent saw mail, worked launchd diagnosis, retiring cron jobs, and
     bash work footprint hygiene.
-- name: bash-claude-code
-  location: reference/bash-claude-code/SKILL.md
-  description: |
-    Claude Code CLI (`claude -p`) subprocess usage: the auth-env (`env -u …`)
-    hygiene rule and weekly-limit/credit-balance diagnosis, key flags, print-mode
-    background-job rule, recommended patterns, and stuck-run recovery.
-- name: bash-openai-codex
-  location: reference/bash-openai-codex/SKILL.md
-  description: |
-    OpenAI Codex CLI (`codex exec`) subprocess usage: install/config, model and
-    auth setup, feature surface, Codex-vs-Claude-Code style choice, and
-    troubleshooting.
-- name: bash-opencode
-  location: reference/bash-opencode/SKILL.md
-  description: |
-    OpenCode CLI (`opencode run` / `opencode serve`) subprocess usage: provider
-    auth, command/flag surface, warm-server and custom-agent patterns, and the
-    "daemon backend may not exist" caveat.
-- name: bash-cursor-agent
-  location: reference/bash-cursor-agent/SKILL.md
-  description: Cursor Agent CLI (`cursor-agent --print`) command shape and status.
-- name: bash-mimocode
-  location: reference/bash-mimocode/SKILL.md
-  description: |
-    MiMo Code CLI (`mimocode` / `mimo`) command shape and status; provider
-    discovery stays with swiss-knife, shell execution hygiene lives here.
-- name: bash-qwen-code
-  location: reference/bash-qwen-code/SKILL.md
-  description: Qwen Code CLI (`qwen-code` / `qwen`) command shape and status.
-- name: bash-oh-my-pi
-  location: reference/bash-oh-my-pi/SKILL.md
-  description: |
-    Oh-My-Pi / Pi Coding Agent (`omp`) command shape: JSON mode, approval mode,
-    and `--session` resume.
-- name: bash-kimicode
-  location: reference/bash-kimicode/SKILL.md
-  description: |
-    Kimi Code (`kimi`) subprocess usage: one-shot `--prompt`/`--output-format`
-    mode, the `--prompt` + `--yolo` conflict, per-run environment, the
-    run-private `mcp.json` loader, and why ask/resume is unsupported.
-- name: bash-gemini-cli
-  location: reference/bash-gemini-cli/SKILL.md
-  description: Gemini CLI (`gemini -p`) candidate-harness command shape and status.
-- name: bash-aider
-  location: reference/bash-aider/SKILL.md
-  description: Aider (`aider --message`) candidate-harness command shape and status.
-- name: bash-goose
-  location: reference/bash-goose/SKILL.md
-  description: Goose CLI candidate-harness command shape and status.
-- name: bash-openhands
-  location: reference/bash-openhands/SKILL.md
-  description: |
-    OpenHands CLI headless mode (`--task`/`--file`, JSONL) candidate-harness
-    command shape, status, and dependency-footprint caveat.
-- name: bash-crush
-  location: reference/bash-crush/SKILL.md
-  description: Charm Crush (`crush run`) candidate-harness command shape and status.
-- name: bash-zed-acp
-  location: reference/bash-zed-acp/SKILL.md
-  description: |
-    Zed/ACP external-agent bridge: ACP is a protocol, not a binary — identify a
-    concrete headless client command before treating it as a harness.
 ```
 
-Every `bash-*` page above assumes the shared **Coding-CLI harness baseline**
-below; the page itself carries only what is specific to that CLI.
+Coding-CLI reference pages have moved to `daemon-manual` (ownership change,
+not a prohibition — `shell` remains a supported way to run them).
+
+These coding CLIs (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi) are supported — as **daemon
+backends** (see `daemon-manual`) and via `shell`. The per-backend operational
+details (flags, env, caveats) are owned by `daemon-manual`'s corresponding
+submanuals — `reference/cli-backends/SKILL.md` and its per-backend pages under
+`reference/cli-backends/reference/backends/` — which **supersede the old bash
+reference guides**. This manual keeps only the shell-side discipline that
+applies no matter which CLI you run: the async + poll supervision rules in
+`## Core rules to keep resident` and the CLI-vs-daemon choice in
+`## Coding-CLI harness baseline` below.
 
 ## Router table
 
 | Need / keywords | Read |
 |---|---|
-| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | `reference/bash-claude-code/SKILL.md`, `reference/bash-openai-codex/SKILL.md`, `reference/bash-opencode/SKILL.md`, or the matching `reference/bash-*/SKILL.md`; keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` below resident |
+| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | Supported via `shell` (run with `input.async=true` and poll — keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` resident). The eight with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi) can also be dispatched as daemon backends; per-CLI operational detail (flags, env, caveats): `daemon-manual` → `reference/cli-backends/SKILL.md`. Gemini CLI, Aider, Goose, OpenHands, Crush are shell-only harnesses — no LingTai backend id |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
@@ -142,7 +97,12 @@ below; the page itself carries only what is specific to that CLI.
    Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
    Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
    **Never run it synchronously.** Use `input.async=true` and poll — see the
-   resident rule below.
+   resident rule below. Running these CLIs via `shell` is supported; the eight
+   with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/
+   oh-my-pi) can also be dispatched as daemon backends — Gemini CLI, Aider,
+   Goose, OpenHands, and Crush have no LingTai backend id. Per-CLI detail
+   (flags, env, ask/resume status): `daemon-manual` →
+   `reference/cli-backends/SKILL.md`.
 3. **Time itself is the trigger?** Read `reference/scheduled-work/SKILL.md`.
 4. **You only need a single future nudge?** Read
    `reference/notification-reminders/SKILL.md`.
@@ -319,9 +279,12 @@ reading the whole file when you only need recent events.
 
 ## Coding-CLI harness baseline
 
-This section is the single owner of the rules every `reference/bash-*/SKILL.md`
-page shares. Read it once; each page then adds only its own command shape,
-status, flags, and caveats.
+This section keeps the two rules every coding-CLI run shares — whether via
+`shell` (async + poll) or as a daemon backend: run `--help` before relying on
+any flag, and pick CLI-vs-daemon by the shape of the work. Per-CLI specifics
+(flags, env, caveats) are owned by `daemon-manual` →
+`reference/cli-backends/SKILL.md`, which supersedes the old bash reference
+guides.
 
 **Before relying on any coding CLI in automation:** run the installed CLI's own
 `--help`. Flag surfaces rev between releases, so a documented flag is
@@ -355,25 +318,8 @@ outlive the turn, and prefer several smaller bounded calls over one monolithic
 prompt. Backend names, `backend_options`, `ask`/resume, and per-backend parser
 caveats belong to `daemon-manual` → `reference/cli-backends/SKILL.md`, not here.
 
-**Candidate-harness promotion criteria.** Several pages document a CLI that is
-*not* a daemon backend yet. A backend needs all of:
-
-- a deterministic non-interactive start command;
-- a stable session id plus a tested resume command, for `ask`/resume;
-- JSON/JSONL output, or a transcript parser whose output contract is pinned by
-  tests.
-
-If any is missing, keep the CLI as a documented bash harness rather than adding
-a speculative daemon backend.
-
-**Generic validation checklist** for any page above:
-
-1. `command -v <binary>` succeeds, or the documented installation path exists.
-2. `--help` confirms the non-interactive command and approval flags.
-3. A dry-run in a disposable worktree exits non-interactively.
-4. If promoted to a daemon backend, tests mock subprocess launch, output
-   parsing, session capture, resume/ask, and reserved `backend_options`
-   handling.
+Backend-promotion criteria for a CLI that is not yet a daemon backend live in
+`daemon-manual` → `reference/cli-backends/SKILL.md` (`## Backend promotion gate`).
 
 ## Scheduling rules to keep resident
 

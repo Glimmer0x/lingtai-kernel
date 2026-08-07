@@ -6,11 +6,10 @@ description: >
   (model selection, skills/workspace directories): it routes you to the
   installed CLI's live help via shell and shows how to translate that help into
   the generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.2.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.3.1
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
-- src/lingtai/tools/bash/manual/reference/bash-kimicode/SKILL.md
 maintenance: |
   Tracks the Kimi Code daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
@@ -25,17 +24,16 @@ accepted short alias; persisted daemon entries use the canonical backend name
 
 ## Discover flags from the installed CLI
 
-1. Load `shell-manual` (its nested `reference/bash-kimicode/SKILL.md` has
-   broader Kimi Code CLI context: per-run environment contract, MCP config
-   evidence, validation checklist).
-2. Run, in bash: `kimi --version` and `kimi --help`. The daemon backend wraps
+1. Run, in bash: `kimi --version` and `kimi --help`. The daemon backend wraps
    the top-level one-shot mode (`kimi --prompt <prompt> --output-format
    text`), so the top-level help is the relevant flag surface — there is no
    `exec`-style wrapper subcommand. Run `kimi <subcommand> --help` only when a
    task actually needs one of the listed subcommands. These are local
    read-only commands; no session is started.
-3. Translate what you found into `backend_options` with the parent's generic
+2. Translate what you found into `backend_options` with the parent's generic
    conversion rules. Nothing Kimi-specific is added to that contract here.
+   Flag-name note: the output switch is `--output-format`
+   (`text` / `stream-json`), not `--format`.
 
 ## Example: model selection
 
@@ -87,4 +85,16 @@ stdout becomes the result. The run-private MCP loader is not argv-based —
 the daemon writes `daemon_common` plus parent stdio and HTTP registrations
 to `<run>/kimi-code-home/mcp.json` (path recorded in `daemon.json` under
 `backend_harness_files.kimicode_mcp_config`); secret env/header values stay
-out of prompts and logs.
+out of prompts and logs. The CLI's own MCP declaration search paths are
+`$KIMI_CODE_HOME/mcp.json`, project-root `.mcp.json`, and cwd-local
+`.kimi-code/mcp.json`; the schema accepts `stdio` and `http` transports —
+SSE is not exposed by LingTai daemon task registrations.
+
+## Kimi-specific validation steps
+
+In the Generic validation checklist (see
+`reference/cli-backends/SKILL.md`), additionally confirm from installed help
+that `--yolo` conflicts with `--prompt` (the CLI refuses that pairing). Before
+enabling `ask` for this backend, source-cite a stable machine-readable
+session-id output plus a tested resume command from local help/code — do not
+guess.

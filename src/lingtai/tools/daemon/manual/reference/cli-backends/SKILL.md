@@ -6,8 +6,8 @@ description: >
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
-version: 1.14.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 1.16.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -137,29 +137,43 @@ you only want currently tracked in-memory runs. This is the first layer of progr
 
 ## Bash harness subskills
 
-Daemon backend integration and user-facing shell execution guidance now split by
-ownership:
+Ownership note: per-backend operational guides for the coding CLIs have moved
+here from the bash manual. `shell` remains a fully supported way to run these
+CLIs — the async + poll supervision discipline lives in `shell-manual` — but
+each CLI's command shape, flags, env contracts, and caveats are owned by this
+page's per-backend references below (`reference/backends/<backend>/SKILL.md`),
+which **supersede the old `reference/bash-*/SKILL.md` guides** in the bash
+manual.
 
-- This page owns the daemon API contract: backend names, `daemon(...)` behavior,
-  `backend_options`, result/session capture, `ask`/resume, and backend-specific
-  parser caveats.
-- `shell-manual` owns the shell subprocess recipes for the underlying CLIs. Before
-  launching or troubleshooting a long-running coding CLI directly from bash,
-  read the matching nested bash reference:
-  - Claude Code: `shell-manual` → `reference/bash-claude-code/SKILL.md`
-  - OpenAI Codex: `shell-manual` → `reference/bash-openai-codex/SKILL.md`
-  - OpenCode: `shell-manual` → `reference/bash-opencode/SKILL.md`
-  - Cursor Agent: `shell-manual` → `reference/bash-cursor-agent/SKILL.md`
-  - MiMo Code: `shell-manual` → `reference/bash-mimocode/SKILL.md`
-  - Qwen Code: `shell-manual` → `reference/bash-qwen-code/SKILL.md`
-  - Oh-My-Pi / Pi Coding Agent: `shell-manual` →
-    `reference/bash-oh-my-pi/SKILL.md`
-  - Kimi Code: `shell-manual` → `reference/bash-kimicode/SKILL.md`
+All 9 shipped daemon backends have drill-down pages under
+`reference/backends/`. CLIs that are not daemon backends are not documented
+here. `shell-manual` owns only the shell-side supervision discipline
+(async + poll, reminders, scheduling, debugging, cleanup) that applies no
+matter which CLI you run.
 
-Candidate harnesses that are not daemon backends yet (Gemini CLI, Aider, Goose,
-OpenHands, Crush, and Zed/ACP bridges) are tracked under `shell-manual` as
-`reference/bash-*/SKILL.md` pages until their command/session contracts are
-stable enough for backend promotion.
+## Backend promotion gate
+
+Several pages document a CLI that is *not* a daemon backend yet. A backend
+needs all of:
+
+- a deterministic non-interactive start command;
+- a stable session id plus a tested resume command, for `ask`/resume;
+- JSON/JSONL output, or a transcript parser whose output contract is pinned by
+  tests.
+
+If any is missing, keep the CLI as a documented shell harness rather than
+adding a speculative daemon backend.
+
+## Generic validation checklist
+
+For any coding CLI before relying on it in automation:
+
+1. `command -v <binary>` succeeds, or the documented installation path exists.
+2. `--help` confirms the non-interactive command and approval flags.
+3. A dry-run in a disposable worktree exits non-interactively.
+4. If promoted to a daemon backend, tests mock subprocess launch, output
+   parsing, session capture, resume/ask, and reserved `backend_options`
+   handling.
 
 ## CLI backends
 
@@ -238,8 +252,8 @@ set. `mimocode`/`mimo`, `qwen-code`/`qwen`, `oh-my-pi`/`omp`, and `kimicode`/`ki
 auth override variables from the subprocess environment, so daemon runs are
 already protected; a *manual* `claude` shell invocation is not. For the exact
 variables, the weekly-limit smoke test, and how to find a stale token's source,
-read `reference/backends/claude-p/SKILL.md` and `shell-manual` →
-`reference/bash-claude-code/SKILL.md`. Never print token values while diagnosing.
+read `reference/backends/claude-p/SKILL.md`. Never print token values while
+diagnosing.
 
 **CLI backends skip preset resolution** — the external CLI manages its own model,
 tools, and permissions. The `tools` field in the task spec is ignored for CLI

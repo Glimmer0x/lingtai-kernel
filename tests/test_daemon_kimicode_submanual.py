@@ -81,8 +81,6 @@ def test_kimicode_child_routes_to_live_help_and_generic_backend_options():
     body = _body(CHILD)
     # Live installed help is the authority — the child must send agents there.
     for phrase in (
-        "shell-manual",
-        "reference/bash-kimicode/SKILL.md",
         "kimi --version",
         "kimi --help",
     ):
@@ -112,7 +110,8 @@ def test_kimicode_child_names_canonical_alias_and_limitations():
 
 def test_kimicode_child_stays_tiny_not_a_flag_catalog():
     line_count = len(CHILD.read_text(encoding="utf-8").splitlines())
-    assert line_count <= 90, (
+    # 120 not 230: the page is ~100 lines, so a 230 cap would stop guarding.
+    assert line_count <= 120, (
         "the Kimi Code backend submanual is a tiny entrypoint to live CLI "
         f"help; {line_count} lines suggests it is growing into a flag catalog"
     )

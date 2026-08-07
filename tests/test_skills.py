@@ -231,41 +231,27 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert "name: web-manual" in (web_root / "SKILL.md").read_text(encoding="utf-8")
         assert (web_root / "scripts" / "extract_page.py").is_file()
         assert (web_root / "reference" / "tier-quick-refs" / "SKILL.md").is_file()
-        for moved_reference in (
-            "reference/bash-claude-code/SKILL.md",
-            "reference/bash-openai-codex/SKILL.md",
-            "reference/bash-opencode/SKILL.md",
-            "reference/bash-cursor-agent/SKILL.md",
-            "reference/bash-mimocode/SKILL.md",
-            "reference/bash-qwen-code/SKILL.md",
-            "reference/bash-oh-my-pi/SKILL.md",
-            "reference/bash-gemini-cli/SKILL.md",
-            "reference/bash-aider/SKILL.md",
-            "reference/bash-goose/SKILL.md",
-            "reference/bash-openhands/SKILL.md",
-            "reference/bash-crush/SKILL.md",
-            "reference/bash-zed-acp/SKILL.md",
-        ):
-            assert moved_reference in bash_body
-
-        bash_reference_dir = bash_md.parent / "reference"
-        for reference_name in (
-            "scheduled-work",
-            "notification-reminders",
-            "debugging-cleanup",
+        # The bash manual routes coding-CLI detail to daemon-manual, but must
+        # never resurrect a retired bash-* page or re-claim a non-backend CLI
+        # as a daemon backend (only the eight real backends have backend ids).
+        assert "daemon-manual" in bash_body
+        assert "reference/cli-backends/SKILL.md" in bash_body
+        for gone in (
             "bash-claude-code",
-            "bash-openai-codex",
-            "bash-opencode",
-            "bash-cursor-agent",
-            "bash-mimocode",
-            "bash-qwen-code",
-            "bash-oh-my-pi",
             "bash-gemini-cli",
             "bash-aider",
             "bash-goose",
             "bash-openhands",
             "bash-crush",
             "bash-zed-acp",
+        ):
+            assert gone not in bash_body
+
+        bash_reference_dir = bash_md.parent / "reference"
+        for reference_name in (
+            "scheduled-work",
+            "notification-reminders",
+            "debugging-cleanup",
         ):
             bash_reference = bash_reference_dir / reference_name / "SKILL.md"
             assert bash_reference.is_file()
