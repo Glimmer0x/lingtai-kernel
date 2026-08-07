@@ -72,7 +72,8 @@ class DetachedDaemonExecutionHost:
         *, capsule: dict | None = None, process_port=None,
         interactive_terminal_port=None,
     ) -> None:
-        from lingtai.tools.daemon import DaemonManager
+        from lingtai.tools.daemon import DaemonManager, DAEMON_ALLOWED_INTRINSICS
+        from lingtai.tools.registry import INTRINSICS
 
         self._run_dir = run_dir
         # Keep the owner events available to the Port observation callback even
@@ -91,6 +92,24 @@ class DetachedDaemonExecutionHost:
             model=(manifest.get("llm") or {}).get("model", "unknown"),
         )
         self._agent._mcp_tool_names = set()
+        # The stub deliberately skips BaseAgent._wire_intrinsics (no full Agent
+        # is constructed here — see DaemonSupervisorAgentStub's docstring), so
+        # wire the one daemon-eligible exception it needs directly:
+        # DaemonManager._daemon_intrinsic_surface reads _intrinsics /
+        # _intrinsic_modules, and email's own handler dereferences
+        # agent._email_manager, so its boot() must run too. Every other
+        # intrinsic (identity/lifecycle/recursive mutation) stays unwired —
+        # DAEMON_ALLOWED_INTRINSICS is the single narrow set, shared with the
+        # in-process manager so the two never drift apart.
+        for _name in DAEMON_ALLOWED_INTRINSICS:
+            _module = INTRINSICS[_name]["module"]
+            self._agent._intrinsic_modules[_name] = _module
+            self._agent._intrinsics[_name] = (
+                lambda args, fn=_module.handle: fn(self._agent, args)
+            )
+            _boot_fn = getattr(_module, "boot", None)
+            if _boot_fn is not None:
+                _boot_fn(self._agent)
         self._max_turns = int(manifest["max_turns"])
         self._timeout = float(manifest["timeout_s"])
         self._default_model = self._agent.service.model

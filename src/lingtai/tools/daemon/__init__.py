@@ -438,6 +438,16 @@ EMANATION_BLACKLIST = {
     "knowledge",
 }
 
+# The daemon-eligible subset of the mandatory intrinsic layer — see
+# ``DaemonManager._daemon_intrinsic_surface``. Email is the sole deliberate
+# exception so a parent can grant a running daemon local-network
+# communication; every other intrinsic (identity/lifecycle/recursive-mutation)
+# stays unavailable. Module-level so both the in-process manager and the
+# detached supervisor's tool-surface composition (``execution_host.py``,
+# which cannot construct a full ``Agent``) wire the exact same set instead of
+# risking drift between two hand-maintained copies.
+DAEMON_ALLOWED_INTRINSICS = frozenset({"email"})
+
 
 def _parent_host_tool_floor() -> frozenset[str]:
     """The always-on host tools a preset emanation may borrow from the parent.
@@ -1575,7 +1585,7 @@ class DaemonManager:
         narrow exception so a parent can grant a running daemon local-network
         communication when the task prompt calls for it.
         """
-        allowed = {"email"}
+        allowed = DAEMON_ALLOWED_INTRINSICS
         schemas: dict[str, FunctionSchema] = {}
         handlers: dict = {}
         for name in sorted(allowed):

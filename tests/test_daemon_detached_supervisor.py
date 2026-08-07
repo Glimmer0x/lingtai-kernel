@@ -1137,6 +1137,114 @@ def test_detached_file_manifest_injects_file_io(tmp_path):
     assert (parent_working_dir / "detached-probe.txt").read_text(encoding="utf-8") == "file works\n"
 
 
+def test_detached_email_manifest_wires_schema_and_dispatch(tmp_path):
+    """A manifest requesting ``email`` gets a working schema + dispatch.
+
+    ``DetachedDaemonExecutionHost`` composes its tool surface against
+    ``DaemonSupervisorAgentStub``, a bare stand-in that deliberately never runs
+    ``BaseAgent._wire_intrinsics`` (constructing a full ``Agent`` here would
+    fight the parent for its workdir lease). Without wiring the daemon-eligible
+    intrinsic exception onto that stub, every detached run rejected its own
+    manifest-granted ``email`` tool as unknown even though the parent's
+    pre-flight validation — which runs against a real, fully-wired Agent —
+    already accepted it. This exercises the actual detached-process surface,
+    not just the parent-side pre-flight.
+    """
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="email manifest")
+    parent_working_dir = run_dir.path.parent.parent
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(parent_working_dir), run_dir=str(run_dir.path),
+        task="email manifest", tools=["shell", "file", "email"], max_turns=1,
+        timeout_s=30, group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    schemas, dispatch = host._build_lingtai_surface()
+
+    names = {s.name for s in schemas}
+    assert {"shell", "file", "email"} <= names
+    assert "email" in dispatch
+
+    result = dispatch["email"]({
+        "action": "check",
+        "input": {},
+        "reasoning": "detached email probe",
+    })
+    assert result["status"] == "ok", result
+
+
+def test_detached_preset_manifest_email_requires_explicit_tool(tmp_path):
+    """Preset-path detached runs gate ``email`` the same as the default path.
+
+    Mirrors ``test_build_tool_surface_preset_requires_explicit_email_tool``
+    (test_daemon.py) but through the detached supervisor's own
+    ``_build_lingtai_surface``, which selects the preset branch whenever the
+    manifest carries ``preset_capabilities``.
+    """
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="preset result only")
+    common_kwargs = dict(
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="preset result only", max_turns=1, timeout_s=30, group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+        preset_llm={"provider": "fake", "model": "fake", "api_key": None,
+                    "base_url": None, "context_window": None, "provider_defaults": None},
+        preset_capabilities={},
+    )
+
+    manifest = build_manifest(run_id=run_dir.run_id, backend="lingtai", tools=[], **common_kwargs)
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    schemas, dispatch = host._build_lingtai_surface()
+    names = {s.name for s in schemas}
+    assert "email" not in names
+    assert "email" not in dispatch
+
+    manifest2 = build_manifest(run_id=run_dir.run_id, backend="lingtai", tools=["email"], **common_kwargs)
+    host2 = DetachedDaemonExecutionHost(run_dir, manifest2, Event(), Event())
+    schemas2, dispatch2 = host2._build_lingtai_surface()
+    names2 = {s.name for s in schemas2}
+    assert "email" in names2
+    assert "email" in dispatch2
+
+
+def test_detached_result_only_manifest_excludes_email(tmp_path):
+    """A result-only manifest (``tools=[]``) must not gain email either.
+
+    Same security posture as the in-process manager's
+    ``test_build_tool_surface_requires_explicit_email_tool``: a daemon that
+    was not explicitly granted ``email`` must stay unable to communicate, on
+    the detached-supervisor path too.
+    """
+    from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
+    from threading import Event
+
+    run_dir = _make_run_dir(tmp_path, task="result only")
+    manifest = build_manifest(
+        run_id=run_dir.run_id, backend="lingtai",
+        parent_working_dir=str(run_dir.path.parent.parent), run_dir=str(run_dir.path),
+        task="result only", tools=[], max_turns=1,
+        timeout_s=30, group_id=None,
+        llm={"provider": "fake", "model": "fake", "api_key": None,
+             "base_url": None, "context_window": None, "provider_defaults": None},
+    )
+
+    host = DetachedDaemonExecutionHost(run_dir, manifest, Event(), Event())
+    schemas, dispatch = host._build_lingtai_surface()
+
+    names = {s.name for s in schemas}
+    assert "email" not in names
+    assert "email" not in dispatch
+
+
 def test_detached_retired_file_tool_names_fail_loudly(tmp_path):
     """A stale manifest naming the retired per-operation tools is rejected.
 
