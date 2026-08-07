@@ -22,6 +22,8 @@ related_files:
   - src/lingtai/adapters/windows/powershell_process.py
   - src/lingtai/adapters/windows/win32_job.py
   - src/lingtai/adapters/windows/powershell_state_lock.py
+  - src/lingtai/adapters/windows/gitbash.py
+  - src/lingtai/adapters/windows/wsl.py
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
@@ -184,3 +186,37 @@ stop on Windows is capability-defined (the refresh adapter's `.suspend`
 channel); there is no deliverable SIGTERM, and `Popen.terminate()` is
 forceful — adapters document that mapping instead of pretending a graceful
 tier exists.
+
+**Git Bash / MSYS pitfalls.** Git Bash (Git for Windows) is a POSIX-grammar
+fallback dialect on Windows; `src/lingtai/adapters/windows/gitbash.py`
+implements it and `wsl.py` is the separate, opt-in WSL adapter. Spawning Git
+Bash correctly is full of traps — record them here so future PRs do not
+rediscover them:
+
+- `MSYS_NO_PATHCONV=1` + `MSYS2_ARG_CONV_EXCL=*` — MSYS2 auto-converts
+  POSIX-looking arguments (paths, flags like `/p`) into Windows form before
+  the child sees them, mangling native argv; set both environment variables
+  to disable the conversion for the spawned process.
+- `/c/...` path translation — Git Bash mounts Windows drives as
+  `/c/Users/...` instead of `C:\Users\...`; every path crossing the Git Bash
+  ↔ native-Windows boundary must be translated (`/c/...` ↔ `C:\...`)
+  explicitly, in argv and in the environment.
+- `usr\bin` PATH prepend — Git for Windows keeps its own coreutils under
+  `C:\Program Files\Git\usr\bin`; prepend that directory (ahead of
+  `System32`) so the child resolves the MSYS coreutils rather than the
+  differently-behaving Windows built-ins (`find`, `sort`, ...).
+- Non-login `bash -c` coreutils gap — a non-interactive `bash -c` never runs
+  the profile that sets up the MSYS environment, so coreutils/PATH are
+  incomplete; use the login form `bash -lc` (as `gitbash.py` does) or set the
+  environment explicitly.
+- ASLR spawn-failure class (0xc0000142 / 0xc0000005) — Git Bash/Cygwin
+  children can fail at spawn with `STATUS_DLL_INIT_FAILED`
+  (0xc0000142) or an access violation (0xc0000005) under loader/ASLR
+  interference (AV, DEP, DLL-base randomization); the failure is transient,
+  so spawns in this class warrant a bounded retry rather than an immediate
+  hard error.
+- WSL-bash-vs-Git-bash ambiguity — `%SystemRoot%\System32\bash.exe` (and the
+  SysWOW64 twin) is the WSL launcher, not Git Bash; on WSL-enabled hosts
+  `bash` on PATH silently resolves to WSL bash, which is Linux and behaves
+  differently. Never assume which bash is on PATH: `discover_git_bash()`
+  rejects the System32/SysWOW64 launcher and WSL stays opt-in (`wsl.py`).
