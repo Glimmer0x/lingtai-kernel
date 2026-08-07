@@ -10,6 +10,7 @@ import pytest
 import lingtai.kernel.meta_block as meta_block
 
 from lingtai.kernel.meta_block import (
+    CACHE_MISS_BUDGET_ENV,
     GUIDANCE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     GuidanceSchemaError,
@@ -1511,6 +1512,23 @@ def test_session_half_honors_custom_budget():
     session = _session_half(compact)
     assert session["cache_miss_budget"] == 250_000
     assert session["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
+
+
+def test_session_half_honors_env_budget_override(monkeypatch):
+    # The session half shares _resolve_cache_miss_budget with the context guard,
+    # so a positive-int LINGTAI_CACHE_MISS_BUDGET wins over config here too — and
+    # cache_miss_remaining_tokens is recomputed against the env budget.
+    monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, "500000")
+    agent = _session_agent_with_budget(
+        input_tokens=300_000, cached_tokens=100_000, budget=250_000
+    )
+
+    compact = build_tool_meta_token_usage(agent)
+
+    session = _session_half(compact)
+    assert session["cache_miss_tokens"] == 200_000
+    assert session["cache_miss_budget"] == 500_000  # env, not the 250k config
+    assert session["cache_miss_remaining_tokens"] == 300_000  # 500k - 200k
 
 
 def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
@@ -4417,6 +4435,37 @@ def test_cache_miss_budget_context_honors_custom_budget():
     agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
     ctx = build_cache_miss_budget_context(agent)
     assert ctx["molt"] == "cache miss budget 250000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 250_000
+
+
+
+def test_cache_miss_budget_env_overrides_config(monkeypatch):
+    # A positive-int LINGTAI_CACHE_MISS_BUDGET env value wins over config.
+    monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, "777000")
+    agent = _budget_agent(budget=1_000_000, input_tokens=777_000, cached_tokens=0)
+    ctx = build_cache_miss_budget_context(agent)
+    assert ctx is not None
+    assert ctx["molt"] == "cache miss budget 777000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 777_000
+
+
+def test_cache_miss_budget_env_invalid_falls_back_to_config(monkeypatch):
+    # Non-int / bool / zero / negative env values fall back to config, matching
+    # the positive-int validation shared by _resolve_cache_miss_budget.
+    for bad in ("abc", "True", "0", "-5", ""):
+        monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, bad)
+        agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
+        ctx = build_cache_miss_budget_context(agent)
+        assert ctx is not None
+        assert ctx["cache_miss_budget"] == 250_000
+        assert ctx["molt"] == "cache miss budget 250000 reached, molt now"
+
+
+def test_cache_miss_budget_env_absent_uses_config_default(monkeypatch):
+    monkeypatch.delenv(CACHE_MISS_BUDGET_ENV, raising=False)
+    agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
+    ctx = build_cache_miss_budget_context(agent)
+    assert ctx is not None
     assert ctx["cache_miss_budget"] == 250_000
 
 

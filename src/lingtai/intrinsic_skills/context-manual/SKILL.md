@@ -3,7 +3,7 @@ name: context-manual
 description: |
   Router and operational guide for the context tool — molt, tool-result summarize/rebuild, session journaling, and post-wipe recovery. Read this when: you are about to molt; you need to compact or rebuild your provider context; you need to tend the four durable stores; you want guidance on writing a good summary or session journal; you wake up after a system-performed wipe with a system-authored summary; or you need to understand keep_tool_calls and keep_last. Routes consequential molt handoffs to assets/molt-template.md and summarize/rebuild procedure to reference/summarize-manual, keeping routine guidance compact.
 version: 2.0.0
-last_changed_at: 2026-07-28T00:00:00-07:00
+last_changed_at: 2026-08-07T00:00:00-07:00
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
@@ -210,9 +210,9 @@ When this reminder appears, batch already-digested noisy history into one `conte
 
 ### Cache-miss budget
 
-A second `agent_meta.agent_state.context.molt` reminder guards a soft **cache-miss token budget** — a since-last-molt cap on total cache-miss (uncached input) tokens. The cache-miss total is `max(input_tokens - cached_tokens, 0)` from the same cumulative/restored totals behind `agent_meta.agent_state.token_usage.session` — it accumulates since your last molt and SURVIVES a refresh/restart (it is not the since-refresh runtime delta), so a refresh does not reset the remaining budget. The budget defaults to **1,000,000** tokens and is set via `manifest.cache_miss_budget` in init.json.
+A second `agent_meta.agent_state.context.molt` reminder guards a soft **cache-miss token budget** — a since-last-molt cap on total cache-miss (uncached input) tokens. The cache-miss total is `max(input_tokens - cached_tokens, 0)` from the same cumulative/restored totals behind `agent_meta.agent_state.token_usage.session` — it accumulates since your last molt and SURVIVES a refresh/restart (it is not the since-refresh runtime delta), so a refresh does not reset the remaining budget. The budget defaults to **1,000,000** tokens and is set via `manifest.cache_miss_budget` in init.json, or overridden at runtime by the `LINGTAI_CACHE_MISS_BUDGET` env var (positive int; read live at every budget resolution, so your `env_file` + refresh applies it without an init.json edit — an invalid or non-positive value silently falls back to the configured budget).
 
-Once the since-last-molt cache-miss total reaches or exceeds the budget, tool results restamp `_meta.agent_meta.agent_state.context.molt` with `cache miss budget {N} reached, molt now`, and `_meta.agent_meta.agent_state.context` reports `cache_miss_budget` (the configured budget) and `cache_miss_tokens` (the current cache-miss total). If the sustained context-pressure reminder above is also active, both warnings are preserved in `context.molt` (the budget line is appended). This is a soft cap — nothing is blocked — but the recommended action is to **molt now**: a large cache-miss total means the session keeps re-sending uncached context, so shedding it via molt restores cache efficiency.
+Once the since-last-molt cache-miss total reaches or exceeds the budget, tool results restamp `_meta.agent_meta.agent_state.context.molt` with `cache miss budget {N} reached, molt now`, and `_meta.agent_meta.agent_state.context` reports `cache_miss_budget` (the effective budget — the `LINGTAI_CACHE_MISS_BUDGET` env override if set, else the configured one) and `cache_miss_tokens` (the current cache-miss total). If the sustained context-pressure reminder above is also active, both warnings are preserved in `context.molt` (the budget line is appended). This is a soft cap — nothing is blocked — but the recommended action is to **molt now**: a large cache-miss total means the session keeps re-sending uncached context, so shedding it via molt restores cache efficiency.
 
 ## 8. Post-Wipe Recovery
 
