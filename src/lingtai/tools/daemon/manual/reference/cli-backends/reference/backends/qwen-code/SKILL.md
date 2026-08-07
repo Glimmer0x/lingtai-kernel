@@ -7,11 +7,10 @@ description: >
   routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
-version: 0.2.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.3.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
-- src/lingtai/tools/bash/manual/reference/bash-qwen-code/SKILL.md
 maintenance: |
   Tracks the Qwen Code daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
@@ -26,15 +25,15 @@ canonicalizes to the `qwen-code` backend id.
 
 ## Discover flags from the installed CLI
 
-1. Load `shell-manual` (its nested `reference/bash-qwen-code/SKILL.md` has
-   broader Qwen Code CLI context).
-2. Run, in bash: `qwen --version` and `qwen --help`. The daemon backend wraps
+1. Run, in bash: `qwen --version` and `qwen --help`. The daemon backend wraps
    the top-level `qwen` binary directly — it spawns
    `qwen --yolo <backend_argv...> -p <prompt>`, no subcommand — so
    `qwen --help` is the whole relevant flag surface. These are local
    read-only commands; no session is started.
-3. Translate what you found into `backend_options` with the parent's generic
+2. Translate what you found into `backend_options` with the parent's generic
    conversion rules. Nothing Qwen-specific is added to that contract here.
+   Verify the installed `qwen --help` before passing `backend_options`;
+   do not confuse provider setup with shell execution.
 
 ## Example: model selection via the generic route
 

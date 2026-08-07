@@ -6,11 +6,10 @@ description: >
   (model selection, output/tooling switches): it routes you to the installed
   CLI's live help via shell and shows how to translate that help into the
   generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.2.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.3.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
-- src/lingtai/tools/bash/manual/reference/bash-cursor-agent/SKILL.md
 maintenance: |
   Tracks the Cursor daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
@@ -23,12 +22,11 @@ is only the entrypoint. Conversion rules live in the parent
 
 ## Discover flags from the installed CLI
 
-1. Load `shell-manual` (its nested `reference/bash-cursor-agent/SKILL.md` has
-   broader Cursor Agent CLI context).
-2. Run `agent --version` and `agent --help` in bash. The daemon spawns root
-   `agent` directly — `agent -p --force --output-format stream-json <prompt>` —
+1. Run `agent --version` and `agent --help` in bash. The daemon spawns root
+   `agent` directly (the root binary is `agent`; older docs said
+   `cursor-agent`) — `agent -p --force --output-format stream-json <prompt>` —
    so root help is authoritative (keychain errors happen before help on some builds).
-3. Translate what you found into `backend_options` with the parent's generic
+2. Translate what you found into `backend_options` with the parent's generic
    conversion rules (nothing Cursor-specific is added).
 
 ## Example: model selection via the generic route

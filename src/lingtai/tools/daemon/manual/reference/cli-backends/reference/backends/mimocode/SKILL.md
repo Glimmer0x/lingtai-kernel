@@ -6,11 +6,10 @@ description: >
   MiMo-specific CLI flags (model selection, provider switches): it routes you
   to the installed CLI's live help via shell and shows how to translate that
   help into the generic `backend_options` mechanism. It is not a flag catalog.
-version: 0.3.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.4.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
-- src/lingtai/tools/bash/manual/reference/bash-mimocode/SKILL.md
 maintenance: |
   Tracks the MiMo Code daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
@@ -31,12 +30,10 @@ between the harness flags and the trailing prompt positional.
 
 ## Discover flags from the installed CLI
 
-1. Load `shell-manual` (its nested `reference/bash-mimocode/SKILL.md` has
-   broader MiMo Code CLI context).
-2. Run, in bash: `mimo --version`, `mimo --help`, and `mimo run --help`.
+1. Run, in bash: `mimo --version`, `mimo --help`, and `mimo run --help`.
    The daemon backend wraps `mimo run`, so `mimo run --help` is the relevant
    flag surface. These are local read-only commands; no session is started.
-3. Translate what you found into `backend_options` with the parent's generic
+2. Translate what you found into `backend_options` with the parent's generic
    conversion rules. Nothing MiMo-specific is added to that contract here.
 
 ## Example: model selection via the generic route
@@ -60,8 +57,9 @@ validate, enumerate, or simulate it.
 
 ## Subscription & auth
 
-Per-provider keys (see `swiss-knife`'s `xiaomi-mimo` reference); the CLI reads
-its configured credentials at spawn. LingTai does not inject or rotate them.
+Provider/model credential discovery stays with `swiss-knife` xiaomi-mimo; the
+CLI reads its configured credentials at spawn. LingTai does not inject or
+rotate them.
 
 Official docs: https://github.com/XiaomiMiMo/MiMo-Code
 

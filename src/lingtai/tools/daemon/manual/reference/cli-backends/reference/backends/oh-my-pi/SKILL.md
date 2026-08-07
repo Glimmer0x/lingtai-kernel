@@ -7,11 +7,10 @@ description: >
   it routes you to the installed CLI's live help via shell and shows how to
   translate that help into the generic `backend_options` mechanism. It is
   not a flag catalog.
-version: 0.1.0
-last_changed_at: 2026-07-19T00:00:00Z
+version: 0.2.0
+last_changed_at: 2026-08-07T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
-- src/lingtai/tools/bash/manual/reference/bash-oh-my-pi/SKILL.md
 maintenance: |
   Tracks the Oh-My-Pi daemon backend flag-discovery topic it documents; update when that integration changes.
 ---
@@ -27,15 +26,13 @@ canonical name.
 
 ## Discover flags from the installed CLI
 
-1. Load `shell-manual` (its nested `reference/bash-oh-my-pi/SKILL.md` has
-   broader Oh-My-Pi CLI context).
-2. Run, in bash: `omp --version` and `omp --help`. The daemon backend wraps
+1. Run, in bash: `omp --version` and `omp --help`. The daemon backend wraps
    the root `omp` invocation (no subcommand), so the root help is the
    relevant flag surface. These are local read-only commands; no session is
    started. Run `omp <command> --help` only on demand for a subcommand the
    installed root help itself lists — subcommands are outside the daemon
    wrapper.
-3. Translate what you found into `backend_options` with the parent's generic
+2. Translate what you found into `backend_options` with the parent's generic
    conversion rules. Nothing Oh-My-Pi-specific is added to that contract here.
 
 ## Example: model selection
