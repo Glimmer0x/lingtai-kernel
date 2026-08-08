@@ -277,7 +277,7 @@ def test_known_manifest_llm_pass_through_fields_do_not_warn(key, value):
     assert all(f"unknown field in manifest.llm: {key}" != w for w in warnings)
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
 def test_llm_thinking_valid_values(value):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "codex"
@@ -285,7 +285,7 @@ def test_llm_thinking_valid_values(value):
     validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
 def test_llm_thinking_valid_for_custom_openai_responses(value):
     data = _valid_init()
     data["manifest"]["llm"].update(
@@ -299,6 +299,20 @@ def test_llm_thinking_valid_for_custom_openai_responses(value):
 
     validate_init(data)
 
+
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_llm_thinking_valid_for_deepseek_responses(value):
+    # DeepSeek is OpenAI-compatible; Responses wire accepts thinking by default.
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "deepseek",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": value,
+        }
+    )
+    validate_init(data)
 
 @pytest.mark.parametrize("value", ["default", "ultra", 1, None])
 def test_llm_thinking_invalid_for_custom_openai_responses(value):
