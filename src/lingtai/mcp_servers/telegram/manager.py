@@ -52,6 +52,23 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+def _short_endpoint(base_url: str) -> str:
+    """Return a compact endpoint label from an LLM base_url.
+
+    Strips the scheme, credentials, and trailing path so the Task Card shows
+    e.g. ``api.deepseek.com`` / ``opencode.ai`` instead of a full URL.
+    """
+    value = (base_url or "").strip()
+    if not value:
+        return ""
+    if "://" in value:
+        value = value.split("://", 1)[1]
+    if "@" in value:
+        value = value.rsplit("@", 1)[1]
+    value = value.split("/", 1)[0]
+    return value.strip()
+
+
 def _load_notification_header_template() -> str:
     text = resources.files(__package__).joinpath("notification_header.md").read_text(
         encoding="utf-8"
@@ -2193,6 +2210,12 @@ class TelegramManager:
         model = self._task_card_current_model()
         if model:
             snapshot["model"] = model
+        llm_extra = self._task_card_current_llm()
+        if llm_extra:
+            if "endpoint" in llm_extra:
+                snapshot["endpoint"] = llm_extra["endpoint"]
+            if "thinking" in llm_extra:
+                snapshot["thinking"] = llm_extra["thinking"]
         # Physical path + device short name make the card self-identifying:
         # the reader can tell exactly which agent on which machine produced
         # this card, and where its durable state lives. ``socket.gethostname``
@@ -2232,6 +2255,24 @@ class TelegramManager:
         stays compact. Missing, malformed, or non-object data degrades to
         ``None`` — no line is rendered rather than fabricating a model.
         """
+        llm = self._task_card_current_llm()
+        if not llm:
+            return None
+        model = llm.get("model")
+        if not isinstance(model, str) or not model.strip():
+            return None
+        return model.strip()
+
+    def _task_card_current_llm(self) -> dict | None:
+        """Read the agent's current LLM block from ``.agent.json``.
+
+        Returns ``model``, ``endpoint`` (derived from ``base_url`` host) and
+        ``thinking`` (the resolved effort) when present; missing, malformed,
+        or non-object data degrades to ``None`` — no line is fabricated.
+        ``thinking`` is resolved from ``manifest.llm.thinking`` in init.json
+        when the materialized block omits it, mirroring the kernel's
+        omitted/default sentinel semantics.
+        """
         try:
             raw = (self._working_dir / ".agent.json").read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -2245,10 +2286,29 @@ class TelegramManager:
         llm = data.get("llm")
         if not isinstance(llm, dict):
             return None
+        out: dict = {}
         model = llm.get("model")
-        if not isinstance(model, str) or not model.strip():
-            return None
-        return model.strip()
+        if isinstance(model, str) and model.strip():
+            out["model"] = model.strip()
+        base_url = llm.get("base_url")
+        if isinstance(base_url, str) and base_url.strip():
+            out["endpoint"] = _short_endpoint(base_url)
+        thinking = llm.get("thinking")
+        if thinking is None or thinking == "default":
+            try:
+                raw_init = (self._working_dir / "init.json").read_text(
+                    encoding="utf-8"
+                )
+                init_data = json.loads(raw_init)
+                init_llm = (
+                    (init_data.get("manifest") or {}).get("llm") or {}
+                )
+                thinking = init_llm.get("thinking")
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+                thinking = None
+        if isinstance(thinking, str) and thinking.strip():
+            out["thinking"] = thinking.strip()
+        return out or None
 
     def _task_card_agent_lifecycle_status(self) -> str | None:
         """Read this agent's own canonical lifecycle for the footer.
