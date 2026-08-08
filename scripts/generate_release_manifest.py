@@ -6,8 +6,8 @@ one flat directory):
 
     python scripts/generate_release_manifest.py \\
         --assets-dir ./release-assets \\
-        --kernel-version 0.16.4 \\
-        --kernel-tag v0.16.4 \\
+        --kernel-version 0.19.5 \\
+        --kernel-tag v0.19.5 \\
         --commit "$GITHUB_SHA" \\
         --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
         --out-manifest ./release-assets/lingtai-kernel-release-manifest.json \\
@@ -144,8 +144,8 @@ def write_sha256sums(manifest: ReleaseManifest, out_path: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--assets-dir", type=Path, required=True, help="directory containing built .whl/.tar.gz files")
-    parser.add_argument("--kernel-version", required=True, help="PEP 440 version, e.g. 0.16.4")
-    parser.add_argument("--kernel-tag", required=True, help="release tag, e.g. v0.16.4")
+    parser.add_argument("--kernel-version", required=True, help="PEP 440 version, e.g. 0.19.5")
+    parser.add_argument("--kernel-tag", required=True, help="release tag, e.g. v0.19.5")
     parser.add_argument("--commit", required=True, help="full git commit SHA the release was built from")
     parser.add_argument("--generated-at", required=True, help="UTC ISO8601 timestamp, injected by the caller")
     parser.add_argument("--out-manifest", type=Path, required=True)

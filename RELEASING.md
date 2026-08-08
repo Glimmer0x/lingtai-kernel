@@ -53,13 +53,13 @@ which:
    ```json
    {
      "schema": "lingtai.kernel.release/v1",
-     "kernel_version": "0.16.4",
-     "kernel_tag": "v0.16.4",
+     "kernel_version": "0.19.5",
+     "kernel_tag": "v0.19.5",
      "commit": "<full 40-char sha>",
-     "generated_at": "2026-07-15T00:00:00Z",
+     "generated_at": "2026-08-07T00:00:00Z",
      "artifacts": [
        {
-         "filename": "lingtai-0.16.4-cp312-cp312-macosx_11_0_arm64.whl",
+         "filename": "lingtai-0.19.5-cp312-cp312-macosx_11_0_arm64.whl",
          "sha256": "<64-char hex>",
          "kind": "wheel",
          "python_tag": "cp312",
@@ -67,7 +67,7 @@ which:
          "platform_tag": "macosx_11_0_arm64"
        },
        {
-         "filename": "lingtai-0.16.4.tar.gz",
+         "filename": "lingtai-0.19.5.tar.gz",
          "sha256": "<64-char hex>",
          "kind": "sdist",
          "python_tag": null,
@@ -75,7 +75,7 @@ which:
          "platform_tag": null
        }
      ],
-     "sdist_fallback": "lingtai-0.16.4.tar.gz"
+     "sdist_fallback": "lingtai-0.19.5.tar.gz"
    }
    ```
 
@@ -133,7 +133,7 @@ always triggers a fail-loud error before upload planning completes.
 # ./release-assets, then:
 python scripts/generate_release_manifest.py \
   --assets-dir release-assets \
-  --kernel-version 0.16.4 --kernel-tag v0.16.4 \
+  --kernel-version 0.19.5 --kernel-tag v0.19.5 \
   --commit "$(git rev-parse HEAD)" \
   --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --out-manifest release-assets/lingtai-kernel-release-manifest.json \

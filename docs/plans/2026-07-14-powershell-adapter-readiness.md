@@ -82,7 +82,7 @@ base; the preserved old-base worktree is snapshot evidence only.
 | External daemon CLI backends | **CORE MECHANISM LEAK** | Backend argv/parsing and process supervision are still directly coupled to `Popen` and POSIX process-group termination. Migrate one headless backend family at a time. The in-process LingTai backend is a separate portable sub-surface. |
 | Avatar launcher | **CORE MECHANISM LEAK** | Validation, boot handshake, and ledger policy are independent, but launch still directly owns POSIX detached-process mechanics. |
 | Interactive daemon / PTY | **DEFERRED** | ConPTY and interactive Claude are a third axis. They do not block the headless support tier. |
-| Windows composition profile | **WIRING GAP** | Create the profile only after capability-native boundaries exist. Reuse portable filesystem adapters and register genuine Windows lease/shell/process implementations. |
+| Windows composition profile | **SELECTOR-WIRED / native acceptance pending** | Reuse portable filesystem adapters and register genuine Windows lease/shell/process implementations. `select_workdir_lease`, `select_refresh_watcher`, `select_avatar_launcher`, `select_shell_dialect`, `select_shell_async_process`, and `select_shell_state_lock` all register their Windows adapters (`WindowsWorkdirLeaseAdapter`, `WindowsRefreshWatcherAdapter`, `WindowsAvatarLauncherAdapter`, `PowerShellDialect`, `WindowsShellAsyncProcessAdapter`, `WindowsShellStateLockAdapter`) as of 2026-08-04–2026-08-07, and the Windows sync run path in `tools/bash/__init__.py` uses `adapters/windows/win32_job.py` for Job-Object process containment. The remaining gap is native acceptance/certification testing, not selector wiring. |
 
 ## Dependency-ordered stages
 
@@ -136,9 +136,13 @@ ranges and one current-main baseline citation were repaired and revalidated.
 **Stage 2 candidate evidence (2026-07-14):** an exact-worktree parent run with
 the repository venv recorded **140 passed in 18.42s** across the new shell
 contract plus the existing synchronous and asynchronous Bash suites.
-`git diff --check` and targeted compile checks were clean. The actual PowerShell
-adapter is deferred to Stage 6, after Stage 3 process supervision exists. Every
-dialect must provide its own policy parser and may not silently bypass policy.
+`git diff --check` and targeted compile checks were clean. At the time of this
+stage the actual PowerShell adapter was deferred to Stage 6, after Stage 3
+process supervision exists; it has since landed at
+`src/lingtai/adapters/windows/powershell.py` and
+`src/lingtai/adapters/windows/powershell_process.py` (see Stage 6 wiring
+status below). Every dialect must provide its own policy parser and may not
+silently bypass policy.
 
 ### Stage 3 — separate Bash asynchronous process supervision
 
@@ -147,9 +151,13 @@ dialect must provide its own policy parser and may not silently bypass policy.
 - [x] Keep durable leases, reminders, poll/cancel state, and terminal-result
   fidelity in the existing policy layer.
 - [x] Wire POSIX process groups and the Bash-local state lock as production
-  adapters. Windows Job Object and Windows state-lock implementations are
-  intentionally deferred to Stage 6, where Windows composition and native
-  acceptance register and certify them behind these fixed contracts.
+  adapters. At the time of this stage, Windows Job Object and Windows
+  state-lock implementations were intentionally deferred to Stage 6, where
+  Windows composition and native acceptance register and certify them behind
+  these fixed contracts; they have since landed at
+  `src/lingtai/adapters/windows/win32_job.py` and
+  `src/lingtai/adapters/windows/powershell_state_lock.py` (see Stage 6 wiring
+  status below).
 
 Stage 3 does not claim Windows process or locking support; its dependency
 correction is to cut and certify the Bash-local contracts and POSIX production
@@ -219,9 +227,10 @@ support remain pending.
   boot policy.
 - [x] Move only interpreter launch, detachment, liveness, and termination behind
   an avatar-local launcher Port.
-- [ ] Add a Windows launcher adapter. This re-cut intentionally keeps only the
-  POSIX reference adapter and the fail-loud selector; no controlled-double or
-  native Windows acceptance is evidence of Windows support.
+- [x] Add a Windows launcher adapter. This re-cut intentionally kept only the
+  POSIX reference adapter and the fail-loud selector at the time; a Windows
+  adapter (`adapters/windows/avatar_launcher.py`) has since landed and
+  `select_avatar_launcher` now registers it (2026-08-07).
 
 Stage 5 parent-validated candidate evidence (2026-07-15): the shared launcher
 Contract covered the POSIX reference adapter; focused avatar/rules/preset/timezone
@@ -235,8 +244,14 @@ wiring, and acceptance test; native Windows support remains pending Stage 6.
 
 - [ ] Reuse the portable LifecycleClock, AgentPresence, MailTransport,
   MigrationWorkspace, NotificationStore, and other proven portable adapters.
-- [ ] Register genuine Windows implementations for WorkdirLease, ShellDialect,
-  process supervision, RefreshWatcher, and avatar launch.
+- [x] Register genuine Windows implementations for WorkdirLease, ShellDialect,
+  process supervision, RefreshWatcher, and avatar launch. All five are now
+  registered via their composition-root selectors (`select_workdir_lease`,
+  `select_shell_dialect`, `select_shell_async_process`,
+  `select_shell_state_lock`, `select_refresh_watcher`,
+  `select_avatar_launcher`, landed 2026-08-04 through 2026-08-07); the
+  remaining Stage 6 work is native acceptance/certification, not selector
+  wiring.
 - [ ] Keep compatibility-preserving neutral adapter renames/re-homing inside this
   production composition slice, not in standalone rename PRs.
 - [ ] Run native acceptance in tiers:
