@@ -12,6 +12,7 @@ Mirrors IMAPMailManager patterns with Telegram-specific adaptations.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -613,6 +614,12 @@ class TelegramManager:
         # any older snapshot.
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
+        # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
+        # resident target. A 1s blanket rebuild only edits Telegram when the
+        # frame actually changed (excluding the volatile ``Last Updated`` line),
+        # so bursty event tails coalesce into at most one edit per second
+        # instead of hammering the per-chat edit rate limit.
+        self._task_card_automatic_fingerprints: dict[tuple[str, int], str] = {}
         self._task_card_tail_thread: threading.Thread | None = None
         self._task_card_tail_stop = threading.Event()
         self._programmable_task_card_thread: threading.Thread | None = None
@@ -2513,7 +2520,10 @@ class TelegramManager:
 
         Detects truncation/replacement (current size smaller than the tracked
         offset, or a changed inode) and reinitializes from the new tail rather
-        than seeking into now-invalid byte positions.
+        than seeking into now-invalid byte positions. The blanket 1s loop also
+        re-renders every tick; this method only fires when the file itself
+        changed, so bursty appends still coalesce through the fingerprint
+        dedupe in ``_broadcast_task_card_event_window``.
         """
         with self._task_card_event_lock:
             path = self._task_card_event_path
@@ -2555,7 +2565,7 @@ class TelegramManager:
             # rehydrated window — even an empty one — must still be broadcast
             # rather than leaving a stale non-empty render displayed.
             self._init_event_tail()
-            changed = True
+            self._broadcast_task_card_event_window(force=True)
         elif stat.st_size > offset:
             changed = self._append_new_lines(path, offset, stat.st_size)
             with self._task_card_event_lock:
@@ -2565,11 +2575,8 @@ class TelegramManager:
                 # strand an old token and fabricate a replacement later.
                 if current_identity is not None:
                     self._task_card_event_identity = current_identity
-        else:
-            changed = False
-
-        if changed:
-            self._broadcast_task_card_event_window()
+            if changed:
+                self._broadcast_task_card_event_window()
 
     def _append_new_lines(self, path: Path, offset: int, size: int) -> bool:
         """Seek to ``offset`` and consume only complete new lines.
@@ -2759,13 +2766,31 @@ class TelegramManager:
                     e,
                 )
 
-    def _broadcast_task_card_event_window(self) -> None:
-        """Project the current bounded window to every resident Task Card.
+    def _task_card_automatic_fingerprint(self, automatic: str) -> str:
+        """Stable fingerprint of an automatic frame for edit dedupe.
+
+        The volatile ``Last Updated:`` line is excluded — it changes on every
+        render and must not force a Telegram edit when the actual content
+        (events, footer, metadata) is unchanged.
+        """
+        stable = "\n".join(
+            line
+            for line in automatic.splitlines()
+            if not line.startswith(_TASK_CARD_TIME_PREFIX)
+        )
+        return hashlib.sha256(stable.encode("utf-8", "replace")).hexdigest()
+
+    def _broadcast_task_card_event_window(self, *, force: bool = False) -> None:
+        """Blanket-rebuild the current window to every resident Task Card.
 
         Update-first per target (same discipline as ``_task_card_create``):
         edits the tracked resident in place, sending/deleting only as
         fail-open recovery. A delivery failure for one target never blocks
         another target's broadcast.
+
+        ``force`` bypasses the fingerprint dedupe (used when the tail was
+        truncated/replaced — the rehydrated window must be pushed even if it
+        renders to the same text, so stale state cannot survive).
         """
         if not self._taskcard_enabled():
             return
@@ -2775,17 +2800,41 @@ class TelegramManager:
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
         )
+        fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
-            try:
-                self._deliver_channel_frame(
-                    account, chat_id, "automatic", automatic,
-                    error="Failed to broadcast task card",
-                )
-            except Exception as e:
-                log.debug(
-                    "Automatic task card broadcast failed for %s:%s: %s",
-                    account, chat_id, e,
-                )
+            key = (account, chat_id)
+            # Check + deliver + store are atomic per route (RLock is reentrant,
+            # so the nested acquisition inside project() is free). This keeps the
+            # fingerprint cache consistent with the actually-delivered frame even
+            # when the 1s blanket loop, the re-enable listener, and a rehydrate
+            # race on the same route.
+            with self._task_card_delivery_lock(account, chat_id):
+                if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
+                    # Skip only when the tracked resident still exists. This guard
+                    # catches tracked-map clears (e.g. a peer process rotating the
+                    # resident in state.json); it does NOT probe whether a user
+                    # deleted the message in-chat, so a deleted card heals on the
+                    # next content change (edit fails -> replace_after_probe), not
+                    # on this tick.
+                    resident_id = self._get_resident_task_card(account, chat_id)
+                    if resident_id is not None:
+                        continue
+                try:
+                    result = self._deliver_channel_frame(
+                        account, chat_id, "automatic", automatic,
+                        error="Failed to broadcast task card",
+                    )
+                    # Cache only when a frame was actually delivered. A suppressed
+                    # project (toggle flipped off mid-broadcast) delivers nothing,
+                    # so caching its fingerprint would pin a stale frame once the
+                    # card is re-enabled.
+                    if result.get("status") == "ok" and not result.get("suppressed"):
+                        self._task_card_automatic_fingerprints[key] = fingerprint
+                except Exception as e:
+                    log.debug(
+                        "Automatic task card broadcast failed for %s:%s: %s",
+                        account, chat_id, e,
+                    )
 
     def _start_task_card_tail(self) -> None:
         """Start the one manager-owned tail worker, idempotently.
@@ -2805,6 +2854,14 @@ class TelegramManager:
                     self._poll_event_tail()
                 except Exception as e:
                     log.debug("Automatic task card event tail poll failed: %s", e)
+                # Blanket rebuild: every tick re-renders the current window and
+                # the fingerprint dedupe inside the broadcast decides whether a
+                # Telegram edit is actually needed. This coalesces bursty event
+                # tails into at most one edit per second.
+                try:
+                    self._broadcast_task_card_event_window()
+                except Exception as e:
+                    log.debug("Automatic task card blanket broadcast failed: %s", e)
                 if self._task_card_tail_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
                     return
 
@@ -2893,9 +2950,15 @@ class TelegramManager:
             return {"status": "error", "error": str(e)}
 
     def _ensure_task_card_resident(self, account: str, chat_id: int) -> dict:
-        """Ensure the resident target for an established inbound chat."""
-        automatic = self._format_task_card_text(
-            "", "", "", rows=[], metadata=None,
+        """Ensure the resident target for an established inbound chat.
+
+        Renders the full automatic event window (not a sparse placeholder) so
+        the first card a human sees is already complete; the 1s blanket keeps
+        it fresh from there.
+        """
+        automatic = TaskCardEventProjection.render_event_groups(
+            self._task_card_event_groups_snapshot(),
+            metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
         )
         return self._resident.ensure(
