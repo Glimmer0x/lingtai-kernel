@@ -1,0 +1,20 @@
+---
+kind: tool-glossary
+schema_version: 1
+tool_package: lingtai.tools.plugin
+language: zh
+related_files:
+- docs.yaml
+- src/lingtai/kernel/tool_glossary.py
+- src/lingtai/tools/glossary_validator.py
+- src/lingtai/tools/plugin/glossary-en.md
+- src/lingtai/tools/plugin/glossary-wen.md
+maintenance: |
+  Simplified-Chinese (zh) glossary for the `plugin` tool package (lingtai.tools.plugin); body must stay non-empty. Update in lockstep with glossary-en.md/glossary-wen.md whenever plugin's public tool schema changes.
+  Body policy: maintain only a minimal term mapping plus at most one or two sentences of naming rationale; do not translate or duplicate the tool schema, parameters, action behavior, manual, contract, or anatomy.
+---
+**术语对照**
+
+- `plugin`：Agent Plugins（agent-plugins.org v1.0.0）标准名，原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `action` / `input` / `reasoning` / `summarize`：LTP v2 信封四字段，字面量不本地化；`info`、`manual` 两个 action 取值同样保持 canonical English。
+- `plugin.json` / `mcp.json` / `skills/`：Agent Plugins 标准文件名与目录名，属规范字面量，不译。

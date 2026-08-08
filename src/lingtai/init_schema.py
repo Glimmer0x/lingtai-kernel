@@ -125,6 +125,16 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # fixed-floor top_results ranking still runs). Runtime mutation via the
     # system tool is not supported — change this field and refresh.
     "summarize_notification_threshold": int,
+    # plugins is the CANONICAL declaration list for Agent Plugins
+    # (agent-plugins.org, v1.0.0): a list of plugin package directories,
+    # absolute / tilde-prefixed / relative to the agent working dir. Each
+    # declared plugin is registered on boot by
+    # services.plugin_registry.register_plugins — its skills/ joins the skills
+    # catalog and its mcp.json servers join mcp_registry.jsonl with
+    # source="plugin:<name>". Removing an entry uninstalls it on the next
+    # refresh. The alias manifest.capabilities.plugin.paths means the same
+    # thing and is retained for configs written against PR #1232.
+    "plugins": list,
 }
 
 # Manifest fields retired from the active schema but still tolerated on
@@ -444,6 +454,20 @@ def validate_init(data: dict) -> list[str]:
     if isinstance(addons, list):
         if not all(isinstance(x, str) for x in addons):
             warnings.append("addons: all entries must be strings (curated MCP names)")
+
+    # Validate manifest.plugins: the canonical Agent Plugins declaration list.
+    # Each entry is a plugin package directory. Per-plugin validation (the
+    # plugin.json $schema/name contract and §4.1 path containment) happens at
+    # registration time, so there is no per-entry validation here — only the
+    # shape, which is what makes a malformed entry a warning rather than a
+    # boot failure.
+    plugins = manifest.get("plugins")
+    if isinstance(plugins, list):
+        if not all(isinstance(x, str) and x for x in plugins):
+            warnings.append(
+                "manifest.plugins: all entries must be non-empty strings "
+                "(Agent Plugin package directories)"
+            )
 
     # Validate manifest.capabilities.skills shape if present.
     caps = manifest.get("capabilities") or {}

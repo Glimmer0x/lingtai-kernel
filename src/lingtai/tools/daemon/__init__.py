@@ -471,10 +471,16 @@ def _parent_host_tool_floor() -> frozenset[str]:
         register no emanation-usable tool surface;
       * ``mcp`` — the MCP host registers no regular tool of its own; parent MCP
         tools are inherited only via task ``mcp`` registrations, never the floor.
+      * ``plugin`` — mcp's flagpost twin. It does register a regular tool, but
+        that tool only renders the *parent's* Agent Plugins catalog, which is
+        not a host primitive and means nothing inside an emanation. Excluded for
+        the same reason optional parent tools are: the floor is host primitives
+        only, and a capability joining ``CORE_DEFAULTS`` must not silently widen
+        it.
     The result is exactly {shell, file}.
     """
     from lingtai.tools.registry import CORE_DEFAULTS  # noqa: PLC0415
-    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp"})
+    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp", "plugin"})
 
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.

@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/knowledge/ANATOMY.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/soul/ANATOMY.md

@@ -13,6 +13,8 @@ related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/plugin/CONTRACT.md
+  - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
@@ -338,6 +340,24 @@ child out-of-band — the same seam `avatar` uses for root `_reasoning` — rath
 than widening `_ROOT_FIELDS` or relaxing the rule that no envelope field
 reaches a child. The sibling `pad` and manual-only `lingtai` roots compose their
 own final child inventories independently.
+
+`plugin/__init__.py` (`../plugin/CONTRACT.md`) is the newest Adapter/consumer,
+and the first that was *born* on this package rather than migrated onto it. It
+is deliberately a copy of `mcp`'s minimal shape, not a variation on it: one
+`_build_family(agent | None, paths)` registering an `info` child and
+`build_manual_child(agent, "plugin")` directly and unwrapped, both declaring the
+exported `MANUAL_INPUT_SCHEMA` strict-empty `input`; an import-time `agent=None`
+instance backing `get_schema()` whose construction is the registry's
+duplicate/reserved-name collision check; a post-dispatch `_flatten_manual_result`
+producing the family's own flat `plugin_manual` public shape; and an outer
+`handle_plugin` rendering the same pre-`ToolFamily` unknown-action envelope
+`mcp` pins, including the missing-action empty-string default and the unhashable
+`action` case routed by `child_names` tuple membership. Being new, it had no
+pre-migration envelope to preserve — it adopts `mcp`'s because the two tools are
+deliberate twins, which is a consumer's choice under "Implementation
+independence", not a requirement this package imposes. Its migration joins
+`kernel/tool_result_summary.py`'s `_LTP_V2_MIGRATED_FAMILIES` in the same change,
+per the allowlist step noted above.
 
 Every other built-in family remains fully independent of this package until
 its own scoped migration.

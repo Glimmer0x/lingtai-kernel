@@ -11,6 +11,8 @@ related_files:
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
+  - src/lingtai/services/plugin_registry.py
+  - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/services/vision/ANATOMY.md
   - src/lingtai/services/websearch/ANATOMY.md
@@ -47,6 +49,7 @@ Root services package — pluggable backends for intrinsic tools and MCP clients
 | `mcp_registry.py` | — | MCP registry infrastructure (the non-tool half of the `lingtai/tools/mcp` capability): record schema (`validate_record`), JSONL registry I/O (`read_registry`, `_append_record`), catalog loader (`_load_catalog`, path constant recomputed for this location), secret-safe identity projection (`read_identities`, `IDENTITY_SAFE_ACCOUNT_KEYS`), boot-time addon decompression (`decompress_addons`), and the system-prompt XML renderer (`_build_registry_xml`). Consumed by the `lingtai/tools/mcp` tool slice (lazy import) and `agent.py` |
 | `mcp_inbox.py` | — | LICC v1 filesystem inbox poller plus Core projection; in-process publication receives the agent and uses its injected Notification Store while the external inbox path/envelope stays unchanged (`src/lingtai/services/mcp_inbox.py:373-395`). |
 | `mcp_licc.py` | — | LICC v1 client producer (`push_inbox_event`); imports contract constants from `mcp_inbox.py` |
+| `plugin_registry.py` | — | Agent Plugins v1.0.0 discovery **and registration** infrastructure (the non-tool half of the `lingtai/tools/plugin` capability, `src/lingtai/tools/plugin/ANATOMY.md`): §4.1 path containment (`resolve_contained`), manifest validation against the pinned `PLUGIN_SCHEMA_URL` and the v1.0.0 `name` grammar (`validate_manifest`), component discovery through the one server gate (`_scan_skills`, `resolve_server_spec`, `_scan_mcp_servers`), per-plugin and per-path scanning (`read_plugin`, `scan_plugin_root`, `read_plugins`), boot-time registration of declared plugins (`declared_plugin_paths`, `to_registry_record`, `prune_plugin_records`, `register_plugins`), and the `<registered_plugin>` system-prompt XML renderer (`_build_registry_xml`). Stdlib only, spawns nothing, and makes no network call — `$schema` values are compared as opaque version identifiers, never fetched. It writes in exactly one place, at boot only: `mcp_registry.jsonl` lines stamped `source="plugin:<name>"`, appended through `mcp_registry.validate_record` — the same gate curated addons pass. Consumed by the `lingtai/tools/plugin` tool slice (lazy import) and by `Agent._register_declared_plugins` |
 | `LICC_NOTIFICATION_CONTRACT.md` | — | The LICC notification two-lane projection contract governing curated IM producers; live diagnosis and recovery are documented in `docs/references/licc-notification-wake-runbook.md` |
 
 **Sub-packages (not covered here):** `vision/` (7 provider files), `websearch/` (6 provider files).

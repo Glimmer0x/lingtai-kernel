@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/mcp/manual/SKILL.md
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/mcp_servers/ANATOMY.md
   - tests/test_mcp_capability.py
   - tests/test_mcp_inbox.py

@@ -111,6 +111,18 @@ BUILTIN_TOOLS: dict[str, str] = {
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
+    # Agent Plugins (agent-plugins.org v1.0.0) catalog. The *tool* is a twin of
+    # ``mcp``: pure presentation, zero side effects — it renders the catalog and
+    # reports the boot registration snapshot, and no action it exposes mounts
+    # anything. Mounting itself happens once per boot/refresh, outside this tool,
+    # in ``services.plugin_registry.register_plugins``: a plugin declared in
+    # ``init.json`` ``manifest.plugins`` has its validated skill directories
+    # composed into the skills catalog and its ``mcp.json`` servers written to
+    # ``mcp_registry.jsonl`` as ``source="plugin:<name>"`` records. Registry-level
+    # only — nothing is executed, and activating a server still needs an
+    # ``init.json`` top-level ``mcp`` entry. A plugin merely *discovered* on an
+    # inherited skills path mounts nothing at all.
+    "plugin": "lingtai.tools.plugin",
     "task_card": "lingtai.tools.task_card",
     # Unified public file capability: one package owning the composed schema,
     # the envelope dispatch, and all five operation implementations. The
@@ -138,6 +150,10 @@ CORE_DEFAULTS: dict[str, dict] = {
     "avatar": {},
     "daemon": {},
     "mcp": {},
+    # Default-on for the same reason ``mcp`` is: the capability is pure
+    # presentation. It renders a read-only catalog and writes nothing at all,
+    # so booting it on every agent costs one directory scan and risks nothing.
+    "plugin": {},
     "task_card": {},
     "file": {},
 }
