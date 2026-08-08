@@ -1,9 +1,9 @@
 """Outer platform selector for the RefreshWatcher capability.
 
-Composition roots call this selector instead of constructing the POSIX handoff
-adapter directly.  This slice has one real implementation; unsupported
-platforms fail before importing it rather than receiving a no-op watcher or a
-misleading default.
+Composition roots call this selector instead of constructing a platform
+adapter directly.  This slice ships production POSIX and Windows adapters;
+other unsupported platforms fail before importing either one rather than
+receiving a no-op watcher or a misleading default.
 """
 from __future__ import annotations
 
@@ -16,10 +16,9 @@ from lingtai.kernel.refresh_watcher import RefreshWatcherPort
 def select_refresh_watcher() -> RefreshWatcherPort:
     """Return the production refresh-watcher Port for this platform.
 
-    The current vertical slice intentionally ships only the POSIX adapter.  The
-    selector is the capability-level registration point for a future genuine
-    platform implementation and owns the fail-loud unsupported-platform
-    behavior.
+    This vertical slice ships production POSIX and Windows adapters. The
+    selector is the capability-level registration point for either one and
+    owns the fail-loud unsupported-platform behavior for anything else.
     """
     if sys.platform == "win32":
         from lingtai.adapters.windows.refresh_watcher import WindowsRefreshWatcherAdapter

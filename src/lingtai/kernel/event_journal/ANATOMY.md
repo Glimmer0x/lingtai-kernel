@@ -35,14 +35,14 @@ source-position value used by agent event producers.
 ## Connections
 
 `BaseAgent` receives the Port and stores it as `_event_journal`
-(`src/lingtai/kernel/base_agent/__init__.py:278-320`), appends fully assembled
-runtime events through it (`src/lingtai/kernel/base_agent/__init__.py:938-946`),
+(`src/lingtai/kernel/base_agent/__init__.py:409`), appends fully assembled
+runtime events through it (`src/lingtai/kernel/base_agent/__init__.py:1058-1059`),
 and closes it best-effort after session and mail teardown but before final
-liveness withdrawal (`src/lingtai/kernel/base_agent/lifecycle.py:266-290`).
+liveness withdrawal (`src/lingtai/kernel/base_agent/lifecycle.py:297-299`).
 
 The outer `Agent` wrapper constructs the POSIX adapter when callers omit the Port
-(`src/lingtai/agent.py:115-141`). The CLI boot path injects that adapter explicitly
-before later config hydration (`src/lingtai/cli.py:125-141`).
+(`src/lingtai/agent.py:181-194`). The CLI boot path injects that adapter explicitly
+before later config hydration (`src/lingtai/cli.py:134-137`).
 
 ## Composition
 

@@ -1,6 +1,6 @@
 """Agent — BaseAgent + composable capabilities.
 
-Anatomy leaf: docs/plans/drafts/2026-04-30-anatomy-tree/leaves/core/preset-materialization/
+Anatomy leaf: see ANATOMY.md in this directory for preset materialization.
 
 Layer 2 of the three-layer hierarchy:
     BaseAgent (kernel) → Agent (capabilities) → CustomAgent (domain)

@@ -6,17 +6,18 @@ related_files:
 - src/lingtai/tools/context/_molt.py
 - src/lingtai/llm/openai/adapter.py
 maintenance: |
-  Spec-first design doc (status: spec-first, dated 2026-07-02, branch spec/runtime-agent-session-objects-20260702) that cites code by file:line; update its citations and "Implementation status" section as the runtime/agent session objects move from spec to shipped code, so the file:line grounding does not rot.
+  Design doc (spec dated 2026-07-02, branch spec/runtime-agent-session-objects-20260702; wiring shipped by c46fad8e) that cites code by file:line; keep its citations and "Implementation status" section in sync with the runtime/agent session objects' actual shipped state so the file:line grounding does not rot.
 ---
 
 # Runtime session vs. agent session — explicit kernel objects
 
-Status: **spec-first** (this branch ships the spec + a benchmark/prototype of the
-optimized rebuild path; see "Implementation status" at the end for exactly what
-is code vs. spec).
+Status: **shipped**. The `RuntimeSession`/`AgentSession` objects, the optimized
+rebuild path, and the `_start`/`meta_block` wiring below are all landed on
+`main`; see "Implementation status" at the end for what's shipped vs. still
+open.
 
-Date: 2026-07-02
-Branch: `spec/runtime-agent-session-objects-20260702`
+Date: 2026-07-02 (spec), wiring landed by `c46fad8e`
+Branch: `spec/runtime-agent-session-objects-20260702` (spec origin; superseded by `main`)
 
 ## Why this document exists
 
@@ -39,7 +40,10 @@ path (no full `events.jsonl` scans in the normal case), the benchmark
 requirement, migration/back-compat, and the consumer API surface.
 
 Code is truth. Every claim below cites the code it is grounded in
-(`file:line`), read at branch base `origin/main` (`e53fb20`).
+(`file:line`), originally read at branch base `origin/main` (`e53fb20`); the
+wiring has since landed on `main` (`c46fad8e` — see "Implementation status"),
+and file:line citations in the body predate that landing. Prefer function/class
+names over the line numbers below when they conflict with current code.
 
 ---
 
@@ -373,24 +377,34 @@ testable and benchmarkable offline.
   operators can `lingtai-agent log rebuild` (`services/logging.py:845`) to
   restore the fast path.
 
-### Remaining implementation tasks (post-spec)
+### Post-spec implementation tasks — status
 
-1. Land `RuntimeSession`/`AgentSession` dataclasses + accessors on
-   `SessionManager`/`BaseAgent`.
-2. Wire `rebuild_agent_session()` into `_start` so refresh/restart rebuilds the
-   current agent session for `molt_count` (in addition to, then eventually
-   instead of, the lifetime ledger restore).
-3. Reset the runtime session object on `_perform_refresh` and re-anchor on molt
-   (baselines already do this; the named object just needs to follow).
-4. Point `meta_block.build_tool_meta_token_usage`'s `session` half at the
-   `AgentSession` aggregate (§6.2), preserving the #679 "survives refresh"
-   contract.
-5. Migrate the startup token restore off the full ledger scan onto the
-   event-based rebuild (the #679-sensitive change, done last with its own tests).
+1. **Shipped.** `RuntimeSession`/`AgentSession` dataclasses + accessors live on
+   `SessionManager` (`kernel/session.py`) and are exposed on `BaseAgent` via
+   `runtime_session()`, `agent_session()`, `rebuild_agent_session()`,
+   `agent_session_token_usage()`.
+2. **Shipped.** `lifecycle._start` calls `agent.rebuild_agent_session()`
+   (`kernel/base_agent/lifecycle.py:174`) and seeds `restore_token_state` from
+   the rebuilt aggregate before falling back to the lifetime ledger.
+3. **Partially shipped.** `tools/context/_molt.py` (`:502`, `:748`) calls
+   `session.reset_session_token_usage()`, which re-mints the `RuntimeSession`
+   object on molt (`kernel/session.py::reset_runtime_session_token_usage` →
+   `reset_runtime_session`). `_perform_refresh` does **not** yet call this —
+   the runtime-session object is only re-minted on molt and on fresh
+   `SessionManager` construction, not on every refresh. Still open.
+4. **Shipped.** `meta_block._build_session_token_economy`
+   (`kernel/meta_block.py:1544`) sources the injected `token_usage.session`
+   half from the agent-session view (`agent_session_token_usage()`),
+   preserving the #679 "survives refresh" contract.
+5. **Shipped as the primary path.** `lifecycle._start` seeds the startup token
+   restore from the event-based rebuild first; the full `token_ledger.jsonl`
+   scan (`sum_token_ledger`) now runs only as a back-compat fallback when the
+   rebuild yields no usable trajectory (`rebuild_tier == "none"` — brand-new
+   agent or corrupt/absent events).
 
 ---
 
-## Implementation status (this branch)
+## Implementation status (current, `main` @ `c46fad8e`)
 
 > Note: `docs/` is gitignored (`.gitignore:41`) but the existing reference docs
 > under `docs/references/` are tracked; this spec follows that convention and was
@@ -399,11 +413,12 @@ testable and benchmarkable offline.
 - **Spec:** this document. ✅
 - **Optimized rebuild primitive:** `rebuild_agent_session_from_events` +
   `RuntimeSession`/`AgentSession` dataclasses shipped as a self-contained kernel
-  module (`src/lingtai/kernel/agent_session.py`). ✅ (prototype — not yet wired
-  into `_start`; see follow-up #2.)
+  module (`src/lingtai/kernel/agent_session.py`). ✅
 - **Benchmark:** the `lingtai-kernel-anatomy` skill's
   `scripts/bench_agent_session_rebuild.py` measures rebuild time and proves
   Tier 1 (indexed) vs. Tier 3 (full scan) on a synthetic events source.
   See the report for results and command. ✅
-- **Wiring into lifecycle / meta_block / startup restore:** spec-only in this
-  branch (follow-ups #2, #4, #5). ❌ (deliberately deferred — hot path + #679.)
+- **Wiring into lifecycle / meta_block / startup restore:** shipped (tasks
+  1, 2, 4, 5 above). ✅ **Runtime-session reset on refresh** (the refresh half
+  of task 3): not yet wired — molt re-anchors the object, `_perform_refresh`
+  does not. ❌
