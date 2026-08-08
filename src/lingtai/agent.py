@@ -1,6 +1,6 @@
 """Agent — BaseAgent + composable capabilities.
 
-Anatomy leaf: docs/plans/drafts/2026-04-30-anatomy-tree/leaves/core/preset-materialization/
+Anatomy leaf: see ANATOMY.md in this directory for preset materialization.
 
 Layer 2 of the three-layer hierarchy:
     BaseAgent (kernel) → Agent (capabilities) → CustomAgent (domain)
@@ -172,7 +172,7 @@ class Agent(BaseAgent):
         # Inject the built-in intrinsic tool registry. The kernel owns the tool
         # machinery, not the concrete tools: it accepts intrinsics as injection
         # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
-        # it supplies the five mandatory intrinsics here. ``setdefault`` lets a
+        # it supplies the six mandatory intrinsics here. ``setdefault`` lets a
         # host override (e.g. a test injecting a subset).
         from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)

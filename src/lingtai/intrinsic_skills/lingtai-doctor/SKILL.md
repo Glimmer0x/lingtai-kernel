@@ -58,7 +58,8 @@ Layered so one broken surface is not mistaken for a dead agent:
    `~/.lingtai-tui/runtime/venv/bin/python` replacements.
 7. **First-party MCP server imports** — if a configured stdio command points at a
    usable Python executable, tries importing the configured LingTai curated MCP
-   modules (`lingtai.mcp_servers.` `telegram`/`feishu`/`wechat`/`whatsapp`/`imap`)
+   modules (`lingtai.mcp_servers.`
+   `telegram`/`feishu`/`wechat`/`whatsapp`/`imap`/`cloud_mail`)
    without reading credentials.
 
 ## Reading the result

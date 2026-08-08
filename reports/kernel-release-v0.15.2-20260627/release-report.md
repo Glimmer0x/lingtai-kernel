@@ -37,8 +37,10 @@ A first full run without `PYTHONPATH=src` produced three subprocess import failu
 ```
 
 ## Publish checklist
-- [ ] Version/report/cap PR merged
-- [ ] GitHub release `v0.15.2` published
-- [ ] PyPI `lingtai 0.15.2` uploaded and verified
-- [ ] Release URLs verified
+This checklist reflects a pre-publish snapshot; the release has since completed
+(release commits `95bb06ef`, `603e5d85`; tag `v0.15.2`).
+- [x] Version/report/cap PR merged
+- [x] GitHub release `v0.15.2` published — https://github.com/Lingtai-AI/lingtai-kernel/releases/tag/v0.15.2
+- [x] ~~PyPI `lingtai 0.15.2` uploaded and verified~~ — not applicable; RELEASING.md's non-goals establish no PyPI publication for this package
+- [x] Release URLs verified
 - [x] Local validation caveat recorded

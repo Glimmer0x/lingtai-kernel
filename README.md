@@ -24,7 +24,7 @@ maintenance: |
 
 **The Python runtime and SDK that powers LingTai agents.**
 
-[![PyPI](https://img.shields.io/pypi/v/lingtai?color=%237dab8f)](https://pypi.org/project/lingtai/)
+[![Release](https://img.shields.io/github/v/release/Lingtai-AI/lingtai-kernel?color=%237dab8f)](https://github.com/Lingtai-AI/lingtai-kernel/releases)
 [![License](https://img.shields.io/github/license/Lingtai-AI/lingtai-kernel?color=%237dab8f)](LICENSE)
 [![Blog](https://img.shields.io/badge/blog-lingtai.ai-%23d4a853)](https://lingtai.ai)
 

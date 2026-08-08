@@ -53,9 +53,13 @@ uv pip install -e . pytest
 
 ## 架构 / 开发者入口
 
+在修改任何内容之前，编码代理应首先查找并阅读本仓库本地的开发指南技能；它统领工作流程，并将各项任务导向下方链接的入口点，而不重复 Anatomy 或 Contract 体系。
+
 | 入口 | 涵盖内容 |
 |---|---|
-| [`ANATOMY.md`](../../ANATOMY.md) | 仓库地图——顶层布局，以及各子系统的解剖从何处开始。 |
+| [`dev-guide-skill/SKILL.md`](../../dev-guide-skill/SKILL.md) | 强制性的仓库本地开发指南技能：编码代理在修改前必须遵循的开发工作流程。 |
+| [`ANATOMY.md`](../../ANATOMY.md) | 仓库地图——顶层布局，以及各子系统的解剖从何处开始，并如何联结到其行为 Contract。 |
+| [`CONTRACT.md`](../../CONTRACT.md) | 规范性的接口/行为承诺，以及受治理组件配对/归属规则，与 Anatomy 结构相链接。 |
 | [`src/lingtai/kernel/ANATOMY.md`](../../src/lingtai/kernel/ANATOMY.md) | 核心运行时：`BaseAgent`、轮次/生命周期、工具机制、信件、LLM 协议。 |
 | [`src/lingtai/ANATOMY.md`](../../src/lingtai/ANATOMY.md) | `lingtai` 包：`Agent(BaseAgent)`、能力、预设、CLI、公开重导出。 |
 | [`src/lingtai/tools/ANATOMY.md`](../../src/lingtai/tools/ANATOMY.md) | 具体的内置工具，以及组合它们的注册表。 |

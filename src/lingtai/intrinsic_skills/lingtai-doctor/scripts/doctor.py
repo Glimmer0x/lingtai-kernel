@@ -44,6 +44,7 @@ ADDON_MODULES = {
     "wechat": "lingtai.mcp_servers.wechat",
     "whatsapp": "lingtai.mcp_servers.whatsapp",
     "imap": "lingtai.mcp_servers.imap",
+    "cloud_mail": "lingtai.mcp_servers.cloud_mail",
 }
 
 

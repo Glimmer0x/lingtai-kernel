@@ -54,8 +54,11 @@ snapshot/source-revision Git capability, and the migration workspace. It also
 houses the capability-owned POSIX avatar launcher adapter. It is an
 implementation-only Anatomy with no independent local Contract; for the
 Anatomy/Contract pairing rule its unique owning Core component Contract is
-`src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed only in
-that Contract's `related_files`). Each Core adapter implements its owning Port
+`src/lingtai/kernel/event_journal/CONTRACT.md` (this Anatomy is listed in that
+Contract's `related_files`). It is also linked bidirectionally with the
+capability-local `src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md`
+(see this Anatomy's own `related_files` above), which owns the
+`PosixInteractiveTerminalAdapter` promise. Each Core adapter implements its owning Port
 rather than defining a separate behavioral promise; the mail adapter's promises
 are owned by `src/lingtai/kernel/mail_transport/CONTRACT.md`, the workdir-lease
 adapter's by `src/lingtai/kernel/workdir_lease/CONTRACT.md`, the refresh-watcher
@@ -86,10 +89,10 @@ co-located owning ANATOMY.md files.
   messages as files into a recipient's inbox and polling its own inbox plus
   subscribed pseudo-agent outboxes (`src/lingtai/adapters/posix/mail.py:34-69`).
 - `send()` handshakes, injects mailbox metadata, copies attachments, and writes
-  `message.json` atomically (`src/lingtai/adapters/posix/mail.py:84-162`);
+  `message.json` atomically via `os.replace`
+  (`send()`, `src/lingtai/adapters/posix/mail.py:102`; atomic write at :184);
   `listen()`/`stop()` own the 0.5-second daemon poll loop with pseudo-outbox
-  priority and per-phase `OSError` isolation
-  (`src/lingtai/adapters/posix/mail.py:168-219`, `src/lingtai/adapters/posix/mail.py:425-430`).
+  priority and per-phase `OSError` isolation.
 - `PosixWorkdirLeaseAdapter` implements `WorkdirLeasePort` by holding an exclusive
   non-blocking `fcntl.flock` on `<workdir>/.agent.lock`
   (`src/lingtai/adapters/posix/workdir_lease.py:27-95`); `acquire()` polls at
@@ -129,7 +132,7 @@ co-located owning ANATOMY.md files.
   single encoded-request argument via `refresh_watcher.decode_request`,
   renders the Core-owned watcher program text via
   `watcher_program.render_watcher_script(request)`, and `exec`s it in a fresh
-  namespace — this is the only place the previously argv-embedded ~480-line
+  namespace — this is the only place the previously argv-embedded
   generated program text is materialized, replacing the earlier
   `sys.executable -c <script>` transport. `main` performs no watcher policy
   itself and is directly callable in tests independent of a real subprocess.
@@ -209,9 +212,11 @@ open `.agent.lock` file handle while the lease is held; release resets adapter
 state, attempts unlock and close, and unlinks only after closure is confirmed so
 an uncertain live descriptor cannot create split-inode authority
 (`src/lingtai/adapters/posix/workdir_lease.py:38-96`). The notification-store
-adapter owns the internal `threading.Lock` and the workdir path, and writes
-`.notification/<channel>.json` plus `.notification/large_result_acks.json`
-(`src/lingtai/adapters/posix/notification_store.py:63-66`, `src/lingtai/adapters/posix/notification_store.py:210-240`).
+adapter owns the internal `threading.Lock` (set in `__init__`,
+`src/lingtai/adapters/posix/notification_store.py:68-76`) and the workdir path,
+and writes `.notification/<channel>.json` plus
+`.notification/large_result_acks.json` via `load_ack_refs`/`update_ack_refs`
+(`src/lingtai/adapters/posix/notification_store.py:227`, `:237-254`).
 The migration-workspace adapter owns only its bound `(domain, root)` pair and
 writes the domain's `_kernel_meta.json` version file, `system/migrations/` archive
 artifacts, and best-effort `logs/events.jsonl` audit through PID-suffixed temp + replace; it holds no long-lived handle or lock.

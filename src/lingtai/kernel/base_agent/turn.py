@@ -1113,8 +1113,10 @@ def _is_context_molt_call(tc) -> bool:
     family advertises and the exact shape the kernel itself synthesizes for a
     forced molt (``tools/context/_molt.py``).  This is a read path over the
     live batch, not a second accepted call shape: nothing in ``context``
-    dispatch admits the former ``psyche``/``context_molt`` spellings, and no
-    tool named ``psyche`` exists to produce one.
+    dispatch admits the former ``psyche``/``context_molt`` spellings. A
+    ``psyche`` tool still exists, but it is the unrelated read-only routing
+    root over pad/lingtai/knowledge/skills — its action set has no ``molt``
+    to produce one.
     """
     if getattr(tc, "name", None) != "context":
         return False
@@ -1814,7 +1816,8 @@ def _process_response(agent, response, *, ledger_source: str = "main") -> dict:
         # canonical history; only the latest holder per family is current
         # state.
         if _batch_includes_context_molt(response.tool_calls):
-            # ``psyche.molt`` publishes ``.notification/post-molt.json`` before
+            # ``context(action='molt')`` (``tools/context/_molt.py``) publishes
+            # ``.notification/post-molt.json`` before
             # its own tool result returns.  Do not let that same result batch
             # consume the notification or commit its fingerprint; otherwise the
             # post-turn IDLE sync would see no change and skip the wake.  Leaving

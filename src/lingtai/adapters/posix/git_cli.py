@@ -15,7 +15,14 @@ _GITIGNORE = (
     ".sleep\n"
     ".suspend\n"
     ".agent.heartbeat\n"
-    ".timemachine.pid\n"
+    ".refresh\n"
+    ".refresh.taken\n"
+    ".prompt\n"
+    ".clear\n"
+    ".inquiry\n"
+    ".inquiry.taken\n"
+    ".rules\n"
+    ".interrupt\n"
 )
 
 

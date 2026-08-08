@@ -46,8 +46,10 @@ __all__ = [
 # (post-increment). See src/lingtai/tools/context/_molt.py.
 #
 # LEGACY PERSISTENCE KEY. The public tool that performs a molt is now
-# ``context(action='molt')`` — the ``psyche`` family it came from no longer
-# exists at any model-visible or registry level. This durable *event* name is
+# ``context(action='molt')`` — the OLD ``psyche`` family's ``molt`` action no
+# longer exists (the ``psyche`` name is reused today by an unrelated
+# read-only routing root over pad/lingtai/knowledge/skills, still registered
+# in registry.py). This durable *event* name is
 # deliberately NOT renamed with it: it is the boundary marker every historical
 # ``logs/events.jsonl`` row and every ledger row already on disk carries, and
 # it is queried by literal string in the SQL below. Renaming it would make
@@ -58,7 +60,7 @@ __all__ = [
 MOLT_BOUNDARY_EVENT = "psyche_molt"
 
 # The event type carrying per-provider-round token usage. See
-# src/lingtai/kernel/session.py:608-616 (``llm_response`` with input_tokens/
+# src/lingtai/kernel/session.py:674-675 (``llm_response`` with input_tokens/
 # output_tokens/thinking_tokens/cached_tokens).
 TOKEN_EVENT = "llm_response"
 

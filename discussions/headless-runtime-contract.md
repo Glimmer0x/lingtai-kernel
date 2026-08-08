@@ -39,7 +39,7 @@ Controllers may write a single-recipient probe to the human pseudo-agent outbox:
 }
 ```
 
-The real `FilesystemMailService` poller claims the message, moves it to
+The real `PosixFilesystemMailAdapter` poller claims the message, moves it to
 `human/mailbox/sent/<probe-id>/`, writes the probe into the agent inbox, and
 writes a structured `runtime_probe_ack` into `human/mailbox/inbox/`.
 

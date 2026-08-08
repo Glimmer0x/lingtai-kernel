@@ -20,13 +20,14 @@ The kernel's message catalog — a flat key-value string table covering system n
 
 ## Components
 
-- `__init__.py` — the entire module (60 lines). Three public symbols and one module-level cache:
+- `__init__.py` — the entire module (77 lines). Three public symbols, one module-level cache, and one load-tracking set:
   - `_DIR` (`i18n/__init__.py:18`) — resolves to this folder; locates `{lang}.json` at runtime.
   - `_CACHE: dict[str, dict[str, str]]` (`i18n/__init__.py:19`) — in-memory cache, lazy-loaded per language on first access.
-  - `_load(lang)` (`i18n/__init__.py:22-30`) — loads and caches a locale file; returns `{}` if the JSON file is missing.
-  - `register_strings(lang, strings)` (`i18n/__init__.py:33-41`) — additive merge of external strings into `_CACHE`; its docstring names the wrapper as the caller.
-  - `t(lang, key, **kwargs)` (`i18n/__init__.py:44-60`) — loads the locale, looks up the key, falls back to English, then to the raw key string, and formats with `defaultdict(str, kwargs)`.
-- `en.json` — English (baseline). ~80 keys across 7 prefixes: `system.`, `soul.`, `insight.`, `psyche.`, `system_tool.`, `tool.`, `email.`.
+  - `_DISK_LOADED: set[str]` (`i18n/__init__.py:25`) — languages whose on-disk kernel catalog has been merged into `_CACHE`, tracked separately so a `register_strings`-only language (e.g. the tools bridge registering before any kernel `t()` call) doesn't suppress the kernel's own disk load.
+  - `_load(lang)` (`i18n/__init__.py:28-45`) — loads and caches a locale file (registered strings win over on-disk defaults for the same key); returns `{}` if the JSON file is missing.
+  - `register_strings(lang, strings)` (`i18n/__init__.py:48-58`) — additive merge of external strings into `_CACHE`; its docstring names the wrapper as the caller.
+  - `t(lang, key, **kwargs)` (`i18n/__init__.py:61-77`) — loads the locale, looks up the key, falls back to English, then to the raw key string, and formats with `defaultdict(str, kwargs)`.
+- `en.json` — English (baseline). **7 keys across 2 prefixes**: `system.`, `insight.`. Other prefixes referenced by callers below (`soul.`, `context.`, `system_tool.`, `email.`) are not in this file — they are registered into the shared `_CACHE` at runtime by the tools bridge (see "Inbound — tools bridge" below), not shipped as kernel-owned disk defaults.
 - `zh.json` — 中文. Mirror of en.json; same key set.
 - `wen.json` — 文言. Mirror of en.json in Classical Chinese register; same key set.
 
@@ -36,15 +37,15 @@ The kernel's message catalog — a flat key-value string table covering system n
 
 | Caller | Citation | Typical keys |
 |---|---|---|
-| `meta_block.py` | `meta_block.py:151-176` | `system.current_time`, context fragments |
-| `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:223`, `src/lingtai/tools/system/karma.py:71`, `src/lingtai/tools/system/karma.py:90` | `system_tool.*` runtime manager prose |
-| `lingtai/tools/context/` | `src/lingtai/tools/context/_molt.py:490`, `src/lingtai/tools/context/_molt.py:562-566`, `src/lingtai/tools/context/_molt.py:708` | `psyche.*` runtime manager prose |
+| `meta_block.py` | `meta_block.py:3243`, `meta_block.py:3264-3265` | `system.current_time`, `system.context_unknown`, context fragments |
+| `lingtai/tools/system/` | `src/lingtai/tools/system/preset.py:202`, `src/lingtai/tools/system/karma.py:98`, `src/lingtai/tools/system/karma.py:117` | `system_tool.*` runtime manager prose |
+| `lingtai/tools/context/` | `src/lingtai/tools/context/_molt.py:551`, `src/lingtai/tools/context/_molt.py:599-603`, `src/lingtai/tools/context/_molt.py:780` | `context.*` runtime manager prose (renamed from `psyche.*`) |
 | `lingtai/tools/soul/` | `src/lingtai/tools/soul/config.py:374`, `src/lingtai/tools/soul/config.py:384`, `src/lingtai/tools/soul/consultation.py:389`, `src/lingtai/tools/soul/consultation.py:645` | `soul.*` runtime manager prose |
-| `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:288` | `email.*` runtime manager prose |
+| `lingtai/tools/email/` | `src/lingtai/tools/email/primitives.py:290` | `email.*` runtime manager prose |
 
-**Inbound — tools bridge.** The tools string catalog `src/lingtai/tools/i18n/__init__.py` loads every locale table (`src/lingtai/tools/i18n/__init__.py:31`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/lingtai/tools/i18n/__init__.py:38`, calling `register_strings` at `src/lingtai/tools/i18n/__init__.py:45`), triggered on import of `lingtai.tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:33-41`).
+**Inbound — tools bridge.** The tools string catalog `src/lingtai/tools/i18n/__init__.py` loads every locale table (`src/lingtai/tools/i18n/__init__.py:39`) and pushes all keys into the kernel cache via `register_strings()` (`_register_all` at `src/lingtai/tools/i18n/__init__.py:46`, calling `register_strings` at `src/lingtai/tools/i18n/__init__.py:48`), triggered on import of `lingtai.tools.registry`. The kernel side is only the additive merge hook (`i18n/__init__.py:48-58`).
 
-**Outbound — none.** This module has no imports beyond `json`, `pathlib`, and `collections.defaultdict` (`i18n/__init__.py:15-16`, `i18n/__init__.py:50`). It is a leaf dependency.
+**Outbound — none.** This module has no imports beyond `json`, `pathlib`, and `collections.defaultdict` (`i18n/__init__.py:15-16`, `i18n/__init__.py:67`). It is a leaf dependency.
 
 ## Composition
 
@@ -59,7 +60,7 @@ The kernel's message catalog — a flat key-value string table covering system n
 
 ## Notes
 
-- **Fallback chain:** `t("zh", "foo")` → check `zh.json["foo"]` → check `en.json["foo"]` → return `"foo"` (`i18n/__init__.py:52-57`). The key-as-fallback behavior makes missing translations visible rather than fatal.
-- **Template vars:** `format_map(defaultdict(str, ...))` means missing placeholder values render as empty strings instead of raising (`i18n/__init__.py:47-59`).
+- **Fallback chain:** `t("zh", "foo")` → check the merged `zh` table (registered strings, then on-disk `zh.json`) → check the merged `en` table → return `"foo"` (`i18n/__init__.py:69-74`). The key-as-fallback behavior makes missing translations visible rather than fatal.
+- **Template vars:** `format_map(defaultdict(str, ...))` means missing placeholder values render as empty strings instead of raising (`i18n/__init__.py:75-76`).
 - **No pluralisation or ICU.** The system is flat key-value with Python `str.format`. Complex linguistic features (plural forms, gendered agreement) are handled by having per-locale templates that embed the logic, not by the engine.
-- **The tools bridge is one-directional.** The tools catalog calls `register_strings()` into the kernel cache; this folder never imports tool code (`src/lingtai/tools/i18n/__init__.py:38`, `i18n/__init__.py:33-41`).
+- **The tools bridge is one-directional.** The tools catalog calls `register_strings()` into the kernel cache; this folder never imports tool code (`src/lingtai/tools/i18n/__init__.py:46`, `i18n/__init__.py:48-58`).

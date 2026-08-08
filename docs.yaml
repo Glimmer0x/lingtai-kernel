@@ -61,7 +61,7 @@ related_files:
 maintenance: |
   This file is the canonical, machine-readable authoring template and
   validation contract for every Markdown document in the repository — all
-  244 candidates, with zero path-level content exemptions. A change to
+  304 candidates, with zero path-level content exemptions. A change to
   required_fields, field_constraints, metadata_modes,
   metadata_mode_overrides, placeholder_patterns, or lifecycle_contract requires
   updating scripts/check_docs_governance.py and tests/test_docs_governance.py

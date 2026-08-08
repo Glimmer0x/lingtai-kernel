@@ -16,7 +16,7 @@ two extra steps into the standard ``setuptools.build_meta`` flow:
    distribution reports ``has_ext_modules()`` *before* superclass layout
    finalization. That single predicate drives the platform tag
    (``root_is_pure=False`` → e.g.
-   ``lingtai-0.10.10-cp311-cp311-macosx_14_0_arm64.whl``) *and* the install
+   ``lingtai-0.19.5-cp311-cp311-macosx_14_0_arm64.whl``) *and* the install
    scheme, so every package — including the bundled binary under
    ``lingtai/bin/`` — lands at the archive root (platlib) instead of under
    ``<name>-<ver>.data/purelib/``. The latter placement is what auditwheel

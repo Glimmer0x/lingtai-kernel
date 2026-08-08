@@ -186,14 +186,13 @@ The situation→manual table is resident in `procedures`, and the `system-manual
 router table owns routing into this manual's sibling references. Do not maintain
 a third copy here.
 
-## 8. Web, files, media, and local artifacts
+## 8. Web, files, and local artifacts
 
 Use existing producer/tool capabilities before inventing workflows. Resident
 `procedures` ("Skill Routing — When to Load What") names the owner for web
 fetching/search/scraping (`web-manual`) and image understanding (`vision`); that
-table does not carry the two below, so they live here:
+table does not carry the one below, so it lives here:
 
-- For shell audio/media work, load the relevant media/listen/minimax skill.
 - For tricky file encodings, large files, binary-like data, or careful edit
   workflows, read `file-manual`.
 
