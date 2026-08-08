@@ -50,6 +50,7 @@ _BUILTIN_TOOLS = [
     "mcp",
     "notification",
     "pad",
+    "plugin",
     "skills",
     "soul",
     "psyche",

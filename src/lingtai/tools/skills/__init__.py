@@ -15,6 +15,11 @@ recursively and contributes to the YAML skill catalog injected into the
 system prompt's ``skills`` section. Paths may be absolute, relative to the
 agent working dir, or tilde-prefixed.
 
+One more path source is composed in, not declared here: every Agent Plugin
+declared in ``manifest.plugins`` contributes each of its containment-validated
+skill directories, which ``Agent`` records on the agent at boot registration.
+See ``_compose_paths``.
+
 This capability is pure presentation: it scans whatever is on disk and builds
 the catalog. It never writes to ``.library/``. File installation is the
 initializer's job.
@@ -40,7 +45,11 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .._catalog import build_catalog_yaml, scan_markdown_catalog
+from .._catalog import (
+    build_catalog_yaml,
+    parse_markdown_catalog_file,
+    scan_markdown_catalog,
+)
 from lingtai.kernel.i18n import t
 
 if TYPE_CHECKING:
@@ -74,6 +83,51 @@ def _resolve_path(p: str, working_dir: Path) -> Path:
 
 def _scan(directory: Path) -> tuple[list[dict], list[dict]]:
     return scan_markdown_catalog(directory, filename="SKILL.md", kind="skill")
+
+
+def _scan_one_skill(directory: Path) -> tuple[list[dict], list[dict]]:
+    """Scan a path that *is* a skill directory rather than a collection of them.
+
+    ``_scan`` looks for ``<child>/SKILL.md`` under the path it is given. A
+    registered Agent Plugin contributes the individual skill directories that
+    passed §4.1 containment, not their parent, so each of those paths carries its
+    own ``SKILL.md`` one level up from where ``_scan`` would look. This parses it
+    directly, which keeps the mounted set exactly the validated set — composing
+    the parent instead would re-admit a skill the plugin registry rejected,
+    because the recursive scanner follows symlinks.
+    """
+    entry, problem = parse_markdown_catalog_file(
+        directory / "SKILL.md", directory.name, filename="SKILL.md",
+    )
+    return ([entry] if entry else []), ([problem] if problem else [])
+
+
+def _compose_paths(agent: "BaseAgent", paths: list[str]) -> list[str]:
+    """Union the declared Tier-1 paths with the registered plugins' skills.
+
+    An Agent Plugin declared in ``init.json`` ``manifest.plugins`` is registered
+    before capability setup (see ``services.plugin_registry.register_plugins``),
+    and one thing registration produces is the absolute path of every *validated*
+    skill directory inside each declared plugin. Composing those here — rather
+    than copying the skill files anywhere — is what makes a plugin's skills
+    appear in this catalog as ordinary skills, with their ``location`` pointing
+    inside the plugin, so the plugin remains their visible source and
+    uninstalling it removes them by simply not being declared any more.
+
+    They are per-skill paths and not the plugin's ``skills/`` parent on purpose:
+    a skill directory whose resolved path escapes the plugin root is rejected at
+    registration, and handing this scan the parent would mount it anyway.
+
+    Declared paths come first, plugin paths after, duplicates dropped: an
+    operator who also lists a plugin's skill directory explicitly gets one scan,
+    not two entries per skill.
+    """
+    ordered = list(paths)
+    ordered.extend(
+        p for p in getattr(agent, "_plugin_skill_paths", []) or [] if isinstance(p, str)
+    )
+    seen: set[str] = set()
+    return [p for p in ordered if not (p in seen or seen.add(p))]
 
 
 # ---------------------------------------------------------------------------
@@ -116,15 +170,20 @@ def _reconcile(
     all_skills.extend(cus_valid)
     problems.extend(cus_problems)
 
-    # Scan each Tier 1 path.
+    # Scan each Tier 1 path, plus every registered plugin's validated skill dirs.
     paths_report: dict[str, dict] = {}
-    for raw in paths:
+    for raw in _compose_paths(agent, paths):
         resolved = _resolve_path(raw, working_dir)
         exists = resolved.is_dir()
         p_valid: list[dict] = []
         p_problems: list[dict] = []
         if exists:
-            p_valid, p_problems = _scan(resolved)
+            # A path that carries SKILL.md is itself one skill (how a plugin
+            # contributes); anything else is a collection to walk.
+            if (resolved / "SKILL.md").is_file():
+                p_valid, p_problems = _scan_one_skill(resolved)
+            else:
+                p_valid, p_problems = _scan(resolved)
             all_skills.extend(p_valid)
             problems.extend(p_problems)
         else:

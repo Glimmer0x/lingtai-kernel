@@ -246,6 +246,7 @@ related_files:
   - tests/test_override_intrinsic.py
   - tests/test_pad.py
   - tests/test_pad_lingtai_split.py
+  - tests/test_plugin_tool.py
   - tests/test_perform_refresh_handshake.py
   - tests/test_portable_adapter_encoding.py
   - tests/test_post_molt_notification.py

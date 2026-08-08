@@ -3,6 +3,8 @@ related_files:
   - ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/psyche/ANATOMY.md
+  - src/lingtai/tools/plugin/ANATOMY.md
+  - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -86,8 +88,20 @@ capability names and lazy adapters.
   second, `knowledge` its third, `file` its fourth, `vision` its fifth,
   `avatar` its sixth, `soul` its seventh, `shell` its eighth, `skills` its
   ninth, `notification` its tenth, `system` its eleventh, `daemon` its
-  twelfth, and `context` its thirteenth
+  twelfth, `context` its thirteenth, and `plugin` its fourteenth
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
+- `plugin/` — the `plugin` capability: the per-agent Agent Plugins
+  (agent-plugins.org, v1.0.0) catalog and registration snapshot, structural twin
+  of `mcp` with the same `info`/`manual` children and the same tool/service split
+  (`src/lingtai/tools/plugin/ANATOMY.md`, `src/lingtai/tools/plugin/CONTRACT.md`).
+  A plugin *declared* in `init.json` `manifest.plugins` is mounted at boot — its
+  `skills/` composed into the skills catalog, its `mcp.json` servers registered
+  in `mcp_registry.jsonl` with `source="plugin:<name>"` — while one merely
+  *discovered* on an inherited skills path is listed and nothing more. The tool
+  itself stays read-only: mounting happens in
+  `Agent._register_declared_plugins` before capability setup, unreachable from
+  any action, which is what makes it safe in `CORE_DEFAULTS`. Registration is
+  registry-level like `addons:[]`: registered, never running.
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
   lifecycle, preset, and identity-naming actions behind one model-facing root
   (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene

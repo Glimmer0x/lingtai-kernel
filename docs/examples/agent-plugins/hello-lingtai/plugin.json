@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hello-lingtai",
+  "version": "1.0.0",
+  "description": "Minimal Agent Plugins v1.0.0 example: one Agent Skill and one stdio MCP server, for live-testing kernel plugin registration.",
+  "license": "Apache-2.0",
+  "keywords": ["example", "agent-plugins"]
+}

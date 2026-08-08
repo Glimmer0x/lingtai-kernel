@@ -431,7 +431,7 @@ still-unmigrated caller; `src/lingtai/kernel/tool_result_summary.py` recognizes
 the canonical `summarize` spelling only when the calling tool is a migrated LTP
 v2 family (`_LTP_V2_MIGRATED_FAMILIES`, currently `web`, `mcp`, `knowledge`,
 `file`, `vision`, `avatar`, `soul`, `shell`, `skills`, `notification`, `system`,
-`daemon`, `email`, `pad`, `lingtai`, and `context`), so
+`daemon`, `email`, `pad`, `lingtai`, `context`, and `plugin`), so
 an unmigrated tool's own field literally named `summarize` is never
 reinterpreted as this control. A family adopting this envelope MUST join that
 allowlist in the same change, or the root `summarize` it advertises to the
@@ -445,6 +445,19 @@ its call envelope only — no action was added, removed, renamed, or given a new
 capability; it remains signpost-only and read-only, and external MCP
 registration (direct insertion into `mcp_registry.jsonl`) is untouched by it.
 See `src/lingtai/tools/mcp/CONTRACT.md`.
+
+`plugin` is `mcp`'s deliberate twin and the only family born on this envelope
+rather than migrated onto it: public tool name `plugin`, actions `info |
+manual`, both taking the canonical strict-empty `input`, same read-only surface
+in the same shape. It renders the per-agent Agent Plugins (agent-plugins.org,
+v1.0.0) catalog and boot registration snapshot into the protected `plugin`
+prompt section. The *tool* owns no state and writes no file; mounting a declared
+plugin — composing its `skills/` into the skills catalog and appending its
+`mcp.json` servers to `mcp_registry.jsonl` with `source="plugin:<name>"` —
+happens once at boot in `Agent._register_declared_plugins`, mirroring `mcp`'s
+addon decompression and unreachable from any action. That is why it is safe in
+`CORE_DEFAULTS`, and registration is registry-level only: registered, never
+running. See `src/lingtai/tools/plugin/CONTRACT.md`.
 
 `soul` (`inquiry | flow | config | voice | dismiss | manual`) is the seventh
 family migrated to this contract, and the first migrated *intrinsic*. Its final

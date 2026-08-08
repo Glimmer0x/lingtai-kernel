@@ -154,6 +154,10 @@ class Agent(BaseAgent):
             Each capability dict may include ``"provider"`` to route that
             capability to a specific LLM provider (e.g. ``"gemini"``, ``"minimax"``).
             Group names (e.g. ``"file"``) expand to individual capabilities.
+        plugins: Agent Plugin package directories to register, the constructor
+            form of ``init.json`` ``manifest.plugins``. Each declared plugin's
+            ``skills/`` joins the skills catalog and its ``mcp.json`` servers
+            join ``mcp_registry.jsonl`` with ``source="plugin:<name>"``.
         *args, **kwargs: Passed through to BaseAgent.
     """
 
@@ -162,12 +166,23 @@ class Agent(BaseAgent):
         *args: Any,
         capabilities: list[str] | dict[str, dict] | None = None,
         addons: list[str] | None = None,
+        plugins: list[str] | None = None,
         combo_name: str | None = None,
         disable: list[str] | None = None,
         **kwargs: Any,
     ):
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
+
+        # Whether this caller made any statement about what this agent runs.
+        # ``capabilities`` is about to be rewritten by ``apply_core_defaults``,
+        # which makes it unconditionally truthy, so the question has to be asked
+        # here. ``_register_declared_plugins`` below is gated on it: a minimal
+        # construction that declares neither capabilities nor plugins is a
+        # caller deferring everything to ``_setup_from_init``, and must not be
+        # read as "no plugins are declared" — that reading would prune every
+        # plugin-owned registry record on the way to re-registering it.
+        _plugin_decision_made = capabilities is not None or plugins is not None
 
         # Inject the built-in intrinsic tool registry. The kernel owns the tool
         # machinery, not the concrete tools: it accepts intrinsics as injection
@@ -331,6 +346,22 @@ class Agent(BaseAgent):
             except Exception as e:
                 self._log("mcp_decompress_failed", reason=str(e))
 
+        # Register declared Agent Plugins at the same point and for the same
+        # reason: `skills` must see each plugin's skill directories and `mcp`
+        # must see its plugin-sourced registry records on their first reconcile.
+        # It runs after addon decompression so a plugin server cannot silently
+        # take a name a curated addon owns.
+        #
+        # Skipped only for the minimal-construction path (neither `capabilities`
+        # nor `plugins` given), where `_setup_from_init` does the real
+        # registration moments later. Running here too would prune every
+        # plugin-owned record and re-append it on every single boot, making the
+        # idempotence this module promises untrue of the shipped boot flow.
+        self._plugin_skill_paths: list[str] = []
+        self._plugin_registration: dict = {}
+        if _plugin_decision_made:
+            self._register_declared_plugins(plugins, capabilities)
+
         # Register capabilities — provider kwarg flows through to setup() naturally
         if capabilities:
             for name, cap_kwargs in capabilities.items():
@@ -433,6 +464,63 @@ class Agent(BaseAgent):
             return None
         self._capability_managers[name] = mgr
         return mgr
+
+    def _register_declared_plugins(
+        self, plugins: Any, capabilities: Any = None
+    ) -> None:
+        """Register every declared Agent Plugin. Boot/refresh only, never a tool.
+
+        The canonical declaration key is ``init.json`` ``manifest.plugins``; the
+        alias ``manifest.capabilities.plugin.paths`` (the key PR #1232 shipped)
+        is honored unchanged and means the same thing. Both are resolved by
+        ``plugin_registry.declared_plugin_paths``.
+
+        Runs even when nothing is declared — that empty run is exactly the
+        uninstall path. Removing a plugin from the declaration list leaves its
+        ``source="plugin:<name>"`` records in ``mcp_registry.jsonl`` until
+        something prunes them, and this is that something. Skipping the call when
+        the list is empty would make uninstalling the *last* plugin silently
+        leave its servers registered.
+
+        "Nothing is declared" is a decision, though, and only a caller who said
+        something is making it. ``__init__`` therefore calls this only when it was
+        given ``capabilities=`` or ``plugins=``; a bare minimal construction
+        defers to ``_setup_from_init``, which always calls it. Without that gate
+        the CLI boot path ran the uninstall branch first and the real
+        registration second, pruning and re-appending every plugin record on
+        every boot.
+
+        The results are recorded on the agent rather than returned: the skills
+        capability reads ``_plugin_skill_paths`` from every one of its reconcile
+        entry points, and the plugin tool's ``info`` reports
+        ``_plugin_registration``.
+        """
+        self._plugin_skill_paths: list[str] = []
+        self._plugin_registration: dict = {}
+        try:
+            from .services.plugin_registry import (
+                declared_plugin_paths,
+                register_plugins,
+            )
+
+            declared = declared_plugin_paths(plugins, capabilities)
+            snapshot = register_plugins(self._working_dir, declared)
+            self._plugin_skill_paths = list(snapshot.get("skill_paths") or [])
+            self._plugin_registration = snapshot
+            if declared or snapshot.get("mcp_pruned"):
+                self._log(
+                    "plugin_register",
+                    declared=declared,
+                    plugins=[p["name"] for p in snapshot.get("plugins", [])],
+                    mcp_appended=snapshot.get("mcp_appended", []),
+                    mcp_pruned=snapshot.get("mcp_pruned", []),
+                    problems=len(snapshot.get("problems", [])),
+                )
+        except Exception as e:
+            # Registration must never take the agent down. A failure here leaves
+            # the agent unmounted (empty snapshot), which the plugin tool reports
+            # honestly, rather than half-mounted and silent.
+            self._log("plugin_register_failed", reason=str(e))
 
     def _install_intrinsic_manuals(self) -> None:
         """Wipe and rewrite ``.library/intrinsic/`` from kernel-shipped manuals.
@@ -1809,6 +1897,16 @@ class Agent(BaseAgent):
 
         disable_list = m.get("disable") or []
         capabilities = apply_core_defaults(normalized, disable=disable_list)
+
+        # Register declared Agent Plugins BEFORE capability setup, next to addon
+        # decompression above and for the same reason: `skills` must see each
+        # plugin's validated skill directories and `mcp` its plugin-sourced
+        # registry records on their first reconcile. This is the one registration
+        # the CLI boot path performs — `__init__` defers to it. Also the
+        # uninstall path —
+        # a plugin dropped from manifest.plugins has its registry records pruned
+        # here on the next refresh.
+        self._register_declared_plugins(m.get("plugins"), capabilities)
 
         if capabilities:
             for name, cap_kwargs in capabilities.items():
