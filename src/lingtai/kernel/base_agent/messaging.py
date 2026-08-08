@@ -83,11 +83,13 @@ def _enqueue_system_notification(
     the existing list, capped at the 20 most recent entries so a noisy
     producer can't blow the agent's context window.
 
-    The merge is read-modify-write on the same file, so concurrent
-    arrivals (e.g. a burst of bounces) need a per-agent lock to avoid
-    losing writes.  The lock is initialized by ``BaseAgent``; only
-    ``system.json`` needs it because ``email.json`` and ``soul.json``
-    recompute full state on every publish (no merge).
+    The merge is read-modify-write on the same channel, so concurrent
+    arrivals (e.g. a burst of bounces) need atomicity to avoid losing
+    writes: the merge runs as a ``_mutator`` callback passed to
+    ``store.compare_update_channel("system", UNCONDITIONAL, _mutator)``,
+    which the notification store applies as a compare-and-update. Only
+    ``system.json`` needs this merge step because ``email.json`` and
+    ``soul.json`` recompute full state on every publish (no merge).
 
     Args:
         agent: The agent instance.

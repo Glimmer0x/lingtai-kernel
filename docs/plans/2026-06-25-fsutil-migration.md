@@ -61,19 +61,19 @@ These are migration *candidates*, not a commitment to change every one.
 - [x] `workdir.py::WorkingDir.write_manifest` (`.agent.json`) — **migrated here**
 - [x] `base_agent/__init__.py::_write_status_snapshot` (`.status.json`) — migrated with byte-parity coverage and opt-in existing-mode retention
 - [ ] `workdir.py::write_resolved_manifest` (`manifest.resolved.json`, trailing newline → pass explicit newline or keep inline)
-- [ ] notification files (`.notification/*.json`)
-- [ ] `intrinsics/email/primitives.py` message/`message.json` writes (currently direct `write_text`; some non-contact paths can escape non-ASCII)
-- [ ] `intrinsics/email/manager.py` contact persistence (already atomic via `mkstemp`+`os.replace`; migrate for consistency)
+- [x] notification files (`.notification/*.json`) — migrated to `atomic_write_json` (`adapters/posix/notification_store.py`)
+- [ ] `tools/email/primitives.py` message/`message.json` writes (currently direct `write_text`; some non-contact paths can escape non-ASCII)
+- [ ] `tools/email/manager.py` contact persistence (already atomic via `mkstemp`+`os.replace`; migrate for consistency)
 
 ### Stage 2 — ledgers / append-only logs
-- [ ] `token_ledger.py` append (also mirrors to sqlite via returned offset — keep offset contract)
+- [x] `token_ledger.py` append — migrated to `append_jsonl`/`iter_jsonl_records` (also mirrors to sqlite via returned offset — offset contract kept)
 - [ ] soul-flow / event JSONL writers
 - [ ] `tool_result_recovery.py` JSONL read/reverse-tail
 - [ ] runtime log JSONL recovery paths
 
 ### Stage 3 — broader writes + retire local helpers
 - [ ] `migrate/*.py` write/replace sites
-- [ ] `intrinsics/soul/config.py`, psyche snapshot/molt/archive writers
+- [ ] `tools/soul/config.py`, psyche snapshot/molt/archive writers
 - [ ] remaining `read_json(default=...)`-style local readers → `_fsutil.read_json`
 
 Each checkbox above should land as (or within) its own PR with format-parity

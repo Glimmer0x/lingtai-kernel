@@ -35,7 +35,7 @@ The supervisor Port and durable run schemas define the narrow process boundary; 
 - `adapters/windows/daemon_supervisor.py:117-247` — the Windows launch adapter for the same Port.
 - `tools/daemon/supervisor_runtime.py:77-138` — detached startup identity, run attachment, and terminal dispatch.
 - `tools/daemon/supervisor_runtime.py:219-394` — execution-child ownership plus the exact control/deadline watcher.
-- `adapters/posix/daemon_supervisor.py:27-77` — concrete interpreter/session/log launch adapter.
+- `adapters/posix/daemon_supervisor.py:94-267` (`PosixDaemonSupervisorAdapter`) — concrete interpreter/session/log launch adapter.
 - `tools/daemon/execution_host.py:24-224` — composition root that reuses manager setup and every `_BackendSpec` runner.
 
 ## Connections

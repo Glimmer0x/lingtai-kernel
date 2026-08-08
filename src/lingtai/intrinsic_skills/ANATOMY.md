@@ -36,10 +36,12 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/reference/how-to-change-name/scripts/change_name.py
   - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/refresh-precheck/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/sqlite-log-query/scripts/event_summary.py
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/trajectory-mining/SKILL.md
   - tests/test_intrinsic_manual_actions.py
   - tests/test_lingtai_doctor.py
   - tests/test_override_intrinsic.py
@@ -69,10 +71,11 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 - `context-manual/` — the `context` family's manual, with `assets/`
   (`molt-template.md`, `session-journal-entry-template.md`) and the nested
   `reference/summarize-manual/SKILL.md` sub-skill.
-- `system-manual/` — the largest bundle: the `system` family manual plus eight
+- `system-manual/` — the largest bundle: the `system` family manual plus ten
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `how-to-change-name`, `llm-adapters`, `procedures-manual`,
-  `runtime-update-checks`, `sqlite-log-query`, `substrate-manual`). Two of them
+  `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
+  `substrate-manual`, `trajectory-mining`). Two of them
   ship executable helpers — `how-to-change-name/scripts/change_name.py` and
   `sqlite-log-query/scripts/event_summary.py`.
 - `notification-manual/` — the `notification` family manual plus the

@@ -1,8 +1,10 @@
 """Observable behavior for Snapshot and SourceRevision Ports."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -17,7 +19,8 @@ GITIGNORE_BASELINE = (
     "# Secrets — MCP addon credentials (bot tokens, API keys)\n"
     ".secrets/\n\n"
     "# Transient lifecycle signal files\n"
-    ".sleep\n.suspend\n.agent.heartbeat\n.timemachine.pid\n"
+    ".sleep\n.suspend\n.agent.heartbeat\n"
+    ".refresh\n.refresh.taken\n.prompt\n.clear\n.inquiry\n.inquiry.taken\n.rules\n.interrupt\n"
 )
 SYSTEM_BASELINE = {"covenant.md": "", "principle.md": "", "pad.md": ""}
 
@@ -183,6 +186,59 @@ def test_real_git_snapshot_handles_deletion_and_secret_exclusion(tmp_path):
         text=True,
         check=True,
     ).stdout == ""
+
+
+LIFECYCLE_SIGNAL_FILES = (
+    ".sleep",
+    ".suspend",
+    ".agent.heartbeat",
+    ".refresh",
+    ".refresh.taken",
+    ".prompt",
+    ".clear",
+    ".inquiry",
+    ".inquiry.taken",
+    ".rules",
+    ".interrupt",
+)
+
+
+def test_real_git_snapshot_never_commits_lifecycle_signal_files(tmp_path):
+    """Signal files are transient control state, not agent history.
+
+    ``lifecycle.py`` writes each of these into the same working directory this
+    adapter snapshots with ``git add -A``; a periodic snapshot firing while one
+    is present must not sweep it into the commit.
+    """
+    if shutil.which("git") is None:
+        pytest.skip("real Git behavior lock requires the git executable")
+    adapter = PosixGitCliAdapter(tmp_path)
+    adapter.initialize()
+
+    for name in LIFECYCLE_SIGNAL_FILES:
+        (tmp_path / name).write_text("signal")
+    assert adapter.snapshot() is None
+
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert [name for name in LIFECYCLE_SIGNAL_FILES if name in tracked] == []
+
+
+def test_lifecycle_signal_file_literals_are_all_ignored():
+    """Guard against a new signal file landing in ``lifecycle.py`` unignored."""
+    source = Path(lifecycle.__file__).read_text(encoding="utf-8")
+    written = {
+        match.group(1)
+        for match in re.finditer(r"_working_dir / \"(\.[A-Za-z.]+)\"", source)
+    }
+    assert written, "expected to find signal-file literals in lifecycle.py"
+    ignored = {line for line in GITIGNORE_BASELINE.splitlines() if line.startswith(".")}
+    assert written <= ignored, f"unignored lifecycle signal files: {written - ignored}"
 
 
 def test_snapshot_swallows_git_absence_and_failure(tmp_path):

@@ -53,9 +53,13 @@ uv pip install -e . pytest
 
 ## 架构与开发者门径
 
+凡欲改此仓者，编码代理宜先寻而读本仓本地之开发指南技艺；此技艺统其工作之流，导诸事至下列门径，而不重复 Anatomy 或 Contract 之体系。
+
 | 门径 | 所涵 |
 |---|---|
-| [`ANATOMY.md`](../../ANATOMY.md) | 仓之舆图——顶层之布局，暨各子系统解剖所始之处。 |
+| [`dev-guide-skill/SKILL.md`](../../dev-guide-skill/SKILL.md) | 必行之仓本地开发指南技艺：编码代理改动之前所必循之开发流程。 |
+| [`ANATOMY.md`](../../ANATOMY.md) | 仓之舆图——顶层之布局，暨各子系统解剖所始之处，及其如何联至行为之 Contract。 |
+| [`CONTRACT.md`](../../CONTRACT.md) | 规范之接口与行为之诺，暨受治组件配对归属之则，与 Anatomy 之构相联。 |
 | [`src/lingtai/kernel/ANATOMY.md`](../../src/lingtai/kernel/ANATOMY.md) | 核心之运行时：`BaseAgent`、轮次与生灭、工具之机、书信、LLM 之约。 |
 | [`src/lingtai/ANATOMY.md`](../../src/lingtai/ANATOMY.md) | `lingtai` 之包：`Agent(BaseAgent)`、诸能、预设、CLI、公开之重导。 |
 | [`src/lingtai/tools/ANATOMY.md`](../../src/lingtai/tools/ANATOMY.md) | 具体之内置工具，暨组合诸工具之注册表。 |

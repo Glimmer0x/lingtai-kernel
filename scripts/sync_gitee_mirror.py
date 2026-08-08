@@ -26,7 +26,7 @@ Usage:
     export GITEE_ACCESS_TOKEN=...  # never echo or log this
     python scripts/sync_gitee_mirror.py \\
         --owner huangzesen1997 --repo lingtai-kernel \\
-        --commit <full-sha> --tag v0.16.4 --branch main \\
+        --commit <full-sha> --tag v0.19.5 --branch main \\
         --execute
 """
 from __future__ import annotations
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--owner", default="huangzesen1997")
     parser.add_argument("--repo", default="lingtai-kernel")
     parser.add_argument("--commit", required=True, help="full commit SHA to synchronize")
-    parser.add_argument("--tag", required=True, help="release tag to synchronize, e.g. v0.16.4")
+    parser.add_argument("--tag", required=True, help="release tag to synchronize, e.g. v0.19.5")
     parser.add_argument("--branch", default="main")
     parser.add_argument("--username", help="Gitee HTTPS username; defaults to --owner")
     parser.add_argument("--token-env", default="GITEE_ACCESS_TOKEN", help="env var holding the Gitee token; never printed")

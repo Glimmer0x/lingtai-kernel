@@ -10,8 +10,8 @@ POSIX session so it survives the caller's exit. It is the only production
 adapter; Core never constructs it.
 
 The concrete interpreter path (``sys.executable``), the ``-m`` module
-invocation (rather than putting the ~480-line generated watcher-program
-source directly on argv via ``-c``), ``stdin``/``stdout``/``stderr``
+invocation (rather than putting the generated watcher-program source
+directly on argv via ``-c``), ``stdin``/``stdout``/``stderr``
 detachment to ``DEVNULL``, ``start_new_session=True`` (POSIX process-group
 detachment, not available on Windows), and full-environment construction
 (``os.environ`` capture plus the ``env_overwrite`` policy bit from the

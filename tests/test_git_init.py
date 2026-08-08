@@ -60,7 +60,14 @@ def test_start_creates_gitignore(tmp_path):
             ".sleep\n"
             ".suspend\n"
             ".agent.heartbeat\n"
-            ".timemachine.pid\n"
+            ".refresh\n"
+            ".refresh.taken\n"
+            ".prompt\n"
+            ".clear\n"
+            ".inquiry\n"
+            ".inquiry.taken\n"
+            ".rules\n"
+            ".interrupt\n"
         )
         assert gitignore.read_text() == expected
     finally:

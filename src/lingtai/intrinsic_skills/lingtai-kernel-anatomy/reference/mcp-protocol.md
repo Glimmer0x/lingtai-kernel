@@ -99,10 +99,10 @@ metadata. The top-level `additionalProperties` removal remains an intentional
 
 ## Server behavior
 
-All seven bundled servers are low-level `Server` instances over stdio:
+All eight bundled servers are low-level `Server` instances over stdio:
 
 `cloud_mail`, `imap`, `telegram`, `feishu`, `wechat`, `whatsapp`,
-`daemon_common`.
+`daemon_common`, `daemon_email`.
 
 * Handlers are **constructor parameters** (`on_list_tools`, `on_call_tool`,
   `on_list_resources`, `on_read_resource`), not decorators, and each is
