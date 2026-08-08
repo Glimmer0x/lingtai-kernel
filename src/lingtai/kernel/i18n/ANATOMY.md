@@ -26,7 +26,7 @@ The kernel's message catalog — a flat key-value string table covering system n
   - `_load(lang)` (`i18n/__init__.py:22-30`) — loads and caches a locale file; returns `{}` if the JSON file is missing.
   - `register_strings(lang, strings)` (`i18n/__init__.py:33-41`) — additive merge of external strings into `_CACHE`; its docstring names the wrapper as the caller.
   - `t(lang, key, **kwargs)` (`i18n/__init__.py:44-60`) — loads the locale, looks up the key, falls back to English, then to the raw key string, and formats with `defaultdict(str, kwargs)`.
-- `en.json` — English (baseline). ~80 keys across 7 prefixes: `system.`, `soul.`, `insight.`, `psyche.`, `system_tool.`, `tool.`, `email.`.
+- `en.json` — English (baseline). **7 keys across 2 prefixes**: `system.`, `insight.`. Other prefixes referenced by callers below (`soul.`, `context.`, `system_tool.`, `email.`) are not in this file — they are registered into the shared `_CACHE` at runtime by the tools bridge (see "Inbound — tools bridge" below), not shipped as kernel-owned disk defaults.
 - `zh.json` — 中文. Mirror of en.json; same key set.
 - `wen.json` — 文言. Mirror of en.json in Classical Chinese register; same key set.
 
