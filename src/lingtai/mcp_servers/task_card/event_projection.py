@@ -22,7 +22,7 @@ class TaskCardEventProjection:
         "/taskcard N sets normal rows (1-10"
     )
     DEFAULT_NORMAL_ROWS = 1
-    METADATA_MAX_CHARS = 150
+    METADATA_MAX_CHARS = 500
     METADATA_MAX_LINES = 2
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
@@ -393,17 +393,35 @@ class TaskCardEventProjection:
             "session · " + " · ".join(session_parts) if session_parts else None
         )
         context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
-        lines: list[str] = []
-        if agent_line and session_line:
-            lines.append(f"{agent_line} · {session_line}")
-        elif agent_line:
-            lines.append(agent_line)
-        elif session_line:
-            lines.append(session_line)
+        # One compact footer line: groups separated by "|" so each concept stays
+        # readable without forcing line breaks (the card stays narrow on
+        # Telegram). agent/session/ctx/device/path each own a group; a long
+        # working dir rides in the last group so it cannot crowd identity.
+        groups: list[str] = []
+        if agent_line:
+            groups.append(agent_line)
+        if session_line:
+            groups.append(session_line)
         if context_line:
-            lines.append(context_line)
-        lines = lines[: cls.METADATA_MAX_LINES]
-        if not lines:
+            groups.append(context_line)
+
+        device = cls.machine_identifier(
+            metadata.get("device_short_name"), limit=64
+        )
+        shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
+        if device is not None or shell_name is not None:
+            parts: list[str] = []
+            if device is not None:
+                parts.append(device)
+            if shell_name is not None:
+                parts.append(f"shell {shell_name}")
+            groups.append("device · " + " · ".join(parts))
+        working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
+        if working_dir is not None:
+            groups.append(f"path · {working_dir}")
+
+        lines = [" | ".join(groups)[: cls.METADATA_MAX_CHARS]]
+        if not lines or not lines[0].strip():
             return []
         joined = "\n".join(lines)
         if len(joined) <= cls.METADATA_MAX_CHARS:
@@ -541,7 +559,7 @@ class TaskCardEventProjection:
         value = value.strip()
         if not value or len(value) > limit:
             return None
-        safe_punctuation = frozenset("._:/-")
+        safe_punctuation = frozenset("._:/\\-")
         if not all(
             ch.isascii() and (ch.isalnum() or ch in safe_punctuation) for ch in value
         ):

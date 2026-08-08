@@ -132,6 +132,31 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
-        "agent · active · session · calls 2\n"
+        "agent · active | session · calls 2\n"
         "Last Updated: 02:30:00 UTC+08"
     )
+
+
+def test_metadata_renders_device_and_working_dir_lines() -> None:
+    """Device identity metadata renders a compact ||-separated footer."""
+    metadata = {
+        "agent_lifecycle": "active",
+        "api_calls": 2,
+        "device_short_name": "zesen-desktop",
+        "shell_name": "powershell",
+        "working_dir": "C:\\Users\\zhuang\\.lingtai\\deepseek-1",
+    }
+    lines = TaskCardEventProjection.format_metadata(metadata)
+    assert len(lines) == 1
+    joined = lines[0]
+    assert "device · zesen-desktop · shell powershell" in joined
+    assert "path · C:\\Users\\zhuang" in joined
+    assert " | " in joined
+
+
+def test_metadata_omits_device_line_when_only_bad_values() -> None:
+    """Missing or malformed device identity degrades to no device/path groups."""
+    metadata = {"agent_lifecycle": "active", "device_short_name": 42, "working_dir": ""}
+    lines = TaskCardEventProjection.format_metadata(metadata)
+    assert not any("device · " in line for line in lines)
+    assert not any("path · " in line for line in lines)
