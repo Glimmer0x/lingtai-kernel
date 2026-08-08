@@ -333,7 +333,7 @@ def test_load_preset_rejects_non_integer_context_limit(tmp_path):
         load_preset(str(f))
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh"])
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
 def test_load_preset_accepts_thinking_values(tmp_path, value):
     p = {
         "name": "thinking",

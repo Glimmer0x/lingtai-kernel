@@ -954,9 +954,15 @@ def _estimate_responses_input_tokens(
 
 
 def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str]]:
-    """Return OpenAI Responses reasoning kwargs for a configured thinking level."""
+    """Return OpenAI Responses reasoning kwargs for a configured thinking level.
+
+    An omitted/``default`` level maps to the explicit ``xhigh`` effort (the
+    kernel's canonical default), matching the Codex adapter's longstanding
+    behavior. Explicit levels pass through; ``none`` is sent as
+    ``reasoning.effort = "none"``.
+    """
     if thinking in (None, "default"):
-        return {}
+        thinking = "xhigh"
     if thinking not in THINKING_LEVELS:
         raise ValueError(
             "OpenAI Responses thinking must be one of "
@@ -2640,9 +2646,14 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Reasoning effort for o-series models
-        if thinking != "default":
-            extra_kwargs["reasoning_effort"] = "high" if thinking == "high" else "low"
+        # Reasoning effort for o-series models. Subclasses override
+        # ``_chat_reasoning_effort`` to map the kernel thinking levels to
+        # their Chat Completions wire value (e.g. DeepSeek passes the
+        # seven-tier value through unchanged; ``default`` is omitted here and
+        # the upstream default applies).
+        effort = self._chat_reasoning_effort(thinking)
+        if effort is not None:
+            extra_kwargs["reasoning_effort"] = effort
 
         # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
         # Merge rather than overwrite so callers adding their own extra_body
@@ -2672,6 +2683,19 @@ class OpenAIAdapter(LLMAdapter):
         surface reasoning text on reasoning-capable models).
         """
         return {}
+
+    def _chat_reasoning_effort(self, thinking: str) -> str | None:
+        """Map a kernel thinking level to the Chat Completions reasoning_effort value.
+
+        Default maps ``high`` to ``high`` and every other explicit level to
+        ``low`` (OpenAI o-series compatibility), and returns ``None`` for the
+        omitted/``default`` sentinel so the field is not sent. Subclasses with
+        a wider wire vocabulary (e.g. DeepSeek seven-tier passthrough)
+        override this hook.
+        """
+        if thinking == "default":
+            return None
+        return "high" if thinking == "high" else "low"
 
     def generate(
         self,

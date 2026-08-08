@@ -206,6 +206,25 @@ class DeepSeekAdapter(OpenAIAdapter):
 
     _session_class = DeepSeekChatSession
 
+    def _chat_reasoning_effort(self, thinking: str) -> str | None:
+        """DeepSeek passes the seven-tier kernel effort through unchanged.
+
+        DeepSeek's OpenAI-compatible Chat Completions wire accepts
+        ``none | minimal | low | medium | high | xhigh | max`` (verified
+        against opencode.ai zen/go). The omitted/``default`` sentinel maps to
+        ``None`` so no field is sent and the upstream default applies.
+        """
+        from lingtai.kernel.config import THINKING_LEVELS
+
+        if thinking == "default":
+            return None
+        if thinking not in THINKING_LEVELS:
+            raise ValueError(
+                "DeepSeek thinking must be one of "
+                f"{', '.join(THINKING_LEVELS)}, or default"
+            )
+        return thinking
+
     def _default_prompt_cache_key(self, model: str) -> str:
         # Fixed provider identity — use a clean ``lingtai-deepseek`` namespace
         # rather than the base_url host. DeepSeek Chat Completions accepts

@@ -9,9 +9,9 @@ from dataclasses import dataclass
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses
 # ``reasoning.effort`` payload values in ascending effort order. Explicit
 # ``"none"`` is a real payload value (effort none), distinct from an *omitted*
-# field — omitted stays the internal ``"default"`` sentinel and the Codex
-# adapter maps it to ``"xhigh"``.
-THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# field — omitted stays the internal ``"default"`` sentinel and adapters that
+# own a default map it to ``"xhigh"``.
+THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
 # reuses the Codex adapter (both dash/underscore spellings). Custom
@@ -21,13 +21,19 @@ THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
 
 def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort."""
+    """Return whether a manifest LLM block accepts explicit thinking effort.
+
+    Responses-API compatible models are allowed by default: any block whose
+    wire is OpenAI Responses (``api_compat == "openai"`` and
+    ``wire_api == "responses"``) is accepted, regardless of provider. The
+    Codex family remains accepted through ``THINKING_PROVIDERS`` (it owns its
+    own wire/backend), as does any provider explicitly listed there.
+    """
     provider = str(llm.get("provider") or "").lower()
     if provider in THINKING_PROVIDERS:
         return True
     return (
-        provider == "custom"
-        and str(llm.get("api_compat") or "").lower() == "openai"
+        str(llm.get("api_compat") or "").lower() == "openai"
         and str(llm.get("wire_api") or "").lower() == "responses"
     )
 
