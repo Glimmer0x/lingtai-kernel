@@ -39,7 +39,7 @@ is canonical.
 
 | Mode | Trigger | When the raw is hidden | Authored by |
 |---|---|---|---|
-| **A priori** — reasoning-guided | `summary=true` on `bash`/`read`/`grep`/`daemon`/`glob` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
+| **A priori** — reasoning-guided | `summarize=true` (legacy `summary=true` also accepted) on any migrated family — e.g. `file` (covers read/grep/glob-style bulky reads), `shell`, `daemon` | *before* the result ever enters context | the runtime LLM, driven by your `reasoning` |
 | **A posteriori** — agent-guided | `context(action="summarize")` | *after* you have already seen and digested it | you |
 | **Molt** — context-pressure-triggered | `context(action='molt', ...)` | the whole conversation is continued/reset | you (briefing) |
 
@@ -47,10 +47,14 @@ Sections 1–6 below are mostly about the a-posteriori `summarize` action; §1a
 covers the a-priori `summary=true` option and when to prefer it; §6 contrasts
 both with molt.
 
-## 1a · A priori summary: `summary=true` on bash / read / grep / daemon / glob
+## 1a · A priori summary: `summarize=true` on migrated tool families
 
-`bash`, `read`, `grep`, `daemon`, and `glob` accept an optional boolean `summary` (default
-`false`). When `true`:
+Any LingTai Tool Protocol v2-migrated family — `web`, `mcp`, `file` (covering
+read/grep/glob-style bulky reads), `vision`, `avatar`, `soul`, `shell`,
+`notification`, `system`, `daemon`, `email`, `task_card`, `context`, `psyche`
+— accepts an optional boolean root `summarize` (legacy spelling `summary` is
+also honored on any call, for backward compatibility). Default `false`. When
+`true`:
 
 - The tool runs **normally**. The raw result is written to the durable event log
   and (if oversized) spilled, exactly as with `summary=false` — nothing is lost
@@ -281,7 +285,7 @@ grep 'call_abc123' <workdir>/logs/events.jsonl
 ```
 
 For structured trace work, use the SQLite/log tooling documented in
-`reference/sqlite-log-query/SKILL.md`, for example `lingtai-agent log query`, to
+`../../../system-manual/reference/sqlite-log-query/SKILL.md`, for example `lingtai-agent log query`, to
 locate the event and inspect nearby context.
 
 If the original was a spill result, the log entry or summary should also point to

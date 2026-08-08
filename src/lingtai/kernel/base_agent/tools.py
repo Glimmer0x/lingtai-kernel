@@ -170,7 +170,7 @@ def _remove_tool(agent, name: str) -> None:
 def _override_intrinsic(agent, name: str):
     """Remove an intrinsic and return its handler for delegation.
 
-    Called by capabilities that upgrade an intrinsic (e.g. email → mail).
+    Called by capabilities that upgrade an intrinsic.
     Must be called before start() (tool surface sealed).
 
     Returns the original handler so the capability can delegate to it.

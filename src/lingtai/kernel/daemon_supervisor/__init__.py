@@ -129,7 +129,8 @@ class DaemonSupervisorPort(ABC):
         started; it does not wait for the process to complete, does not
         return the process identity, and adds no wait/poll/signal operation.
         The supervisor itself is responsible for recording its own PID into
-        the run's ``daemon.json`` once it starts (see ``supervisor.py``) so a
+        the run's ``daemon.json`` once it starts (see
+        ``tools/daemon/supervisor_runtime.py::run_supervisor``) so a
         caller-side startup handshake can observe successful launch without
         this Port returning one.
         """
