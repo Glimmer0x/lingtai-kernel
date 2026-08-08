@@ -528,6 +528,12 @@ class TaskCardEventProjection:
         model = metadata.get("model")
         if isinstance(model, str) and model.strip():
             session_parts.append(f"model {model.strip()}")
+        thinking = metadata.get("thinking")
+        if isinstance(thinking, str) and thinking.strip():
+            session_parts.append(f"effort {thinking.strip()}")
+        endpoint = metadata.get("endpoint")
+        if isinstance(endpoint, str) and endpoint.strip():
+            session_parts.append(f"endpoint {endpoint.strip()}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}
