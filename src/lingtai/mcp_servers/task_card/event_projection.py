@@ -537,20 +537,40 @@ class TaskCardEventProjection:
         session_parts: list[str] = []
         model = metadata.get("model")
         if isinstance(model, str) and model.strip():
-            session_parts.append(f"model {model.strip()}")
+            session_parts.append(model.strip())
         thinking = metadata.get("thinking")
         if isinstance(thinking, str) and thinking.strip():
-            session_parts.append(f"effort {thinking.strip()}")
+            session_parts.append(thinking.strip())
         endpoint = metadata.get("endpoint")
         if isinstance(endpoint, str) and endpoint.strip():
-            session_parts.append(f"endpoint {endpoint.strip()}")
+            session_parts.append(f"@{endpoint.strip()}")
+        context = cls.format_count(metadata.get("context_tokens"))
+        window = cls.format_count(metadata.get("context_window"))
+        usage = metadata.get("context_usage")
+        if (
+            type(usage) in {int, float}
+            and not isinstance(usage, bool)
+            and 0 <= usage <= 1
+        ):
+            if context is not None:
+                session_parts.append(
+                    f"ctx {float(usage):.0%} · {context}/{window}"
+                    if window is not None
+                    else f"ctx {float(usage):.0%}"
+                )
+            else:
+                session_parts.append(f"ctx {float(usage):.0%}")
+        elif context is not None:
+            session_parts.append(
+                f"ctx {context}/{window}" if window is not None else f"ctx {context}"
+            )
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}
             and not isinstance(cache_rate, bool)
             and 0 <= cache_rate <= 1
         ):
-            session_parts.append(f"cache {float(cache_rate):.1%}")
+            session_parts.append(f"cache {float(cache_rate):.0%}")
         miss = cls.format_count(metadata.get("cache_miss_tokens"))
         budget = cls.format_count(metadata.get("cache_miss_budget"))
         if miss is not None:
@@ -561,78 +581,77 @@ class TaskCardEventProjection:
         if calls is not None:
             session_parts.append(f"calls {calls}")
 
-        context_parts: list[str] = []
-        context = cls.format_count(metadata.get("context_tokens"))
-        window = cls.format_count(metadata.get("context_window"))
-        if context is not None:
-            context_parts.append(
-                f"{context}/{window}" if window is not None else context
-            )
-        usage = metadata.get("context_usage")
-        if (
-            type(usage) in {int, float}
-            and not isinstance(usage, bool)
-            and 0 <= usage <= 1
-        ):
-            context_parts.append(f"{float(usage):.0%}")
-
-        agent_line: str | None = None
+        agent_part: str | None = None
         lifecycle = metadata.get("agent_lifecycle")
         if lifecycle in (AgentState.STUCK.value, "offline"):
-            agent_line = f"agent · {lifecycle} · try /refresh"
-        elif lifecycle in cls.AGENT_STATES:
-            agent_line = f"agent · {lifecycle}"
-        if agent_line and lifecycle == AgentState.ACTIVE.value:
+            agent_part = f"agent · {lifecycle} · try /refresh"
+        elif lifecycle == AgentState.ACTIVE.value:
             active_seconds = metadata.get("agent_active_seconds")
             if (
                 type(active_seconds) in {int, float}
                 and not isinstance(active_seconds, bool)
                 and active_seconds >= 0
             ):
-                agent_line = f"{agent_line} ({float(active_seconds):.0f}s)"
+                agent_part = f"active ({float(active_seconds):.0f}s)"
+            else:
+                agent_part = "active"
+        elif lifecycle in cls.AGENT_STATES:
+            agent_part = f"agent · {lifecycle}"
 
-        session_line = (
-            "session · " + " · ".join(session_parts) if session_parts else None
-        )
-        context_line = "ctx · " + " · ".join(context_parts) if context_parts else None
-        # One compact footer line: groups separated by "|" so each concept stays
-        # readable without forcing line breaks (the card stays narrow on
-        # Telegram). agent/session/ctx/device/path each own a group; a long
-        # working dir rides in the last group so it cannot crowd identity.
-        groups: list[str] = []
-        if agent_line:
-            groups.append(agent_line)
-        if session_line:
-            groups.append(session_line)
-        if context_line:
-            groups.append(context_line)
+        # Line 1 = running state: agent lifecycle + session identity/usage,
+        # compact (no per-part prefixes; effort/endpoint/ctx/cache/miss are
+        # self-evident from position). Line 2 = identity: device + short path.
+        line1_parts: list[str] = []
+        if agent_part:
+            line1_parts.append(agent_part)
+        line1_parts.extend(session_parts)
+        line1 = " · ".join(line1_parts) if line1_parts else None
 
         device = cls.machine_identifier(
             metadata.get("device_short_name"), limit=64
         )
         shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
+        line2_parts: list[str] = []
         if device is not None or shell_name is not None:
             parts: list[str] = []
             if device is not None:
                 parts.append(device)
             if shell_name is not None:
                 parts.append(f"shell {shell_name}")
-            groups.append("device · " + " · ".join(parts))
+            line2_parts.append("device · " + " · ".join(parts))
         working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
         if working_dir is not None:
-            groups.append(f"path · {working_dir}")
+            line2_parts.append(f"path · {cls._short_working_dir(working_dir)}")
+        line2 = " | ".join(line2_parts) if line2_parts else None
 
-        lines = [" | ".join(groups)[: cls.METADATA_MAX_CHARS]]
-        if not lines or not lines[0].strip():
+        lines = [ln for ln in (line1, line2) if ln]
+        if not lines:
             return []
         joined = "\n".join(lines)
         if len(joined) <= cls.METADATA_MAX_CHARS:
             return lines
+        # Prefer preserving the session line; truncate from the identity line.
+        budget1 = cls.METADATA_MAX_CHARS
+        if len(lines) > 1:
+            budget1 = min(budget1, len(lines[0]) + 1)
         first = lines[0][: cls.METADATA_MAX_CHARS]
+        if len(lines) == 1:
+            return [first]
         remaining = cls.METADATA_MAX_CHARS - len(first) - 1
-        if remaining <= 0 or len(lines) == 1:
+        if remaining <= 0:
             return [first]
         return [first, lines[1][:remaining]]
+
+    @classmethod
+    def _short_working_dir(cls, working_dir: str) -> str:
+        """Trim an absolute agent path to ``<project>/.lingtai/<agent>``."""
+        idx = working_dir.find("/.lingtai/")
+        if idx > 0:
+            prev = working_dir.rfind("/", 0, idx)
+            if prev >= 0:
+                return working_dir[prev + 1 :]
+            return working_dir
+        return working_dir
 
     @classmethod
     def format_rows_task_card_text(
