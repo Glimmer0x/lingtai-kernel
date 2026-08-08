@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -615,9 +616,9 @@ class TelegramManager:
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
-        # resident target. A 1s blanket rebuild only edits Telegram when the
+        # resident target. A 5s blanket rebuild only edits Telegram when the
         # frame actually changed (excluding the volatile ``Last Updated`` line),
-        # so bursty event tails coalesce into at most one edit per second
+        # so bursty event tails coalesce into at most one edit every 5s
         # instead of hammering the per-chat edit rate limit.
         self._task_card_automatic_fingerprints: dict[tuple[str, int], str] = {}
         self._task_card_tail_thread: threading.Thread | None = None
@@ -2149,7 +2150,9 @@ class TelegramManager:
     # Latest final-carrier session telemetry is projected separately. There is no
     # durable cursor: startup and log replacement rehydrate from the bounded tail.
     _TASK_CARD_EVENT_WINDOW = TaskCardEventProjection.EVENT_WINDOW
-    _TASK_CARD_EVENT_POLL_INTERVAL = 1.0
+    _TASK_CARD_EVENT_POLL_INTERVAL = float(
+        os.environ.get("LINGTAI_TASKCARD_POLL_INTERVAL", "5.0")
+    )
     _TASK_CARD_EVENT_TAIL_CHUNK = 65536
     _TASK_CARD_EVENT_REASONING_CAP = TaskCardEventProjection.EVENT_REASONING_CAP
     _TASK_CARD_EVENT_TEXT_CAP = TaskCardEventProjection.EVENT_TEXT_CAP
@@ -2184,6 +2187,9 @@ class TelegramManager:
         lifecycle = self._task_card_agent_lifecycle_status()
         if lifecycle is not None:
             snapshot["agent_lifecycle"] = lifecycle
+        active_seconds = self._task_card_active_seconds()
+        if active_seconds is not None:
+            snapshot["agent_active_seconds"] = active_seconds
         model = self._task_card_current_model()
         if model:
             snapshot["model"] = model
@@ -2284,6 +2290,40 @@ class TelegramManager:
         except Exception:
             return state
         return state if alive else "offline"
+
+    def _task_card_active_seconds(self) -> float | None:
+        """Seconds since the agent's last progress while it is active.
+
+        Reads ``.status.json``'s ``runtime.last_progress_at`` (the wall
+        timestamp ``BaseAgent._write_status_snapshot`` refreshes on every
+        turn) and returns its age only when the runtime reports ``active``.
+        This surfaces the live LLM/tool latency: while the model thinks or a
+        tool runs, ``last_progress_at`` stays put and the age grows; when
+        activity resumes it resets. Missing/malformed data, a non-active
+        state, or a future timestamp degrades to ``None``.
+        """
+        try:
+            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        runtime = data.get("runtime")
+        if not isinstance(runtime, dict):
+            return None
+        if runtime.get("state") != AgentState.ACTIVE.value:
+            return None
+        last_progress = runtime.get("last_progress_at")
+        if not isinstance(last_progress, (int, float)) or isinstance(last_progress, bool):
+            return None
+        if not math.isfinite(last_progress):
+            return None
+        age = time.time() - last_progress
+        return age if age >= 0 else None
 
     @staticmethod
     def _project_agent_text_event(event: dict) -> dict | None:
@@ -2408,7 +2448,7 @@ class TelegramManager:
                 self._task_card_event_groups = []
                 self._task_card_event_metadata = None
             return
-        rows, offset, metadata = result
+        rows, offset, metadata, usages = result
         with self._task_card_event_lock:
             self._task_card_event_path = path
             self._task_card_event_offset = offset
@@ -2417,6 +2457,9 @@ class TelegramManager:
             self._task_card_event_identity = self._event_file_identity(stat)
             projected = [({"api_call_id": row.get("group_id")}, dict(row)) for row in rows]
             self._task_card_event_groups = self._group_task_card_events(projected)
+            TaskCardEventProjection.apply_tool_usages(
+                self._task_card_event_groups, usages,
+            )
             self._task_card_event_metadata = metadata
 
     def _reverse_tail_latest_rows(
@@ -2443,6 +2486,7 @@ class TelegramManager:
         window = self._TASK_CARD_EVENT_WINDOW
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
+        per_call_usages: dict[str, dict] = {}
         tail_offset = size
         try:
             with open(path, "rb") as f:
@@ -2488,6 +2532,14 @@ class TelegramManager:
                         row = self._project_task_card_event(event)
                         if row is not None:
                             round_projected.append((event, row))
+                        carrier = TaskCardEventProjection.project_current_call_usage(event)
+                        if carrier is not None:
+                            carrier_call_id, usage = carrier
+                            per_call_usages[carrier_call_id] = usage
+                        llm_usage = TaskCardEventProjection.project_llm_response_usage(event)
+                        if llm_usage is not None:
+                            llm_call_id, usage = llm_usage
+                            per_call_usages[llm_call_id] = usage
                         candidate = self._project_final_carrier_metadata(event)
                         if candidate is not None:
                             # ``complete`` is oldest-to-newest within this
@@ -2502,9 +2554,10 @@ class TelegramManager:
         # Chunks were prepended above, so projected events are already in
         # journal order before grouping; one API call receives one divider.
         groups = self._group_task_card_events(projected_events)
+        TaskCardEventProjection.apply_tool_usages(groups, per_call_usages)
         return self._flatten_task_card_groups(
             groups, include_group_id=True,
-        ), tail_offset, latest_metadata
+        ), tail_offset, latest_metadata, per_call_usages
 
     @staticmethod
     def _decode_event_line(raw: bytes) -> dict | None:
@@ -2604,6 +2657,7 @@ class TelegramManager:
         projected_events: list[tuple[dict, dict]] = []
         latest_metadata: dict | None = None
         tool_results: dict[str, dict] = {}
+        per_call_usages: dict[str, dict] = {}
         for raw in complete.split(b"\n"):
             event = self._decode_event_line(raw)
             if event is None:
@@ -2611,6 +2665,14 @@ class TelegramManager:
             call_id = event.get("tool_call_id")
             if event.get("type") == "tool_result" and isinstance(call_id, str) and call_id:
                 tool_results[call_id] = event
+            carrier = TaskCardEventProjection.project_current_call_usage(event)
+            if carrier is not None:
+                carrier_call_id, usage = carrier
+                per_call_usages[carrier_call_id] = usage
+            llm_usage = TaskCardEventProjection.project_llm_response_usage(event)
+            if llm_usage is not None:
+                llm_call_id, usage = llm_usage
+                per_call_usages[llm_call_id] = usage
             row = self._project_task_card_event(event)
             if row is not None:
                 projected_events.append((event, row))
@@ -2642,7 +2704,11 @@ class TelegramManager:
                 self._task_card_event_groups,
                 tool_results,
             )
-        return bool(projected_events) or metadata_changed or result_changed
+            usage_changed = TaskCardEventProjection.apply_tool_usages(
+                self._task_card_event_groups,
+                per_call_usages,
+            )
+        return bool(projected_events) or metadata_changed or result_changed or usage_changed
 
     def _resident_task_card_targets(self) -> list[tuple[str, int]]:
         """Enumerate every ``(account, chat_id)`` with a resident Task Card.
@@ -2806,7 +2872,7 @@ class TelegramManager:
             # Check + deliver + store are atomic per route (RLock is reentrant,
             # so the nested acquisition inside project() is free). This keeps the
             # fingerprint cache consistent with the actually-delivered frame even
-            # when the 1s blanket loop, the re-enable listener, and a rehydrate
+            # when the 5s blanket loop, the re-enable listener, and a rehydrate
             # race on the same route.
             with self._task_card_delivery_lock(account, chat_id):
                 if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
@@ -2857,7 +2923,7 @@ class TelegramManager:
                 # Blanket rebuild: every tick re-renders the current window and
                 # the fingerprint dedupe inside the broadcast decides whether a
                 # Telegram edit is actually needed. This coalesces bursty event
-                # tails into at most one edit per second.
+                # tails into at most one edit every 5 seconds.
                 try:
                     self._broadcast_task_card_event_window()
                 except Exception as e:
@@ -2892,7 +2958,7 @@ class TelegramManager:
                     self._broadcast_programmable_task_card_file()
                 except Exception as e:
                     log.debug("Programmable task card poll failed: %s", e)
-                if self._programmable_task_card_stop.wait(1.0):
+                if self._programmable_task_card_stop.wait(self._TASK_CARD_EVENT_POLL_INTERVAL):
                     return
 
         thread = threading.Thread(
@@ -2953,7 +3019,7 @@ class TelegramManager:
         """Ensure the resident target for an established inbound chat.
 
         Renders the full automatic event window (not a sparse placeholder) so
-        the first card a human sees is already complete; the 1s blanket keeps
+        the first card a human sees is already complete; the 5s blanket keeps
         it fresh from there.
         """
         automatic = TaskCardEventProjection.render_event_groups(
@@ -3347,7 +3413,8 @@ class TelegramManager:
         When ``rows`` is supplied (the batched multi-row form) each parallel or
         sequential call renders as its own row showing ``tool.action``, its
         redacted reasoning excerpt, its own captured start stamp, its own
-        whole-second elapsed, and a ``✓`` marker once it has completed.  The
+        millisecond elapsed (plus the LLM API round-trip gap since the previous
+        progress event), and a ``✓`` marker once it has completed.  The
         scalar ``tool``/``action``/``reasoning`` path is retained for
         backward-compatible single-tool callers and does not render the footer
         (it is the legacy transient-step form).

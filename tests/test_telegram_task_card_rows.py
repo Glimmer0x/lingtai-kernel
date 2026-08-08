@@ -70,9 +70,9 @@ def test_single_row_shows_tool_action_reasoning_elapsed():
     ])
     assert "bash.run" in text
     assert "compile project" in text
-    # Elapsed renders as whole seconds, no decimal point.
-    assert "3s" in text
-    assert "3.0s" not in text
+    # Elapsed renders adaptively: ms under 0.1s, one-decimal seconds above.
+    assert "3.0s" in text
+    assert "3000ms" not in text
 
 
 def test_parallel_rows_all_represented_with_independent_elapsed():
@@ -84,60 +84,59 @@ def test_parallel_rows_all_represented_with_independent_elapsed():
         {"tool": "grep", "tool_action": "", "reasoning": "scan",
          "elapsed_s": 8, "done": True},
     ])
-    # Each row present with its own tool + whole-second elapsed.
+    # Each row present with its own tool + whole-millisecond elapsed.
     assert "bash.run" in text
     assert "read" in text
     assert "grep" in text
-    assert "5s" in text
-    assert "2s" in text
-    assert "8s" in text
+    assert "5.0s" in text
+    assert "2.0s" in text
+    assert "8.0s" in text
 
 
 # ---------------------------------------------------------------------------
-# Whole-second display rule (no decimal point)
+# Adaptive duration display rule (ms under 0.1s, x.x s above)
 # ---------------------------------------------------------------------------
 
-def test_no_decimal_point_in_render():
+def test_adaptive_duration_renders_one_decimal_second():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 12, "done": False},
     ])
-    assert "12s" in text
-    # The elapsed suffix is whole-second, no decimal point in it.
+    assert "12.0s" in text
+    # The elapsed suffix is one-decimal seconds for >=0.1s durations.
     row_line = next(ln for ln in text.splitlines() if "bash.run" in ln)
-    elapsed_suffix = row_line[row_line.rindex("("):]  # "(12s)"
-    assert elapsed_suffix == "(12s)"
-    assert "." not in elapsed_suffix
+    elapsed_suffix = row_line[row_line.rindex("("):]  # "(12000ms)"
+    assert elapsed_suffix == "(12.0s)"
+    assert "." in elapsed_suffix
 
 
-def test_float_elapsed_payload_is_floored_to_whole_second():
-    """A float elapsed (e.g. from an in-flight value) is floored, not rounded,
-    and shows no decimal — 8.99s displays 8s."""
+def test_float_elapsed_payload_floors_to_one_decimal_second():
+    """A float elapsed (e.g. from an in-flight value) floors to one decimal — 8.99s displays 9.0s."""
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 8.99, "done": False},
     ])
-    assert "8s" in text
+    assert "9.0s" in text
     assert "8.99" not in text
     assert "9s" not in text
 
 
-def test_zero_elapsed_renders_zero_seconds():
+def test_zero_elapsed_renders_zero_ms():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 0, "done": False},
     ])
-    assert "0s" in text
+    assert "0ms" in text
     assert "0.0s" not in text
 
 
-def test_done_row_elapsed_is_whole_second():
+def test_done_row_elapsed_is_whole_ms():
     text = _fmt([
         {"tool": "bash", "tool_action": "run", "reasoning": "x",
          "elapsed_s": 7, "done": True},
     ])
-    assert "7s" in text
-    assert "7.0s" not in text
+    assert "7.0s" in text
+    assert "7000ms" not in text
 
 
 def test_done_row_has_marker_and_active_row_does_not():
@@ -382,7 +381,29 @@ def test_metadata_renders_compact_normal_lifecycle_states():
     for state in ("active", "idle", "asleep", "suspended"):
         lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": state})
         assert lines == [f"agent · {state}"]
-        assert "/refresh" not in lines[0]
+
+
+def test_metadata_renders_active_seconds_only_when_active():
+    # Active state plus a sane age renders the (N sec) suffix.
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "agent_active_seconds": 12.0,
+    })
+    assert lines == ["agent · active (12s)"]
+    # Non-active states never render the suffix even if the field is present.
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "idle",
+        "agent_active_seconds": 12.0,
+    })
+    assert lines == ["agent · idle"]
+    # Missing/invalid age degrades to the plain lifecycle line.
+    lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "active"})
+    assert lines == ["agent · active"]
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "agent_active_seconds": "secret",
+    })
+    assert lines == ["agent · active"]
 
 
 def test_metadata_renders_stuck_with_refresh_hint():

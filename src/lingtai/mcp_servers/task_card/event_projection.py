@@ -31,6 +31,7 @@ class TaskCardEventProjection:
     EVENT_REASONING_CAP = 300
     EVENT_TEXT_CAP = 500
     MAX_EVENTS_PER_CALL = 24
+    MAX_ELAPSED_MS = 9_999_999
     API_CALL_DIVIDER = "──────────"
 
     @classmethod
@@ -83,7 +84,19 @@ class TaskCardEventProjection:
         cap = cls.EVENT_TEXT_CAP if text_cap is None else text_cap
         if len(text) > cap:
             text = text[: cap - 1] + "…"
-        return {"kind": "text", "text": text}
+        row: dict[str, Any] = {"kind": "text", "text": text}
+        raw_ts = event.get("ts")
+        if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+            try:
+                ts = float(raw_ts)
+            except (OverflowError, ValueError):
+                ts = None
+            if ts is not None and math.isfinite(ts):
+                row["_ts"] = ts
+        api_call_id = event.get("api_call_id")
+        if isinstance(api_call_id, str) and api_call_id:
+            row["_api_call_id"] = api_call_id
+        return row
 
     @classmethod
     def project_tool_call_row(
@@ -118,6 +131,14 @@ class TaskCardEventProjection:
         started_at = cls.format_row_timestamp(event.get("ts"))
         if started_at:
             row["started_at"] = started_at
+        raw_ts = event.get("ts")
+        if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+            try:
+                ts = float(raw_ts)
+            except (OverflowError, ValueError):
+                ts = None
+            if ts is not None and math.isfinite(ts):
+                row["_ts"] = ts
         return row
 
     @classmethod
@@ -159,6 +180,7 @@ class TaskCardEventProjection:
             if max_events_per_call is None
             else max_events_per_call
         )
+        last_tool_ts: float | None = None
         for index, (event, row) in enumerate(projected):
             group_id = cls.event_group_id(event, index)
             group = by_id.get(group_id)
@@ -167,6 +189,19 @@ class TaskCardEventProjection:
                 by_id[group_id] = group
                 groups.append(group)
             events = group["events"]
+            # The LLM API round trip Jason watches as ``active (N sec)`` is the
+            # gap between consecutive progress events: the previous tool_call's
+            # own ``ts`` (stream order, so a group's first row still sees the
+            # previous group's last tool call; only the very first tool row of
+            # the stream has no prior progress and reads 0.0).
+            raw_ts = row.get("_ts")
+            if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+                ts = float(raw_ts)
+                if last_tool_ts is None:
+                    row["api_delay_s"] = 0.0
+                else:
+                    row["api_delay_s"] = max(0.0, round(ts - last_tool_ts, 2))
+                last_tool_ts = ts
             if len(events) < limit:
                 events.append(row)
         count = cls.EVENT_WINDOW if window is None else window
@@ -188,6 +223,9 @@ class TaskCardEventProjection:
                 else:
                     row.pop("group_id", None)
                     row.pop("_tool_call_id", None)
+                    row.pop("_ts", None)
+                    row.pop("_usage", None)
+                    row.pop("_api_call_id", None)
                 if row.get("kind") == "tool":
                     row.pop("kind", None)
                 rows.append(row)
@@ -238,6 +276,94 @@ class TaskCardEventProjection:
         return event if isinstance(event, dict) else None
 
     @staticmethod
+    def project_current_call_usage(
+        event: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Extract per-call LLM usage from a ``notification_block_injected``
+        carrier. Returns ``(call_id, {output, cache_miss, cache_rate})`` so the
+        tailer can attach it to the matching tool row."""
+        if event.get("type") != "notification_block_injected":
+            return None
+        call_id = event.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        envelope = event.get("_meta")
+        if not isinstance(envelope, dict):
+            return None
+        agent_meta = envelope.get("agent_meta")
+        if not isinstance(agent_meta, dict):
+            return None
+        state = agent_meta.get("agent_state")
+        if not isinstance(state, dict):
+            return None
+        token_usage = state.get("token_usage")
+        if not isinstance(token_usage, dict):
+            return None
+        current = token_usage.get("current_call")
+        if not isinstance(current, dict):
+            return None
+        supported = ("output", "cache_miss", "cache_rate")
+        usage = {key: current[key] for key in supported if key in current}
+        return (call_id, usage) if usage else None
+
+    @staticmethod
+    def project_llm_response_usage(
+        event: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Extract per-call LLM usage from a ``llm_response`` event.
+
+        Pure-text turns (an assistant reply with no tool call) never carry a
+        ``notification_block_injected`` carrier, so their per-call token usage
+        has to come from the ``llm_response`` event itself. Returns
+        ``(api_call_id, {output, cache_miss, cache_rate})``; estimated token
+        counts are still shown (they are the only signal a pure-text turn has)
+        but missing/zero input degrades to ``None``.
+        """
+        if event.get("type") != "llm_response":
+            return None
+        call_id = event.get("api_call_id")
+        if not isinstance(call_id, str) or not call_id:
+            return None
+        output = event.get("output_tokens")
+        cached = event.get("cached_tokens")
+        total = event.get("input_tokens")
+        if (
+            type(output) is not int
+            or type(cached) is not int
+            or type(total) is not int
+            or total <= 0
+        ):
+            return None
+        usage: dict[str, Any] = {"output": output, "cache_miss": max(total - cached, 0)}
+        if cached > 0:
+            usage["cache_rate"] = min(cached / total, 1.0)
+        return (call_id, usage)
+
+    @staticmethod
+    def apply_tool_usages(
+        groups: list[dict[str, Any]],
+        usages: dict[str, dict[str, Any]],
+    ) -> bool:
+        """Attach per-call usage to rows by their ``_tool_call_id``.
+
+        Pure-text rows carry ``_api_call_id`` instead, which the tailer keys
+        from ``llm_response`` events; fall back to it so a text-only turn still
+        gets its divider usage arrows."""
+        changed = False
+        for group in groups:
+            for row in group.get("events", []):
+                usage = usages.get(row.get("_tool_call_id"))
+                if usage is None:
+                    usage = usages.get(row.get("_api_call_id"))
+                if usage is None:
+                    continue
+                if row.get("_usage") == usage:
+                    continue
+                row["_usage"] = usage
+                changed = True
+        return changed
+
+    @staticmethod
     def apply_tool_results(
         groups: list[dict[str, Any]],
         tool_results: dict[str, dict[str, Any]],
@@ -259,6 +385,9 @@ class TaskCardEventProjection:
                 elapsed_ms = result.get("elapsed_ms")
                 if type(elapsed_ms) in (int, float) and elapsed_ms >= 0:
                     row["elapsed_s"] = elapsed_ms / 1000
+                    # Keep the raw ms so sub-second durations render exactly
+                    # (e.g. ``412ms``) instead of rounding to ``0s``.
+                    row["elapsed_ms"] = elapsed_ms
                 changed = True
         return changed
 
@@ -274,6 +403,23 @@ class TaskCardEventProjection:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
             rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
+            # The group's API delay is the LLM round-trip gap since the previous
+            # progress; the per-call usage rides the same divider line, both kept
+            # out of tool rows.
+            api_delay_s: float | None = None
+            usage: dict[str, Any] | None = None
+            for row in group.get("events", []):
+                v = row.get("api_delay_s")
+                if api_delay_s is None and type(v) in (int, float) and not isinstance(v, bool) and v >= 0:
+                    api_delay_s = float(v)
+                u = row.get("_usage")
+                if usage is None and isinstance(u, dict) and u:
+                    usage = u
+                if api_delay_s is not None and usage is not None:
+                    break
+            info = cls.format_divider_info(api_delay_s, usage)
+            if info:
+                rows.append({"kind": "api_info", "text": info})
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -285,6 +431,38 @@ class TaskCardEventProjection:
             now=now,
         )
         return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
+
+    @classmethod
+    def format_divider_info(
+        cls,
+        api_delay_s: float | None,
+        usage: dict[str, Any] | None,
+    ) -> str:
+        """Compact divider line: `API x s` plus `↓out ↑miss cache%` per-call usage.
+
+        The down arrow denotes output tokens, the up arrow denotes cache miss
+        (the two token flows that grow with each call); the trailing percentage
+        is that call's cache rate. Any piece missing from the event degrades
+        silently, so old events without usage still render the delay alone.
+        """
+        parts: list[str] = []
+        if api_delay_s is not None and api_delay_s > 0:
+            parts.append(f"API {api_delay_s:.1f}s")
+        if isinstance(usage, dict) and usage:
+            out = usage.get("output")
+            miss = usage.get("cache_miss")
+            rate = usage.get("cache_rate")
+            if type(out) is int and out >= 0:
+                parts.append(f"\u2193{cls.format_count(out)}")
+            if type(miss) is int and miss >= 0:
+                parts.append(f"\u2191{cls.format_count(miss)}")
+            if (
+                type(rate) in {int, float}
+                and not isinstance(rate, bool)
+                and 0 <= rate <= 1
+            ):
+                parts.append(f"{float(rate):.1%}")
+        return " ".join(parts)
 
     @classmethod
     def format_task_card_text(
@@ -388,6 +566,14 @@ class TaskCardEventProjection:
             agent_line = f"agent · {lifecycle} · try /refresh"
         elif lifecycle in cls.AGENT_STATES:
             agent_line = f"agent · {lifecycle}"
+        if agent_line and lifecycle == AgentState.ACTIVE.value:
+            active_seconds = metadata.get("agent_active_seconds")
+            if (
+                type(active_seconds) in {int, float}
+                and not isinstance(active_seconds, bool)
+                and active_seconds >= 0
+            ):
+                agent_line = f"{agent_line} ({float(active_seconds):.0f}s)"
 
         session_line = (
             "session · " + " · ".join(session_parts) if session_parts else None
@@ -452,6 +638,11 @@ class TaskCardEventProjection:
             if kind == "divider":
                 api_prepared.append((idx, cls.API_CALL_DIVIDER))
                 continue
+            if kind == "api_info":
+                info = redact_text(str(row.get("text", ""))).strip()
+                if info:
+                    api_prepared.append((idx, info[: cls.EVENT_TEXT_CAP]))
+                continue
             if kind == "text":
                 text = redact_text(str(row.get("text", ""))).strip()
                 if text:
@@ -464,14 +655,25 @@ class TaskCardEventProjection:
             action = str(row.get("tool_action", ""))
             label = f"{tool}.{action}" if action else tool
             redacted = redact_text(str(row.get("reasoning", "")))
-            elapsed = cls.format_elapsed(row.get("elapsed_s", 0))
             done = bool(row.get("done", False))
             started_at = row.get("started_at", "")
             started_at = started_at if isinstance(started_at, str) else ""
             status = row.get("status")
             status = status if status in {"success", "error", "???"} else None
+            # Duration in whole milliseconds (sub-second tool results were
+            # useless as ``0s``). The LLM API round-trip gap since the previous
+            # progress is rendered on the group divider, not here.
+            elapsed = cls.format_elapsed_ms(cls.row_elapsed_ms(row))
+            if status == "???":
+                # A tool call with no result yet is genuinely running; showing
+                # ``???`` wasted the slot without saying anything real.
+                status_suffix = ""
+                suffix = f" ({elapsed}, running)" if elapsed else " (running)"
+            else:
+                status_suffix = f", {status}" if status else ""
+                suffix = f" ({elapsed}{status_suffix})"
             tool_prepared.append(
-                (idx, label, redacted, elapsed, done, started_at, status)
+                (idx, label, redacted, suffix, done, started_at, status)
             )
 
         metadata_lines = cls.format_metadata(metadata)
@@ -489,7 +691,7 @@ class TaskCardEventProjection:
             _,
             label,
             _redacted,
-            elapsed,
+            suffix,
             done,
             started_at,
             status,
@@ -497,13 +699,7 @@ class TaskCardEventProjection:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            tool_scaffold += (
-                len(prefix)
-                + len(f" ({elapsed}s{status_suffix})")
-                + len(stamp_suffix)
-                + 2
-            )
+            tool_scaffold += len(prefix) + len(suffix) + len(stamp_suffix) + 2
         fixed = (
             len(cls.HEADER)
             + 1
@@ -521,7 +717,7 @@ class TaskCardEventProjection:
         per_row_cap = max(0, min(cls.REASONING_CAP, budget // divisor))
 
         by_idx: dict[int, str] = {}
-        for idx, label, redacted, elapsed, done, started_at, status in tool_prepared:
+        for idx, label, redacted, suffix, done, started_at, status in tool_prepared:
             excerpt = (
                 redacted[:per_row_cap] + "…"
                 if len(redacted) > per_row_cap
@@ -530,8 +726,7 @@ class TaskCardEventProjection:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
             stamp_suffix = f" · {started_at}" if started_at else ""
-            status_suffix = f", {status}" if status else ""
-            by_idx[idx] = f"{prefix}{excerpt} ({elapsed}s{status_suffix}){stamp_suffix}"
+            by_idx[idx] = f"{prefix}{excerpt}{suffix}{stamp_suffix}"
         for idx, text in text_prepared:
             excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
             by_idx[idx] = f"• {excerpt}"
@@ -610,3 +805,50 @@ class TaskCardEventProjection:
             return str(max(0, int(float(value))))
         except (TypeError, ValueError):
             return "0"
+
+    @staticmethod
+    def row_elapsed_ms(row: dict[str, Any]) -> float:
+        """Resolve a tool row's elapsed duration in whole milliseconds.
+
+        Prefers the raw ``elapsed_ms`` captured from the tool result so
+        sub-second durations are preserved exactly; falls back to converting
+        the legacy ``elapsed_s`` field. Missing/malformed values degrade to 0.
+        """
+        raw_ms = row.get("elapsed_ms")
+        if (
+            type(raw_ms) in (int, float)
+            and not isinstance(raw_ms, bool)
+            and raw_ms >= 0
+        ):
+            return float(raw_ms)
+        raw_s = row.get("elapsed_s")
+        if (
+            type(raw_s) in (int, float)
+            and not isinstance(raw_s, bool)
+            and raw_s >= 0
+        ):
+            return float(raw_s) * 1000
+        return 0.0
+
+    @classmethod
+    def format_elapsed_ms(cls, value: object) -> str:
+        """Render a tool row's elapsed duration adaptively.
+
+        Under 0.1s (Jason 2026-08-08): whole milliseconds (``31ms``); at or above
+        0.1s: one decimal second (``2.3s``). Milliseconds for sub-0.1s tools stay
+        useful instead of rounding to ``0s``, and seconds read naturally for
+        longer tools instead of a wide millisecond wall. Coerces defensively
+        (floored, junk/non-finite/negative degrade to ``0ms``) and caps the
+        display at ``MAX_ELAPSED_MS`` so a runaway timer cannot widen the row
+        unboundedly.
+        """
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return "0ms"
+        if not math.isfinite(number) or number < 0:
+            return "0ms"
+        if number < 100:
+            return f"{min(int(number), cls.MAX_ELAPSED_MS)}ms"
+        seconds = min(number, cls.MAX_ELAPSED_MS) / 1000
+        return f"{seconds:.1f}s"

@@ -438,7 +438,7 @@ def test_only_safe_bounded_fields_are_projected(tmp_path):
     window = manager._task_card_event_window()
     assert len(window) == 1
     row = window[0]
-    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at", "status"}
+    assert set(row.keys()) <= {"tool", "tool_action", "reasoning", "started_at", "status", "api_delay_s"}
     assert row["tool"] == "bash"
     assert row["tool_action"] == "run"
     assert row["reasoning"] == "safe text"
@@ -459,7 +459,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
 
     _write_lines(path, [_tool_call_line(tool_name="read", action="read", call_id="c1")])
     manager._poll_event_tail()
-    assert "(0s, ???)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0ms, running)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
 
     _write_lines(path, [json.dumps({
         "type": "tool_result", "tool_call_id": "c1", "status": "ok",
@@ -467,7 +467,7 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
     })])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "(2s, success)" in rendered
+    assert "(2.3s, success)" in rendered
     assert "RESULT_SECRET" not in rendered
 
     _write_lines(path, [
@@ -478,7 +478,186 @@ def test_tool_result_updates_status_and_elapsed(tmp_path):
         }),
     ])
     manager._poll_event_tail()
-    assert "(0s, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.4s, error)" in [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+
+
+def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
+    """CHANGE A: the second tool call row carries ``api_delay_s`` equal to the
+    ts gap since the previous tool call, and the render shows it distinctly
+    from the tool-result elapsed (``3.4s api``)."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    _write_lines(events_path, [
+        _tool_call_line(tool_name="first", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="second", call_id="c2", ts=103.4),
+    ])
+
+    manager._poll_event_tail()
+
+    window = manager._task_card_event_window()
+    assert [row["tool"] for row in window] == ["first", "second"]
+    # First tool call of the stream has no prior progress: 0.0 baseline.
+    assert window[0]["api_delay_s"] == 0.0
+    # Second tool call: exact ts delta.
+    assert window[1]["api_delay_s"] == 3.4
+    # The raw ts stays private and never leaks into the public window.
+    assert all("_ts" not in row for row in window)
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    # The api delay is rendered on the group divider line, not in tool rows.
+    assert "API 3.4s" in rendered
+    # Tool rows no longer carry the api suffix.
+    assert "3.4s api" not in rendered
+
+
+def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
+    """The group divider carries per-call LLM usage: down arrow = output tokens,
+    up arrow = cache miss, trailing percentage = cache rate. The usage arrives
+    on the notification_block_injected carrier (real kernel shape), keyed by
+    call_id, and is attached to the matching tool row."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def carrier(call_id, out, miss, rate):
+        return json.dumps({
+            "type": "notification_block_injected",
+            "call_id": call_id,
+            "_meta": {
+                "agent_meta": {
+                    "agent_state": {
+                        "token_usage": {
+                            "current_call": {
+                                "output": out,
+                                "cache_miss": miss,
+                                "cache_rate": rate,
+                            }
+                        }
+                    }
+                }
+            },
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        _tool_call_line(call_id="c1", ts=100.0),
+        carrier("c1", 412, 31_000, 0.97716),
+        _tool_call_line(call_id="c2", ts=103.4),
+        carrier("c2", 1_234, 512_345, 0.55),
+    ])
+
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    # The visible tail (last group) carries its own API delay + arrows + rate.
+    assert "API 3.4s" in rendered
+    assert "\u21931.2k" in rendered    # ↓1.2k output tokens
+    assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
+    assert "55.0%" in rendered         # cache rate (one decimal per Jason)
+    # Usage is private per-row state: projected for rendering but never
+    # leaked into the public window rows.
+    assert all("_usage" not in row for row in manager._task_card_event_window())
+    assert all("_ts" not in row for row in manager._task_card_event_window())
+
+
+def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
+    """Old tool_call events without a usage carrier still render delay alone."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    _write_lines(_events_path(tmp_path), [
+        _tool_call_line(tool_name="first", call_id="c1", ts=100.0),
+        _tool_call_line(tool_name="second", call_id="c2", ts=103.4),
+    ])
+    manager._poll_event_tail()
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "API 3.4s" in rendered
+    assert "\u2191" not in rendered
+    assert "\u2193" not in rendered
+
+
+def test_pure_text_turn_renders_api_usage_from_llm_response(tmp_path):
+    """A pure-text turn (diary reply with no tool call) has no
+    notification_block_injected carrier, so the divider usage arrows come from
+    the llm_response event keyed by api_call_id (Jason 2026-08-08: pure text
+    output turns only showed the API line with no usage)."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def diary(text, ts, api_call_id):
+        return json.dumps({
+            "type": "diary", "ts": ts, "api_call_id": api_call_id,
+            "text": text, "visibility": "public",
+        })
+
+    def llm_response(api_call_id, total, cached, out, ts):
+        return json.dumps({
+            "type": "llm_response", "ts": ts, "api_call_id": api_call_id,
+            "input_tokens": total, "cached_tokens": cached,
+            "output_tokens": out, "estimated": False,
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        diary("first pure text", 100.0, "api_pure_1"),
+        llm_response("api_pure_1", 1_000, 900, 123, 105.0),
+    ])
+
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "first pure text" in rendered
+    # llm_response usage rides the divider: output, cache miss, cache rate.
+    assert "\u2193123" in rendered
+    assert "\u2191100" in rendered   # 1000 - 900 cache miss
+    assert "90.0%" in rendered      # 900/1000
+
+
+def test_pure_text_turn_api_line_has_no_bullet(tmp_path):
+    """The API divider info line must not carry the bullet prefix (it would
+    look like a tool row). Jason 2026-08-08."""
+    acct = FakeAccount()
+    manager, service = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+
+    def diary(text, ts, api_call_id):
+        return json.dumps({
+            "type": "diary", "ts": ts, "api_call_id": api_call_id,
+            "text": text, "visibility": "public",
+        })
+
+    _write_lines(_events_path(tmp_path), [
+        diary("only text", 100.0, "api_no_usage"),
+    ])
+    manager._poll_event_tail()
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    lines = rendered.split("\n")
+    # No API info line at all when the turn has no usage (delay 0.0 for a lone
+    # first row is not rendered), and no stray bullet-only line is invented.
+    assert "only text" in rendered
+    assert all("\u2022 API" not in line for line in lines)
+
+
+def test_sub_second_tool_elapsed_renders_adaptive_seconds_not_zero_seconds(tmp_path):
+    """CHANGE B: a 412ms tool result renders ``0.4s``, never the useless ``0s``."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    _pre_resident(acct, 555, manager)
+    path = _events_path(tmp_path)
+
+    _write_lines(path, [_tool_call_line(tool_name="fast", call_id="c1")])
+    manager._poll_event_tail()
+    _write_lines(path, [json.dumps({
+        "type": "tool_result", "tool_call_id": "c1", "status": "ok",
+        "elapsed_ms": 412, "result": "RESULT_SECRET",
+    })])
+    manager._poll_event_tail()
+
+    rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
+    assert "(0.4s, success)" in rendered
+    assert "RESULT_SECRET" not in rendered
 
 
 def test_tool_call_action_is_rendered_as_tool_action():
