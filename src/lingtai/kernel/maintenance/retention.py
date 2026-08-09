@@ -1007,9 +1007,15 @@ def _parse_iso(value: object) -> datetime | None:
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z"):
         try:
             parsed = datetime.strptime(value, fmt)
-            return parsed.astimezone(timezone.utc)
         except ValueError:
             continue
+        if parsed.tzinfo is None:
+            # "Z" means UTC (RFC 3339); the daemon writer always emits UTC.
+            # Stamping instead of astimezone keeps the value independent of
+            # the host's local timezone (astimezone on a naive datetime would
+            # interpret it as local time and shift it by the UTC offset).
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     return None
 
 

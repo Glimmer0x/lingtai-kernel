@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from lingtai.kernel.maintenance import RetentionOptions, TargetError, report_to_dict, scan_retention
+from lingtai.kernel.maintenance.retention import _parse_iso
 
 
 NOW = datetime(2026, 6, 27, 12, 0, 0, tzinfo=timezone.utc)
@@ -336,3 +338,68 @@ def test_json_report_is_deterministic(tmp_path):
     second = report_to_dict(scan_retention(agent, RetentionOptions(), _now=NOW))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def _set_tz(monkeypatch, tz: str) -> None:
+    """Switch the process local timezone for naive-datetime semantics."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset() unavailable on this platform")
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+
+
+def test_parse_iso_z_suffix_is_utc_regardless_of_local_tz(monkeypatch):
+    _set_tz(monkeypatch, "Asia/Shanghai")
+    assert _parse_iso("2026-06-05T12:00:00Z") == datetime(
+        2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc
+    )
+    _set_tz(monkeypatch, "America/New_York")
+    assert _parse_iso("2026-06-05T12:00:00Z") == datetime(
+        2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+def test_parse_iso_explicit_offset_normalized_to_utc(monkeypatch):
+    _set_tz(monkeypatch, "Asia/Shanghai")
+    assert _parse_iso("2026-06-05T20:00:00+08:00") == datetime(
+        2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc
+    )
+
+
+def test_parse_iso_non_string_and_garbage_return_none():
+    assert _parse_iso(None) is None
+    assert _parse_iso(123) is None
+    assert _parse_iso("garbage") is None
+
+
+def test_daemon_finished_at_near_cutoff_not_shifted_by_host_tz(tmp_path, monkeypatch):
+    # 4 hours inside the 30-day window: the run is 29d20h old, so it must be
+    # protected as newer_than_cutoff. Before the fix, a UTC+8 host read the
+    # Z timestamp 8 hours early and misclassified it as a candidate.
+    _set_tz(monkeypatch, "Asia/Shanghai")
+    agent = _agent(tmp_path)
+    _daemon(agent, finished_at=NOW - timedelta(days=30) + timedelta(hours=4))
+
+    data = _report(agent)
+
+    assert data["classes"]["terminal_daemon_run"]["candidates"] == 0
+    assert data["classes"]["terminal_daemon_run"]["protected"] == 1
+    reasons = {item["reason"] for item in data["protected"]}
+    assert "newer_than_cutoff" in reasons
+
+
+def test_daemon_age_fields_match_finished_at(tmp_path, monkeypatch):
+    _set_tz(monkeypatch, "Asia/Shanghai")
+    agent = _agent(tmp_path)
+    finished_at = NOW - timedelta(days=45)
+    run = _daemon(agent, finished_at=finished_at)
+
+    data = _report(agent)
+
+    candidates = [c for c in data["candidates"] if Path(c["path"]) == run]
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate["age_source"] == "daemon_finished_at"
+    assert candidate["timestamp"] == finished_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert candidate["age_seconds"] == pytest.approx(45 * 86400.0, abs=1.0)
+    assert candidate["age_days"] == pytest.approx(45.0, abs=0.01)
