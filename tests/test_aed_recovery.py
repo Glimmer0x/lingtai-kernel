@@ -376,6 +376,117 @@ def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
     assert any(name == "aed_attempt" and fields["attempt"] == 1 for name, fields in agent._logs)
 
 
+def test_over_window_zero_progress_compaction_aborts_aed_retry_loop(tmp_path, monkeypatch):
+    """Issue #713: an over-window error followed by a zero-progress
+    retroactive compaction is a doomed retry — the rebuilt wire is the same
+    size (plus the retry prompt), so further AED attempts can never succeed.
+    The run loop must abort the wake after the first attempt instead of
+    burning the full AED budget (max_aed_attempts can be configured as high
+    as 99, which produced an 11-day zombie / 34.9M wasted input tokens)."""
+    from lingtai.kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 10
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        raise RuntimeError("Your input exceeds the context window of this model.")
+
+    def fake_compact(_agent, *, source):
+        return CompactionStats(scanned_blocks=87, compacted_blocks=0)
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 1
+    assert getattr(agent, "rebuilds", 0) == 0
+    assert agent._asleep.is_set()
+    assert [name for name, _ in agent._logs].count("aed_attempt") == 1
+    assert any(
+        name == "aed_zero_progress_abort" and fields["scanned_blocks"] == 87
+        for name, fields in agent._logs
+    )
+    assert any(name == "aed_exhausted" for name, _ in agent._logs)
+
+
+def test_over_window_zero_progress_abort_reports_terminal_to_task_card(tmp_path, monkeypatch):
+    """Issue #713: the task-card error row must be flipped terminal when the
+    wake is aborted on zero-progress compaction — the turn is observably
+    done (the same wire will fail identically), not left as a retrying row."""
+    from lingtai.kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent.reports = []
+    agent._report_task_card_api_error = (
+        lambda exc, **kw: agent.reports.append((exc, kw))
+    )
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError("prompt is too long: maximum context length exceeded")
+
+    def fake_compact(_agent, *, source):
+        return CompactionStats(scanned_blocks=1, compacted_blocks=0)
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert any(name == "aed_zero_progress_abort" for name, _ in agent._logs)
+    terminal_reports = [kw for _, kw in agent.reports if kw.get("terminal")]
+    assert terminal_reports
+    assert terminal_reports[-1]["attempt"] == 1
+    assert terminal_reports[-1]["max_attempts"] == 10
+
+
+def test_over_window_compaction_with_progress_keeps_aed_retry(tmp_path, monkeypatch):
+    """Issue #713 regression guard: when retroactive compaction actually frees
+    blocks, the AED retry must still proceed — the wire shrank, so the next
+    attempt has a real chance of succeeding."""
+    from lingtai.kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 10
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Your input exceeds the context window of this model.")
+        _agent._shutdown.set()
+
+    def fake_compact(_agent, *, source):
+        return CompactionStats(
+            scanned_blocks=87,
+            compacted_blocks=3,
+            original_chars_total=15000,
+            replacement_chars_total=600,
+        )
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn, "_compact_history_before_retry", fake_compact)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 2
+    assert getattr(agent, "rebuilds", 0) == 1
+    assert [name for name, _ in agent._logs].count("aed_attempt") == 1
+    assert not any(name == "aed_zero_progress_abort" for name, _ in agent._logs)
+    assert not agent._asleep.is_set()
+
+
 def test_empty_llm_response_is_classified_transient():
     err = turn.EmptyLLMResponseError(ledger_source="main", in_tool_loop=False)
     assert turn._is_transient_provider_error(err) is True

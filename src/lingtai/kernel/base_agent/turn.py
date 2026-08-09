@@ -915,10 +915,48 @@ def _run_loop(agent) -> None:
                     # the already-shrunk wire.  Over-window errors get a
                     # distinct source tag so AED logs make the cause
                     # auditable.
-                    _compact_history_before_retry(
+                    compaction_stats = _compact_history_before_retry(
                         agent,
                         source="aed_over_window" if over_window else "aed_deterministic",
                     )
+
+                    # Issue #713: an over-window error means the wire itself
+                    # is too long, and retroactive compaction is the only
+                    # mechanism that can shrink it before the replay.  If the
+                    # pass freed nothing, the rebuilt wire is the same size
+                    # (the retry prompt only adds tokens), so every remaining
+                    # AED attempt is mathematically guaranteed to fail with
+                    # the same provider error.  Abort the wake immediately
+                    # instead of burning the rest of the AED budget (which
+                    # can be configured as high as 99 attempts) on a doomed
+                    # retry storm.  A ``None`` result (no live chat / helper
+                    # failure) is not proof of zero progress, so only a
+                    # positively-observed empty pass aborts.
+                    if (
+                        over_window
+                        and compaction_stats is not None
+                        and compaction_stats.compacted_blocks == 0
+                    ):
+                        agent._log(
+                            "aed_zero_progress_abort",
+                            attempt=aed_attempts,
+                            max_attempts=agent._config.max_aed_attempts,
+                            error=err_desc,
+                            scanned_blocks=compaction_stats.scanned_blocks,
+                        )
+                        _report_api_error_to_task_card(
+                            agent,
+                            _original_provider_exc,
+                            attempt=aed_attempts,
+                            max_attempts=agent._config.max_aed_attempts,
+                            terminal=True,
+                        )
+                        agent._log(
+                            "aed_exhausted", attempts=aed_attempts, error=err_desc
+                        )
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
+                        break
 
                     # Rebuild session with current config, preserving history
                     if agent._session.chat is not None:
