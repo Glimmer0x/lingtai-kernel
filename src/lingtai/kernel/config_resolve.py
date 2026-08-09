@@ -7,17 +7,17 @@ import re
 from pathlib import Path
 
 
-def parse_jsonc(text: str) -> dict:
-    """Parse JSON or JSONC text (strips // comments and trailing commas).
+_TRAILING_COMMA_RE = re.compile(r',\s*([}\]])')
 
-    Pure text→object transform with no I/O, so callers holding raw text (e.g.
-    migration transforms) use it directly. Comment stripping is string-aware: //
-    inside a quoted string is never a comment (URLs like "https://host/..." survive).
+
+def _strip_comments(text: str) -> str:
+    """Strip ``//`` comments while preserving string literals verbatim.
+
+    Implemented as a small state machine rather than splitting around string
+    literals: JSONC comments may themselves contain quoted examples (for
+    example ``// copy as "init.json"``); those quotes must not become JSON data
+    or hide the real delimiters on the following lines.
     """
-    # Strip comments with a small state machine rather than splitting around
-    # string literals. JSONC comments may themselves contain quoted examples
-    # (for example `// copy as "init.json"`); those quotes must not become JSON
-    # data or hide the real delimiters on the following lines.
     parts: list[str] = []
     in_string = False
     escaped = False
@@ -52,8 +52,59 @@ def parse_jsonc(text: str) -> dict:
             continue
         parts.append(ch)
         i += 1
-    text = "".join(parts)
-    text = re.sub(r',\s*([}\]])', r'\1', text)
+    return "".join(parts)
+
+
+def _strip_trailing_commas(text: str) -> str:
+    """Remove trailing commas without touching string literals.
+
+    Equivalent to applying ``re.sub(r',\\s*([}\\]]])', r'\\1', text)`` only to the
+    non-string spans of *text*, so a string value containing `, ]` or `, }`
+    (or `,]` / `,}`) survives byte-for-byte instead of being silently
+    rewritten. Genuine trailing commas always sit in the same non-string span
+    as their closing bracket, so this is semantically identical to the old
+    whole-text pass for every parseable input.
+    """
+    out: list[str] = []
+    pos = 0
+    in_string = False
+    escaped = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)  # copy the string literal verbatim
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+                pos = i + 1
+            i += 1
+            continue
+        if ch == '"':
+            out.append(_TRAILING_COMMA_RE.sub(r"\1", text[pos:i]))
+            out.append(ch)  # opening quote starts the string literal
+            in_string = True
+            i += 1
+            continue
+        i += 1
+    out.append(_TRAILING_COMMA_RE.sub(r"\1", text[pos:]))
+    return "".join(out)
+
+
+def parse_jsonc(text: str) -> dict:
+    """Parse JSON or JSONC text (strips // comments and trailing commas).
+
+    Pure text→object transform with no I/O, so callers holding raw text (e.g.
+    migration transforms) use it directly. Both normalisations are string-aware:
+    // inside a quoted string is never a comment (URLs like "https://host/..."
+    survive), and a string value containing `, ]` or `, }` is left intact.
+    """
+    text = _strip_comments(text)
+    text = _strip_trailing_commas(text)
     return json.loads(text)
 
 
