@@ -246,6 +246,18 @@ def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
     _clean_signal_files(working_dir)
+    # Durable file logging for daemonized agents: stderr alone is DEVNULL for
+    # avatars and truncated per-spawn in logs/spawn.stderr, so logger warnings
+    # (mail claim failures, adapter retries, restore diagnostics) would
+    # otherwise be lost. Do this before load_init() so boot/migration warnings
+    # are captured too. Short-lived inspector subcommands (log, check-caps,
+    # maintenance) deliberately never reach this path.
+    from lingtai.kernel.logging import setup_logging
+
+    setup_logging(
+        verbose=os.environ.get("LINGTAI_VERBOSE") == "1",
+        log_dir=working_dir / "logs",
+    )
     data = load_init(working_dir)
 
     # Resolve venv and store on agent for CPR/avatar to use
@@ -449,6 +461,11 @@ def main() -> None:
 
     run_parser = sub.add_parser("run", help="Boot agent into sleep — wakes on external messages")
     run_parser.add_argument("working_dir", type=Path, help="Agent working directory containing init.json")
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="DEBUG-level console logging (equivalent to LINGTAI_VERBOSE=1)",
+    )
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
@@ -506,6 +523,8 @@ def main() -> None:
         if not working_dir.is_dir():
             print(f"error: {working_dir} is not a directory", file=sys.stderr)
             sys.exit(1)
+        if getattr(args, "verbose", False):
+            os.environ["LINGTAI_VERBOSE"] = "1"
         run(working_dir)
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers

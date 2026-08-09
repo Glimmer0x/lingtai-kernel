@@ -683,3 +683,88 @@ def test_windows_venv_launcher_stub_is_not_a_duplicate(tmp_path, monkeypatch):
     monkeypatch.setattr(win_module.subprocess, "check_output", lambda *a, **k: payload)
     # Must NOT raise: every match belongs to this process's own launch chain.
     _check_duplicate_process(working_dir)
+
+
+def test_run_wires_file_logging(monkeypatch, tmp_path):
+    """run() must wire setup_logging(log_dir=working_dir/logs) into boot.
+
+    Guards the regression where file logging was dead code: the only sink was
+    the stderr console handler, and daemonized agents (stdout=DEVNULL,
+    stderr truncated per spawn in logs/spawn.stderr) lost all diagnostics.
+    """
+    from lingtai import cli
+    from lingtai.kernel.logging import get_logger, reset_logging
+
+    reset_logging()
+
+    class _Flag:
+        def __init__(self):
+            self.was_set = False
+
+        def set(self):
+            self.was_set = True
+
+    class _Shutdown:
+        def wait(self):
+            return None
+
+    class _FakeAgent:
+        def __init__(self):
+            self._asleep = _Flag()
+            self._shutdown = _Shutdown()
+            self._state = None
+            self._venv_path = None
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self, timeout=10.0):
+            self.stopped = True
+
+    monkeypatch.setattr(cli, "_check_duplicate_process", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_clean_signal_files", lambda working_dir: None)
+    monkeypatch.setattr(cli, "_install_signal_handlers", lambda working_dir, agent: None)
+    monkeypatch.setattr(cli, "load_init", lambda working_dir: {})
+    monkeypatch.setattr(cli, "build_agent", lambda data, working_dir: _FakeAgent())
+
+    import lingtai.venv_resolve as venv_resolve
+
+    monkeypatch.setattr(venv_resolve, "resolve_venv", lambda data: tmp_path / "runtime-venv")
+
+    cli.run(tmp_path)
+
+    log_file = tmp_path / "logs" / "agent.log"
+    assert log_file.is_file()
+
+    # The package logger now routes into the file: a warning emitted through
+    # any module's get_logger() binding lands in logs/agent.log.
+    get_logger().warning("boot wiring marker")
+    assert "boot wiring marker" in log_file.read_text(encoding="utf-8")
+
+    reset_logging()
+
+
+def test_log_doctor_does_not_create_agent_log(monkeypatch, tmp_path):
+    """Inspector subcommands must stay write-free w.r.t. agent.log.
+
+    Only run() (the daemon boot path) calls setup_logging(log_dir=...); short-
+    lived inspectors like `lingtai-agent log doctor` must not create or touch
+    logs/agent.log.
+    """
+    from lingtai import cli
+    from lingtai.kernel.logging import reset_logging
+
+    reset_logging()
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Args:
+        agent_dir = tmp_path
+        log_command = "doctor"
+
+    cli._handle_log_command(_Args())
+
+    assert not (logs_dir / "agent.log").exists()
+    reset_logging()
