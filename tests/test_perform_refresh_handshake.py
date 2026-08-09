@@ -1157,3 +1157,216 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
     assert "refresh_watcher_stale_duplicate_terminate" in event_types
     assert "refresh_watcher_success" in event_types
     assert "refresh_failed_permanent" not in event_types
+
+
+# ---------------------------------------------------------------------------
+# Cross-process system.json merge serialization (issue #742)
+#
+# The watcher publishes its terminal alert by merging into the same
+# .notification/system.json that the in-agent Notification Store mutates
+# under an advisory flock on .notification/.store.lock. The generated
+# `_append_system_notification` must take that same lock so a concurrent
+# agent merge is not silently overwritten (lost update) — and vice versa.
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_path(path: Path, timeout: float = 10.0) -> bool:
+    import time as _t
+
+    deadline = _t.time() + timeout
+    while _t.time() < deadline:
+        if path.exists():
+            return True
+        _t.sleep(0.02)
+    return False
+
+
+def _system_payload(events: list) -> dict:
+    return {
+        "header": (
+            f"{len(events)} system notification"
+            f"{'s' if len(events) != 1 else ''}"
+        ),
+        "icon": "\U0001f514",
+        "priority": "normal",
+        "published_at": "2026-08-09T00:00:00Z",
+        "data": {"events": events},
+    }
+
+
+def _watcher_append_runner(
+    prefix: str, started: Path, done: Path, *, lock_timeout: str
+) -> str:
+    """Slice the rendered watcher program at its top-level policy marker and
+    append a tail that calls the generated `_append_system_notification` in
+    isolation (the same slicing technique the redaction tests use), with the
+    lock deadline overridden so tests stay fast."""
+    marker = "deadline = time.time() + 60\n"
+    assert marker in prefix
+    defs = prefix.split(marker, 1)[0]
+    defs = defs.replace(
+        "_NOTIFICATION_LOCK_TIMEOUT = 5.0", f"_NOTIFICATION_LOCK_TIMEOUT = {lock_timeout}"
+    )
+    return defs + (
+        f"started = {str(started)!r}\n"
+        f"done = {str(done)!r}\n"
+        "open(started, 'w').close()\n"
+        "meta = {'attempts': 2, 'last_pid': 4242}\n"
+        "event_id = _append_system_notification(meta)\n"
+        "with open(done, 'w') as f:\n"
+        "    f.write(str(event_id))\n"
+    )
+
+
+def _seed_system_event(wd: Path) -> None:
+    from lingtai.kernel.notification_store import UNCONDITIONAL
+
+    store = notification_store_for(wd)
+    store.compare_update_channel(
+        "system",
+        UNCONDITIONAL,
+        lambda current: (
+            _system_payload(
+                [
+                    {
+                        "event_id": "evt_seed",
+                        "source": "seed",
+                        "ref_id": "seed",
+                        "body": "seed",
+                        "at": "2026-08-09T00:00:00Z",
+                    }
+                ]
+            ),
+            True,
+            None,
+        ),
+    )
+
+
+def test_refresh_watcher_system_notification_append_serializes_with_store_lock(tmp_path):
+    """#742 regression: the generated `_append_system_notification` must block
+    on the same `.notification/.store.lock` flock the Notification Store holds,
+    so a concurrent in-agent merge is not overwritten (lost update)."""
+    import fcntl as _fcntl
+    import time as _time
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    script = _capture_watcher_script(agent)
+    notif_dir = wd / ".notification"
+    _seed_system_event(wd)
+
+    # Hold the store lock *before* the watcher child starts, so the child is
+    # forced to contend for it (the interleaving the race is about).
+    lock_fd = open(notif_dir / ".store.lock", "a+b")
+    _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX)
+    started = wd / "_watcher_append_started"
+    done = wd / "_watcher_append_done"
+    runner = _watcher_append_runner(
+        script, started, done, lock_timeout="60.0"
+    )
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", runner],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(src_dir)},
+    )
+    try:
+        assert _wait_for_path(started, timeout=10), "watcher child did not start"
+        _time.sleep(0.4)
+        assert not done.exists(), (
+            "watcher `_append_system_notification` must block while the "
+            "Notification Store lock is held (lost-update race, #742)"
+        )
+        # Simulate the in-agent locked merge: read, append, rewrite while the
+        # flock is held (exactly what the Store does under the lock).
+        current = json.loads(
+            (notif_dir / "system.json").read_text(encoding="utf-8")
+        )
+        events = list(current.get("data", {}).get("events", []))
+        events.append(
+            {
+                "event_id": "evt_agent_bounce",
+                "source": "email.bounce",
+                "ref_id": "bounce-1",
+                "body": "bounce",
+                "at": "2026-08-09T00:00:01Z",
+            }
+        )
+        (notif_dir / "system.json").write_text(
+            json.dumps(_system_payload(events), ensure_ascii=False),
+            encoding="utf-8",
+        )
+    finally:
+        _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
+        lock_fd.close()
+    assert _wait_for_path(done, timeout=15), "watcher child did not finish"
+    proc.wait(timeout=15)
+    if proc.poll() is None:  # pragma: no cover - defensive
+        proc.kill()
+        proc.wait(timeout=5)
+
+    assert proc.returncode == 0, proc.stderr
+    notification = _read_json(notif_dir / "system.json")
+    ref_ids = [ev.get("ref_id") for ev in notification["data"]["events"]]
+    assert "bounce-1" in ref_ids, "in-agent event was lost to the watcher merge"
+    assert "refresh_failed_permanent" in ref_ids, "watcher alert was lost"
+
+
+def test_refresh_watcher_system_notification_lock_timeout_fails_open(tmp_path):
+    """#742 fail-open: if the store lock cannot be acquired within the bounded
+    deadline, the watcher still publishes its terminal alert (today's unlocked
+    behavior) and logs a diagnosable timeout marker."""
+    import fcntl as _fcntl
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    wd = agent._working_dir
+    script = _capture_watcher_script(agent)
+    notif_dir = wd / ".notification"
+    _seed_system_event(wd)
+
+    # Hold the store lock before the child starts and keep holding it past the
+    # watcher's 0.3s deadline: the watcher must fail open and still publish.
+    lock_fd = open(notif_dir / ".store.lock", "a+b")
+    _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_EX)
+    started = wd / "_watcher_append_started"
+    done = wd / "_watcher_append_done"
+    runner = _watcher_append_runner(
+        script, started, done, lock_timeout="0.3"
+    )
+    src_dir = Path(__file__).resolve().parents[1] / "src"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", runner],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(src_dir)},
+    )
+    try:
+        assert _wait_for_path(started, timeout=10), "watcher child did not start"
+        assert _wait_for_path(done, timeout=5), (
+            "watcher must fail open after the lock timeout and still publish"
+        )
+        proc.wait(timeout=5)
+    finally:
+        _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
+        lock_fd.close()
+        if proc.poll() is None:  # pragma: no cover - defensive
+            proc.kill()
+            proc.wait(timeout=5)
+
+    assert proc.returncode == 0, proc.stderr
+    notification = _read_json(notif_dir / "system.json")
+    ref_ids = [ev.get("ref_id") for ev in notification["data"]["events"]]
+    assert "refresh_failed_permanent" in ref_ids
+    events = [
+        json.loads(line)
+        for line in (wd / "logs" / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    types = [ev["type"] for ev in events]
+    assert "refresh_failed_permanent_lock_timeout" in types
