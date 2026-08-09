@@ -30,7 +30,9 @@ def setup_logging(
         ch.setFormatter(fmt)
         logger.addHandler(ch)
 
-    if log_dir is not None:
+    if log_dir is not None and not any(
+        isinstance(h, logging.FileHandler) for h in logger.handlers
+    ):
         log_path = Path(log_dir)
         log_path.mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(log_path / "agent.log")
