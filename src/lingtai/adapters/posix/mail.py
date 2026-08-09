@@ -34,6 +34,14 @@ from lingtai.kernel.services.mail import _new_mailbox_id
 
 logger = logging.getLogger(__name__)
 
+# A ``message.json`` that fails to read (transient OSError: permissions blip,
+# network-filesystem hiccup) is retried for this many poll cycles before being
+# dead-lettered. At the 0.5 s poll cadence this is ~5 s of retries.
+_MAX_READ_RETRIES = 10
+# Dead-letter store for permanently bad inbox entries, mirroring the MCP inbox
+# poller's ``.dead/`` convention.
+_DEAD_DIRNAME = ".dead"
+
 
 def _presence_store_for(recipient_dir: Path):
     """Build a target-bound POSIX presence adapter for a recipient directory."""
@@ -78,10 +86,18 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         self._poll_thread: threading.Thread | None = None
         self._poll_stop = threading.Event()
         self._seen: set[str] = set()
+        # Consecutive read-failure counts per inbox entry name, for bounded
+        # retry of transiently unreadable ``message.json`` files.
+        self._read_failures: dict[str, int] = {}
         # Own-inbox scans can be expensive on large/slow external-volume
         # mailboxes. Keep iterator progress across poll ticks so Phase 2 can
         # be sliced instead of restarting from the first historical entry.
         self._own_inbox_iter: Iterator[Path] | None = None
+        # Directory names observed in the current own-inbox pass. When a pass
+        # completes, ids in ``_seen`` that were not observed and whose inbox
+        # directories no longer exist are pruned so ``_seen`` tracks the live
+        # inbox instead of all history (see ``_prune_seen_to_live_inbox``).
+        self._own_inbox_observed: set[str] = set()
         self._own_inbox_slice_seconds = 0.05
         self._own_inbox_slice_entries = 200
         self._mail_poll_slow_seconds = 1.0
@@ -112,8 +128,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         1. ``{address}/.agent.json`` must exist.
         2. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
 
-        Then write ``message.json`` atomically into the recipient's inbox
-        and copy any attachment files.
+        Then stage the whole message (attachments + ``message.json``) in a
+        hidden ``.<id>.staging`` directory inside the recipient's inbox and
+        publish it with a single atomic ``os.replace``, so the recipient can
+        never observe a partial inbox entry. Every failure path removes the
+        sender-owned staging directory and leaves the recipient's inbox
+        untouched.
 
         Modes:
         - peer: resolve bare name against parent dir (default — sibling agents in same .lingtai/)
@@ -155,34 +175,47 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             ),
         }
 
-        # Handle attachments
+        # Validate every attachment path up front: a missing file is a
+        # zero-side-effect early return instead of a partial inbox entry.
         attachment_paths = message.get("attachments")
+        srcs: list[Path] = []
         if attachment_paths:
-            att_dir = msg_dir / "attachments"
-            att_dir.mkdir(parents=True, exist_ok=True)
-            local_copies: list[str] = []
             for fpath in attachment_paths:
                 src = Path(fpath)
                 if not src.is_file():
                     return f"Attachment not found: {fpath}"
-                dst = att_dir / src.name
-                shutil.copy2(src, dst)
-                local_copies.append(str(dst))
-            # Replace original paths with recipient-local paths
-            message = {**message, "attachments": local_copies}
-        else:
-            msg_dir.mkdir(parents=True, exist_ok=True)
+                srcs.append(src)
 
-        # Atomic write: tmp → rename
-        tmp_path = msg_dir / "message.json.tmp"
-        final_path = msg_dir / "message.json"
+        # Assemble the whole message (attachments + ``message.json``) in a
+        # hidden staging dir inside the recipient's inbox, then publish with a
+        # single atomic ``os.replace``. Staging under the inbox (not the system
+        # temp dir) keeps the final rename on one filesystem, and the
+        # dot-prefixed name keeps the listener from ever dispatching a partial
+        # entry. Every failure path removes the sender-owned staging dir, so a
+        # failed send never leaves an orphan in another agent's mailbox.
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = inbox_dir / f".{msg_id}.staging"
         try:
-            tmp_path.write_text(
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            if srcs:
+                staging_att_dir = staging_dir / "attachments"
+                staging_att_dir.mkdir(parents=True, exist_ok=True)
+                # Recipient-local paths recorded in the payload must point at
+                # the final location (``msg_dir``), not the staging path.
+                local_copies = [
+                    str(msg_dir / "attachments" / src.name) for src in srcs
+                ]
+                for src in srcs:
+                    shutil.copy2(src, staging_att_dir / src.name)
+                message = {**message, "attachments": local_copies}
+
+            (staging_dir / "message.json").write_text(
                 json.dumps(message, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-            os.replace(str(tmp_path), str(final_path))
+            os.replace(str(staging_dir), str(msg_dir))
         except OSError as e:
+            _remove_tree_retry(staging_dir)
             return f"Failed to write message: {e}"
 
         return None
@@ -196,12 +229,24 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
         Existing messages are recorded in ``_seen`` so they are not
         re-delivered.  New directories that appear with a ``message.json``
-        trigger *on_message*.
+        trigger *on_message*. After each complete own-inbox pass, ``_seen``
+        is pruned to ids whose inbox directories still exist (archived or
+        deleted messages drop out of the dedupe set).
+
+        Re-entry guard: raises ``RuntimeError`` when a poll thread is already
+        running, so a second ``listen()`` cannot spawn a second poll thread
+        that double-dispatches the same messages.  The agent lifecycle
+        (``base_agent/lifecycle.py``) relies on this exception to treat a
+        repeated ``listen()`` as "already listening".
         """
-        # Snapshot existing inbox entries so we don't re-notify
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            raise RuntimeError("MailService already listening")
+        # Snapshot existing inbox entries so we don't re-notify. Dotted
+        # directories (e.g. the ``.dead/`` dead-letter store) are not inbox
+        # entries and are excluded from the snapshot.
         if self._inbox_dir.is_dir():
             for entry in self._inbox_dir.iterdir():
-                if entry.is_dir():
+                if entry.is_dir() and not entry.name.startswith("."):
                     self._seen.add(entry.name)
 
         self._poll_stop.clear()
@@ -279,6 +324,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 return False
             if self._own_inbox_iter is None:
                 self._own_inbox_iter = iter(self._inbox_dir.iterdir())
+                self._own_inbox_observed = set()
 
             while not self._poll_stop.is_set() and visited < limit:
                 # Every branch below—including cheap `_seen` skips—must pay
@@ -289,26 +335,88 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 try:
                     entry = next(self._own_inbox_iter)
                 except StopIteration:
+                    # Complete pass: prune _seen to ids whose inbox dirs still
+                    # exist (archived/deleted messages drop out). Pruning only
+                    # here, on a full scan, means a partial pass can never
+                    # evict live entries.
+                    self._prune_seen_to_live_inbox()
                     self._reset_own_inbox_iter()
                     return visited > 0
 
                 visited += 1
+                # Sender-owned staging dirs (``.{id}.staging``) contain a
+                # ``message.json`` while the message is being assembled; only
+                # the final atomic publish is deliverable, so never dispatch or
+                # record dot-prefixed entries.
+                if entry.name.startswith("."):
+                    continue
+                self._own_inbox_observed.add(entry.name)
                 # _seen only holds handled directory names or pseudo-claim
-                # UUIDs, so skip before the stat.
+                # UUIDs, so skip before the stat. Dotted directories (e.g. the
+                # ``.dead/`` dead-letter store) are never inbox entries.
                 if entry.name in self._seen:
                     skipped_seen += 1
                     continue
-                if not entry.is_dir():
+                if not entry.is_dir() or entry.name.startswith("."):
                     continue
                 msg_file = entry / "message.json"
                 if msg_file.is_file():
+                    # Transient read failures are retried (NOT marked seen),
+                    # so a one-cycle OSError on a network filesystem cannot
+                    # permanently drop an intact message. Permanent failures
+                    # are dead-lettered with a logged error report.
                     try:
-                        payload = json.loads(msg_file.read_text(encoding="utf-8"))
+                        raw = msg_file.read_text(encoding="utf-8")
+                    except UnicodeDecodeError as e:
+                        # #1063: corrupt UTF-8 content must not crash the poll
+                        # thread; dead-letter it like other permanently bad
+                        # inbox entries.
+                        self._dead_letter_inbox_entry(entry, f"invalid UTF-8: {e}")
+                        continue
+                    except OSError as e:
+                        n = self._read_failures.get(entry.name, 0) + 1
+                        self._read_failures[entry.name] = n
+                        if n >= _MAX_READ_RETRIES:
+                            self._dead_letter_inbox_entry(
+                                entry, f"read failed after {n} attempts: {e}"
+                            )
+                        else:
+                            logger.warning(
+                                "mail inbox: transient read failure on %s (attempt %d/%d): %s",
+                                entry.name,
+                                n,
+                                _MAX_READ_RETRIES,
+                                e,
+                            )
+                        continue
+
+                    if not raw.strip():
+                        # An empty read means a ``message.json`` caught
+                        # mid-write by a non-atomic writer; retry next cycle
+                        # instead of dead-lettering a half-written file.
+                        continue
+
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError as e:
+                        # `send()` writes message.json atomically (tmp -> rename),
+                        # so a parse error means genuinely malformed content;
+                        # dead-letter immediately.
+                        self._dead_letter_inbox_entry(entry, f"invalid JSON: {e}")
+                        continue
+
+                    self._read_failures.pop(entry.name, None)
+                    # Mark seen BEFORE dispatch: a consumer error must not
+                    # redeliver (at-most-once), and must not be misdiagnosed
+                    # as a transport failure.
+                    self._seen.add(entry.name)
+                    try:
                         on_message(payload)
                         dispatched += 1
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                    self._seen.add(entry.name)
+                    except Exception:
+                        logger.exception(
+                            "mail inbox: on_message handler failed for %s", entry.name
+                        )
 
         except OSError:
             self._reset_own_inbox_iter()
@@ -325,12 +433,72 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
         return visited > 0
 
+    def _dead_letter_inbox_entry(self, entry: Path, error: str) -> None:
+        """Move a bad inbox entry directory into ``inbox/.dead/`` with a report.
+
+        Mail inbox entries are directories (``<uuid>/message.json`` plus
+        optional ``attachments/``), so unlike the single-file MCP inbox
+        dead-letter path the whole entry directory is moved. An ``error.json``
+        report and a warning log line are left behind for operators.
+        """
+        from datetime import datetime, timezone
+
+        dead_dir = self._inbox_dir / _DEAD_DIRNAME
+        try:
+            dead_dir.mkdir(parents=True, exist_ok=True)
+            target = dead_dir / entry.name
+            shutil.move(str(entry), str(target))
+            (target / "error.json").write_text(
+                json.dumps(
+                    {
+                        "error": error,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            logger.warning("mail inbox: dead-lettered %s: %s", target, error)
+        except OSError as e:
+            logger.error(
+                "mail inbox: failed to dead-letter %s: %s (original error: %s)",
+                entry,
+                e,
+                error,
+            )
+        # Either way, stop re-processing this entry.
+        self._seen.add(entry.name)
+        self._read_failures.pop(entry.name, None)
+
     def _reset_own_inbox_iter(self) -> None:
         iterator = self._own_inbox_iter
         self._own_inbox_iter = None
         close = getattr(iterator, "close", None)
         if callable(close):
             close()
+
+    def _prune_seen_to_live_inbox(self) -> None:
+        """Evict ``_seen`` ids whose inbox directories no longer exist.
+
+        Called only after a complete own-inbox pass (iterator exhausted), so a
+        partial scan can never evict live entries. Candidates are ``_seen`` ids
+        that were not observed in this pass; each is verified on disk before
+        eviction. The existence check matters because the own-inbox pass spans
+        many poll ticks: a pseudo-agent claim pre-marks an id in ``_seen``
+        before placing the inbox copy, so an id created mid-pass may not be
+        yielded by this pass's iterator even though its directory exists —
+        evicting it would re-dispatch an already-delivered message.
+
+        Pruning is safe: a missing directory can never be re-dispatched by the
+        poll loop, and mailbox ids are timestamp-prefixed so an old id does not
+        recur as a new message.
+        """
+        if not self._seen:
+            return
+        for name in self._seen - self._own_inbox_observed:
+            if not (self._inbox_dir / name).exists():
+                self._seen.discard(name)
 
     def _log_slow_mail_phase(self, phase: str, start: float, **fields: object) -> None:
         elapsed = time.monotonic() - start
@@ -392,7 +560,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 continue
             try:
                 payload = json.loads(msg_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 continue
 
             # Normalize `to` to a list of strings.

@@ -47,6 +47,11 @@ class MailTransportPort(ABC):
         payloads are passed to ``on_message`` according to the adapter's
         delivery semantics; the Port does not promise end-to-end exactly-once
         delivery across process crashes or restarts.
+
+        Re-entry: calling ``listen()`` while delivery is already running raises
+        ``RuntimeError``; callers such as the agent lifecycle treat that as
+        "already listening" and ignore it. A fresh ``listen()`` after
+        ``stop()`` restarts delivery.
         """
         ...
 

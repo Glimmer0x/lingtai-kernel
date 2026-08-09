@@ -279,6 +279,43 @@ class TestListen:
         svc.stop()
         svc.stop()
 
+    def test_listen_raises_on_reentry_while_polling(self, tmp_path):
+        """A second listen() while a poll thread is alive must raise RuntimeError.
+
+        Without the guard a second listen() would spawn a second poll thread
+        and both loops would dispatch the same inbox messages.  The agent
+        lifecycle (base_agent/lifecycle.py) relies on RuntimeError to treat a
+        repeated listen() as "already listening".
+        """
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+        svc.listen(on_message=lambda p: None)
+        try:
+            with pytest.raises(RuntimeError):
+                svc.listen(on_message=lambda p: None)
+            # Exactly one poll thread must exist after the guarded re-entry.
+            assert svc._poll_thread is not None
+        finally:
+            svc.stop()
+
+    def test_listen_after_stop_restarts_polling(self, tmp_path):
+        """listen() after stop() is allowed (refresh/restart path)."""
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+        svc.listen(on_message=lambda p: None)
+        svc.stop()
+        # A fresh listen() after stop() must not raise.
+        svc.listen(on_message=lambda p: None)
+        svc.stop()
+
 
 class TestAddress:
 
@@ -466,6 +503,10 @@ def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
     real_inbox.mkdir(parents=True)
+    # The seen entry must be a live inbox directory: the poll loop prunes
+    # _seen ids whose inbox dirs are gone, so a fake name with no backing
+    # directory would be evicted and re-statted on the next tick.
+    (real_inbox / "already-seen").mkdir()
 
     stat_attempted = threading.Event()
     scan_finished = threading.Event()
@@ -967,3 +1008,478 @@ def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):
     assert "phase=own_inbox_slice" in caplog.text
     assert "agent=agent01" in caplog.text
     assert "do-not-log-body" not in caplog.text
+
+
+def _write_message(msg_dir, payload):
+    """Write an inbox message atomically (tmp -> os.replace), exactly like
+    ``PosixFilesystemMailAdapter.send()`` does, so tests never expose a
+    half-written ``message.json`` to the poller."""
+    import os
+
+    msg_dir.mkdir(parents=True, exist_ok=True)
+    tmp = msg_dir / "message.json.tmp"
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(str(tmp), str(msg_dir / "message.json"))
+
+
+def test_listen_retries_transient_read_error_then_delivers(
+    tmp_path, monkeypatch, caplog
+):
+    """A transient OSError reading message.json must be retried, not dropped.
+
+    Regression for #732: the old poller swallowed the error with ``pass`` and
+    marked the entry seen, permanently losing an intact message.
+    """
+    import pathlib
+
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    payload = {"from": "/tmp/other", "message": "hi"}
+    real_read_text = pathlib.Path.read_text
+    failures = {"count": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self.name == "message.json" and failures["count"] < 2:
+            failures["count"] += 1
+            raise OSError("transient EIO")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", flaky_read_text)
+
+    received = []
+    received_event = threading.Event()
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: (received.append(p), received_event.set()))
+
+    # Deliver AFTER listen() so the startup snapshot does not mark it seen.
+    _write_message(inbox / "uuid-1", payload)
+
+    try:
+        assert received_event.wait(timeout=6.0)
+    finally:
+        svc.stop()
+
+    assert failures["count"] >= 2
+    assert len(received) == 1
+    assert received[0]["message"] == "hi"
+    # The intact message must NOT have been dead-lettered.
+    assert not (inbox / ".dead").exists()
+    assert "transient read failure" in caplog.text
+
+
+def test_listen_dead_letters_after_max_read_retries(tmp_path, monkeypatch, caplog):
+    """A persistently unreadable entry is dead-lettered, not retried forever."""
+    import pathlib
+
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    # Bound the retry window so the test runs in seconds, not minutes.
+    monkeypatch.setattr("lingtai.adapters.posix.mail._MAX_READ_RETRIES", 3)
+
+    real_read_text = pathlib.Path.read_text
+
+    def always_fail_read_text(self, *args, **kwargs):
+        if self.name == "message.json":
+            raise OSError("EACCES persistent")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", always_fail_read_text)
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    _write_message(inbox / "uuid-1", {"message": "hi"})
+
+    dead_dir = inbox / ".dead"
+    try:
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            if (dead_dir / "uuid-1" / "error.json").is_file():
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert not (inbox / "uuid-1").exists()
+    error_report = json.loads((dead_dir / "uuid-1" / "error.json").read_text())
+    assert "read failed after 3 attempts" in error_report["error"]
+    assert len(received) == 0
+    assert "dead-lettered" in caplog.text
+
+
+def test_listen_dead_letters_malformed_json_immediately(tmp_path, caplog):
+    """Malformed JSON is dead-lettered on the first cycle with a report."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    # Genuinely malformed content (cannot happen from send(), which writes
+    # atomically, but can arrive from hand-edited or corrupted files).
+    msg_dir = inbox / "uuid-1"
+    msg_dir.mkdir()
+    (msg_dir / "message.json").write_text("{not json", encoding="utf-8")
+
+    dead_dir = inbox / ".dead"
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if (dead_dir / "uuid-1" / "error.json").is_file():
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert not (inbox / "uuid-1").exists()
+    error_report = json.loads((dead_dir / "uuid-1" / "error.json").read_text())
+    assert "invalid JSON" in error_report["error"]
+    assert len(received) == 0
+    assert "dead-lettered" in caplog.text
+
+
+def test_listen_on_message_exception_is_logged_not_silent(tmp_path, caplog):
+    """A consumer exception is logged; the poll thread survives and no
+    redelivery occurs (at-most-once preserved)."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    received = []
+    received_event = threading.Event()
+    calls = {"n": 0}
+
+    def on_message(payload):
+        calls["n"] += 1
+        if payload["message"] == "boom":
+            raise RuntimeError("consumer bug")
+        received.append(payload)
+        received_event.set()
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=on_message)
+
+    # First message: the handler raises; must be logged and marked seen.
+    _write_message(inbox / "bad-1", {"message": "boom"})
+    # Second message: must still be delivered (poll thread stayed alive).
+    _write_message(inbox / "good-1", {"message": "fine"})
+
+    try:
+        assert received_event.wait(timeout=6.0)
+        # Let several cycles pass: the failing entry must not redeliver.
+        time.sleep(1.5)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert received == [{"message": "fine"}]
+    # bad-1 dispatched exactly once (marked seen before dispatch), good-1 once.
+    assert calls["n"] == 2
+    assert "on_message handler failed for bad-1" in caplog.text
+
+
+def test_listen_skips_dead_dir(tmp_path):
+    """The .dead/ store is never treated as inbox content, and dotted
+    directories are excluded from the _seen snapshot."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    # Pre-existing dead-letter store (as produced by dead-lettering before a
+    # restart): must be skipped by both the snapshot and the poll loop.
+    _write_message(inbox / ".dead" / "stuck-1", {"message": "dead"})
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    # A live message proves the poller still works.
+    _write_message(inbox / "live-1", {"message": "live"})
+
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if len(received) >= 1:
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert received == [{"message": "live"}]
+    assert ".dead" not in svc._seen
+
+
+def test_pseudo_outbox_corrupt_utf8_skipped_does_not_crash(tmp_path):
+    """A pseudo-outbox message.json with invalid UTF-8 must be skipped, not
+    crash the poll loop.
+
+    Regression for #1063: ``read_text(encoding="utf-8")`` raises
+    ``UnicodeDecodeError`` (a ``ValueError``), which the old
+    ``except (json.JSONDecodeError, OSError)`` guard did not catch — a single
+    corrupt file escaped ``_poll_pseudo_outboxes`` and killed the whole
+    mail-delivery thread.
+    """
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    agent_dir = base / "agent01"
+    pseudo_dir.mkdir()
+    agent_dir.mkdir()
+    (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    corrupt_dir = outbox_dir / "corrupt-msg"
+    corrupt_dir.mkdir(parents=True)
+    # 0xff is never a valid UTF-8 byte.
+    (corrupt_dir / "message.json").write_bytes(b'{"message": "\xff", "to": ["agent01"]}')
+
+    good_dir = outbox_dir / "good-msg"
+    good_dir.mkdir()
+    (good_dir / "message.json").write_text(
+        json.dumps({"message": "valid", "to": ["agent01"]}),
+        encoding="utf-8",
+    )
+
+    svc = PosixFilesystemMailAdapter(
+        working_dir=agent_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    received: list[dict] = []
+    # Must not raise: the corrupt entry is skipped and the valid one is
+    # still claimed and dispatched in the same pass.
+    svc._poll_pseudo_outboxes(received.append)
+
+    assert received == [{"message": "valid", "to": ["agent01"]}]
+    assert not good_dir.exists()  # valid message claimed into pseudo sent/
+    assert corrupt_dir.exists()  # corrupt entry left in place for inspection
+
+
+def test_own_inbox_corrupt_utf8_skipped_does_not_crash(tmp_path):
+    """A corrupt message.json in the own inbox must be skipped by the poll
+    slice, not crash the poll loop.
+
+    Regression for #1063: ``UnicodeDecodeError`` escaped the slice's read
+    guard and killed the mail-delivery thread.
+    """
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    corrupt_entry = inbox / "corrupt-msg"
+    corrupt_entry.mkdir()
+    (corrupt_entry / "message.json").write_bytes(b'{"message": "\xff"}')
+
+    good_entry = inbox / "good-msg"
+    good_entry.mkdir()
+    (good_entry / "message.json").write_text(
+        json.dumps({"message": "ok"}),
+        encoding="utf-8",
+    )
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    # Deterministic entry order: corrupt first, valid second.
+    svc._own_inbox_iter = iter([corrupt_entry, good_entry])
+    received: list[dict] = []
+    assert svc._poll_own_inbox_slice(received.append) is True
+
+    assert received == [{"message": "ok"}]
+
+
+def test_seen_pruned_after_inbox_dir_removed(tmp_path):
+    """_seen drops ids whose inbox dirs are archived/deleted after a pass."""
+    import shutil
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    entry = inbox / "20260701T000000-1a2b"
+    entry.mkdir()
+    (entry / "message.json").write_text(json.dumps({"message": "old"}))
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.add(entry.name)  # snapshot seed, like listen()
+
+    received: list[dict] = []
+    # Complete pass: observes the seen entry, dispatches nothing.
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert entry.name in svc._seen
+
+    # EmailManager._archive moves the dir out of the inbox.
+    archive = agent_dir / "mailbox" / "archive"
+    archive.mkdir(parents=True)
+    shutil.move(str(entry), str(archive / entry.name))
+
+    # Next complete pass (empty inbox) prunes the missing id without dispatch.
+    assert svc._poll_own_inbox_slice(received.append) is False
+    assert entry.name not in svc._seen
+    assert received == []
+
+
+def test_seen_retains_live_inbox_entries_after_prune(tmp_path):
+    """Pruning keeps ids whose dirs still exist and never re-dispatches."""
+    import shutil
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    keep = "20260702T000000-bbbb"
+    drop = "20260701T000000-aaaa"
+    for name in (drop, keep):
+        d = inbox / name
+        d.mkdir()
+        (d / "message.json").write_text(json.dumps({"message": name}))
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.update([drop, keep])
+
+    # Archive only the first entry, then run a complete pass.
+    archive = agent_dir / "mailbox" / "archive"
+    archive.mkdir(parents=True)
+    shutil.move(str(inbox / drop), str(archive / drop))
+
+    received: list[dict] = []
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert svc._seen == {keep}
+    assert received == []
+
+
+def test_pseudo_claimed_id_survives_prune(tmp_path):
+    """A pseudo-claim id whose inbox copy exists must not be evicted."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "agent_a"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+    outbox_msg = pseudo_dir / "mailbox" / "outbox" / "claimed-1"
+    outbox_msg.mkdir(parents=True)
+    payload = {
+        "from": "human",
+        "to": ["agent_a"],
+        "message": "hi",
+        "received_at": "2026-08-01T00:00:00.000Z",
+    }
+    (outbox_msg / "message.json").write_text(json.dumps(payload))
+
+    svc = PosixFilesystemMailAdapter(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    received: list[dict] = []
+    svc._poll_pseudo_outboxes(received.append)
+    assert "claimed-1" in svc._seen
+    assert (my_dir / "mailbox" / "inbox" / "claimed-1" / "message.json").is_file()
+    assert received == [payload]
+
+    # A complete own-inbox pass that observes the copy keeps the id.
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert "claimed-1" in svc._seen
+
+    # The sliced pass spans ticks while a claim copy can land mid-pass: an
+    # iterator snapshot taken before the copy existed must not evict the id
+    # (its directory exists, so the prune must keep it).
+    svc._own_inbox_iter = iter([])
+    svc._own_inbox_observed = set()
+    assert svc._poll_own_inbox_slice(received.append) is False
+    assert "claimed-1" in svc._seen
+
+
+def test_partial_scan_does_not_prune(tmp_path):
+    """An OSError mid-pass skips pruning: partial observations are unsafe."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    live = inbox / "live-msg"
+    live.mkdir()
+    (live / "message.json").write_text(json.dumps({"message": "x"}))
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.add("gone-msg")  # stale id whose dir does not exist
+
+    class FlakyIter:
+        def __init__(self, entries):
+            self._it = iter(entries)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            n = next(self._it)
+            if n is None:
+                raise OSError("simulated mid-scan failure")
+            return n
+
+    class FlakyInboxDir:
+        def __init__(self, path, entries):
+            self.path = path
+            self.entries = entries
+
+        def is_dir(self):
+            return self.path.is_dir()
+
+        def iterdir(self):
+            return FlakyIter(self.entries)
+
+        def __truediv__(self, child):
+            return self.path / child
+
+    svc._inbox_dir = FlakyInboxDir(inbox, [live, None])
+    assert svc._poll_own_inbox_slice(lambda _p: None) is True
+    # Partial pass: the stale id must survive; pruning happens only on a
+    # complete scan.
+    assert "gone-msg" in svc._seen
+    assert "live-msg" in svc._seen  # dispatched before the failure
+
+
+def test_listen_prunes_seen_after_archive(tmp_path):
+    """End-to-end: listen() prunes archived ids within a few poll ticks."""
+    import shutil
+    import time
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    old = inbox / "20260701T000000-1a2b"
+    old.mkdir()
+    (old / "message.json").write_text(json.dumps({"message": "old"}))
+
+    received: list[dict] = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+    try:
+        assert old.name in svc._seen  # snapshot seed
+        archive = agent_dir / "mailbox" / "archive"
+        archive.mkdir(parents=True)
+        shutil.move(str(old), str(archive / old.name))
+        deadline = time.time() + 3.0
+        while time.time() < deadline and old.name in svc._seen:
+            time.sleep(0.1)
+        assert old.name not in svc._seen
+        # The archived message was never re-delivered.
+        assert received == []
+    finally:
+        svc.stop()
