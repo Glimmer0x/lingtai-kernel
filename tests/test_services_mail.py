@@ -228,6 +228,10 @@ class TestMailAttachments:
             )
             assert isinstance(result, str)
             assert "Attachment not found" in result
+            # A failed send must not leave an orphaned partial message
+            # directory in the recipient's inbox.
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not inbox.is_dir() or not list(inbox.iterdir())
         finally:
             stop.set()
 
@@ -299,6 +303,155 @@ class TestMailAttachments:
             msg_dirs = list(mailbox.iterdir())
             assert len(msg_dirs) == 1
             assert (msg_dirs[0] / "message.json").is_file()
+        finally:
+            listener.stop()
+            stop.set()
+
+    def test_attachment_not_found_leaves_no_inbox_orphan(self, tmp_path):
+        """A missing attachment must not leave an orphaned inbox directory."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        try:
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"message": "hi", "attachments": ["/nonexistent/file.png"]},
+            )
+            assert isinstance(result, str)
+            assert "Attachment not found" in result
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not inbox.is_dir() or not list(inbox.iterdir())
+        finally:
+            stop.set()
+
+    def test_partial_attachment_failure_leaves_no_inbox_orphan(self, tmp_path):
+        """When the second of two attachments is missing, nothing remains."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        good = sender_dir / "good.txt"
+        good.write_text("hello")
+
+        try:
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"message": "hi", "attachments": [str(good), "/nonexistent/bad.txt"]},
+            )
+            assert isinstance(result, str)
+            assert "Attachment not found" in result
+            # No partial copy of the first attachment may exist anywhere
+            # under the recipient's mailbox.
+            assert not list((receiver_dir / "mailbox").rglob("good.txt"))
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not inbox.is_dir() or not list(inbox.iterdir())
+        finally:
+            stop.set()
+
+    def test_attachment_copy_error_returns_error_not_raise(self, tmp_path, monkeypatch):
+        """A copy2 OSError returns an error string and leaves the inbox clean."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        attachment = sender_dir / "a.txt"
+        attachment.write_text("data")
+
+        def _boom(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("lingtai.adapters.posix.mail.shutil.copy2", _boom)
+
+        try:
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"message": "hi", "attachments": [str(attachment)]},
+            )
+            assert isinstance(result, str)
+            assert "Failed to write message" in result
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not inbox.is_dir() or not list(inbox.iterdir())
+        finally:
+            stop.set()
+
+    def test_delivered_attachment_paths_point_at_final_location(self, tmp_path):
+        """Delivered message.json attachment paths must be final inbox paths."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        attachment = sender_dir / "a.txt"
+        attachment.write_text("data")
+
+        try:
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"message": "hi", "attachments": [str(attachment)]},
+            )
+            assert result is None
+
+            inbox = receiver_dir / "mailbox" / "inbox"
+            msg_dirs = list(inbox.iterdir())
+            assert len(msg_dirs) == 1
+            msg_dir = msg_dirs[0]
+            payload = json.loads((msg_dir / "message.json").read_text(encoding="utf-8"))
+            delivered = [Path(p) for p in payload["attachments"]]
+            assert len(delivered) == 1
+            final_path = msg_dir / "attachments" / "a.txt"
+            assert delivered[0] == final_path
+            assert delivered[0].is_file()
+            assert delivered[0].read_text(encoding="utf-8") == "data"
+            # No sender-owned staging leftovers.
+            assert not any(e.name.startswith(".") for e in inbox.iterdir())
+        finally:
+            stop.set()
+
+    def test_listener_never_dispatches_partial_message(self, tmp_path):
+        """A failing send followed by a successful send dispatches exactly once."""
+        sender_dir = _setup_agent_dir(tmp_path / "sender")
+        receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+
+        received = []
+        event = threading.Event()
+        stop = threading.Event()
+        _keep_heartbeat_alive(receiver_dir, stop)
+
+        def on_message(msg):
+            received.append(msg)
+            event.set()
+
+        listener = PosixFilesystemMailAdapter(working_dir=receiver_dir)
+        listener.listen(on_message)
+
+        try:
+            sender = PosixFilesystemMailAdapter(working_dir=sender_dir)
+            result = sender.send(
+                str(receiver_dir),
+                {"message": "bad", "attachments": ["/nonexistent/bad.png"]},
+            )
+            assert isinstance(result, str)
+            result = sender.send(str(receiver_dir), {"message": "good"})
+            assert result is None
+
+            assert event.wait(timeout=5.0), "Successful message not received"
+            time.sleep(1.0)  # give any wrong extra dispatch time to surface
+            assert len(received) == 1
+            assert received[0]["message"] == "good"
+
+            # The failed send left nothing behind: exactly one delivered
+            # message directory and no staging leftovers.
+            inbox = receiver_dir / "mailbox" / "inbox"
+            assert not any(e.name.startswith(".") for e in inbox.iterdir())
+            assert len(list(inbox.iterdir())) == 1
         finally:
             listener.stop()
             stop.set()

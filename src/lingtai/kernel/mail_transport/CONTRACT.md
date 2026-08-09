@@ -40,7 +40,8 @@ polling, or concurrency mechanisms.
 Agents and coding agents MUST preserve the current observable semantics:
 fire-and-forget `send` (no request/response coupling), background non-blocking
 `listen`, explicit idempotent `stop`, handshake-before-delivery, mailbox metadata
-injection, attachment copy, atomic `message.json` write, pseudo-outbox priority
+injection, attachment copy, atomic stage-then-rename delivery (a partial inbox
+entry is never observable), pseudo-outbox priority
 over the own-inbox scan, optimistic claim/rollback for subscribed outboxes,
 0.5-second polling, and the current string error / `None` success result of
 `send`. They MUST NOT let concrete-transport identities (POSIX vs Windows,
@@ -77,7 +78,8 @@ pseudo-agent subscriptions, `Path`). Those are adapter construction concerns.
 into the recipient's inbox and polls its own inbox plus subscribed pseudo-agent
 outboxes. It owns peer/abs address resolution, the
 `mailbox/{inbox,outbox,sent}/<id>/message.json` layout and `attachments/`,
-handshake liveness checks, atomic tmp→rename writes, the optimistic
+handshake liveness checks, atomic stage-then-rename delivery (a partial inbox
+entry is never observable), the optimistic
 outbox→claim→sent rename protocol with rollback, 0.5-second polling with
 per-phase `OSError` isolation, and the runtime-probe ack. A test-only in-memory
 fake in `tests/test_mail_transport.py` implements the same Port to prove
@@ -87,13 +89,19 @@ substitutability. IMAP/SMTP/network transports are explicitly out of scope.
 
 1. `send` is fire-and-forget and returns `None` on success. The POSIX adapter
    returns the current exact error strings for no agent, failed liveness,
-   missing attachment, and final `message.json` write failure. Other filesystem
+   missing attachment, and delivery write failure. Failed sends leave no
+   partial entry in the recipient's inbox: attachments are validated up front
+   and the message is published by a single atomic rename, so an error path
+   only removes the sender-owned staging directory. Other filesystem
    exceptions retain existing behavior and may propagate; the Port does not
    upgrade them into a blanket no-raise guarantee.
 2. Delivery is gated by the handshake (recipient is an agent and is alive) before
    any inbox write, except human pseudo-agents which skip the liveness check.
 3. Payloads delivered through `send` carry injected `_mailbox_id` and
-   `received_at`; `message.json` is written atomically (tmp → rename).
+   `received_at`; the adapter assembles the whole message (attachments +
+   `message.json`) in a hidden `.<id>.staging` dir under the recipient's inbox
+   and publishes it with one atomic `os.replace`, so a partial inbox entry is
+   never observable (the listener skips dot-prefixed entries).
    Pseudo-outbox pickup preserves the already-authored payload rather than
    reinjecting those fields.
 4. `listen` is non-blocking. Within one active listener, each newly observed
