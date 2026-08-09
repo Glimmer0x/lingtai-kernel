@@ -1,6 +1,6 @@
 ---
 name: tool-family
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
@@ -116,7 +116,8 @@ model-visible `summarize` control that the kernel silently ignores —
 joining it is part of a migration, not something this package does on a
 family's behalf. Calling
 `handle()` is optional: it validates the envelope (unknown `action`,
-non-boolean `summarize`, unknown root fields, `input` keys outside the
+non-boolean `summarize`, unknown root fields — with one narrow relocation
+exception, see "Contract rules" below — `input` keys outside the
 selected child's own declared schema) before invoking exactly that child's
 handler with only its own `input` mapping. A family MAY skip `handle()`
 entirely and dispatch by hand — `web` uses it internally but still owns its
@@ -384,12 +385,27 @@ its own scoped migration.
   the schema level without adding a fifth public root field or duplicating
   `action` inside `input`.
 - `handle()`, when used, MUST validate `action` against the registry, type-
-  check and strip root `summarize` before any child handler runs, reject
-  unknown root fields, and reject `input` keys outside the selected child's
-  own declared schema `properties` — schema conformance alone is not the
-  sole enforcement boundary; dispatch remains always-authoritative and
-  fail-closed regardless of whether a given provider validates the root
-  `allOf`/`if`/`then` schema-side (`../CONTRACT.md` "Dispatch and actions").
+  check and strip root `summarize` before any child handler runs, and reject
+  `input` keys outside the selected child's own declared schema `properties`
+  — schema conformance alone is not the sole enforcement boundary; dispatch
+  remains always-authoritative and fail-closed regardless of whether a given
+  provider validates the root `allOf`/`if`/`then` schema-side
+  (`../CONTRACT.md` "Dispatch and actions").
+- `handle()` MUST reject an unknown root field UNLESS it is both (a) a
+  property declared in the *selected* action's own `input_schema` and (b)
+  entirely absent from `input` — in which case `handle()` MUST relocate it
+  into `input` (add it as that key) rather than reject the call, and MUST
+  continue validating exactly as if the caller had nested it correctly. A
+  root field whose name duplicates a key already present in `input` — even
+  with an identical value — MUST still be rejected; the relocation exception
+  exists only for a genuinely misplaced-and-otherwise-absent field (observed
+  cause: a calling model's own native flat tool shape, e.g. an
+  `Edit(file_path, old_string, new_string, replace_all)`-style tool, leaking
+  `replace_all` to root instead of nesting it under `input` for the `file`
+  family's `edit` action), not for tolerating a redundant or conflicting
+  duplicate. This exception applies per-family, automatically, to every
+  family built on this dispatcher — it is not something an individual family
+  opts into or configures.
 - `handle()` MUST treat an unhashable `action` (e.g. `[]` or `{}`, reachable
   when invalid JSON survives to dispatch — the issue #513 blocker class) as
   simply matching no child, rendering the stable typed `ACTION_REQUIRED`

@@ -170,6 +170,47 @@ def test_dispatch_unknown_root_field_fails_with_invalid_argument():
     assert result["error_code"] == "INVALID_ARGUMENT"
 
 
+def test_dispatch_relocates_root_field_that_matches_selected_actions_own_schema_when_absent_from_input():
+    """A root-level key that IS a declared property of the selected action,
+    and is entirely absent from ``input``, is relocated into ``input``
+    rather than rejected — the fix for a calling model leaking its own
+    native flat tool shape (e.g. ``Edit(..., replace_all)``) into an
+    enveloped family's root instead of nesting it under ``input``."""
+    calls: list[dict] = []
+    fam = _widget_family(calls)
+    result = fam.handle({"action": "spin", "input": {}, "speed": 7})
+    assert result["status"] == "ok"
+    assert result["speed"] == 7
+    assert calls == [{"speed": 7}]
+
+
+def test_dispatch_rejects_duplicate_root_field_matching_key_already_in_input():
+    """The relocation exception does NOT cover a root-level key that
+    duplicates a name already present in ``input`` — even with an identical
+    value. Two conflicting-or-redundant places for the same value stays a
+    rejected hygiene violation, unchanged from before."""
+    fam = _widget_family()
+    result = fam.handle({"action": "spin", "input": {"speed": 1}, "speed": 1})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_dispatch_still_rejects_root_field_belonging_to_a_different_actions_schema():
+    """A root-level key that matches some OTHER child's input property (not
+    the selected action's) is not relocated — the exception is scoped to the
+    selected action's own schema only, so cross-branch keys are still
+    rejected exactly as before."""
+    fam = _widget_family()
+    # "manual_path" belongs to no widget action's input schema at all, and
+    # even a name matching another action's own declared property (there is
+    # none to collide with here, since `manual`'s input schema is empty)
+    # would not be relocated for `spin`'s dispatch — this proves the plain
+    # not-in-any-schema case remains rejected under the new code path too.
+    result = fam.handle({"action": "spin", "input": {"speed": 1}, "manual_path": "/x"})
+    assert result["status"] == "failed"
+    assert result["error_code"] == "INVALID_ARGUMENT"
+
+
 def test_dispatch_rejects_reasoning_or_summarize_leaking_into_input():
     fam = _widget_family()
     result = fam.handle({"action": "spin", "input": {"speed": 1, "summarize": True}})
