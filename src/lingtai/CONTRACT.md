@@ -14,6 +14,8 @@ related_files:
   - src/lingtai/kernel/nudge/ANATOMY.md
   - src/lingtai/kernel/nudge/__init__.py
   - src/lingtai/kernel/nudge/init_config.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
   - tests/test_init_reader.py
   - tests/test_cli.py
@@ -55,6 +57,15 @@ stage, location when available, safe excerpt, behavior (`STOP` for boot and
 `KEEP_PREVIOUS_EFFECTIVE` for refresh), and a next repair step.
 Legacy `manifest.capabilities.bash` is mapped in memory to `shell`; equal dual
 input nudges, differing dual input blocks, and canonical-only input passes.
+`context_limit` ownership is split by document type: an authored *preset*
+stores it inside `manifest.llm.context_limit` (m001 relocates preset documents
+only), while agent `init.json` and the materialized effective manifest keep it
+at `manifest.context_limit` (runtime hydration reads the root). A stray nested
+`manifest.llm.context_limit` on an init.json is never a runtime source — it is
+reported as a compatibility path (`manifest.llm.context_limit` raw →
+`manifest.context_limit` effective) so the init-config Nudge points the Agent
+at the field that actually takes effect; the nested key remains an
+unknown-field warning under the init schema.
 
 Compatibility exists to keep older local files readable while agents/humans
 repair them. Retired prompt fields and ignored runtime knobs are never new-write

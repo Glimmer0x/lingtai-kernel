@@ -141,6 +141,11 @@
     // Max context window tokens. null/missing/invalid = use the conservative
     // 272,000-token fallback; valid configured values are preserved exactly.
     // Set this to cap memory usage or force earlier molt.
+    // Canonical home for agent init.json / effective manifest is this root
+    // field. Authored presets keep their own manifest.llm.context_limit, which
+    // materialization lifts onto this root; a stray nested
+    // manifest.llm.context_limit on an init.json is diagnosed as a
+    // compatibility path by the init reader (nested raw -> root effective).
     "context_limit": null,
 
     // Per-wake loop budget: max iterations of the LLM/tool-call loop per
