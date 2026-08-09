@@ -496,6 +496,18 @@ def _stale_channel_refusal(
     }
 
 
+# Machine-readable ``cause`` values for ``cleared: false`` no-op dismiss
+# results (#716). Each constant is stamped by the exact branch that decides
+# the no-op, never recomputed elsewhere: ``already_empty`` keys on
+# ``update.cleared`` from ``NotificationStorePort.compare_update_channel``
+# (whole-channel clear of an already-empty channel), ``no_matching_event``
+# keys on the event mutator's ``removed == 0`` count (event_id/ref_id
+# matched nothing). Stale-version refusals are a separate ``status: error``
+# contract (``_stale_channel_refusal``) and never carry ``cause``.
+DISMISS_CAUSE_ALREADY_EMPTY = "already_empty"
+DISMISS_CAUSE_NO_MATCHING_EVENT = "no_matching_event"
+
+
 def dismiss_channel(
     agent,
     channel: str,
@@ -721,6 +733,8 @@ def dismiss_channel(
             "cleared": existed,
             "forced": bool(force),
         }
+        if not existed:
+            result["cause"] = DISMISS_CAUSE_ALREADY_EMPTY
         if ack_reason:
             result["reason"] = ack_reason
         if large_ref_ids:
@@ -824,6 +838,7 @@ def dismiss_channel(
                 "status": "ok",
                 "channel": channel,
                 "cleared": False,
+                "cause": DISMISS_CAUSE_NO_MATCHING_EVENT,
                 "removed": 0,
                 "remaining": remaining,
                 "forced": bool(force),
