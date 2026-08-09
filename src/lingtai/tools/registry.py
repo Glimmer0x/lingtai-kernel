@@ -172,8 +172,8 @@ def apply_core_defaults(
     Resolution order (per capability name):
     1. Start with ``CORE_DEFAULTS``.
     2. Overlay ``capabilities`` from init.json — init.json kwargs win on conflict.
-       Entries with name not in ``CORE_DEFAULTS`` (e.g. ``vision``,
-       ``web_search``) pass through unchanged.
+       Entries with name not in ``CORE_DEFAULTS`` (e.g. ``web_search``)
+       pass through unchanged.
     3. Drop any name listed in ``disable``.
 
     Returns a fresh dict; does not mutate inputs.
