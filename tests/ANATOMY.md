@@ -121,6 +121,7 @@ related_files:
   - tests/test_daemon_manifest.py
   - tests/test_daemon_mimocode_jsonl.py
   - tests/test_daemon_mimocode_submanual.py
+  - tests/test_daemon_missing_finish_guidance.py
   - tests/test_daemon_oh_my_pi_submanual.py
   - tests/test_daemon_opencode_backend.py
   - tests/test_daemon_opencode_submanual.py

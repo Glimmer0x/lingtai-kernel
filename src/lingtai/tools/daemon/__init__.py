@@ -1930,7 +1930,8 @@ class DaemonManager:
             "inspect its result in this run, then call `finish`. If the run "
             "ends without calling `finish(status=...)`, the parent will "
             "report it as missing-finish — that is not proof of failure; "
-            "the parent will inspect the trace/result."
+            "the parent should inspect the run's trace and the full final "
+            "text preserved in the run directory's physical `result.txt`."
         )
 
     @staticmethod
@@ -2040,8 +2041,9 @@ class DaemonManager:
         if completion.error == _DAEMON_MISSING_COMPLETION_ERROR:
             detail += (
                 ". The run ended without a finish() signal; this does not "
-                "necessarily mean the task failed — inspect the run's "
-                "trace/result before concluding"
+                "necessarily mean the task failed — before concluding, "
+                "inspect the run's trace and the full final text preserved "
+                "in the run directory's physical result.txt"
             )
         exc = RuntimeError(
             "daemon completion MCP contract did not permit success: "

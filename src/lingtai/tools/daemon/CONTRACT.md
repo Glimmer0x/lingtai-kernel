@@ -8,7 +8,7 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 8
-last_changed_at: "2026-08-08"
+last_changed_at: "2026-08-09"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -42,6 +42,7 @@ related_files:
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon.py
   - tests/test_daemon_empty_parity.py
+  - tests/test_daemon_missing_finish_guidance.py
   - tests/test_apriori_summary_executor.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
@@ -69,6 +70,7 @@ review_triggers:
   - tests/test_daemon.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_claude_p_background_guard.py
+  - tests/test_daemon_missing_finish_guidance.py
   - tests/test_daemon_opencode_backend.py
   - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_claude_interactive_backend.py
@@ -316,8 +318,10 @@ Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
 prevent terminal `done`. A missing-finish failure is a contract failure, not
 by itself proof the underlying task failed: the failure message tells the
-parent to inspect the run's trace/result before concluding, and the daemon
-context/manual carry the same guidance.
+parent that before concluding it should inspect the run's trace and the full
+final text preserved in the run directory's physical `result.txt` (on this
+failure path `result_path` stays null; the physical file is the discoverable
+route), and the daemon context/manual carry the same guidance.
 
 The LingTai loop shares only the pure `LLMResponse` all-empty predicate
 (`text`, `tool_calls`, and `thoughts` all empty) with the main agent. An all-empty
