@@ -1293,6 +1293,90 @@ def test_build_emanation_prompt_includes_selected_skills(tmp_path):
     assert prompt.index("- name: review-skill") < prompt.index("Your task:")
 
 
+def test_task_plugin_context_renders_catalog_and_flattens_skills_mcp(tmp_path):
+    """Daemon task plugin paths render a plugin section plus flattened skills/mcp."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    plugin_root = agent._working_dir / "plugin"
+    plugin_dir = plugin_root / "demo-plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "demo-plugin", "version": "1.0.0", "description": "Demo plugin for daemon injection."}',
+        encoding="utf-8",
+    )
+    skill_dir = plugin_dir / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n" + "name: demo-skill\n" + "description: Plugin skill for daemon runs.\n" + "---\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "mcp.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", '
+        '"mcpServers": {"demo-mcp": {"type": "stdio", "command": "python3", '
+        '"args": ["-m", "demo"]}}}',
+        encoding="utf-8",
+    )
+
+    catalog, skill_rows, mcp_regs = mgr._task_plugin_context(
+        {"task": "x", "tools": [], "plugin": ["plugin/demo-plugin"]}
+    )
+
+    assert catalog is not None
+    assert "plugins:" in catalog
+    assert "- name: demo-plugin" in catalog
+    assert "Demo plugin for daemon injection." in catalog
+    assert "skills (1):" in catalog
+    assert "- demo-skill" in catalog
+    assert "mcp (1):" in catalog
+    assert "- demo-mcp (mounted)" in catalog
+    assert [r["name"] for r in skill_rows] == ["demo-skill"]
+    assert len(mcp_regs) == 1
+    assert mcp_regs[0]["name"] == "demo-mcp"
+    assert mcp_regs[0]["transport"] == "stdio"
+    assert mcp_regs[0]["command"] == "python3"
+
+
+def test_task_plugin_context_rejects_bad_plugin_path(tmp_path):
+    """A missing plugin path resolves to nothing without failing the whole task."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    catalog, skill_rows, mcp_regs = mgr._task_plugin_context(
+        {"task": "x", "tools": [], "plugin": ["plugin/missing-plugin"]}
+    )
+
+    assert catalog is None
+    assert skill_rows == []
+    assert mcp_regs == []
+
+
+def test_combine_oneshot_context_includes_plugin_section(tmp_path):
+    """The oneshot context combiner renders a dedicated plugin section."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    combined = mgr._combine_oneshot_context(
+        None, None, None, "plugins:\n  - name: demo-plugin\n"
+    )
+
+    assert combined is not None
+    assert "## Parent-selected plugins" in combined
+    assert "demo-plugin" in combined
+
+
+def test_task_plugin_context_rejects_non_list(tmp_path):
+    """A non-list plugin field fails before scheduling."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    try:
+        mgr._task_plugin_context({"task": "x", "tools": [], "plugin": "plugin/demo"})
+    except ValueError as e:
+        assert "plugin must be an array" in str(e)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-list plugin should fail")
+
+
 def test_build_emanation_prompt_includes_selected_mcp_context(tmp_path):
     """Selected MCP registrations are rendered into the daemon prompt before the task."""
     agent = _make_agent(tmp_path, ["file", "daemon"])

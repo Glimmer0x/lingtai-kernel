@@ -129,6 +129,11 @@ def _emanate_task_schema() -> dict[str, Any]:
                 "items": {"type": "object"},
                 "description": 'Optional one-run MCP registrations for this daemon task. Array of full MCP registration objects: {name, transport/type: stdio|http, command+args+env for stdio or url+headers for http}. The registrations are serialized into the daemon prompt as YAML; LingTai backend also starts them as task-scoped MCP clients and exposes their tools for this run. CLI backends receive the same serialized registrations as context and may load them if their runtime supports MCP. Secret env/header values are redacted in prompts.',
             },
+            "plugin": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional Agent Plugins for this daemon task. Array of paths; each item may be a plugin directory (containing plugin.json) or a plugin search root whose immediate children are plugin directories. Relative paths resolve against the parent agent working directory. The daemon runtime reads each plugin manifest and injects a compact plugin section (name, summary, skills list, mcp list) into this run's system prompt; plugin skills are also injected as skill context and plugin mcp.json servers are registered as task-scoped MCP clients for the LingTai backend, exactly like the main agent mounts plugins. CLI backends that cannot mount plugins receive the plugin's skills and MCP registrations separately as normal skill/mcp context.",
+            },
             "preset": {
                 "type": "string",
                 "description": "Optional preset file path. Must be a .json/.jsonc path as returned by system(action='presets'). Do NOT use shorthand names — use the full 'name' field from the presets listing. Example: '~/.lingtai-tui/presets/saved/cheap.json'. Omit to inherit the parent's regular (non-MCP) tool surface; provide task MCP registrations separately with `mcp`.",

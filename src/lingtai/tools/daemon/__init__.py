@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import yaml
+from lingtai.services import plugin_registry as _plugin_registry
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1008,6 +1009,7 @@ class _CliTaskContext:
     skill_catalog: str | None
     mcp_catalog: str | None
     mcp_regs: list[dict]
+    plugin_catalog: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1734,6 +1736,218 @@ class DaemonManager:
         return {"name": name, "location": str(skill_file), "description": description}
 
     @staticmethod
+    def _plugin_path_resolution(raw_path: str, working_dir) -> Path:
+        """Resolve one daemon task plugin path to a concrete plugin directory."""
+        p = Path(raw_path).expanduser()
+        if not p.is_absolute():
+            p = working_dir / p
+        return p.resolve(strict=False)
+
+    @staticmethod
+    def _plugin_mcp_spec_to_registration(
+        plugin_name: str, server_name: str, spec: dict
+    ) -> dict:
+        """Translate one resolved plugin mcp.json server into a task MCP registration.
+
+        Mirrors ``plugin_registry.to_registry_record`` transport mapping: the
+        Agent Plugins v1.0.0 transports ``stdio`` / ``streamable-http`` / ``sse``
+        land on the daemon registration transports ``stdio`` / ``http``. The
+        resolved spec already carries absolute, containment-validated paths, so
+        the registration is directly usable by the LingTai backend client.
+        """
+        transport_map = {
+            "stdio": "stdio",
+            "streamable-http": "http",
+            "sse": "http",
+        }
+        transport = transport_map.get(spec.get("type"))
+        if transport is None:
+            raise ValueError(
+                f"plugin {plugin_name!r} mcp server {server_name!r}: unsupported "
+                f"transport {spec.get('type')!r}"
+            )
+        reg: dict = {"name": server_name, "transport": transport}
+        if transport == "stdio":
+            command = spec.get("command")
+            if not isinstance(command, str) or not command:
+                raise ValueError(
+                    f"plugin {plugin_name!r} mcp server {server_name!r}: stdio "
+                    "requires command"
+                )
+            reg["command"] = command
+            args = spec.get("args")
+            if args:
+                reg["args"] = list(args)
+            env = spec.get("env")
+            if env:
+                reg["env"] = dict(env)
+            cwd = spec.get("cwd")
+            if cwd:
+                reg["cwd"] = cwd
+        else:
+            url = spec.get("url")
+            if not isinstance(url, str) or not url:
+                raise ValueError(
+                    f"plugin {plugin_name!r} mcp server {server_name!r}: http "
+                    "requires url"
+                )
+            reg["url"] = url
+            headers = spec.get("headers")
+            if headers:
+                reg["headers"] = dict(headers)
+        return reg
+
+    @staticmethod
+    def _render_task_plugin_catalog(plugins: list[dict]) -> str | None:
+        """Render the compact plugin section injected into a daemon run prompt.
+
+        This mirrors the main agent's resident ``plugins`` prompt field: the
+        daemon sees the same whole-plugin view (name, summary, skills list, mcp
+        list) instead of a flattened skills/mcp split, so it understands that
+        the components belong to one distributable unit. Plugins whose mcp.json
+        servers were also mounted as task MCP clients are marked ``mounted``.
+        """
+        if not plugins:
+            return None
+        lines = [
+            "The parent selected these Agent Plugins for this daemon run. Read/apply their skills only when relevant to your task:",
+            "plugins:",
+        ]
+        for pl in plugins:
+            name = pl.get("name", "")
+            summary = pl.get("summary", "")
+            lines.append(f"  - name: {name}")
+            if summary:
+                lines.append(f"    summary: {summary}")
+            skills = pl.get("skills") or []
+            lines.append(f"    skills ({len(skills)}):")
+            for sk in skills:
+                lines.append(f"      - {sk}")
+            servers = pl.get("mcp_servers") or []
+            mounted = set(pl.get("mounted_mcp") or [])
+            lines.append(f"    mcp ({len(servers)}):")
+            for server in servers:
+                marker = " (mounted)" if server in mounted else ""
+                lines.append(f"      - {server}{marker}")
+        return "\n".join(lines)
+
+    def _task_plugin_context(
+        self, spec: dict
+    ) -> tuple[str | None, list[dict], list[dict]]:
+        """Resolve one daemon task's ``plugin`` paths.
+
+        Returns ``(plugin_catalog, plugin_skill_rows, plugin_mcp_regs)``.
+        ``plugin_skill_rows`` are compact skill catalog rows parsed from each
+        plugin's validated ``skills/``; ``plugin_mcp_regs`` are full MCP
+        registration objects translated from each plugin's validated ``mcp.json``.
+        The LingTai backend mounts ``plugin_mcp_regs`` as task-scoped MCP clients
+        and merges ``plugin_skill_rows`` into the skill catalog; CLI backends that
+        cannot mount plugins still receive the same skills and MCP registrations
+        separately through the normal skill/mcp oneshot context, which is the
+        "inject both separately" fallback.
+        """
+        raw = spec.get("plugin")
+        if raw is None:
+            return None, [], []
+        if not isinstance(raw, list):
+            raise ValueError("plugin must be an array of plugin directory paths")
+        working_dir = self._agent._working_dir
+        resolved_paths: list[Path] = []
+        for idx, item in enumerate(raw):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"plugin[{idx}] must be a non-empty string path")
+            resolved_paths.append(
+                self._plugin_path_resolution(item.strip(), working_dir)
+            )
+        records, problems, _report = _plugin_registry.read_plugins(
+            working_dir, [str(p) for p in resolved_paths]
+        )
+        # Component problems are reported, not fatal; a plugin that cannot be
+        # read at all (invalid plugin.json) is omitted by read_plugins.
+        for prob in problems:
+            self._log("plugin", warning=str(prob))
+
+        skill_rows: list[dict] = []
+        mcp_regs: list[dict] = []
+        mounted_mcp_by_plugin: dict[str, list[str]] = {}
+        for record in records:
+            name = record["name"]
+            for skill_dir in record.get("skill_paths") or []:
+                try:
+                    skill_file = Path(skill_dir) / "SKILL.md"
+                    skill_rows.append(self._parse_task_skill_file(skill_file))
+                except ValueError as e:
+                    self._log("plugin", warning=f"plugin {name} skill skipped: {e}")
+            for server_name, spec in (record.get("mcp_specs") or {}).items():
+                try:
+                    mcp_regs.append(
+                        self._plugin_mcp_spec_to_registration(
+                            name, server_name, spec
+                        )
+                    )
+                except ValueError as e:
+                    self._log("plugin", warning=str(e))
+            mounted_mcp_by_plugin[name] = list(record.get("mcp_servers") or [])
+
+        # Attach mounted markers for the prompt view (LingTai backend only; CLI
+        # backends still get the flattened skills/mcp separately below).
+        for record in records:
+            record["mounted_mcp"] = mounted_mcp_by_plugin.get(record["name"], [])
+        catalog = self._render_task_plugin_catalog(records)
+        return catalog, skill_rows, mcp_regs
+
+    @staticmethod
+    def _merge_skill_catalog_rows(
+        rendered: str | None, extra_rows: list[dict]
+    ) -> list[dict]:
+        """Merge already-rendered task skill rows with plugin skill rows.
+
+        ``_task_skill_catalog`` returns a rendered string, so to append plugin
+        skill rows we re-render from the original list. This helper parses the
+        rendered YAML back into row dicts when needed; when the base catalog is
+        None (no explicit ``skills``) it simply returns the plugin rows.
+        Deduplicates by canonical skill location.
+        """
+        if rendered is None:
+            return list(extra_rows)
+        rows: list[dict] = []
+        current: dict | None = None
+        lines = rendered.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            m = re.match(r"^  - name: (.*)$", line)
+            if m:
+                if current is not None:
+                    rows.append(current)
+                current = {"name": m.group(1), "location": "", "description": ""}
+                i += 1
+                continue
+            lm = re.match(r"^    location: (.*)$", line)
+            dm = line == "    description: |"
+            if current is not None and lm:
+                current["location"] = lm.group(1)
+            elif current is not None and dm:
+                desc_lines = []
+                i += 1
+                while i < len(lines) and lines[i].startswith("      "):
+                    desc_lines.append(lines[i][6:])
+                    i += 1
+                current["description"] = "\n".join(desc_lines)
+                continue
+            i += 1
+        if current is not None:
+            rows.append(current)
+        seen = {row.get("location") for row in rows}
+        for row in extra_rows:
+            loc = row.get("location")
+            if loc in seen:
+                continue
+            seen.add(loc)
+            rows.append(row)
+        return rows
+
+    @staticmethod
     def _render_task_skill_catalog(skills: list[dict]) -> str | None:
         if not skills:
             return None
@@ -2193,6 +2407,7 @@ class DaemonManager:
         system_prompt: str | None,
         skill_catalog: str | None,
         mcp_catalog: str | None = None,
+        plugin_catalog: str | None = None,
     ) -> str | None:
         parts = []
         if system_prompt:
@@ -2201,6 +2416,8 @@ class DaemonManager:
             parts.append("## Parent-selected skills\n" + skill_catalog)
         if mcp_catalog:
             parts.append("## Parent-provided MCP registrations\n" + mcp_catalog)
+        if plugin_catalog:
+            parts.append("## Parent-selected plugins\n" + plugin_catalog)
         return "\n\n".join(parts) or None
 
     @staticmethod
@@ -4455,11 +4672,19 @@ class DaemonManager:
             try:
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
+                task_plugin_catalog, plugin_skill_rows, plugin_mcp_regs = self._task_plugin_context(spec)
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 return {"status": "error", "message": str(e)}
+            # Plugin skills join the skill catalog; plugin mcp.json servers join
+            # the task MCP registrations (mounted as task-scoped clients below).
+            if plugin_skill_rows:
+                task_skill_catalog = self._render_task_skill_catalog(
+                    self._merge_skill_catalog_rows(task_skill_catalog, plugin_skill_rows)
+                )
+            task_mcp_regs = list(task_mcp_regs) + list(plugin_mcp_regs)
             task_context = self._combine_oneshot_context(
-                None, task_skill_catalog, task_mcp_catalog
+                None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog
             )
             task_context = self._append_daemon_common_context(task_context)
 
@@ -4609,6 +4834,7 @@ class DaemonManager:
             try:
                 task_skill_catalog = self._task_skill_catalog(spec)
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
+                task_plugin_catalog, plugin_skill_rows, plugin_mcp_regs = self._task_plugin_context(spec)
                 if any(r.get("name") == _DAEMON_COMMON_MCP_NAME for r in task_mcp_regs):
                     raise ValueError(
                         f"MCP registration name {_DAEMON_COMMON_MCP_NAME!r} is reserved"
@@ -4616,6 +4842,22 @@ class DaemonManager:
             except ValueError as e:
                 return {"status": "error",
                         "message": f"tasks[{i}]: {e}"}
+            # CLI backends that cannot mount plugins receive the plugin's skills
+            # and mcp.json servers separately (flattened) in addition to the
+            # whole-plugin prompt view, so the information is never lost.
+            if plugin_skill_rows:
+                task_skill_catalog = self._render_task_skill_catalog(
+                    self._merge_skill_catalog_rows(task_skill_catalog, plugin_skill_rows)
+                )
+            task_mcp_regs = list(task_mcp_regs) + list(plugin_mcp_regs)
+            if task_mcp_catalog:
+                task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
+            # Per Jason 2026-08-09: external CLI backends do not receive the
+            # whole-plugin prompt section for the next few weeks; they get the
+            # plugin's skills and mcp.json servers flattened into the ordinary
+            # skill/mcp oneshot context (already done above). The LingTai
+            # backend alone injects the ``## Parent-selected plugins`` section.
+            task_plugin_catalog = None
             raw_opts = spec.get("backend_options")
             if raw_opts is None:
                 backend_argv = []

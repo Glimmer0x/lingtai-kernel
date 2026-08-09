@@ -166,6 +166,18 @@ are the three that change state.
     the hard terminal-success contract: only `finish(status="done")` permits
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. Secret `env`/`headers` values are redacted in prompts.
+  - `plugin` answers **which Agent Plugins belong to this daemon run**. It is
+    optional and is an array of paths; each item may be a plugin directory
+    containing `plugin.json`, or a plugin search root whose immediate children
+    are plugin directories. Relative paths resolve against the parent agent
+    working directory. The runtime reads each plugin manifest and injects a
+    compact plugin section (name, summary, skills list, mcp list) into the
+    daemon system prompt. The built-in LingTai backend also mounts the plugin's
+    `skills/` as skill context and its `mcp.json` servers as task-scoped MCP
+    clients, exactly like the main agent mounts plugins. CLI backends that
+    cannot mount plugins yet receive the plugin's skills and mcp.json servers
+    separately as normal skill/mcp oneshot context until the whole-plugin
+    injection matures.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set
