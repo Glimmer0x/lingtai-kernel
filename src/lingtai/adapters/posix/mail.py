@@ -112,8 +112,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         1. ``{address}/.agent.json`` must exist.
         2. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
 
-        Then write ``message.json`` atomically into the recipient's inbox
-        and copy any attachment files.
+        Then stage the whole message (attachments + ``message.json``) in a
+        hidden ``.<id>.staging`` directory inside the recipient's inbox and
+        publish it with a single atomic ``os.replace``, so the recipient can
+        never observe a partial inbox entry. Every failure path removes the
+        sender-owned staging directory and leaves the recipient's inbox
+        untouched.
 
         Modes:
         - peer: resolve bare name against parent dir (default — sibling agents in same .lingtai/)
@@ -155,34 +159,47 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             ),
         }
 
-        # Handle attachments
+        # Validate every attachment path up front: a missing file is a
+        # zero-side-effect early return instead of a partial inbox entry.
         attachment_paths = message.get("attachments")
+        srcs: list[Path] = []
         if attachment_paths:
-            att_dir = msg_dir / "attachments"
-            att_dir.mkdir(parents=True, exist_ok=True)
-            local_copies: list[str] = []
             for fpath in attachment_paths:
                 src = Path(fpath)
                 if not src.is_file():
                     return f"Attachment not found: {fpath}"
-                dst = att_dir / src.name
-                shutil.copy2(src, dst)
-                local_copies.append(str(dst))
-            # Replace original paths with recipient-local paths
-            message = {**message, "attachments": local_copies}
-        else:
-            msg_dir.mkdir(parents=True, exist_ok=True)
+                srcs.append(src)
 
-        # Atomic write: tmp → rename
-        tmp_path = msg_dir / "message.json.tmp"
-        final_path = msg_dir / "message.json"
+        # Assemble the whole message (attachments + ``message.json``) in a
+        # hidden staging dir inside the recipient's inbox, then publish with a
+        # single atomic ``os.replace``. Staging under the inbox (not the system
+        # temp dir) keeps the final rename on one filesystem, and the
+        # dot-prefixed name keeps the listener from ever dispatching a partial
+        # entry. Every failure path removes the sender-owned staging dir, so a
+        # failed send never leaves an orphan in another agent's mailbox.
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        staging_dir = inbox_dir / f".{msg_id}.staging"
         try:
-            tmp_path.write_text(
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            if srcs:
+                staging_att_dir = staging_dir / "attachments"
+                staging_att_dir.mkdir(parents=True, exist_ok=True)
+                # Recipient-local paths recorded in the payload must point at
+                # the final location (``msg_dir``), not the staging path.
+                local_copies = [
+                    str(msg_dir / "attachments" / src.name) for src in srcs
+                ]
+                for src in srcs:
+                    shutil.copy2(src, staging_att_dir / src.name)
+                message = {**message, "attachments": local_copies}
+
+            (staging_dir / "message.json").write_text(
                 json.dumps(message, indent=2, ensure_ascii=False, default=str),
                 encoding="utf-8",
             )
-            os.replace(str(tmp_path), str(final_path))
+            os.replace(str(staging_dir), str(msg_dir))
         except OSError as e:
+            _remove_tree_retry(staging_dir)
             return f"Failed to write message: {e}"
 
         return None
@@ -201,6 +218,10 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         # Snapshot existing inbox entries so we don't re-notify
         if self._inbox_dir.is_dir():
             for entry in self._inbox_dir.iterdir():
+                if entry.name.startswith("."):
+                    # Sender-owned staging dirs (``.{id}.staging``) are
+                    # invisible to delivery; skip them here and in the scan.
+                    continue
                 if entry.is_dir():
                     self._seen.add(entry.name)
 
@@ -293,6 +314,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                     return visited > 0
 
                 visited += 1
+                # Sender-owned staging dirs (``.{id}.staging``) contain a
+                # ``message.json`` while the message is being assembled; only
+                # the final atomic publish is deliverable, so never dispatch or
+                # record dot-prefixed entries.
+                if entry.name.startswith("."):
+                    continue
                 # _seen only holds handled directory names or pseudo-claim
                 # UUIDs, so skip before the stat.
                 if entry.name in self._seen:

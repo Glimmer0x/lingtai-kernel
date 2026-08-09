@@ -88,11 +88,14 @@ co-located owning ANATOMY.md files.
 - `PosixFilesystemMailAdapter` implements `MailTransportPort` by delivering
   messages as files into a recipient's inbox and polling its own inbox plus
   subscribed pseudo-agent outboxes (`src/lingtai/adapters/posix/mail.py:34-69`).
-- `send()` handshakes, injects mailbox metadata, copies attachments, and writes
-  `message.json` atomically via `os.replace`
-  (`send()`, `src/lingtai/adapters/posix/mail.py:102`; atomic write at :184);
+- `send()` handshakes, injects mailbox metadata, validates every attachment
+  path up front, stages the full message (attachments + `message.json`) in a
+  hidden `.<id>.staging` dir under the inbox, and publishes it with a single
+  atomic `os.replace` — the recipient never observes a partial entry and any
+  failure removes the sender-owned staging dir
+  (`send()`, `src/lingtai/adapters/posix/mail.py:102`; publish at :199);
   `listen()`/`stop()` own the 0.5-second daemon poll loop with pseudo-outbox
-  priority and per-phase `OSError` isolation.
+  priority, dot-prefixed staging skips, and per-phase `OSError` isolation.
 - `PosixWorkdirLeaseAdapter` implements `WorkdirLeasePort` by holding an exclusive
   non-blocking `fcntl.flock` on `<workdir>/.agent.lock`
   (`src/lingtai/adapters/posix/workdir_lease.py:27-95`); `acquire()` polls at
