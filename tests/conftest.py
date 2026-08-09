@@ -42,3 +42,19 @@ def _isolate_notification_dismiss_guards():
     yield
     _GENERIC_DISMISS_GUARDED.clear()
     _GENERIC_DISMISS_GUARDED.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _reset_package_logging():
+    """Keep stdlib-logging handler state from leaking across tests.
+
+    ``setup_logging``/``get_logger`` configure a process-global "lingtai"
+    logger; without a reset, a FileHandler attached by one test would stay
+    attached for every subsequent test in the run (writing to a stale path).
+    """
+
+    from lingtai.kernel.logging import reset_logging
+
+    reset_logging()
+    yield
+    reset_logging()

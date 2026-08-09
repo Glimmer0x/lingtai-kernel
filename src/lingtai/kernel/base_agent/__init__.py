@@ -547,6 +547,7 @@ class BaseAgent:
         manifest_data = _build_manifest(self)
         self._workdir.write_manifest(manifest_data)
 
+
         # Auto-inject identity into system prompt from manifest
         self._prompt_manager.write_section(
             "identity",

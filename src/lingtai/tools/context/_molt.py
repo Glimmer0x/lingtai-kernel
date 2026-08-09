@@ -526,6 +526,7 @@ def _context_molt(agent, args: dict) -> dict:
         session_journal_path=session_journal_path,
     )
 
+
     # Post-molt reminder. ToolExecutor strips visible ``reasoning`` and
     # injects ``_reasoning``; accept the plain key too so direct callers
     # (tests, in-process invocations) behave the same.

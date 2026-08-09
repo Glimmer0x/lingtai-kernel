@@ -258,6 +258,28 @@ class ToolFamily:
         matches no child and renders the stable typed envelope failure below,
         exactly as ``kernel/tool_dispatch.py`` does, rather than raising
         ``TypeError`` out of the dispatcher.
+
+        A root-level key that is neither an envelope field nor a declared
+        property of the *selected* action's own input schema is rejected as
+        before — including a root-level key that duplicates a name already
+        present in ``input``, which stays a hygiene violation exactly as
+        before (two conflicting or redundant places for the same value is a
+        client bug worth surfacing, not something to silently prefer one
+        side of).
+
+        The one narrower case this now rescues instead of rejecting: a
+        root-level key that IS a declared property of the selected action
+        AND is entirely absent from ``input`` (e.g. ``replace_all`` sent as
+        a sibling of ``action``/``input`` instead of nested inside ``input``,
+        with no ``replace_all`` in ``input`` at all). That specific shape is
+        relocated into ``input`` rather than failing the whole call —
+        calling models with strong priors from their own native flat tool
+        shapes (e.g. a model's built-in ``Edit(file_path, old_string,
+        new_string, replace_all)`` tool) occasionally emit exactly this,
+        otherwise-harmless, misplacement. This never widens what ends up in
+        ``input`` beyond a key the schema already declares for this action,
+        and the existing ``input``-keys check below still runs unchanged
+        afterward.
         """
         raw = dict(args or {})
         action = raw.get("action")
@@ -274,14 +296,22 @@ class ToolFamily:
             summarize = raw.pop("summarize")
             if not isinstance(summarize, bool):
                 return self._envelope_error("INVALID_ARGUMENT", "summarize must be a boolean")
+        child = self._children[action]
+        allowed = self._allowed_input_keys(child)
         unknown = set(raw) - _ROOT_FIELDS
         if unknown:
-            return self._envelope_error("INVALID_ARGUMENT", f"unsupported {self.name} argument")
+            action_input_probe = raw.get("input")
+            already_in_input = (
+                set(action_input_probe) if isinstance(action_input_probe, Mapping) else set()
+            )
+            relocatable = (unknown & allowed) - already_in_input
+            if (unknown - relocatable) or not isinstance(action_input_probe, Mapping):
+                return self._envelope_error("INVALID_ARGUMENT", f"unsupported {self.name} argument")
+            for key in relocatable:
+                action_input_probe[key] = raw.pop(key)
         action_input = raw.get("input")
         if not isinstance(action_input, Mapping):
             return self._envelope_error("INVALID_ARGUMENT", "input must be an object")
-        child = self._children[action]
-        allowed = self._allowed_input_keys(child)
         if set(action_input) - allowed:
             return self._envelope_error(
                 "INVALID_ARGUMENT", f"unsupported {self.name} input field"

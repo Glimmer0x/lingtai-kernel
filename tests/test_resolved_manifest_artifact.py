@@ -291,3 +291,102 @@ def test_refresh_rewrites_artifact_after_preset_change(tmp_path, monkeypatch):
     assert artifact["manifest"]["llm"]["model"] == "gemini-2.5-pro"
     assert artifact["preset"]["active"] == smart
     assert artifact["manifest"]["capabilities"]["skills"]["paths"] == ["~/s"]
+
+
+# ---------------------------------------------------------------------------
+# write_resolved_manifest — _fsutil migration golden + concurrency coverage
+# ---------------------------------------------------------------------------
+
+def test_write_resolved_manifest_byte_identical_to_legacy_format(tmp_path, monkeypatch):
+    """Golden-bytes: the _fsutil-migrated write keeps the legacy format
+    exactly (indent=2, ensure_ascii=False, trailing newline), redacts
+    secrets, and leaves no fixed ``*.tmp`` sibling behind."""
+    import datetime as _dt
+
+    from lingtai.kernel import workdir as _workdir
+
+    class _FakeDatetime:
+        @classmethod
+        def now(cls, tz=None):
+            return _dt.datetime(2026, 7, 6, 12, 0, 0, tzinfo=_dt.timezone.utc)
+
+    monkeypatch.setattr(_workdir, "datetime", _FakeDatetime)
+
+    wd = tmp_path / "agent"
+    data = {
+        "manifest": {
+            "agent_name": "内省",
+            "llm": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "soul": {"voice": "inner", "delay": 120},
+        },
+        "principle": "p",
+    }
+    target = _workdir.write_resolved_manifest(wd, data)
+    assert target is not None
+
+    # The legacy implementation serialized exactly this dict with
+    # json.dumps(indent=2, ensure_ascii=False) plus a trailing newline.
+    expected_artifact = {
+        "schema": "lingtai.manifest.resolved/v1",
+        "schema_version": 1,
+        "generated_at": "2026-07-06T12:00:00Z",
+        "source": "kernel",
+        "manifest": data["manifest"],
+    }
+    expected = json.dumps(expected_artifact, indent=2, ensure_ascii=False) + "\n"
+    assert target.read_text(encoding="utf-8") == expected
+    # ensure_ascii=False really round-trips non-ASCII bytes
+    assert "内省" in target.read_text(encoding="utf-8")
+    # no transient temp siblings remain (fixed or unique)
+    assert not (wd / "system" / "manifest.resolved.json.tmp").exists()
+    assert not list((wd / "system").glob("*.tmp"))
+
+
+def test_write_resolved_manifest_concurrent_writers(tmp_path):
+    """Concurrent same-workdir writers must all succeed (no silent None), the
+    final artifact must parse as valid JSON with the expected schema, and no
+    ``*.tmp`` litter may remain — the fixed-temp-name race this migration
+    removes."""
+    import threading
+
+    from lingtai.kernel.workdir import write_resolved_manifest
+
+    wd = tmp_path / "agent"
+    errors: list[str] = []
+    barrier = threading.Barrier(8)
+
+    def worker(idx: int) -> None:
+        try:
+            barrier.wait(timeout=10)
+        except threading.BrokenBarrierError:  # pragma: no cover
+            errors.append(f"worker {idx}: barrier broken")
+            return
+        for i in range(20):
+            payload = {
+                "manifest": {
+                    "agent_name": f"alice-{idx}",
+                    "soul": {"delay": 120 + i},
+                }
+            }
+            try:
+                result = write_resolved_manifest(wd, payload)
+            except Exception as e:  # pragma: no cover
+                errors.append(f"worker {idx} iter {i}: raised {e!r}")
+                return
+            if result is None:
+                errors.append(f"worker {idx} iter {i}: returned None")
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, errors[:5]
+    artifact = json.loads(
+        (wd / "system" / "manifest.resolved.json").read_text(encoding="utf-8")
+    )
+    assert artifact["schema"] == "lingtai.manifest.resolved/v1"
+    assert artifact["schema_version"] == 1
+    assert artifact["manifest"]["agent_name"].startswith("alice-")
+    assert not list((wd / "system").glob("*.tmp"))

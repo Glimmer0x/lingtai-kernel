@@ -1,15 +1,16 @@
 """System prompt — section manager + builder.
 
 SystemPromptManager manages named sections of an agent's system prompt.
-Sections are rendered in a configurable order. The default order groups
-sections by mutation frequency so cache breakpoints can be placed between
-batches:
+Sections are rendered in a configurable order (set_order() reorders sections
+within their cache batches; set_batches() replaces the batch layout
+entirely). The default order groups sections by mutation frequency so cache
+breakpoints can be placed between batches:
 
     Batch 1 — resident prefix:
         principle (no header) → covenant → tools → substrate → procedures →
         meta_guidance → comment
     Batch 2 — rarely mutated (most stable first):
-        rules → brief → skills → knowledge → identity → character → pad
+        rules → brief → skills → plugin → mcp → knowledge → identity → character → pad
 
 `substrate` sits **right after tools** so it functions as the long-form
 companion to the schemas above it: tool schemas carry mechanical
@@ -37,53 +38,57 @@ class SystemPromptManager:
     Sections can be marked as protected (host-written, not overwritable by the LLM)
     or unprotected (LLM-writable at runtime).
 
-    Render order is configurable via set_order(). Sections not in the order
-    list are rendered between the ordered sections and the tail. The last
-    name in the order list is always rendered last (typically 'context').
+    Render order is configurable via set_order(), which reorders sections
+    within their cache-breakpoint batches: each section keeps the batch it
+    belongs to (batch boundaries are where adapters place cache_control
+    markers), while sections listed in `names` render ahead of unlisted ones
+    inside each batch. Names not in any batch are appended to the penultimate
+    batch — the same bucket where render_batches() places unordered sections —
+    never to the final tail batch. set_batches() replaces the batch layout
+    entirely for hosts that need to move sections across batches.
     """
 
-    # Default render order — grouped by mutation frequency. Sections in
+    # Cache-breakpoint batches — grouped by mutation frequency. Sections in
     # the same batch are adjacent so batch-boundary cache breakpoints in
     # the adapter can cover the whole stable prefix. Within each batch,
     # sections are ordered most-stable-first so later mutations invalidate
     # as little prior content as possible.
     #   Batch 1 (resident prefix):  principle, covenant, tools, substrate, procedures, meta_guidance, comment
-    #   Batch 2 (rarely-mutated):    rules, brief, skills, knowledge, identity, character, pad
+    #   Batch 2 (rarely-mutated):    rules, brief, skills, plugin, mcp, knowledge, identity, character, pad
+    # Resident kernel runtime guidance sits before operator/project comment
+    # so comment can remain the final stable prefix-layer instruction.
     # First entry (principle) is rendered without ## header (raw text).
     # `identity` is the mechanical section (name/nickname/manifest, written by
     # BaseAgent); `character` is the agent's self-authored identity from
     # system/lingtai.md (灵台) — distinct sections, character right after identity.
-    _DEFAULT_ORDER = [
-        # Batch 1 — immovable
-        "principle",
-        "covenant",
-        "tools",
-        "substrate",
-        "procedures",
-        # Resident kernel runtime guidance sits before operator/project comment
-        # so comment can remain the final stable prefix-layer instruction.
-        "meta_guidance",
-        "comment",
-        # Batch 2 — rarely mutated (most stable first)
-        "rules",
-        "brief",
-        "skills",
-        # Registered plugin packages and standalone MCP servers sit parallel to
-        # vanilla skills: each is a resident catalog field (written by the
-        # plugin/mcp capabilities, kept adjacent to skills so the agent sees the
-        # three capability namespaces side by side).
-        "plugin",
-        "mcp",
-        "knowledge",
-        "identity",
-        "character",
-        "pad",
-    ]
+    # Registered plugin packages and standalone MCP servers sit parallel to
+    # vanilla skills: each is a resident catalog field (written by the
+    # plugin/mcp capabilities, kept adjacent to skills so the agent sees the
+    # three capability namespaces side by side).
+    # Sections not listed here fall into the "unordered" bucket rendered just
+    # before the tail batch (see render_batches()).
+    _BATCHES: tuple[tuple[str, ...], ...] = (
+        (
+            "principle", "covenant", "tools", "substrate", "procedures",
+            "meta_guidance", "comment",
+        ),
+        (
+            "rules", "brief", "skills", "plugin", "mcp", "knowledge",
+            "identity", "character", "pad",
+        ),
+    )
+
+    # Flat view of the batch layout, derived structurally from _BATCHES so
+    # the two can never drift. Kept as a class attribute because tests and
+    # hosts reference it.
+    _DEFAULT_ORDER: list[str] = [name for batch in _BATCHES for name in batch]
 
     def __init__(self) -> None:
         self._sections: dict[str, dict] = {}
-        self._order: list[str] = list(self._DEFAULT_ORDER)
-        # First entry in order is rendered without ## header (raw text)
+        # Instance copy of the default batch layout; set_order()/set_batches()
+        # mutate this, never the class-level _BATCHES template.
+        self._batches: list[tuple[str, ...]] = [tuple(b) for b in self._BATCHES]
+        # First entry (principle) is rendered without ## header (raw text)
         self._raw_sections: set[str] = {"principle"}
 
     def write_section(self, name: str, content: str, protected: bool = False) -> None:
@@ -107,27 +112,38 @@ class SystemPromptManager:
         ]
 
     def set_order(self, names: list[str]) -> None:
-        """Set the render order. Last name is always rendered last."""
-        self._order = list(names)
+        """Reorder sections within their cache batches.
+
+        Sections keep their batch (batch boundaries are cache breakpoints);
+        within each batch, sections listed in `names` render in the given
+        order, ahead of unlisted sections, which keep their original relative
+        order. Names not in any batch are appended to the penultimate batch —
+        matching where render_batches() puts unordered sections.
+        """
+        index = {name: i for i, name in enumerate(names)}
+        known = {name for batch in self._batches for name in batch}
+        new_batches = [
+            tuple(sorted(batch, key=lambda name: index.get(name, len(names))))
+            for batch in self._batches
+        ]
+        extras = [name for name in names if name not in known]
+        if extras:
+            target = max(0, len(new_batches) - 2)
+            new_batches[target] = new_batches[target] + tuple(extras)
+        self._batches = new_batches
+
+    def set_batches(self, batches: list[list[str]]) -> None:
+        """Replace the cache-breakpoint batch layout entirely.
+
+        Hosts that need to move a section across batches (accepting the
+        resulting cache invalidation) use this; set_order() never crosses
+        batch boundaries.
+        """
+        self._batches = [tuple(b) for b in batches]
 
     def set_raw(self, name: str) -> None:
         """Mark a section as raw — rendered without ## header."""
         self._raw_sections.add(name)
-
-    # Cache-breakpoint batches — must cover the same names as _DEFAULT_ORDER.
-    # Each tuple is one batch; batch boundaries are where the adapter can
-    # place cache_control markers. Sections not listed here fall into the
-    # "unordered" bucket rendered just before the tail batch.
-    _BATCHES: tuple[tuple[str, ...], ...] = (
-        (
-            "principle", "covenant", "tools", "substrate", "procedures",
-            "meta_guidance", "comment",
-        ),
-        (
-            "rules", "brief", "skills", "plugin", "mcp", "knowledge",
-            "identity", "character", "pad",
-        ),
-    )
 
     def render(self) -> str:
         """Render all sections into a single string following the configured order.
@@ -139,14 +155,15 @@ class SystemPromptManager:
     def render_batches(self) -> list[str]:
         """Render sections grouped into cache-breakpoint batches.
 
-        Returns one string per batch in `_BATCHES`, in order. Empty batches
-        are returned as empty strings (not skipped) so caller indexing is
-        stable. Unordered sections (not in any batch) are appended to the
-        penultimate batch — never to the final tail batch, because cache
-        breakpoints land between batches and the tail must stay the most
-        volatile chunk.
+        Returns one string per batch in the instance's current batch layout
+        (initialized from `_BATCHES`, mutable via set_order()/set_batches()),
+        in order. Empty batches are returned as empty strings (not skipped) so
+        caller indexing is stable. Unordered sections (not in any batch) are
+        appended to the penultimate batch — never to the final tail batch,
+        because cache breakpoints land between batches and the tail must stay
+        the most volatile chunk.
         """
-        batches: list[list[str]] = [[] for _ in self._BATCHES]
+        batches: list[list[str]] = [[] for _ in self._batches]
 
         def _render_entry(name: str) -> str | None:
             entry = self._sections.get(name)
@@ -157,14 +174,14 @@ class SystemPromptManager:
             return f"## {name}\n{entry['content']}"
 
         # Fill each batch with its named sections (in batch order).
-        for i, batch_names in enumerate(self._BATCHES):
+        for i, batch_names in enumerate(self._batches):
             for name in batch_names:
                 rendered = _render_entry(name)
                 if rendered:
                     batches[i].append(rendered)
 
         # Unordered sections → penultimate batch (or first batch if only one).
-        all_batched = {n for batch in self._BATCHES for n in batch}
+        all_batched = {n for batch in self._batches for n in batch}
         unordered_target = max(0, len(batches) - 2)
         for name, entry in self._sections.items():
             if name in all_batched:

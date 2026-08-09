@@ -1673,7 +1673,7 @@ class Agent(BaseAgent):
 
         from lingtai.kernel.config_resolve import (
             load_env_file,
-            resolve_env,
+            resolve_env_checked,
             resolve_file,
             _resolve_capabilities,
         )
@@ -1751,7 +1751,16 @@ class Agent(BaseAgent):
 
         # Reconstruct LLM service if changed
         llm = m["llm"]
-        api_key = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
+        # Warn (not raise) on refresh: a live agent should not be killed by a
+        # hot-edited env_file that transiently loses the api_key variable. The
+        # diagnostic lands in the agent log so the cause is findable instead of
+        # surfacing as an opaque provider auth error on the next turn.
+        api_key = resolve_env_checked(
+            llm.get("api_key"),
+            llm.get("api_key_env"),
+            context="manifest.llm.api_key_env",
+            warn=lambda m: self._log("env_resolve_warning", message=m),
+        )
         new_provider = llm["provider"]
         new_model = llm["model"]
         new_base_url = llm.get("base_url")

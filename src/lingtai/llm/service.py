@@ -313,29 +313,36 @@ class LLMService(LLMServiceABC):
         with different base URLs (e.g. OpenRouter vs local vLLM) gets separate
         adapter instances.
 
+        When *base_url* is None and multiple adapters are cached for
+        *provider*, the returned adapter is chosen deterministically: the
+        ``(provider, None)`` entry wins, then the entry whose base_url matches
+        the provider's configured default, then the first match in sorted-key
+        order (see ``_find_provider_adapter``).
+
         Raises RuntimeError if the API key for *provider* is not configured.
         """
         provider = provider.lower()
         cache_key = (provider, base_url)
 
-        # Fast path — no lock needed for reads of an already-cached adapter
-        if cache_key in self._adapters:
-            return self._adapters[cache_key]
-        # When no base_url specified, find any cached adapter for this provider
+        # Fast path — atomic point read, then snapshot-based scan; no lock needed
+        adapter = self._adapters.get(cache_key)
+        if adapter is not None:
+            return adapter
         if base_url is None:
-            for (p, _url), adapter in self._adapters.items():
-                if p == provider:
-                    return adapter
+            adapter = self._find_provider_adapter(provider)
+            if adapter is not None:
+                return adapter
 
         # Slow path — lock to prevent duplicate adapter creation
         with self._adapter_lock:
             # Double-check after acquiring lock
-            if cache_key in self._adapters:
-                return self._adapters[cache_key]
+            adapter = self._adapters.get(cache_key)
+            if adapter is not None:
+                return adapter
             if base_url is None:
-                for (p, _url), adapter in self._adapters.items():
-                    if p == provider:
-                        return adapter
+                adapter = self._find_provider_adapter(provider)
+                if adapter is not None:
+                    return adapter
 
             # Need to create a new adapter — check API key first
             api_key = self._key_resolver(provider)
@@ -353,6 +360,28 @@ class LLMService(LLMServiceABC):
             adapter = self._create_adapter(provider, api_key, effective_base_url)
             self._adapters[cache_key] = adapter
             return adapter
+
+    def _find_provider_adapter(self, provider: str) -> LLMAdapter | None:
+        """Deterministically pick a cached adapter for *provider* (any base_url).
+
+        Preference order:
+        1. the (provider, None) entry,
+        2. the entry matching the provider's configured default base_url,
+        3. first match by sorted cache key (stable tie-break).
+
+        Snapshots the cache so it is safe to call without _adapter_lock.
+        """
+        items = list(self._adapters.items())  # atomic snapshot; safe vs concurrent insert
+        matches = {url: adapter for (p, url), adapter in items if p == provider}
+        if not matches:
+            return None
+        if None in matches:
+            return matches[None]
+        defaults = self._get_provider_defaults(provider)
+        default_url = defaults.get("base_url") if defaults else None
+        if default_url in matches:
+            return matches[default_url]
+        return matches[min(url for url in matches if url is not None)]
 
     def _get_provider_defaults(self, provider_name: str) -> dict | None:
         """Get defaults for a provider from the injected provider_defaults dict."""

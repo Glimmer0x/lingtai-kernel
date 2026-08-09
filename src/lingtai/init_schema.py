@@ -87,12 +87,24 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "disable": list,
     "soul": dict,
     "context_limit": (int, type(None)),
+    # activeness is hydrated into AgentConfig.activeness by
+    # agent.build_agent_config (str | None; default "balanced"). It is a
+    # legacy responsiveness posture value — prompt.py no longer injects text
+    # from it — but the hydrator still overlays it, so it must be
+    # schema-known and type-checked to avoid an "unknown field" warning on
+    # valid configs (issue #736).
+    "activeness": (str, type(None)),
+    # snapshot_interval (seconds between git snapshots; None = off) is
+    # hydrated into AgentConfig.snapshot_interval by agent.build_agent_config
+    # and consumed by the lifecycle snapshot loop; accepts integer or float
+    # seconds. The range check (reject bool and <= 0) is enforced explicitly
+    # in validate_init below.
+    "snapshot_interval": (int, float, type(None)),
     # NOTE: molt_notice / molt_pressure / molt_urgency / molt_prompt are
     # deliberately NOT here. They were retired as agent-configurable fields —
     # molt thresholds are kernel-fixed runtime constants (see config.py
     # MOLT_*_THRESHOLD) and the context.molt message is now hardcoded in
     # meta_block.build_molt_context. See MANIFEST_LEGACY_IGNORED below.
-    "max_turns": int,
     "max_rpm": int,
     # Max AED (agent-environment-defibrillation) retry attempts per inbox
     # message turn (see turn.py). Hydrated into AgentConfig.max_aed_attempts by
@@ -106,8 +118,9 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "aed_timeout": (int, float),
     # Soft per-molt/session cache-miss token budget. Positive int; default
     # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
-    # (reject bool and <= 0) is enforced explicitly in validate_init below —
-    # the (int) type here only rejects non-int types like str/float/None.
+    # (<= 0) is enforced explicitly in validate_init below; the (int) type
+    # here rejects non-int types like str/float/None (bool is rejected by
+    # _check_type's general rule, since bool subclasses int).
     "cache_miss_budget": int,
     "admin": dict,
     "streaming": bool,
@@ -147,6 +160,13 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
 MANIFEST_LEGACY_IGNORED: set[str] = {
     "molt_notice", "molt_pressure", "molt_urgency", "molt_prompt",
     "stamina",
+    # max_turns: deliberately ignored by build_agent_config (agent.py) —
+    # ACTIVE-turn tool-call safety is kernel-owned in
+    # lingtai.kernel.safety_limits. It used to be typed here as int even
+    # though nothing read it; it is now recognized-and-ignored so stale
+    # init.json values stay warning-free without being advertised as a live
+    # typed knob (issue #736).
+    "max_turns",
 }
 
 MANIFEST_KNOWN: set[str] = (
@@ -365,10 +385,6 @@ def validate_init(data: dict) -> list[str]:
 
     if "summarize_notification_threshold" in manifest:
         summarize_threshold = manifest["summarize_notification_threshold"]
-        if isinstance(summarize_threshold, bool):
-            raise ValueError(
-                "manifest.summarize_notification_threshold: expected non-negative int, got bool"
-            )
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
@@ -376,15 +392,50 @@ def validate_init(data: dict) -> list[str]:
 
     if "cache_miss_budget" in manifest:
         cache_miss_budget = manifest["cache_miss_budget"]
-        # bool is an int subclass — reject it explicitly, then require > 0.
-        # (_optional_keys already rejected non-int types like str/float/None.)
-        if isinstance(cache_miss_budget, bool):
-            raise ValueError(
-                "manifest.cache_miss_budget: expected positive int, got bool"
-            )
         if cache_miss_budget <= 0:
             raise ValueError(
                 "manifest.cache_miss_budget: expected positive int (> 0)"
+            )
+
+    if "aed_timeout" in manifest:
+        aed_timeout = manifest["aed_timeout"]
+        # bool is an int subclass — reject it explicitly, then require > 0.
+        # (_optional_keys already rejected non-number types like str/None.)
+        if isinstance(aed_timeout, bool):
+            raise ValueError(
+                "manifest.aed_timeout: expected positive number, got bool"
+            )
+        if aed_timeout <= 0:
+            raise ValueError(
+                "manifest.aed_timeout: expected positive number (> 0)"
+            )
+
+    if "snapshot_interval" in manifest and manifest["snapshot_interval"] is not None:
+        snapshot_interval = manifest["snapshot_interval"]
+        # None means "off"; any numeric value must be a positive number of
+        # seconds. bool must be rejected explicitly: it is not covered by the
+        # _optional_keys bool guard because the schema type here is
+        # (int, float, type(None)).
+        if isinstance(snapshot_interval, bool):
+            raise ValueError(
+                "manifest.snapshot_interval: expected positive number or null, got bool"
+            )
+        if snapshot_interval <= 0:
+            raise ValueError(
+                "manifest.snapshot_interval: expected positive number (> 0)"
+            )
+
+    if "max_aed_attempts" in manifest:
+        max_aed_attempts = manifest["max_aed_attempts"]
+        # Mirrors the AgentConfig.__post_init__ clamp (>= 1) but fails loudly
+        # at validation time instead of silently clamping a bad value.
+        if isinstance(max_aed_attempts, bool):
+            raise ValueError(
+                "manifest.max_aed_attempts: expected int >= 1, got bool"
+            )
+        if max_aed_attempts < 1:
+            raise ValueError(
+                "manifest.max_aed_attempts: expected int >= 1"
             )
 
     soul = manifest.get("soul")
@@ -399,8 +450,6 @@ def validate_init(data: dict) -> list[str]:
     _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
-        if isinstance(compact_threshold, bool):
-            raise ValueError("manifest.llm.compact_threshold: expected int | null, got bool")
         if isinstance(compact_threshold, int) and compact_threshold <= 0:
             raise ValueError(
                 "manifest.llm.compact_threshold: expected positive int or null"
@@ -541,8 +590,10 @@ def _check_type(
     path: str,
 ) -> None:
     """Validate a single value's type."""
+    expected = expected_type if isinstance(expected_type, tuple) else (expected_type,)
     # bool is a subclass of int in Python — reject bools for numeric fields
-    if isinstance(value, bool) and expected_type in (int, (int, float)):
+    # unless bool is explicitly one of the accepted types.
+    if isinstance(value, bool) and int in expected and bool not in expected:
         raise ValueError(f"{path}: expected number, got bool")
 
     if not isinstance(value, expected_type):

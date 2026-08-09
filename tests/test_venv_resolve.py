@@ -746,6 +746,9 @@ def test_create_venv_preserves_platform_specific_pip_path(
     calls: list[list[str]] = []
     monkeypatch.setattr(venv_resolve, "_find_python", lambda: "/mock/python")
     monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+    # No installed distribution in this unit-test process, so provisioning uses
+    # the unpinned spec exactly once regardless of the ambient environment.
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: None)
 
     def fake_run(args: list[str], **kwargs):
         calls.append(args)
@@ -830,3 +833,223 @@ def test_explicit_venv_path_out_of_policy_is_still_accepted(
 
     # resolve_venv on a non-default venv_path skips policy revalidation.
     assert venv_resolve.resolve_venv({"venv_path": str(explicit)}) == explicit
+
+
+# --- issue #758: auto-provisioning must pin the running kernel version ---
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("0.4.2", False),
+        ("1.0.0rc1", False),
+        ("0.5.0.dev3", True),
+        ("0.5.0+g1234abc", True),
+        ("0.5.0.dev3+g1234abc", True),
+    ],
+)
+def test_is_local_dev_version(version: str, expected: bool) -> None:
+    assert venv_resolve._is_local_dev_version(version) is expected
+
+
+def test_create_venv_pins_running_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "venv"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(venv_resolve, "_find_python", lambda: "/mock/python")
+    monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+
+    def fake_run(args: list[str], **kwargs):
+        calls.append(args)
+        assert kwargs == {"check": True}
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
+
+    venv_resolve._create_venv(venv)
+
+    assert calls == [
+        ["/mock/python", "-m", "venv", str(venv)],
+        [str(venv / "bin" / "pip"), "install", "lingtai==0.4.2"],
+    ]
+
+
+def test_create_venv_falls_back_to_unpinned_when_pin_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    venv = tmp_path / "venv"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(venv_resolve, "_find_python", lambda: "/mock/python")
+    monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+
+    def fake_run(args: list[str], **kwargs):
+        calls.append(args)
+        if args[1] == "install" and args[2] == "lingtai==0.4.2":
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
+
+    venv_resolve._create_venv(venv)
+
+    assert calls[1:] == [
+        [str(venv / "bin" / "pip"), "install", "lingtai==0.4.2"],
+        [str(venv / "bin" / "pip"), "install", "lingtai"],
+    ]
+    assert (
+        "warning: install of lingtai==0.4.2 failed; trying fallback"
+        in capsys.readouterr().err
+    )
+
+
+def test_create_venv_skips_pin_for_dev_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "venv"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(venv_resolve, "_find_python", lambda: "/mock/python")
+    monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+    monkeypatch.setattr(
+        venv_resolve, "_running_lingtai_version", lambda: "0.5.0.dev3+g1234abc"
+    )
+
+    def fake_run(args: list[str], **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
+
+    venv_resolve._create_venv(venv)
+
+    assert calls[1:] == [[str(venv / "bin" / "pip"), "install", "lingtai"]]
+
+
+def test_create_venv_repropagates_when_all_installs_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "venv"
+    calls: list[list[str]] = []
+    monkeypatch.setattr(venv_resolve, "_find_python", lambda: "/mock/python")
+    monkeypatch.setattr(venv_resolve, "_write_env_marker_best_effort", lambda _path: None)
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+
+    def fake_run(args: list[str], **kwargs):
+        calls.append(args)
+        if args[1] == "install":
+            raise subprocess.CalledProcessError(1, args)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        venv_resolve._create_venv(venv)
+    assert calls[-1] == [str(venv / "bin" / "pip"), "install", "lingtai"]
+
+
+def test_env_marker_records_lingtai_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    venv = tmp_path / "venv"
+    probe_marker = venv_resolve._current_process_env_marker()
+    probe_marker["lingtai_version"] = "0.4.2"
+    monkeypatch.setattr(
+        venv_resolve, "_current_venv_env_marker", lambda _path: dict(probe_marker)
+    )
+
+    venv_resolve._write_env_marker(venv)
+
+    written = json.loads((venv / ".lingtai-env.json").read_text(encoding="utf-8"))
+    assert written["lingtai_version"] == "0.4.2"
+    assert written["schema_version"] == venv_resolve._ENV_MARKER_SCHEMA_VERSION
+
+
+def test_env_marker_without_version_field_still_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy marker lacking lingtai_version parses and matches (back-compat)."""
+    managed = tmp_path / "runtime" / "venv"
+    _write_python_executable(managed)
+    marker = venv_resolve._current_process_env_marker()
+    marker.pop("lingtai_version", None)
+    _write_marker(managed, marker)
+    current = dict(marker)
+    current["lingtai_version"] = "0.4.2"
+    monkeypatch.setattr(venv_resolve, "_current_venv_env_marker", lambda _path: dict(current))
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+
+    status, _detail = venv_resolve._env_marker_status_detail(managed)
+    assert status == "match"
+
+
+def test_env_marker_version_skew_is_not_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kernel-version skew is informational, never a destructive mismatch."""
+    managed = tmp_path / "runtime" / "venv"
+    _write_python_executable(managed)
+    marker = venv_resolve._current_process_env_marker()
+    marker["lingtai_version"] = "0.6.0"
+    _write_marker(managed, marker)
+    current = dict(marker)
+    current["lingtai_version"] = "0.6.0"
+    monkeypatch.setattr(venv_resolve, "_current_venv_env_marker", lambda _path: dict(current))
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+    # Managed cleanup derives the live policy; accept any Python so only the
+    # version skew is exercised.
+    monkeypatch.setattr(
+        venv_resolve,
+        "_python_selection_policy",
+        lambda: venv_resolve._PythonSelectionPolicy(
+            target_os=venv_resolve._goos(),
+            architecture=venv_resolve._goarch(),
+            macos_version="14.0",
+            macos_major=14,
+            minimum=(3, 11),
+            maximum=None,
+            candidate_names=("python3",),
+        ),
+    )
+
+    status, detail = venv_resolve._env_marker_status_detail(managed)
+    assert status == "match"
+    assert "lingtai version skew" in detail
+    assert "0.6.0" in detail and "0.4.2" in detail
+
+    # And the managed cleanup path must NOT delete the directory on skew.
+    assert managed.exists()
+    venv_resolve._remove_mismatched_managed_venv(managed)
+    assert managed.exists()
+
+
+def test_env_marker_check_reports_version_skew_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    managed = tmp_path / "runtime" / "venv"
+    _write_python_executable(managed)
+    marker = venv_resolve._current_process_env_marker()
+    marker["lingtai_version"] = "0.6.0"
+    _write_marker(managed, marker)
+    current = dict(marker)
+    current["lingtai_version"] = "0.6.0"
+    monkeypatch.setattr(venv_resolve, "_current_venv_env_marker", lambda _path: dict(current))
+    monkeypatch.setattr(venv_resolve, "_running_lingtai_version", lambda: "0.4.2")
+
+    rc = venv_resolve._env_marker_main(["env-marker", "check", "--venv", str(managed)])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "match"
+    assert "lingtai version skew" in payload["detail"]
+    assert "0.6.0" in payload["detail"] and "0.4.2" in payload["detail"]

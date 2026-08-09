@@ -4,15 +4,21 @@ This check is deliberately read-only. It surfaces the observed running and
 installed versions, plus the latest release-manifest facts published on the
 official GitHub/Gitee mirrors, through the shared ``nudge`` notification
 channel. It never mutates an installation.
+
+Cadence note: the remote probe runs on a daemon worker thread and is consumed
+on a later probe, so the nudge surfaces up to one probe (~60s) after the
+fetch completes. This is intentional: the check runs on the 1s heartbeat
+thread, which must never block on the network (#730).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,6 +33,10 @@ from .prompts import (
 
 _FAST_INTERVAL_SECONDS = 60.0
 _REMOTE_TIMEOUT_SECONDS = 3.0
+# Hard ceiling for one background probe. Longer than the worst-case sequential
+# mirror fetch (4 bounded requests x 3.0s); a worker still running after this
+# (e.g. a stalled DNS lookup) is abandoned so the slot never pins forever.
+_FETCH_DEADLINE_SECONDS = 30.0
 _MAX_REMOTE_BYTES = 256 * 1024
 _MANIFEST_ASSET_NAME = "lingtai-kernel-release-manifest.json"
 _GITHUB_LATEST_RELEASE_URL = (
@@ -78,6 +88,63 @@ class _MirrorMismatchError(RuntimeError):
             for source, manifest in sorted(self.manifests.items())
         )
         super().__init__(f"release-manifest mirrors disagree: {versions}")
+
+
+@dataclass
+class _PendingFetch:
+    """Process-local slot for one in-flight remote probe.
+
+    ``result``/``error`` are written only by the daemon worker thread and read
+    by the heartbeat thread after ``done`` is set; ``done`` is the publication
+    barrier. The worker never touches ``.nudge_state.json`` or the
+    notification store, preserving the heartbeat thread's single-writer
+    property over persistent state.
+    """
+
+    thread: threading.Thread | None
+    started_ts: float
+    result: Any = None
+    error: BaseException | None = None
+    done: threading.Event = field(default_factory=threading.Event)
+
+
+def _fetch_slot(agent) -> _PendingFetch | None:
+    """Return the in-flight fetch slot for ``agent``, if any."""
+    return getattr(agent, "_nudge_kernel_fetch", None)
+
+
+def _start_fetch(agent) -> None:
+    """Start the remote probe on a daemon worker and return immediately.
+
+    The heartbeat tick must never block on the network (#730): a slow or
+    stalled fetch would hold the 1s tick past the 2s ``is_alive`` threshold
+    and make a live agent look dead. Single-flight is guaranteed because a
+    slot exists from spawn until consume/abandon, and ``check`` is gated by
+    the 60s fast interval.
+    """
+    pending = _PendingFetch(thread=None, started_ts=time.time())
+
+    def _worker() -> None:
+        try:
+            pending.result = _fetch_latest_version()
+        except Exception as exc:  # keep the slot consumable on any failure
+            pending.error = exc
+        finally:
+            pending.done.set()
+
+    try:
+        worker = threading.Thread(
+            target=_worker,
+            daemon=True,
+            name="nudge-kernel-version-fetch",
+        )
+    except Exception:
+        # Cannot even spawn the worker; stay inert and let the next probe
+        # re-arm the remote check.
+        return
+    pending.thread = worker
+    agent._nudge_kernel_fetch = pending
+    worker.start()
 
 
 def check(agent) -> None:
@@ -158,41 +225,79 @@ def check(agent) -> None:
     # The 60-second probe is only a bounded observation cost. Product repeat
     # behavior belongs to the shared global Nudge policy, not this producer.
 
-    try:
-        observation = _coerce_observation(_fetch_latest_version())
-    except _MirrorMismatchError as e:
-        mismatch = _mirror_mismatch_payload(e.manifests)
+    # The remote probe must never run on the heartbeat thread (#730): a slow
+    # or stalled fetch would hold the 1s tick past the 2s is_alive threshold
+    # and make a live agent look dead. The fetch runs on a daemon worker;
+    # each tick either starts one or consumes a finished one.
+    pending = _fetch_slot(agent)
+    if pending is None:
+        _start_fetch(agent)
+        return
+    if not pending.done.is_set():
+        if time.time() - pending.started_ts > _FETCH_DEADLINE_SECONDS:
+            # Abandon a wedged worker (e.g. a stalled DNS lookup); the
+            # orphaned daemon thread dies on its own. Record the failure so
+            # the day is not retried in a tight loop.
+            kernel_state.update(
+                {
+                    "last_remote_check_date": today,
+                    "checked_installed_version": info.installed_version,
+                    "last_error": "fetch timed out",
+                }
+            )
+            _save_persistent_state(agent, persistent)
+            _log(agent, "kernel_version_update_check_error", error="fetch timed out")
+            agent._nudge_kernel_fetch = None
+        return
+    agent._nudge_kernel_fetch = None
+    if pending.error is not None:
+        error = pending.error
+        if isinstance(error, _MirrorMismatchError):
+            mismatch = _mirror_mismatch_payload(error.manifests)
+            kernel_state.update(
+                {
+                    "last_remote_check_date": today,
+                    "checked_installed_version": info.installed_version,
+                    "latest_seen": None,
+                    "latest_source": None,
+                    "mirror_mismatch": mismatch,
+                    "last_error": None,
+                }
+            )
+            _save_persistent_state(agent, persistent)
+            upsert(
+                agent,
+                _KIND,
+                render_nudge_payload(
+                    NudgeSituation.MIRROR_MISMATCH,
+                    NudgeFacts(
+                        running=info.running_version,
+                        installed=info.installed_version,
+                        checked_at_date=today,
+                        mirror_mismatch=mismatch,
+                    ),
+                ),
+            )
+            _log(
+                agent,
+                "kernel_version_mirror_mismatch",
+                kind=_KIND,
+                sources=sorted(error.manifests),
+            )
+            return
         kernel_state.update(
             {
                 "last_remote_check_date": today,
                 "checked_installed_version": info.installed_version,
-                "latest_seen": None,
-                "latest_source": None,
-                "mirror_mismatch": mismatch,
-                "last_error": None,
+                "last_error": str(error)[:200],
             }
         )
         _save_persistent_state(agent, persistent)
-        upsert(
-            agent,
-            _KIND,
-            render_nudge_payload(
-                NudgeSituation.MIRROR_MISMATCH,
-                NudgeFacts(
-                    running=info.running_version,
-                    installed=info.installed_version,
-                    checked_at_date=today,
-                    mirror_mismatch=mismatch,
-                ),
-            ),
-        )
-        _log(
-            agent,
-            "kernel_version_mirror_mismatch",
-            kind=_KIND,
-            sources=sorted(e.manifests),
-        )
+        _log(agent, "kernel_version_update_check_error", error=str(error)[:200])
         return
+
+    try:
+        observation = _coerce_observation(pending.result)
     except Exception as e:
         kernel_state.update(
             {

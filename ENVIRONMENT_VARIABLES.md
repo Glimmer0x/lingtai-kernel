@@ -4,7 +4,7 @@ description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
 version: 1.0.0
-last_changed_at: "2026-08-07"
+last_changed_at: "2026-08-09"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -58,6 +58,7 @@ reports, prompts, or this registry.
 | `LINGTAI_REFRESH_ENV_OVERWRITE` | unset and off | `1` enables one refresh overwrite | One refresh handoff | Boot or refresh setup; consumed and removed after use | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/agent.py` | Do not log inherited or env-file contents |
 | `LINGTAI_RUNTIME_PYTHON` | unset; caller uses `sys.executable` | Local executable path | Runtime self-check and host-tool routing | When the consumer is invoked; relaunch to change interpreter | Missing or invalid is a caller/configuration error | `src/lingtai/cli.py` and runtime checks | A path is not a credential or a trust decision |
 | `LINGTAI_RUNTIME_VENV` | unset | Local virtualenv directory path | Host-tool runtime hint | When a host tool is invoked; new process sees changes | Missing is tolerated when another interpreter is available | `src/lingtai/cli.py` | Do not infer package trust or freshness from an unrelated shell |
+| `LINGTAI_VERBOSE` | unset and off | `1` enables DEBUG console logging for `lingtai-agent run` | Agent boot file logging; the rotating `logs/agent.log` file handler is always DEBUG, the console handler is DEBUG only when set | Boot of `lingtai-agent run`; the `--verbose` flag is equivalent | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/kernel/logging.py` | Console verbosity only; not an authorization boundary |
 | `LINGTAI_SHELL` | unset (platform default) | `posix`, `powershell`, `cmd`, `gitbash`, `wsl`; case-insensitive | Canonical shell tool dialect and spawn selection | Shell tool setup; restart to change | Unknown values fall back to the platform default | `src/lingtai/adapters/shell.py` | Only changes which shell program the model-driven shell tool spawns; it is not an authorization boundary |
 | `LINGTAI_AGENT_DIR` | unset; normally launcher-injected | Existing local directory | Out-of-process MCP and client workdir | MCP/client process start; restart after change | Invalid path fails the MCP or client operation | `src/lingtai/mcp_servers/_config.py` | Keep private workdir contents out of model-facing output |
 | `LINGTAI_MCP_NAME` | unset | Registered MCP name | One MCP process identity | MCP process start; restart after change | Missing or unknown name fails closed | `src/lingtai/mcp_servers/_config.py` | Prevents arbitrary server selection; it is not a secret |

@@ -17,8 +17,8 @@ from lingtai.adapters.lifecycle_clock import SystemLifecycleClockAdapter
 from lingtai.adapters.refresh_watcher import select_refresh_watcher
 from lingtai.adapters.workdir_lease import select_workdir_lease
 from lingtai.kernel.config_resolve import (
-    resolve_env,
     load_env_file,
+    resolve_env_checked,
 )
 from lingtai.init_reader import InitReadStatus, read_init, reader_callbacks
 from lingtai.llm.service import (
@@ -62,6 +62,19 @@ def load_init(working_dir: Path) -> dict:
     return outcome.data
 
 
+def _raise_env_miss(message: str, env_file: str | None) -> None:
+    """Boot-time hard failure when ``manifest.llm.api_key_env`` cannot resolve.
+
+    A fresh agent with no API key can never make an LLM call, so failing fast
+    at boot with a message naming the variable is strictly better than an
+    opaque provider auth error on the first turn.
+    """
+    raise ValueError(
+        f"{message}; the agent cannot boot without it "
+        f"(env_file: {env_file!r})"
+    )
+
+
 def build_agent(data: dict, working_dir: Path) -> Agent:
     """Construct Agent from validated init data.
 
@@ -83,7 +96,12 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     m = data["manifest"]
     llm = m["llm"]
 
-    api_key = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
+    api_key = resolve_env_checked(
+        llm.get("api_key"),
+        llm.get("api_key_env"),
+        context="manifest.llm.api_key_env",
+        warn=lambda m: _raise_env_miss(m, env_file),
+    )
 
     # Default 60 matches AgentConfig.max_rpm — agents whose init.json
     # predates this field cooperatively share the network-wide 60 RPM cap
@@ -246,6 +264,18 @@ def run(working_dir: Path) -> None:
     """Boot agent into ASLEEP — wakes on external messages (mail/imap/telegram)."""
     _check_duplicate_process(working_dir)
     _clean_signal_files(working_dir)
+    # Durable file logging for daemonized agents: stderr alone is DEVNULL for
+    # avatars and truncated per-spawn in logs/spawn.stderr, so logger warnings
+    # (mail claim failures, adapter retries, restore diagnostics) would
+    # otherwise be lost. Do this before load_init() so boot/migration warnings
+    # are captured too. Short-lived inspector subcommands (log, check-caps,
+    # maintenance) deliberately never reach this path.
+    from lingtai.kernel.logging import setup_logging
+
+    setup_logging(
+        verbose=os.environ.get("LINGTAI_VERBOSE") == "1",
+        log_dir=working_dir / "logs",
+    )
     data = load_init(working_dir)
 
     # Resolve venv and store on agent for CPR/avatar to use
@@ -449,6 +479,11 @@ def main() -> None:
 
     run_parser = sub.add_parser("run", help="Boot agent into sleep — wakes on external messages")
     run_parser.add_argument("working_dir", type=Path, help="Agent working directory containing init.json")
+    run_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="DEBUG-level console logging (equivalent to LINGTAI_VERBOSE=1)",
+    )
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
@@ -506,6 +541,8 @@ def main() -> None:
         if not working_dir.is_dir():
             print(f"error: {working_dir} is not a directory", file=sys.stderr)
             sys.exit(1)
+        if getattr(args, "verbose", False):
+            os.environ["LINGTAI_VERBOSE"] = "1"
         run(working_dir)
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers

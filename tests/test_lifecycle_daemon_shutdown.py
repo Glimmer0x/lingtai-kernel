@@ -12,6 +12,8 @@ import threading
 from concurrent.futures import Future
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_daemon_shutdown_for_agent_stop_reclaims_pools_and_cli_processes(tmp_path, monkeypatch):
     from lingtai.tools import daemon as daemon_module
@@ -253,3 +255,81 @@ def test_daemon_shutdown_waits_for_cli_ask_future_before_releasing_liveness(tmp_
     assert waits == [({primary_done, ask_done}, 2.5)]
     assert report["ask_futures_shutdown"] == 1
     assert report["futures_remaining"] == 0
+
+
+def test_stop_releases_workdir_lease_when_intermediate_teardown_raises(monkeypatch):
+    """Issue #661: an unwrapped teardown failure must not wedge ``.agent.lock``.
+
+    ``_stop`` releases the workdir lease in a ``finally``, so a raise from any
+    intermediate step (session close, manifest write, heartbeat stop) still
+    leaves the directory acquirable. The exception propagates so the caller
+    still sees the teardown failure.
+    """
+    from lingtai.kernel.base_agent import lifecycle
+    import lingtai.tools.soul.flow as soul_flow
+
+    released = []
+
+    class FakeLease:
+        def release(self):
+            released.append(True)
+
+    class ExplodingSession:
+        def close(self):
+            raise RuntimeError("session close boom")
+
+    agent = SimpleNamespace(
+        _log=lambda event, **fields: None,
+        _shutdown=threading.Event(),
+        _thread=None,
+        _session=ExplodingSession(),
+        _mail_service=None,
+        _event_journal=None,
+        _workdir=SimpleNamespace(write_manifest=lambda m: None),
+        _workdir_lease=FakeLease(),
+        _build_manifest=lambda: {"agent": "test"},
+        get_capability=lambda name: None,
+    )
+    agent._cancel_soul_timer = lambda: None
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
+
+    with pytest.raises(RuntimeError, match="session close boom"):
+        lifecycle._stop(agent, timeout=0.01)
+
+    assert released == [True]
+
+
+def test_stop_releases_workdir_lease_when_manifest_write_raises(monkeypatch):
+    """Issue #661: a raise at the LAST teardown step still releases the lease."""
+    from lingtai.kernel.base_agent import lifecycle
+    import lingtai.tools.soul.flow as soul_flow
+
+    released = []
+
+    class FakeLease:
+        def release(self):
+            released.append(True)
+
+    class ExplodingWorkdir:
+        def write_manifest(self, manifest):
+            raise OSError("disk full")
+
+    agent = SimpleNamespace(
+        _log=lambda event, **fields: None,
+        _shutdown=threading.Event(),
+        _thread=None,
+        _session=SimpleNamespace(close=lambda: None),
+        _mail_service=None,
+        _event_journal=None,
+        _workdir=ExplodingWorkdir(),
+        _workdir_lease=FakeLease(),
+        _build_manifest=lambda: {"agent": "test"},
+        get_capability=lambda name: None,
+    )
+    agent._cancel_soul_timer = lambda: None
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda a: None)
+
+    with pytest.raises(OSError, match="disk full"):
+        lifecycle._stop(agent, timeout=0.01)
+
+    assert released == [True]
