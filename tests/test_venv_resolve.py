@@ -798,3 +798,35 @@ def test_managed_venv_with_obsolete_python_version_is_mismatch(
     assert managed.exists()
     venv_resolve._remove_mismatched_managed_venv(managed)
     assert not managed.exists()
+
+
+def test_explicit_venv_path_out_of_policy_is_still_accepted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user-configured venv_path (not the default runtime dir) with an
+    out-of-policy Python version is still accepted: policy revalidation applies
+    only to the managed default runtime venv, never to a path the owner chose
+    deliberately. (fable review note 4, 2026-08-08.)"""
+    _set_selector_host(
+        monkeypatch,
+        sys_platform="darwin",
+        machine="arm64",
+        macos_version="13.6",
+    )
+    explicit = tmp_path / "explicit"
+    _write_python_executable(explicit)
+    marker = venv_resolve._current_process_env_marker()
+    marker["python"]["version_major"] = 3
+    marker["python"]["version_minor"] = 14
+    _write_marker(explicit, marker)
+    monkeypatch.setattr(
+        venv_resolve, "_current_venv_env_marker", lambda _path: dict(marker)
+    )
+    monkeypatch.setattr(
+        venv_resolve.subprocess, "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, stdout="", stderr=""),
+    )
+
+    # resolve_venv on a non-default venv_path skips policy revalidation.
+    assert venv_resolve.resolve_venv({"venv_path": str(explicit)}) == explicit

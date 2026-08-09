@@ -130,9 +130,18 @@ def _test_venv_detail(venv_dir: Path, *, warn_marker_error: bool) -> tuple[bool,
     # Managed (default runtime) venvs are revalidated against the current
     # selection policy so a venv created under an older policy is recreated
     # instead of accepted on marker self-consistency alone. User-configured
-    # venv_paths stay exempt (the owner chose them deliberately).
-    # (Jason review P1-2, 2026-08-08.)
-    policy = _python_selection_policy() if _is_default_runtime_dir(venv_dir) else None
+    # venv_paths stay exempt (the owner chose them deliberately). Policy
+    # derivation may fail on unusual hosts (unsupported macOS major, empty
+    # platform.mac_ver()); degrade to no policy revalidation rather than turn a
+    # previously non-throwing boolean predicate into a hard RuntimeError that
+    # bricks an existing working managed venv. (Jason review P1-2 + fable
+    # review, 2026-08-08.)
+    policy: _PythonSelectionPolicy | None = None
+    if _is_default_runtime_dir(venv_dir):
+        try:
+            policy = _python_selection_policy()
+        except RuntimeError:
+            policy = None
     marker_status, marker_detail = _env_marker_status_detail(venv_dir, policy=policy)
     if marker_status == _MARKER_MISMATCH:
         return False, marker_detail or "environment marker mismatch"
@@ -660,7 +669,16 @@ def _env_marker_main(argv: list[str] | None = None) -> int:
         return 2
 
     if action == "check":
-        status, detail = _env_marker_status_detail(venv_dir)
+        # Mirror resolve_venv's managed-runtime revalidation: pass the current
+        # policy for the default runtime dir so the CLI reports the same verdict
+        # the kernel will act on (fable review note 1, 2026-08-08).
+        policy: _PythonSelectionPolicy | None = None
+        if _is_default_runtime_dir(venv_dir):
+            try:
+                policy = _python_selection_policy()
+            except RuntimeError:
+                policy = None
+        status, detail = _env_marker_status_detail(venv_dir, policy=policy)
         payload = {"status": status}
         if detail:
             payload["detail"] = detail
