@@ -34,7 +34,6 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
-from .llm.policy import ReasoningEmission, ReasoningPolicy
 from .llm.reasoning import ReasoningConstructionResult
 from .llm_utils import (
     send_with_timeout,
@@ -376,7 +375,8 @@ class SessionManager:
         value passes through unchanged — including a falsey one, which the
         provider contracts reject loudly at ``create_chat`` rather than
         papering over here. Every other provider keeps the historical
-        ``or "high"``.
+        ``"high"`` default only for a genuinely constructor-omitted value;
+        an explicit value — falsey ones included — passes through unchanged.
         """
         thinking = self._config.thinking
         provider = self._effective_provider()
@@ -396,7 +396,15 @@ class SessionManager:
             # values included — so the provider normalizer can fail closed
             # instead of a legacy ``or "high"`` rewrite hiding it.
             return thinking
-        return thinking or DEFAULT_THINKING
+        if getattr(self._config, "thinking_omitted", False) or getattr(
+            self._config, "_thinking_constructor_omitted", False
+        ):
+            # Genuinely constructor-omitted: keep the legacy default.
+            return DEFAULT_THINKING
+        # An explicit value passes through unchanged — including a falsey one,
+        # which the provider contracts reject loudly at ``create_chat`` rather
+        # than papering over here.
+        return thinking
 
     def ensure_session(self) -> ChatSession:
         """Ensure a persistent LLM session exists, creating one if needed."""
@@ -509,10 +517,6 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
-        reasoning = getattr(self._chat, "reasoning_emission", None)
-        if isinstance(reasoning, ReasoningEmission):
-            llm_call_fields["reasoning"] = reasoning.as_dict()
-
         result_reader = getattr(self._chat, "reasoning_construction_result", None)
         reasoning_result = result_reader() if callable(result_reader) else None
         if isinstance(reasoning_result, ReasoningConstructionResult):

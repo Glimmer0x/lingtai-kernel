@@ -466,15 +466,13 @@ def validate_init(data: dict) -> list[str]:
                     "the reserved 'default' sentinel cannot be configured"
                 )
         elif not isinstance(thinking, str) or thinking not in allowed:
-            scope = (
-                f" for provider {provider!r}"
-                if provider in ZHIPU_THINKING_PROVIDERS
-                else ""
-            )
-            raise ValueError(
-                f"manifest.llm.thinking{scope}: expected one of "
-                f"{', '.join(allowed)}"
-            )
+            prefix = "manifest.llm.thinking: expected one of "
+            if provider in ZHIPU_THINKING_PROVIDERS:
+                prefix = (
+                    "manifest.llm.thinking for provider "
+                    f"{provider!r}: expected one of "
+                )
+            raise ValueError(prefix + ", ".join(allowed))
     for key in llm:
         if key not in LLM_KNOWN:
             warnings.append(f"unknown field in manifest.llm: {key}")

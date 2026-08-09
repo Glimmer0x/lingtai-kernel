@@ -773,8 +773,6 @@ class ClaudeCodeAdapter(LLMAdapter):
             cmd += ["--resume", resume_session_id]
         if reasoning is not None:
             cmd += list(reasoning.argv_delta)
-        if effort is not None:
-            cmd += list(effort.argv)
         if self._disallowed:
             cmd += ["--disallowedTools", *self._disallowed]
         if system_prompt_file is _UNSET:

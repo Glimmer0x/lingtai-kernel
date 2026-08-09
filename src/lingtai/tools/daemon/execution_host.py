@@ -554,9 +554,7 @@ class DetachedDaemonExecutionHost:
             raise ValueError("detached resume message was not supplied through the one-shot capsule")
         try:
             handler = getattr(self._manager_type, spec.ask_handler_attr)
-            response = handler(
-                self, self._run_dir.handle, entry, message, backend=spec.id
-            )
+            response = handler(self, self._run_dir.handle, entry, message)
             if response.get("status") == "busy":
                 return response
             future = entry.get("ask_future")

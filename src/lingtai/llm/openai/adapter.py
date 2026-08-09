@@ -6262,9 +6262,10 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 },
             }
 
-        construction = self._responses_reasoning_construction(thinking)
-        extra_kwargs.update(construction.materialize_json())
-
+        # Consult the injected provider contract FIRST: its model-specific
+        # allowlists and error vocabulary must win over the generic Responses
+        # validator, which would reject Codex-only tokens (e.g. ``ultra`` on
+        # ``gpt-5.6-sol``) before the contract ever ran.
         reasoning_result: ReasoningConstructionResult | None = None
         if self._reasoning_contract is not None and self._reasoning_provider is not None:
             reasoning_result = self._reasoning_contract.construct(
@@ -6276,9 +6277,15 @@ class CodexOpenAIAdapter(OpenAIAdapter):
                 thinking,
             )
 
-        if reasoning_result is None:
+        if reasoning_result is not None:
+            # Registered Codex route: the contract owns the exact wire patch.
+            reasoning_result.wire_patch.apply(extra_kwargs)
+            construction = None
+        else:
             # Legacy Codex path, retained byte-for-byte for direct adapters,
             # unknown models, and custom endpoints.
+            construction = self._responses_reasoning_construction(thinking)
+            extra_kwargs.update(construction.materialize_json())
             if thinking in (None, "default"):
                 thinking = "xhigh"
             extra_kwargs.update(_responses_reasoning_kwargs(thinking))
@@ -6345,5 +6352,6 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             compact_token_limit=self._codex_compact_token_limit,
             reasoning_result=reasoning_result,
         )
-        session.reasoning_emission = construction.emission()
+        if construction is not None:
+            session.reasoning_emission = construction.emission()
         return session

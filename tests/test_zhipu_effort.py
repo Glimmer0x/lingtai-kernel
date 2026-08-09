@@ -700,28 +700,6 @@ def test_zhipu_none_thinking_reaches_the_adapter_as_omission(call_site, provider
 
 
 @pytest.mark.parametrize("call_site", ["ensure", "rebuild"])
-@pytest.mark.parametrize("provider", ["anthropic", "openai", "deepseek", "codex"])
-@pytest.mark.parametrize("thinking", ["", False, 0, None])
-@pytest.mark.skip(reason='consolidated provider reasoning-effort contracts (#1197); pre-merge wiring assertions superseded by merged provider contracts (see reasoning-consolidation-work.md)')
-def test_non_zhipu_falsey_thinking_keeps_the_legacy_high_fallback(
-    call_site, provider, thinking
-):
-    """Byte-equivalent legacy behavior for every other provider."""
-    from lingtai.kernel.llm.interface import ChatInterface
-
-    manager, service = _session_manager(
-        config_provider=provider, thinking=thinking, service_provider=provider
-    )
-
-    if call_site == "ensure":
-        manager.ensure_session()
-    else:
-        manager._rebuild_session(ChatInterface())
-
-    assert _thinking_passed_to_create(service) == "high"
-
-
-@pytest.mark.parametrize("call_site", ["ensure", "rebuild"])
 @pytest.mark.parametrize(
     "provider,thinking",
     [
