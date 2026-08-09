@@ -64,13 +64,33 @@ or the `claude-p` vision alias), the vision capability does not proxy Claude's
 own CLI authentication. The analyze call fails closed with explicit guidance
 instead of constructing a service:
 
-- Run the Claude Code CLI yourself in print mode with the image path:
+> You are using claude as backend, therefore to use vision run `claude -p`;
+> see the vision manual for more details.
+
+### How Claude CLI vision works
+
+Claude Code attaches images by file path: when the prompt references an image
+path, the CLI reads the file and sends it to the model as an image input block
+alongside the text. `-p` / `--print` is the non-interactive print mode, so the
+analysis is returned as plain text on stdout — ideal for scripting.
+
+- Run in print mode with the image path referenced in the prompt:
   `claude -p "Analyze this image: /path/to/image.png"`.
-- The CLI uses its own authentication (claude.ai subscription, API key, or a
-  configured provider) and returns a text analysis on stdout.
-- For exact image-input syntax and output formats, read the Claude Code CLI
-  reference: <https://code.claude.com/docs/en/cli-reference>. The official
-  docs' image pattern is "Analyze this image: /path/to/your/image.png".
+- Supported image formats include JPEG, PNG, and GIF (GIF uses the first
+  frame). The CLI uses its own authentication (claude.ai subscription, API
+  key, or a configured provider) and its own cost model.
+- The CLI may also accept the image as a positional argument or via paste in
+  interactive mode; print mode with the path in the prompt is the scriptable
+  route.
+
+### Progressive disclosure to the official docs
+
+For the latest authoritative explanation of image input, supported formats,
+output formats, and model support, progressively read the Claude Code CLI
+documentation on the official website:
+
+- CLI reference: <https://code.claude.com/docs/en/cli-reference>
+- Image workflows: <https://code.claude.com/docs/en/common-workflows>
 
 This manual never auto-invokes the CLI; running `claude -p` is an explicit
 operator/agent action with the CLI's own auth and cost model.
