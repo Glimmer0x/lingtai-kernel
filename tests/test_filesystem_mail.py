@@ -279,6 +279,43 @@ class TestListen:
         svc.stop()
         svc.stop()
 
+    def test_listen_raises_on_reentry_while_polling(self, tmp_path):
+        """A second listen() while a poll thread is alive must raise RuntimeError.
+
+        Without the guard a second listen() would spawn a second poll thread
+        and both loops would dispatch the same inbox messages.  The agent
+        lifecycle (base_agent/lifecycle.py) relies on RuntimeError to treat a
+        repeated listen() as "already listening".
+        """
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+        svc.listen(on_message=lambda p: None)
+        try:
+            with pytest.raises(RuntimeError):
+                svc.listen(on_message=lambda p: None)
+            # Exactly one poll thread must exist after the guarded re-entry.
+            assert svc._poll_thread is not None
+        finally:
+            svc.stop()
+
+    def test_listen_after_stop_restarts_polling(self, tmp_path):
+        """listen() after stop() is allowed (refresh/restart path)."""
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        agent_dir = _make_agent_dir(tmp_path, "agent01")
+        (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+        svc.listen(on_message=lambda p: None)
+        svc.stop()
+        # A fresh listen() after stop() must not raise.
+        svc.listen(on_message=lambda p: None)
+        svc.stop()
+
 
 class TestAddress:
 

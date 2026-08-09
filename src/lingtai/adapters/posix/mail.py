@@ -197,7 +197,15 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         Existing messages are recorded in ``_seen`` so they are not
         re-delivered.  New directories that appear with a ``message.json``
         trigger *on_message*.
+
+        Re-entry guard: raises ``RuntimeError`` when a poll thread is already
+        running, so a second ``listen()`` cannot spawn a second poll thread
+        that double-dispatches the same messages.  The agent lifecycle
+        (``base_agent/lifecycle.py``) relies on this exception to treat a
+        repeated ``listen()`` as "already listening".
         """
+        if self._poll_thread is not None and self._poll_thread.is_alive():
+            raise RuntimeError("MailService already listening")
         # Snapshot existing inbox entries so we don't re-notify
         if self._inbox_dir.is_dir():
             for entry in self._inbox_dir.iterdir():
