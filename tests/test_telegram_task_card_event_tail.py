@@ -727,7 +727,10 @@ def test_row_started_at_is_derived_from_event_ts_and_rendered(tmp_path):
     assert window[0]["started_at"] == expected
     edits = [call for call in acct.calls if call[0] == "edit_message"]
     assert edits
-    assert f" · {expected}" in edits[-1][3]
+    # Tool rows no longer carry their own timestamp; the timestamp moved under
+    # the API-call info line (rendered only when usage info exists).
+    assert f" · {expected}" not in edits[-1][3]
+    assert window[0]["started_at"] == expected
 
 
 def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tmp_path):
@@ -796,7 +799,9 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     assert edits
     rendered = edits[-1][3]
     assert "• bash.run: event-log row" in rendered
-    assert f" · {expected_stamp}" in rendered
+    # Tool rows no longer carry their own timestamp. This event carries no
+    # per-call usage, so no api-info line exists and no timestamp line renders.
+    assert f" · {expected_stamp}" not in rendered
     assert "cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx 63% · 171.2k/272.0k" in rendered
     assert "calls 888" not in rendered

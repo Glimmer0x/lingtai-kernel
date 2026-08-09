@@ -427,7 +427,16 @@ class TaskCardEventProjection:
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
-            rows.append({"kind": "divider", "text": cls.API_CALL_DIVIDER})
+            group_ts: float | None = None
+            for row in group.get("events", []):
+                raw_ts = row.get("_ts")
+                if type(raw_ts) in (int, float) and not isinstance(raw_ts, bool):
+                    group_ts = float(raw_ts)
+                    break
+            divider: dict[str, Any] = {"kind": "divider", "text": cls.API_CALL_DIVIDER}
+            if group_ts is not None:
+                divider["ts"] = group_ts
+            rows.append(divider)
             # The group's API delay is the LLM round-trip gap since the previous
             # progress; the per-call usage rides the same divider line, both kept
             # out of tool rows.
@@ -444,7 +453,10 @@ class TaskCardEventProjection:
                     break
             info = cls.format_divider_info(api_delay_s, usage)
             if info:
-                rows.append({"kind": "api_info", "text": info})
+                api_row: dict[str, Any] = {"kind": "api_info", "text": info}
+                if group_ts is not None:
+                    api_row["ts"] = group_ts
+                rows.append(api_row)
             rows.extend(group.get("events", []))
         text = cls.format_task_card_text(
             "",
@@ -702,6 +714,9 @@ class TaskCardEventProjection:
                 info = redact_text(str(row.get("text", ""))).strip()
                 if info:
                     api_prepared.append((idx, info[: cls.EVENT_TEXT_CAP]))
+                info_ts = cls.format_row_timestamp(row.get("ts"))
+                if info_ts:
+                    api_prepared.append((idx + 0.5, info_ts))
                 continue
             if kind == "text":
                 text = redact_text(str(row.get("text", ""))).strip()
@@ -758,8 +773,7 @@ class TaskCardEventProjection:
         ) in tool_prepared:
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            tool_scaffold += len(prefix) + len(suffix) + len(stamp_suffix) + 2
+            tool_scaffold += len(prefix) + len(suffix) + 2
         fixed = (
             len(cls.HEADER)
             + 1
@@ -785,8 +799,7 @@ class TaskCardEventProjection:
             )
             marker = "✓ " if done or status == "success" else "• "
             prefix = f"{marker}{label}: " if label else marker
-            stamp_suffix = f" · {started_at}" if started_at else ""
-            by_idx[idx] = f"{prefix}{excerpt}{suffix}{stamp_suffix}"
+            by_idx[idx] = f"{prefix}{excerpt}{suffix}"
         for idx, text in text_prepared:
             excerpt = text[:per_row_cap] + "…" if len(text) > per_row_cap else text
             by_idx[idx] = f"• {excerpt}"
