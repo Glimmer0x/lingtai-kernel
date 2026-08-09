@@ -106,8 +106,9 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     "aed_timeout": (int, float),
     # Soft per-molt/session cache-miss token budget. Positive int; default
     # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
-    # (reject bool and <= 0) is enforced explicitly in validate_init below —
-    # the (int) type here only rejects non-int types like str/float/None.
+    # (<= 0) is enforced explicitly in validate_init below; the (int) type
+    # here rejects non-int types like str/float/None (bool is rejected by
+    # _check_type's general rule, since bool subclasses int).
     "cache_miss_budget": int,
     "admin": dict,
     "streaming": bool,
@@ -365,10 +366,6 @@ def validate_init(data: dict) -> list[str]:
 
     if "summarize_notification_threshold" in manifest:
         summarize_threshold = manifest["summarize_notification_threshold"]
-        if isinstance(summarize_threshold, bool):
-            raise ValueError(
-                "manifest.summarize_notification_threshold: expected non-negative int, got bool"
-            )
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
@@ -376,12 +373,6 @@ def validate_init(data: dict) -> list[str]:
 
     if "cache_miss_budget" in manifest:
         cache_miss_budget = manifest["cache_miss_budget"]
-        # bool is an int subclass — reject it explicitly, then require > 0.
-        # (_optional_keys already rejected non-int types like str/float/None.)
-        if isinstance(cache_miss_budget, bool):
-            raise ValueError(
-                "manifest.cache_miss_budget: expected positive int, got bool"
-            )
         if cache_miss_budget <= 0:
             raise ValueError(
                 "manifest.cache_miss_budget: expected positive int (> 0)"
@@ -399,8 +390,6 @@ def validate_init(data: dict) -> list[str]:
     _optional_keys(llm, LLM_OPTIONAL, prefix="manifest.llm")
     if "compact_threshold" in llm:
         compact_threshold = llm["compact_threshold"]
-        if isinstance(compact_threshold, bool):
-            raise ValueError("manifest.llm.compact_threshold: expected int | null, got bool")
         if isinstance(compact_threshold, int) and compact_threshold <= 0:
             raise ValueError(
                 "manifest.llm.compact_threshold: expected positive int or null"
@@ -541,8 +530,10 @@ def _check_type(
     path: str,
 ) -> None:
     """Validate a single value's type."""
+    expected = expected_type if isinstance(expected_type, tuple) else (expected_type,)
     # bool is a subclass of int in Python — reject bools for numeric fields
-    if isinstance(value, bool) and expected_type in (int, (int, float)):
+    # unless bool is explicitly one of the accepted types.
+    if isinstance(value, bool) and int in expected and bool not in expected:
         raise ValueError(f"{path}: expected number, got bool")
 
     if not isinstance(value, expected_type):

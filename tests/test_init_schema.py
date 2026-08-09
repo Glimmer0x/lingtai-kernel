@@ -1,6 +1,6 @@
 import json
 import pytest
-from lingtai.init_schema import validate_init
+from lingtai.init_schema import _check_type, validate_init
 
 
 def _valid_init() -> dict:
@@ -96,7 +96,7 @@ def test_summarize_notification_threshold_rejects_negative():
 def test_summarize_notification_threshold_rejects_bool():
     data = _valid_init()
     data["manifest"]["summarize_notification_threshold"] = True
-    with pytest.raises(ValueError, match="summarize_notification_threshold"):
+    with pytest.raises(ValueError, match="summarize_notification_threshold.*bool"):
         validate_init(data)
 
 
@@ -128,10 +128,39 @@ def test_cache_miss_budget_rejects_negative():
 
 def test_cache_miss_budget_rejects_bool():
     data = _valid_init()
-    # bool is an int subclass in Python — must be rejected explicitly.
+    # bool is an int subclass in Python — rejected by _check_type's general
+    # rule for any int-accepting field (issue #737).
     data["manifest"]["cache_miss_budget"] = True
-    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
+    with pytest.raises(ValueError, match="manifest.cache_miss_budget.*bool"):
         validate_init(data)
+
+
+@pytest.mark.parametrize("bad_value", [True, False])
+def test_context_limit_rejects_bool(bad_value):
+    data = _valid_init()
+    data["manifest"]["context_limit"] = bad_value
+    with pytest.raises(ValueError, match=r"manifest\.context_limit.*bool"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("good_value", [200_000, None])
+def test_context_limit_accepts_int_and_null(good_value):
+    data = _valid_init()
+    data["manifest"]["context_limit"] = good_value
+    assert validate_init(data) == []
+
+
+def test_compact_threshold_rejects_bool_via_check_type():
+    data = _valid_init()
+    data["manifest"]["llm"]["compact_threshold"] = True
+    with pytest.raises(ValueError, match=r"manifest\.llm\.compact_threshold.*bool"):
+        validate_init(data)
+
+
+def test_check_type_bool_allowed_when_listed():
+    # Escape hatch: a field that explicitly accepts bool | int is not rejected.
+    _check_type(True, (int, bool), "x")  # should not raise
+    _check_type(3, (int, bool), "x")  # should not raise
 
 
 @pytest.mark.parametrize(
