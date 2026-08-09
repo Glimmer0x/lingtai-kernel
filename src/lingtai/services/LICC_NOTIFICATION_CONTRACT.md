@@ -342,6 +342,34 @@ Persistent/on-disk state involved in this contract:
   authoritative source for exact read/reply/dismiss semantics.
 - Chat history/tool results — where `_meta.agent_meta.notifications.attention` and
   `_meta.agent_meta.notifications.persistent` blocks are recorded for the model and replay.
+- `logs/events.jsonl` — durable synthetic `tool_result` recovery record per
+  synthesized pair (see "Synthetic pair durability and heal replay").
+
+### Synthetic pair durability and heal replay
+
+- After appending the wire pair, `BaseAgent._inject_notification_pair` writes
+  one durable `tool_result` event: `tool_call_id`, `tool_name="notification"`,
+  full synthetic `tool_args`, `status="success"`, `elapsed_ms=0`, `result`
+  (marker body), `result_metadata` (deep-copied `ToolResultBlock.metadata`
+  envelope), `synthesized: true`, `origin: "kernel_notification_sync"`, and a
+  deterministic `redacted` flag (true iff the mandatory `redact_for_trajectory`
+  pass changed the durable payload vs the wire). No `tool_trace_id`/lifecycle
+  events — it does not impersonate the canonical executed-tool record.
+- Provenance gate (normative): `tool_result_recovery.py` honors the extension
+  fields only under exactly `origin: "kernel_notification_sync"` +
+  `tool_name: "notification"`; any other record — even with lookalike fields —
+  recovers with defaults (`metadata={}`, `synthesized=false`). Heal replay
+  restores content, metadata, and `synthesized=True`;
+  `ChatInterface.close_pending_tool_calls` preserves that recorded state.
+- Redacted replay (normative): a `redacted: true` record replays only the
+  redacted projection and MUST NOT be treated as the original. Recovery sets
+  `metadata["redacted"] = true`; `BaseAgent._recover_pending_tool_result` then
+  resets the committed fingerprint and emits
+  `notification_redacted_replay_resync` so the next sync re-injects current
+  producer state. Raw secrets never reach `logs/events.jsonl` on any pass.
+- Best-effort fail-open: a recovery-record write failure never aborts
+  injection; it surfaces as `recovery_record_error` on
+  `notification_pair_injected`.
 
 In-memory state involved in this contract:
 

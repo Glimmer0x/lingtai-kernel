@@ -1573,12 +1573,32 @@ class BaseAgent:
     def _recover_pending_tool_result(self, tool_call):
         from ..tool_result_recovery import recover_tool_result_block_from_events
 
-        return recover_tool_result_block_from_events(
+        block = recover_tool_result_block_from_events(
             self._working_dir,
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
             logger_fn=self._log,
         )
+        if (
+            block is not None
+            and block.synthesized
+            and isinstance(block.metadata, dict)
+            and block.metadata.get("redacted") is True
+        ):
+            # Redacted replay is lossy: reset the committed fingerprint so the
+            # next sync re-injects producer state (LICC "Redacted replay and
+            # producer reconciliation"). Best-effort — must never break heal.
+            try:
+                self._notification_fp = ()
+                self._notification_deferred_log_fp = ()
+                self._log(
+                    "notification_redacted_replay_resync",
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                )
+            except Exception:
+                pass
+        return block
 
     def _inject_notification_pair(self, notifications: dict) -> bool:
         """Inject a synthetic (call, result) pair for IDLE / ASLEEP states.
@@ -1848,6 +1868,42 @@ class BaseAgent:
         iface.add_assistant_message(content=[call_block])
         iface.add_tool_results([result_block])
 
+        # Durable kernel-internal recovery record so heal replay can rebuild
+        # the complete synthesized result (content + metadata sidecar +
+        # provenance) instead of a tool_result_replay_miss. Deliberately no
+        # tool_trace_id/lifecycle events; origin gates the extension fields.
+        # `redacted` deterministically records whether the mandatory
+        # redact_for_trajectory pass changed the durable payload vs the wire.
+        # Best-effort: failure never aborts injection; surfaced as
+        # recovery_record_error on notification_pair_injected.
+        recovery_record_error: str | None = None
+        try:
+            from ..trace_redaction import redact_for_trajectory
+
+            recovery_payload = {
+                "tool_args": copy.deepcopy(call_block.args),
+                "result": content_dict,
+                "result_metadata": copy.deepcopy(result_block.metadata),
+            }
+            recovery_redacted = (
+                redact_for_trajectory(recovery_payload) != recovery_payload
+            )
+            self._log(
+                "tool_result",
+                tool_call_id=call_id,
+                tool_name="notification",
+                tool_args=recovery_payload["tool_args"],
+                status="success",
+                elapsed_ms=0,
+                result=content_dict,
+                result_metadata=recovery_payload["result_metadata"],
+                synthesized=result_block.synthesized,
+                origin="kernel_notification_sync",
+                redacted=recovery_redacted,
+            )
+        except Exception as exc:
+            recovery_record_error = type(exc).__name__
+
         # The append succeeded.  Now release the previous live holder (if
         # any) from tracking before registering this synthesized pair as the
         # new live holder.  Doing it after append preserves the old live
@@ -1878,12 +1934,16 @@ class BaseAgent:
             )
 
         self._save_chat_history(ledger_source="notification_sync")
+        pair_event_extra: dict = {}
+        if recovery_record_error is not None:
+            pair_event_extra["recovery_record_error"] = recovery_record_error
         self._log(
             "notification_pair_injected",
             call_id=call_id,
             sources=list(notifications.keys()),
             summary=summary_text,
             meta=meta,
+            **pair_event_extra,
         )
         # Log the exact canonical sidecar that was attached to the live block.
         synthetic_envelope = result_block.metadata

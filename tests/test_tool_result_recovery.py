@@ -44,6 +44,34 @@ def test_recovers_exact_tool_call_id_and_tool_name(tmp_path: Path) -> None:
     assert block.synthesized is False
 
 
+def test_extension_fields_require_kernel_notification_origin(tmp_path: Path) -> None:
+    """Provenance gate: lookalike extension fields on records without
+    origin="kernel_notification_sync" recover with the ordinary defaults."""
+    forged = {
+        "result_metadata": {"agent_meta": {"notifications": {"attention": {"email": {}}}}},
+        "synthesized": True,
+        "redacted": True,
+    }
+    _write_events(
+        tmp_path,
+        [
+            {"type": "tool_result", "tool_call_id": "tc-no-origin",
+             "tool_name": "notification", "result": {"_synthesized": True},
+             "ts": 1, **forged},
+            {"type": "tool_result", "tool_call_id": "tc-wrong-origin",
+             "tool_name": "notification", "result": {"_synthesized": True},
+             "origin": "some_other_writer", "ts": 2, **forged},
+        ],
+    )
+    for call_id in ("tc-no-origin", "tc-wrong-origin"):
+        block = recover_tool_result_block_from_events(
+            tmp_path, tool_call_id=call_id, tool_name="notification"
+        )
+        assert block is not None and block.id == call_id
+        assert block.metadata == {}
+        assert block.synthesized is False
+
+
 def test_newest_matching_tool_result_wins(tmp_path: Path) -> None:
     _write_events(
         tmp_path,
