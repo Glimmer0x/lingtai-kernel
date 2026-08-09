@@ -1157,3 +1157,70 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
     assert "refresh_watcher_stale_duplicate_terminate" in event_types
     assert "refresh_watcher_success" in event_types
     assert "refresh_failed_permanent" not in event_types
+
+
+# ---------------------------------------------------------------------------
+# Single-flight coalescing (Lingtai-AI/lingtai#624)
+# ---------------------------------------------------------------------------
+
+
+def test_two_refresh_requests_coalesce_to_one_watcher(tmp_path):
+    """Two near-concurrent refresh requests on the same agent must coalesce
+    into ONE watcher spawn (lingtai#624 regression).
+
+    Before the single-flight guard, a second ``_perform_refresh`` call while
+    the first refresh operation was pending saw ``.refresh.taken`` already on
+    disk and spawned its own watcher anyway. Sibling watchers then each
+    launched ``lingtai run <dir>`` children that mutually rejected one
+    another with "another lingtai agent is already running" until both
+    exhausted MAX_ATTEMPTS and recovery failed permanently. The second
+    request must instead be coalesced: logged ``refresh_skipped`` with
+    reason ``refresh_already_in_progress`` and no second watcher spawn.
+    """
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    watcher = agent._refresh_watcher
+    log_events = []
+    agent._log = lambda event, **kw: log_events.append((event, kw))
+
+    agent._perform_refresh()
+    assert len(watcher.calls) == 1, "first refresh must spawn exactly one watcher"
+
+    agent._perform_refresh()  # second near-concurrent request
+
+    assert len(watcher.calls) == 1, \
+        "a second refresh while one is already in flight must not spawn another watcher"
+    assert any(
+        event == "refresh_skipped"
+        and kw.get("reason") == "refresh_already_in_progress"
+        for event, kw in log_events
+    ), "the second request must coalesce: log refresh_skipped(refresh_already_in_progress)"
+
+
+def test_concurrent_refresh_requests_spawn_exactly_one_watcher(tmp_path):
+    """Threaded variant with a start barrier: even when two refresh requests
+    arrive at the same instant from different threads (heartbeat thread vs
+    LLM worker thread), exactly one watcher is spawned and one refresh
+    operation wins the single-flight slot (lingtai#624)."""
+    import threading
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    watcher = agent._refresh_watcher
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def refresh():
+        try:
+            barrier.wait(timeout=5)
+            agent._perform_refresh()
+        except BaseException as exc:  # pragma: no cover - failure reporting
+            errors.append(exc)
+
+    threads = [threading.Thread(target=refresh) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert not errors, f"refresh threads failed: {errors!r}"
+    assert len(watcher.calls) == 1, \
+        "concurrent refresh requests must spawn exactly one watcher"

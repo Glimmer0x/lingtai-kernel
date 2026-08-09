@@ -716,6 +716,29 @@ def _perform_refresh(
     ``_shutdown`` / ``_cancel_event`` ourselves so the watcher's second
     phase can complete.
     """
+    # Single-flight guard (lingtai#624): refresh is terminal for this
+    # process — the watcher relaunches a NEW `lingtai run <dir>` child and
+    # we set `_shutdown` so `.agent.lock` releases — so at most ONE refresh
+    # operation may ever run per process lifetime. Two near-concurrent
+    # refresh requests (heartbeat-detected `.refresh` racing a
+    # `system(action='refresh')` tool call, or the AED preset-fallback
+    # racing either) must coalesce into one watcher; otherwise sibling
+    # watchers each launch a `lingtai run <dir>` child that the other
+    # rejects with "another lingtai agent is already running", and both
+    # retry loops exhaust MAX_ATTEMPTS, failing recovery permanently.
+    guard = getattr(agent, "_refresh_singleflight_lock", None)
+    if guard is None:
+        guard = threading.Lock()
+        agent._refresh_singleflight_lock = guard
+    with guard:
+        if getattr(agent, "_refresh_started", False):
+            agent._log("refresh_skipped", reason="refresh_already_in_progress")
+            return
+        # Claim the single-flight slot before any side effect (chat-history
+        # save, handshake rename, watcher spawn). Released on every failure
+        # exit below so a failed refresh never wedges a live agent.
+        agent._refresh_started = True
+
     # When the worker interface is poisoned, the in-memory ChatInterface may
     # still be mutated by a stuck worker thread — saving it would serialize
     # unsafe state. Fail closed: skip the save and rebuild from disk.
@@ -742,6 +765,8 @@ def _perform_refresh(
     cmd = agent._build_launch_cmd()
     if cmd is None:
         agent._log("refresh_no_launch_cmd")
+        with guard:
+            agent._refresh_started = False
         return
 
     # A real launch command means this refresh will actually spawn a watcher.
@@ -751,6 +776,8 @@ def _perform_refresh(
     # Port must never orphan an agent mid-handshake or leave it silently
     # unable to relaunch.
     if agent._refresh_watcher is None:
+        with guard:
+            agent._refresh_started = False
         raise RuntimeError(
             "_perform_refresh requires a RefreshWatcherPort to spawn the "
             "relaunch watcher, but this agent was constructed without one "
@@ -794,6 +821,8 @@ def _perform_refresh(
         # agent with no relaunch. If .refresh still exists, leave it for
         # the heartbeat path or a later retry rather than consuming it.
         agent._log("refresh_ack_failed", handshake=handshake_source)
+        with guard:
+            agent._refresh_started = False
         return
 
     # If both files happen to exist (heartbeat renamed but a later
@@ -829,7 +858,14 @@ def _perform_refresh(
         address=address,
         identity_fields_json=identity_fields_json,
     )
-    agent._refresh_watcher.spawn_detached(request)
+    try:
+        agent._refresh_watcher.spawn_detached(request)
+    except BaseException:
+        # Spawn failed: the agent stays alive and must be able to retry
+        # refresh later — release the single-flight slot.
+        with guard:
+            agent._refresh_started = False
+        raise
     agent._log("refresh_deferred_relaunch",
                cmd=cmd[0], handshake=handshake_source)
     # Lock-clear signaling — direct callers (intrinsic system tool call,
