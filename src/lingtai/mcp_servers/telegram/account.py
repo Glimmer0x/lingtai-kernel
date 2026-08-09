@@ -198,7 +198,8 @@ class TelegramAccount:
         self._last_update_id: int = 0
         self._bot_info: dict | None = None
         self._last_verified_at: str | None = None
-        self._client: httpx.Client | None = None
+        self._outbound_client: httpx.Client | None = None
+        self._poll_client: httpx.Client | None = None
 
         # Resident Task Card message id per chat: {chat_id_str: compound_id}.
         # Exactly one card stays resident per (account, chat) and ordinary frames
@@ -225,6 +226,15 @@ class TelegramAccount:
 
         self._load_state()
 
+    @property
+    def _client(self) -> httpx.Client | None:
+        """Compatibility alias for existing test doubles and callers."""
+        return self._outbound_client
+
+    @_client.setter
+    def _client(self, value: httpx.Client | None) -> None:
+        self._outbound_client = value
+
     # -- API helpers ---------------------------------------------------------
 
     def _api_url(self, method: str) -> str:
@@ -233,19 +243,22 @@ class TelegramAccount:
     def _file_url(self, file_path: str) -> str:
         return _FILE_BASE.format(token=self._bot_token, file_path=file_path)
 
-    def _ensure_client(self) -> None:
-        """Lazy-import httpx and create client on first use."""
+    def _ensure_client(self, *, polling: bool = False) -> None:
+        """Create only the client needed by this request."""
         global httpx
+        target = "_poll_client" if polling else "_outbound_client"
+        if getattr(self, target) is not None:
+            return
         if httpx is None or isinstance(httpx, type(None)):
             import httpx as _httpx
             httpx = _httpx
-        if self._client is None:
-            self._client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
+        setattr(self, target, httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0)))
 
     def _request(self, method: str, **kwargs: Any) -> dict:
         """Make one Bot API request. Returns the result or raises immediately."""
-        self._ensure_client()
-        resp = self._client.post(self._api_url(method), **kwargs)
+        self._ensure_client(polling=method == "getUpdates")
+        client = self._poll_client if method == "getUpdates" else self._outbound_client
+        resp = client.post(self._api_url(method), **kwargs)
         if resp.status_code == 429:
             try:
                 data = resp.json()
@@ -312,9 +325,11 @@ class TelegramAccount:
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=5.0)
             self._poll_thread = None
-        if self._client is not None:
-            self._client.close()
-            self._client = None
+        for name in ("_outbound_client", "_poll_client"):
+            client = getattr(self, name)
+            if client is not None:
+                client.close()
+                setattr(self, name, None)
 
     # -- Polling -------------------------------------------------------------
 
@@ -355,9 +370,6 @@ class TelegramAccount:
     def _process_update(self, update: dict) -> None:
         """Process a single update — filter, dispatch, track offset."""
         update_id = update.get("update_id", 0)
-        if update_id > self._last_update_id:
-            self._last_update_id = update_id
-            self._save_state()
 
         if "message" in update:
             # A plain message is a new bottom message in the chat; record it so a
@@ -385,14 +397,23 @@ class TelegramAccount:
         # boundary with their uncertainty recorded on the envelope.
         actor = tg_updates.resolve_update_actor(update)
         if not tg_updates.is_admitted(actor, self._allowed_users):
+            self._commit_update(update_id)
             return
 
         # Intercept slash commands before they reach the agent
         if self._handle_slash_command(update):
+            self._commit_update(update_id)
             return
 
         if self._on_message:
             self._on_message(self.alias, update)
+        self._commit_update(update_id)
+
+    def _commit_update(self, update_id: object) -> None:
+        """Advance the durable offset only after handling succeeds."""
+        if type(update_id) is int and update_id > self._last_update_id:
+            self._last_update_id = update_id
+            self._save_state()
 
     def _handle_slash_command(self, update: dict) -> bool:
         """Handle slash commands locally (no LLM call). Returns True if handled."""
@@ -1175,9 +1196,8 @@ class TelegramAccount:
         file_path = file_info["file_path"]
         filename = Path(file_path).name
         url = self._file_url(file_path)
-        if self._client is None:
-            self._client = httpx.Client(timeout=httpx.Timeout(60.0, connect=10.0))
-        resp = self._client.get(url)
+        self._ensure_client()
+        resp = self._outbound_client.get(url)
         resp.raise_for_status()
         return filename, resp.content
 
