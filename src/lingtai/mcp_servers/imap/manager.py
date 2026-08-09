@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from .. import _skill
+from .._outbound_files import OutboundFileError, resolve_outbound_file
 from . import _family
 
 if TYPE_CHECKING:
@@ -203,7 +204,10 @@ SCHEMA = {
         "attachments": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "List of file paths to attach (absolute or relative to working dir).",
+            "description": (
+                "List of file paths to attach. Relative paths resolve against "
+                "the agent working dir; absolute paths must be inside it."
+            ),
         },
     },
     "required": ["action"],
@@ -478,7 +482,12 @@ class IMAPMailManager:
     # ------------------------------------------------------------------
 
     def _resolve_attachment_paths(self, raw_attachments: object) -> list[str]:
-        """Resolve tool-supplied attachment paths relative to the agent workdir."""
+        """Resolve tool-supplied attachment paths relative to the agent workdir.
+
+        Enforces the shared outbound-file containment policy: absolute paths
+        outside the working directory (including ``..`` and symlink escapes)
+        raise :class:`OutboundFileError`.
+        """
         if not raw_attachments:
             return []
         if isinstance(raw_attachments, (str, Path)):
@@ -486,13 +495,10 @@ class IMAPMailManager:
         else:
             raw_items = list(raw_attachments)
 
-        attachments: list[str] = []
-        for item in raw_items:
-            path = Path(item)
-            if not path.is_absolute():
-                path = self._working_dir / path
-            attachments.append(str(path))
-        return attachments
+        return [
+            str(resolve_outbound_file(item, self._working_dir))
+            for item in raw_items
+        ]
 
     def _send(self, args: dict, account: "IMAPAccount") -> dict:
         to_list = self._normalize_addresses(args.get("address"))
@@ -500,7 +506,10 @@ class IMAPMailManager:
         message_text = args.get("message", "")
         cc = self._normalize_addresses(args.get("cc"))
         bcc = self._normalize_addresses(args.get("bcc"))
-        attachments = self._resolve_attachment_paths(args.get("attachments", []))
+        try:
+            attachments = self._resolve_attachment_paths(args.get("attachments", []))
+        except OutboundFileError as e:
+            return {"error": str(e)}
 
         if not to_list:
             return {"error": "address is required"}
@@ -657,7 +666,10 @@ class IMAPMailManager:
 
         # CC and attachments
         cc = self._normalize_addresses(args.get("cc"))
-        attachments = self._resolve_attachment_paths(args.get("attachments", []))
+        try:
+            attachments = self._resolve_attachment_paths(args.get("attachments", []))
+        except OutboundFileError as e:
+            return {"error": str(e)}
 
         # Reply to sender
         reply_to = original.get("from_address") or original.get("from", "")

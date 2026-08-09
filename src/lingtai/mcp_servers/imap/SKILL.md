@@ -69,9 +69,10 @@ a list of ids.
 
 - You are encouraged to `read` multiple relevant — or even all unread — emails
   and think before acting.
-- `attachments` is a list of file paths (absolute or relative to the working
-  dir) for `send`/`reply`. Attach generated artifacts (charts, reports, CSVs,
-  PDFs) as files rather than pasting a path into the body.
+- `attachments` is a list of file paths for `send`/`reply`. Relative paths
+  resolve against the working dir; absolute paths must be inside it. Attach
+  generated artifacts (charts, reports, CSVs, PDFs) as files rather than
+  pasting a path into the body.
 
 ## SIDE EFFECTS & SAFETY
 

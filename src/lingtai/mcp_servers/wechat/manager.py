@@ -25,6 +25,7 @@ from . import _family
 from . import media as media_mod
 from .lockfile import AccountLock, PollerLockBusy
 from .. import _identity, _skill
+from .._outbound_files import OutboundFileError, resolve_outbound_file
 
 if TYPE_CHECKING:
     pass
@@ -537,9 +538,18 @@ class WechatManager:
         if not text and not media_path:
             return {"error": "text or media_path is required"}
 
-        # Validate media_path before sending text to avoid partial sends
-        if media_path and not Path(media_path).is_file():
-            return {"error": f"File not found: {media_path}"}
+        # Validate media_path before sending text to avoid partial sends.
+        # Enforce the shared outbound-file containment policy first so a
+        # prompt-injected path cannot exfiltrate files outside the workdir.
+        if media_path:
+            try:
+                media_path = str(
+                    resolve_outbound_file(media_path, self._working_dir)
+                )
+            except OutboundFileError as e:
+                return {"error": str(e)}
+            if not Path(media_path).is_file():
+                return {"error": f"File not found: {media_path}"}
 
         results = []
 
