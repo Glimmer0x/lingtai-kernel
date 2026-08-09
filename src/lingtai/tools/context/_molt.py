@@ -526,6 +526,18 @@ def _context_molt(agent, args: dict) -> dict:
         session_journal_path=session_journal_path,
     )
 
+    # Molt is one of README.md's mechanical regeneration points (template-
+    # version check only). Fail-soft: a README problem must never break a molt.
+    try:
+        from lingtai.kernel.agent_readme import ensure_agent_readme
+
+        ensure_agent_readme(agent._working_dir, _log=agent._log)
+    except Exception:
+        try:
+            agent._log("agent_readme_ensure_failed", stage="molt")
+        except Exception:
+            pass
+
 
     # Post-molt reminder. ToolExecutor strips visible ``reasoning`` and
     # injects ``_reasoning``; accept the plain key too so direct callers

@@ -747,6 +747,16 @@ def _perform_refresh(
         agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
     else:
         agent._save_chat_history()
+
+    # Refresh is one of README.md's mechanical regeneration points
+    # (template-version check only). Fail-soft: a README problem must never
+    # break a refresh.
+    try:
+        from ..agent_readme import ensure_agent_readme
+
+        ensure_agent_readme(agent._working_dir, _log=agent._log)
+    except Exception:
+        agent._log("agent_readme_ensure_failed", stage="refresh")
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
     # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
     # called a module-level _build_launch_cmd shadow that always returned
