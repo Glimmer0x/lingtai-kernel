@@ -50,7 +50,13 @@ def _send(
     retry_timeout: float,
     agent_name: str,
 ) -> LLMResponse:
-    """Send a message to the LLM. Single attempt with timeout."""
+    """Send a message to the LLM. Single attempt with timeout.
+
+    Note: on Python >= 3.11, ``except TimeoutError`` alone cannot distinguish a
+    wait-slice expiry from a worker-raised builtin ``TimeoutError`` (``socket
+    .timeout`` / ``asyncio.TimeoutError`` are aliases of it); ``future.done()``
+    is the discriminator and must stay part of this loop.
+    """
     future: Future = submit_fn()
     t0 = time.monotonic()
     while True:
@@ -63,6 +69,14 @@ def _send(
         try:
             return future.result(timeout=wait)
         except TimeoutError:
+            if future.done():
+                # The worker settled: either it raised its own TimeoutError
+                # (socket.timeout / asyncio.TimeoutError / concurrent.futures
+                # TimeoutError are all the builtin TimeoutError on >=3.11) or it
+                # finished during the race after our wait expired. Either way
+                # the worker is gone and its cleanup already ran — surface the
+                # real outcome instead of misreading it as "not responding".
+                return future.result(timeout=0)
             elapsed = time.monotonic() - t0
             if elapsed >= retry_timeout:
                 _wait_for_worker_settle(future, elapsed, agent_name)
@@ -84,10 +98,22 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
     If the worker is still running after the grace period, raise a distinct
     WorkerStillRunningError. AED must not treat this as an ordinary timeout
     because the provider worker may still mutate the shared ChatInterface.
+
+    A worker that settled with its own builtin ``TimeoutError`` (``socket
+    .timeout`` / ``asyncio.TimeoutError`` / ``concurrent.futures.TimeoutError``
+    are all the same class on >= 3.11) is NOT still running: its except-block
+    already ran ``drop_trailing``. Use ``future.done()`` to tell the two apart
+    rather than ``except TimeoutError`` alone.
     """
     try:
         future.result(timeout=_WORKER_SETTLE_GRACE)
     except TimeoutError:
+        if future.done():
+            # The worker settled with its own TimeoutError (socket.timeout,
+            # asyncio.TimeoutError, and concurrent.futures.TimeoutError are all
+            # the builtin TimeoutError on >=3.11). Its except-block already ran
+            # drop_trailing — same as any other worker error.
+            return
         _logger.error(
             "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
             "interface state may be inconsistent. Refusing AED retry.",
