@@ -34,6 +34,14 @@ from lingtai.kernel.services.mail import _new_mailbox_id
 
 logger = logging.getLogger(__name__)
 
+# A ``message.json`` that fails to read (transient OSError: permissions blip,
+# network-filesystem hiccup) is retried for this many poll cycles before being
+# dead-lettered. At the 0.5 s poll cadence this is ~5 s of retries.
+_MAX_READ_RETRIES = 10
+# Dead-letter store for permanently bad inbox entries, mirroring the MCP inbox
+# poller's ``.dead/`` convention.
+_DEAD_DIRNAME = ".dead"
+
 
 def _presence_store_for(recipient_dir: Path):
     """Build a target-bound POSIX presence adapter for a recipient directory."""
@@ -78,6 +86,9 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         self._poll_thread: threading.Thread | None = None
         self._poll_stop = threading.Event()
         self._seen: set[str] = set()
+        # Consecutive read-failure counts per inbox entry name, for bounded
+        # retry of transiently unreadable ``message.json`` files.
+        self._read_failures: dict[str, int] = {}
         # Own-inbox scans can be expensive on large/slow external-volume
         # mailboxes. Keep iterator progress across poll ticks so Phase 2 can
         # be sliced instead of restarting from the first historical entry.
@@ -198,10 +209,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         re-delivered.  New directories that appear with a ``message.json``
         trigger *on_message*.
         """
-        # Snapshot existing inbox entries so we don't re-notify
+        # Snapshot existing inbox entries so we don't re-notify. Dotted
+        # directories (e.g. the ``.dead/`` dead-letter store) are not inbox
+        # entries and are excluded from the snapshot.
         if self._inbox_dir.is_dir():
             for entry in self._inbox_dir.iterdir():
-                if entry.is_dir():
+                if entry.is_dir() and not entry.name.startswith("."):
                     self._seen.add(entry.name)
 
         self._poll_stop.clear()
@@ -294,21 +307,59 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
                 visited += 1
                 # _seen only holds handled directory names or pseudo-claim
-                # UUIDs, so skip before the stat.
+                # UUIDs, so skip before the stat. Dotted directories (e.g. the
+                # ``.dead/`` dead-letter store) are never inbox entries.
                 if entry.name in self._seen:
                     skipped_seen += 1
                     continue
-                if not entry.is_dir():
+                if not entry.is_dir() or entry.name.startswith("."):
                     continue
                 msg_file = entry / "message.json"
                 if msg_file.is_file():
+                    # Transient read failures are retried (NOT marked seen),
+                    # so a one-cycle OSError on a network filesystem cannot
+                    # permanently drop an intact message. Permanent failures
+                    # are dead-lettered with a logged error report.
                     try:
-                        payload = json.loads(msg_file.read_text(encoding="utf-8"))
+                        raw = msg_file.read_text(encoding="utf-8")
+                    except OSError as e:
+                        n = self._read_failures.get(entry.name, 0) + 1
+                        self._read_failures[entry.name] = n
+                        if n >= _MAX_READ_RETRIES:
+                            self._dead_letter_inbox_entry(
+                                entry, f"read failed after {n} attempts: {e}"
+                            )
+                        else:
+                            logger.warning(
+                                "mail inbox: transient read failure on %s (attempt %d/%d): %s",
+                                entry.name,
+                                n,
+                                _MAX_READ_RETRIES,
+                                e,
+                            )
+                        continue
+
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError as e:
+                        # `send()` writes message.json atomically (tmp -> rename),
+                        # so a parse error means genuinely malformed content;
+                        # dead-letter immediately.
+                        self._dead_letter_inbox_entry(entry, f"invalid JSON: {e}")
+                        continue
+
+                    self._read_failures.pop(entry.name, None)
+                    # Mark seen BEFORE dispatch: a consumer error must not
+                    # redeliver (at-most-once), and must not be misdiagnosed
+                    # as a transport failure.
+                    self._seen.add(entry.name)
+                    try:
                         on_message(payload)
                         dispatched += 1
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                    self._seen.add(entry.name)
+                    except Exception:
+                        logger.exception(
+                            "mail inbox: on_message handler failed for %s", entry.name
+                        )
 
         except OSError:
             self._reset_own_inbox_iter()
@@ -324,6 +375,44 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             )
 
         return visited > 0
+
+    def _dead_letter_inbox_entry(self, entry: Path, error: str) -> None:
+        """Move a bad inbox entry directory into ``inbox/.dead/`` with a report.
+
+        Mail inbox entries are directories (``<uuid>/message.json`` plus
+        optional ``attachments/``), so unlike the single-file MCP inbox
+        dead-letter path the whole entry directory is moved. An ``error.json``
+        report and a warning log line are left behind for operators.
+        """
+        from datetime import datetime, timezone
+
+        dead_dir = self._inbox_dir / _DEAD_DIRNAME
+        try:
+            dead_dir.mkdir(parents=True, exist_ok=True)
+            target = dead_dir / entry.name
+            shutil.move(str(entry), str(target))
+            (target / "error.json").write_text(
+                json.dumps(
+                    {
+                        "error": error,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            logger.warning("mail inbox: dead-lettered %s: %s", target, error)
+        except OSError as e:
+            logger.error(
+                "mail inbox: failed to dead-letter %s: %s (original error: %s)",
+                entry,
+                e,
+                error,
+            )
+        # Either way, stop re-processing this entry.
+        self._seen.add(entry.name)
+        self._read_failures.pop(entry.name, None)
 
     def _reset_own_inbox_iter(self) -> None:
         iterator = self._own_inbox_iter

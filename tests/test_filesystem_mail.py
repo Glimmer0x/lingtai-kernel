@@ -967,3 +967,222 @@ def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):
     assert "phase=own_inbox_slice" in caplog.text
     assert "agent=agent01" in caplog.text
     assert "do-not-log-body" not in caplog.text
+
+
+def _write_message(msg_dir, payload):
+    """Write an inbox message atomically (tmp -> os.replace), exactly like
+    ``PosixFilesystemMailAdapter.send()`` does, so tests never expose a
+    half-written ``message.json`` to the poller."""
+    import os
+
+    msg_dir.mkdir(parents=True, exist_ok=True)
+    tmp = msg_dir / "message.json.tmp"
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(str(tmp), str(msg_dir / "message.json"))
+
+
+def test_listen_retries_transient_read_error_then_delivers(
+    tmp_path, monkeypatch, caplog
+):
+    """A transient OSError reading message.json must be retried, not dropped.
+
+    Regression for #732: the old poller swallowed the error with ``pass`` and
+    marked the entry seen, permanently losing an intact message.
+    """
+    import pathlib
+
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    payload = {"from": "/tmp/other", "message": "hi"}
+    real_read_text = pathlib.Path.read_text
+    failures = {"count": 0}
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self.name == "message.json" and failures["count"] < 2:
+            failures["count"] += 1
+            raise OSError("transient EIO")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", flaky_read_text)
+
+    received = []
+    received_event = threading.Event()
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: (received.append(p), received_event.set()))
+
+    # Deliver AFTER listen() so the startup snapshot does not mark it seen.
+    _write_message(inbox / "uuid-1", payload)
+
+    try:
+        assert received_event.wait(timeout=6.0)
+    finally:
+        svc.stop()
+
+    assert failures["count"] >= 2
+    assert len(received) == 1
+    assert received[0]["message"] == "hi"
+    # The intact message must NOT have been dead-lettered.
+    assert not (inbox / ".dead").exists()
+    assert "transient read failure" in caplog.text
+
+
+def test_listen_dead_letters_after_max_read_retries(tmp_path, monkeypatch, caplog):
+    """A persistently unreadable entry is dead-lettered, not retried forever."""
+    import pathlib
+
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    # Bound the retry window so the test runs in seconds, not minutes.
+    monkeypatch.setattr("lingtai.adapters.posix.mail._MAX_READ_RETRIES", 3)
+
+    real_read_text = pathlib.Path.read_text
+
+    def always_fail_read_text(self, *args, **kwargs):
+        if self.name == "message.json":
+            raise OSError("EACCES persistent")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", always_fail_read_text)
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    _write_message(inbox / "uuid-1", {"message": "hi"})
+
+    dead_dir = inbox / ".dead"
+    try:
+        deadline = time.time() + 8.0
+        while time.time() < deadline:
+            if (dead_dir / "uuid-1" / "error.json").is_file():
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert not (inbox / "uuid-1").exists()
+    error_report = json.loads((dead_dir / "uuid-1" / "error.json").read_text())
+    assert "read failed after 3 attempts" in error_report["error"]
+    assert len(received) == 0
+    assert "dead-lettered" in caplog.text
+
+
+def test_listen_dead_letters_malformed_json_immediately(tmp_path, caplog):
+    """Malformed JSON is dead-lettered on the first cycle with a report."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    # Genuinely malformed content (cannot happen from send(), which writes
+    # atomically, but can arrive from hand-edited or corrupted files).
+    msg_dir = inbox / "uuid-1"
+    msg_dir.mkdir()
+    (msg_dir / "message.json").write_text("{not json", encoding="utf-8")
+
+    dead_dir = inbox / ".dead"
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if (dead_dir / "uuid-1" / "error.json").is_file():
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert not (inbox / "uuid-1").exists()
+    error_report = json.loads((dead_dir / "uuid-1" / "error.json").read_text())
+    assert "invalid JSON" in error_report["error"]
+    assert len(received) == 0
+    assert "dead-lettered" in caplog.text
+
+
+def test_listen_on_message_exception_is_logged_not_silent(tmp_path, caplog):
+    """A consumer exception is logged; the poll thread survives and no
+    redelivery occurs (at-most-once preserved)."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    received = []
+    received_event = threading.Event()
+    calls = {"n": 0}
+
+    def on_message(payload):
+        calls["n"] += 1
+        if payload["message"] == "boom":
+            raise RuntimeError("consumer bug")
+        received.append(payload)
+        received_event.set()
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=on_message)
+
+    # First message: the handler raises; must be logged and marked seen.
+    _write_message(inbox / "bad-1", {"message": "boom"})
+    # Second message: must still be delivered (poll thread stayed alive).
+    _write_message(inbox / "good-1", {"message": "fine"})
+
+    try:
+        assert received_event.wait(timeout=6.0)
+        # Let several cycles pass: the failing entry must not redeliver.
+        time.sleep(1.5)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert received == [{"message": "fine"}]
+    # bad-1 dispatched exactly once (marked seen before dispatch), good-1 once.
+    assert calls["n"] == 2
+    assert "on_message handler failed for bad-1" in caplog.text
+
+
+def test_listen_skips_dead_dir(tmp_path):
+    """The .dead/ store is never treated as inbox content, and dotted
+    directories are excluded from the _seen snapshot."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True)
+
+    # Pre-existing dead-letter store (as produced by dead-lettering before a
+    # restart): must be skipped by both the snapshot and the poll loop.
+    _write_message(inbox / ".dead" / "stuck-1", {"message": "dead"})
+
+    received = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+
+    # A live message proves the poller still works.
+    _write_message(inbox / "live-1", {"message": "live"})
+
+    try:
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            if len(received) >= 1:
+                break
+            time.sleep(0.1)
+        svc.stop()
+    finally:
+        svc.stop()
+
+    assert received == [{"message": "live"}]
+    assert ".dead" not in svc._seen
