@@ -360,3 +360,19 @@ class TestSelfSleepPendingNotificationsGuard:
 
         assert result.get("status") == "ok"
         assert agent.state == AgentState.ASLEEP
+
+
+def test_is_alive_default_threshold_synced_with_kernel():
+    """karma's local _is_alive defaults to the kernel liveness window (no 2.0 drift)."""
+    import inspect
+
+    from lingtai.kernel import config
+    from lingtai.kernel.agent_presence import DEFAULT_LIVENESS_THRESHOLD_SECONDS
+    from lingtai.tools.system.karma import _is_alive
+
+    default = inspect.signature(_is_alive).parameters["threshold"].default
+    assert (
+        default
+        == DEFAULT_LIVENESS_THRESHOLD_SECONDS
+        == config.HEARTBEAT_LIVENESS_SECONDS
+    )

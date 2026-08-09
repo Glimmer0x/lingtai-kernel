@@ -119,6 +119,23 @@ def system_prompt_pressure_ratio() -> float:
 # prompts, status, or tool metadata.
 IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
 
+# Heartbeat cadence and liveness (kernel-fixed, cross-process contract).
+# _heartbeat_loop stamps .agent.heartbeat every HEARTBEAT_TICK_SECONDS; a reader
+# considers the agent alive if the stamp is younger than
+# HEARTBEAT_LIVENESS_SECONDS. Headroom is deliberate: the writer thread shares
+# the GIL/disk with agent work, so a single tick can be delayed by seconds under
+# load. 5x the tick tolerates four consecutive missed ticks before flapping to
+# "dead". Kernel-fixed rather than agent-configurable: the numbers are read
+# cross-process by peers, mail, and maintenance tooling that do not share the
+# writer's config, and an agent must not be able to widen its own liveness
+# window.
+HEARTBEAT_TICK_SECONDS = 1.0
+HEARTBEAT_LIVENESS_SECONDS = 5 * HEARTBEAT_TICK_SECONDS
+# Retention is report-only and must over-estimate liveness so it never
+# classifies a live agent's files as stale; keep 2x extra margin. Value stays
+# 10.0 (unchanged) but is now derived from the heartbeat contract.
+RETENTION_LIVE_HEARTBEAT_SECONDS = 2 * HEARTBEAT_LIVENESS_SECONDS
+
 
 @dataclass
 class AgentConfig:

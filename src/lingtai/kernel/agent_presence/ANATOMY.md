@@ -38,8 +38,10 @@ heartbeat, plus the agent's own heartbeat publication and withdrawal.
   `wall_seconds`) are the technology-neutral typed evidence values
   (`src/lingtai/kernel/agent_presence/__init__.py`).
 - Pure Core policy `is_agent` / `is_human` / `is_alive` (default threshold
-  `DEFAULT_LIVENESS_THRESHOLD_SECONDS = 2.0`) derives presence, human, and
-  freshness decisions from observations. Core use case `observe_alive` preserves
+  `DEFAULT_LIVENESS_THRESHOLD_SECONDS`, derived in
+  `lingtai.kernel.config` as `HEARTBEAT_LIVENESS_SECONDS` — 5x the heartbeat
+  tick cadence) derives presence, human, and freshness decisions from
+  observations. Core use case `observe_alive` preserves
   manifest-first ordering and skips heartbeat observation for valid humans
   (`src/lingtai/kernel/agent_presence/__init__.py`).
 - `PosixAgentPresenceStoreAdapter` maps the Port onto `.agent.json` /

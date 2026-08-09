@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import IDLE_SLEEP_TIMEOUT_SECONDS
+from ..config import HEARTBEAT_TICK_SECONDS, IDLE_SLEEP_TIMEOUT_SECONDS
 from ..refresh_watcher import RefreshWatcherRequest
 from ..snapshot import SourceRevisionPort
 
@@ -370,7 +370,7 @@ def _stop_heartbeat(agent) -> None:
 
 
 def _heartbeat_loop(agent) -> None:
-    """Beat every 1 second. AED if agent is STUCK.
+    """Beat every HEARTBEAT_TICK_SECONDS (kernel-fixed cadence). AED if agent is STUCK.
 
     Loop exit is governed solely by `agent._heartbeat_thread is None`, which
     `_stop_heartbeat` flips at the very end of `_stop`. The loop deliberately
@@ -390,7 +390,7 @@ def _heartbeat_loop(agent) -> None:
         # `.suspend`/`.refresh` here would emit spurious state-change events.
         if agent._shutdown.is_set() or not getattr(agent, "_heartbeat_runtime_ready", True):
             # _shutdown keeps beating; only final heartbeat stop wakes the wait.
-            agent._heartbeat_stop.wait(1.0)
+            agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)
             continue
 
         # --- signal file detection ---
@@ -641,7 +641,7 @@ def _heartbeat_loop(agent) -> None:
                 agent._snapshot_port.collect_garbage()
                 agent._last_gc = now_mono
 
-        agent._heartbeat_stop.wait(1.0)
+        agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)
 
 
 def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> None:

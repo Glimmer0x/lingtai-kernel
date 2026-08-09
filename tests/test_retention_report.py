@@ -336,3 +336,17 @@ def test_json_report_is_deterministic(tmp_path):
     second = report_to_dict(scan_retention(agent, RetentionOptions(), _now=NOW))
 
     assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def test_live_window_derived_from_kernel_constant():
+    """Retention's liveness window is derived from the heartbeat contract."""
+    from lingtai.kernel import config
+    from lingtai.kernel.maintenance import retention
+
+    assert (
+        retention.DEFAULT_LIVE_HEARTBEAT_SECONDS
+        == config.RETENTION_LIVE_HEARTBEAT_SECONDS
+    )
+    assert config.RETENTION_LIVE_HEARTBEAT_SECONDS >= config.HEARTBEAT_LIVENESS_SECONDS
+    # Effective value is unchanged (back-compat): 10.0.
+    assert retention.DEFAULT_LIVE_HEARTBEAT_SECONDS == 10.0

@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping
 
+from ..config import HEARTBEAT_LIVENESS_SECONDS
+
 
 class ManifestKind(Enum):
     """Tri-state evidence for the agent manifest observation.
@@ -135,10 +137,12 @@ class HeartbeatObservation:
         return cls(kind=HeartbeatKind.PRESENT, wall_seconds=wall_seconds)
 
 
-# Default non-human freshness window (seconds). Matches the historical
-# ``handshake.is_alive`` handshake threshold; it is Core policy, never an
-# adapter concern.
-DEFAULT_LIVENESS_THRESHOLD_SECONDS: float = 2.0
+# Default non-human freshness window (seconds). Kernel-fixed cross-process
+# contract derived in ``lingtai.kernel.config`` from the heartbeat tick cadence
+# (``HEARTBEAT_TICK_SECONDS``) with deliberate headroom; it is Core policy,
+# never an adapter or agent concern. Back-compat name kept as a re-export so
+# existing importers and explicit-threshold callers keep working unchanged.
+DEFAULT_LIVENESS_THRESHOLD_SECONDS: float = HEARTBEAT_LIVENESS_SECONDS
 
 
 class AgentPresenceStorePort(ABC):

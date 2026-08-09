@@ -26,9 +26,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..config import RETENTION_LIVE_HEARTBEAT_SECONDS
+
 TERMINAL_DAEMON_STATES = frozenset({"done", "failed", "cancelled", "timeout"})
 PROTECTED_AGENT_STATES = frozenset({"active", "asleep", "suspended"})
-DEFAULT_LIVE_HEARTBEAT_SECONDS = 10.0
+# Back-compat name; value now derived from the kernel heartbeat contract
+# (RETENTION_LIVE_HEARTBEAT_SECONDS = 2x HEARTBEAT_LIVENESS_SECONDS = 10.0,
+# unchanged). Retention over-estimates liveness on purpose: it is report-only
+# and must never classify a live agent's files as stale.
+DEFAULT_LIVE_HEARTBEAT_SECONDS = RETENTION_LIVE_HEARTBEAT_SECONDS
 SAMPLE_LIMIT = 10
 
 CATEGORY_DAEMON = "terminal_daemon_run"
