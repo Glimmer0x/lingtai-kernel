@@ -86,6 +86,7 @@ related_files:
   - tests/test_codex_pool_quota_exclusion.py
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_quota.py
+  - tests/test_codex_reasoning_contract.py
   - tests/test_codex_raw_reasoning_replay.py
   - tests/test_codex_standalone_compaction.py
   - tests/test_codex_ws_delta.py
@@ -182,6 +183,8 @@ related_files:
   - tests/test_interface.py
   - tests/test_intrinsic_manual_actions.py
   - tests/test_intrinsics_comm.py
+  - tests/test_issue_1197_pr1_current_wiring_characterization.py
+  - tests/test_issue_1197_pr1_policy_refactor.py
   - tests/test_karma.py
   - tests/test_kernel_isolation.py
   - tests/test_kernel_migrate.py
@@ -418,6 +421,7 @@ related_files:
   - tests/test_workdir.py
   - tests/test_workdir_lease.py
   - tests/test_workdir_lease_posix_only.py
+  - tests/test_zhipu_effort.py
   - tests/test_zhipu_merge_consecutive.py
   - tests/unit/__init__.py
   - tests/unit/auth/__init__.py

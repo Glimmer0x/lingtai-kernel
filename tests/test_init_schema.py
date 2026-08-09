@@ -330,7 +330,7 @@ def test_llm_thinking_invalid_for_custom_openai_responses(value):
         validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+@pytest.mark.parametrize("value", ["default", "", 1, None])
 def test_llm_thinking_invalid_values(value):
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "codex"
@@ -381,6 +381,45 @@ def test_llm_thinking_accepted_for_codex_pool(provider):
     data["manifest"]["llm"]["provider"] = provider
     data["manifest"]["llm"]["thinking"] = "xhigh"
     validate_init(data)
+
+
+# --- Claude Code five-value scope (issue #1197) ----------------------------
+
+_CLAUDE_PROVIDERS = ["claude-code", "claude_code"]
+_CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", _CLAUDE_LEVELS)
+def test_llm_thinking_accepted_for_claude_code(provider, value):
+    """Both registered Claude spellings accept the installed CLI's five levels."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", ["none", "minimal", "default", "High", " high", "", 1, None])
+def test_llm_thinking_rejected_outside_claude_vocabulary(provider, value):
+    """``none``/``minimal``/aliases are Responses values, not Claude values."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        validate_init(data)
+    message = str(excinfo.value)
+    for level in _CLAUDE_LEVELS:
+        assert level in message, message
+    assert "minimal" not in message, message
+
+
+def test_llm_thinking_max_accepted_for_codex_exact_string():
+    """``max`` is a valid exact-model capability string on the Codex route."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "codex"
+    data["manifest"]["llm"]["thinking"] = "max"
+    validate_init(data)  # should not raise
 
 
 def test_llm_thinking_known_field_does_not_warn():
@@ -878,3 +917,134 @@ def test_deepseek_wire_api_responses_allowed():
     data["manifest"]["llm"]["base_url"] = "https://api.deepseek.com"
     data["manifest"]["llm"]["wire_api"] = "responses"
     validate_init(data)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Kimi Code configured-effort vocabulary (issue #1197)
+# ---------------------------------------------------------------------------
+
+KIMI_PROVIDERS = ("kimi-code", "kimi_code")
+KIMI_LEVELS = ("low", "high", "max")
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize("value", KIMI_LEVELS)
+def test_llm_thinking_accepted_for_kimi_code(provider, value):
+    """Both registered kimi-code spellings accept the K3 coding vocabulary."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+
+    validate_init(data)
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize(
+    "value",
+    ["medium", "xhigh", "minimal", "none", "default", "High", " high", "", "ultra", 1, None],
+)
+def test_llm_thinking_rejected_outside_kimi_vocabulary(provider, value):
+    """Responses values, aliases, and the omission sentinel are not Kimi values.
+
+    The rejection must come from the *vocabulary* gate rather than the
+    out-of-scope gate, so the message has to offer exactly ``low, high, max``.
+    Asserting only ``pytest.raises`` would pass before the contract exists,
+    because kimi-code is currently rejected as an unsupported scope.
+    """
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = value
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        validate_init(data)
+
+    message = str(excinfo.value)
+    assert "expected one of " in message, message
+    offered = message.split("expected one of ", 1)[1]
+    assert offered.split(", ") == list(KIMI_LEVELS), message
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+def test_llm_thinking_scope_message_names_the_kimi_providers(provider):
+    """The out-of-scope message must advertise the kimi-code route too."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "anthropic"
+    data["manifest"]["llm"]["thinking"] = "high"
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex") as excinfo:
+        validate_init(data)
+
+    assert provider in str(excinfo.value), str(excinfo.value)
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_llm_thinking_max_accepted_for_codex(provider):
+    """``max`` is a valid exact-model capability string on the Codex route."""
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["thinking"] = "max"
+
+    validate_init(data)  # should not raise
+
+
+def test_llm_thinking_max_accepted_for_custom_openai_responses():
+    """``max`` is a valid Responses ``reasoning.effort`` value (main 7-tier tuple)."""
+    data = _valid_init()
+    data["manifest"]["llm"].update(
+        {
+            "provider": "custom",
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "thinking": "max",
+        }
+    )
+
+    validate_init(data)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# manifest.llm.thinking — zhipu/glm provider-scoped vocabulary (issue #1197)
+#
+# GLM owns a provider-scoped vocabulary (none|high|max) that is deliberately
+# NOT the global THINKING_LEVELS tuple: zhipu/glm rejects
+# `minimal|low|medium|xhigh`, while Codex and custom Responses keep main's
+# 7-tier tuple (max included). Both registered spellings are covered because
+# `_register.py` registers `glm` and `zhipu` for the same factory.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize("value", ["none", "high", "max"])
+def test_llm_thinking_valid_values_for_zhipu(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = value
+    validate_init(data)  # should not raise
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize(
+    "value",
+    ["minimal", "low", "medium", "xhigh", "default", "High", " high", "", True, 1, None],
+)
+def test_llm_thinking_invalid_values_for_zhipu(provider, value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = value
+    # The message names the provider spelling actually in play, so a `glm`
+    # manifest never reports itself as `zhipu`.
+    with pytest.raises(ValueError, match=rf"manifest\.llm\.thinking.*{provider}"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+def test_llm_thinking_zhipu_error_names_the_valid_tokens(provider):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = provider
+    data["manifest"]["llm"]["model"] = "GLM-5.2"
+    data["manifest"]["llm"]["thinking"] = "medium"
+    with pytest.raises(ValueError, match="none, high, max"):
+        validate_init(data)
+

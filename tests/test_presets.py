@@ -398,7 +398,7 @@ def test_load_preset_rejects_invalid_custom_responses_thinking(tmp_path, value):
         load_preset(str(f))
 
 
-@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+@pytest.mark.parametrize("value", ["default", "", 1, None])
 def test_load_preset_rejects_invalid_thinking(tmp_path, value):
     p = {
         "name": "bad",
@@ -482,6 +482,71 @@ def test_load_preset_accepts_thinking_for_codex_pool(tmp_path, provider):
     loaded = load_preset(str(f))
 
     assert loaded["manifest"]["llm"]["thinking"] == "xhigh"
+
+
+# --- Claude Code five-value scope (issue #1197) ----------------------------
+
+_CLAUDE_PROVIDERS = ["claude-code", "claude_code"]
+_CLAUDE_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", _CLAUDE_LEVELS)
+def test_load_preset_accepts_thinking_for_claude_code(tmp_path, provider, value):
+    p = {
+        "name": "claude",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "opus", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / f"claude-{provider}-{value}.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("provider", _CLAUDE_PROVIDERS)
+@pytest.mark.parametrize("value", ["none", "minimal", "default", "High", " high", "", 1, None])
+def test_load_preset_rejects_thinking_outside_claude_vocabulary(
+    tmp_path, provider, value
+):
+    p = {
+        "name": "bad-claude",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "opus", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-claude.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        load_preset(str(f))
+    message = str(excinfo.value)
+    for level in _CLAUDE_LEVELS:
+        assert level in message, message
+    assert "minimal" not in message, message
+
+
+def test_load_preset_accepts_max_for_codex(tmp_path):
+    """``max`` is a valid exact-model capability string on the Codex route."""
+    p = {
+        "name": "ok-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "ok-max.json"
+    f.write_text(json.dumps(p))
+
+    load_preset(str(f))
 
 
 def test_preset_context_limit_reads_from_llm_block():
@@ -1005,3 +1070,188 @@ def test_materialize_preserves_init_skills_paths_carveout(tmp_path):
         "~/preset-skills",
         "~/agent-skills",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Kimi Code configured-effort vocabulary through preset materialization (#1197)
+# ---------------------------------------------------------------------------
+
+KIMI_PROVIDERS = ("kimi-code", "kimi_code")
+KIMI_LEVELS = ("low", "high", "max")
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize("value", KIMI_LEVELS)
+def test_load_preset_accepts_kimi_thinking_values(tmp_path, provider, value):
+    """A saved kimi-code preset may carry the K3 coding effort vocabulary."""
+    p = {
+        "name": "kimi-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "k3", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "kimi-thinking.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+# preset manifest.llm.thinking — zhipu/glm provider-scoped vocabulary (#1197)
+# ---------------------------------------------------------------------------
+
+
+def _zhipu_thinking_preset(provider: str, value) -> dict:
+    return {
+        "name": "zhipu-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "GLM-5.2", "thinking": value},
+            "capabilities": {},
+        },
+    }
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize("value", ["none", "high", "max"])
+def test_load_preset_accepts_thinking_for_zhipu(tmp_path, provider, value):
+    f = tmp_path / "zhipu-thinking.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, value)))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+@pytest.mark.parametrize(
+    "value",
+    ["medium", "xhigh", "minimal", "none", "default", "High", " high", "", "ultra", 1, None],
+)
+def test_load_preset_rejects_outside_kimi_vocabulary(tmp_path, provider, value):
+    """Rejection must come from the vocabulary gate, not the scope gate.
+
+    Before the contract exists kimi-code is out of scope entirely, so a bare
+    ``pytest.raises`` would pass without proving anything; the message must
+    offer exactly ``low, high, max``.
+    """
+    p = {
+        "name": "bad-kimi-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "k3", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-kimi-thinking.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking") as excinfo:
+        load_preset(str(f))
+
+    message = str(excinfo.value)
+    assert "must be one of " in message, message
+    offered = message.split("must be one of ", 1)[1]
+    assert offered.split(", ") == list(KIMI_LEVELS), message
+
+
+@pytest.mark.parametrize("provider", KIMI_PROVIDERS)
+def test_load_preset_scope_message_names_the_kimi_providers(tmp_path, provider):
+    """The out-of-scope preset message must advertise the kimi-code route."""
+    p = {
+        "name": "bad",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "anthropic", "model": "claude", "thinking": "high"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-provider-kimi.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex") as excinfo:
+        load_preset(str(f))
+
+    assert provider in str(excinfo.value), str(excinfo.value)
+
+
+@pytest.mark.parametrize("provider", ["codex", "codex-pool", "codex_pool"])
+def test_load_preset_max_accepted_on_codex_responses(tmp_path, provider):
+    """Codex accepts exact-model capability strings, including the seven-tier ``max``."""
+    p = {
+        "name": "ok-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": provider, "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "ok-max.json"
+    f.write_text(json.dumps(p))
+
+    load_preset(str(f))
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+@pytest.mark.parametrize(
+    "value",
+    ["minimal", "low", "medium", "xhigh", "default", "High", " high", "", True, 1, None],
+)
+def test_load_preset_rejects_invalid_thinking_for_zhipu(tmp_path, provider, value):
+    f = tmp_path / "bad-zhipu-thinking.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, value)))
+
+    # The message names the provider spelling actually in play, so a `glm`
+    # preset never reports itself as `zhipu`.
+    with pytest.raises(ValueError, match=rf"manifest\.llm\.thinking.*{provider}"):
+        load_preset(str(f))
+
+
+@pytest.mark.parametrize("provider", ["zhipu", "glm"])
+def test_load_preset_zhipu_thinking_error_names_the_valid_tokens(tmp_path, provider):
+    f = tmp_path / "bad-zhipu-tokens.json"
+    f.write_text(json.dumps(_zhipu_thinking_preset(provider, "medium")))
+
+    with pytest.raises(ValueError, match="none, high, max"):
+        load_preset(str(f))
+
+
+def test_load_preset_accepts_thinking_max_for_codex(tmp_path):
+    """The seven-tier ``max`` is a valid Codex exact-model capability string."""
+    p = {
+        "name": "codex-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "codex", "model": "gpt-5.5", "thinking": "max"},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "codex-max.json"
+    f.write_text(json.dumps(p))
+
+    load_preset(str(f))
+
+
+def test_load_preset_accepts_thinking_max_for_custom_openai_responses(tmp_path):
+    """Custom OpenAI-compatible Responses keeps the seven-tier vocabulary."""
+    p = {
+        "name": "custom-max",
+        "description": _DESC,
+        "manifest": {
+            "llm": {
+                "provider": "custom",
+                "model": "custom-model",
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "thinking": "max",
+            },
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "custom-max.json"
+    f.write_text(json.dumps(p))
+
+    load_preset(str(f))

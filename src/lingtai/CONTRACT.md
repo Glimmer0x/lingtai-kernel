@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/init.jsonc
   - src/lingtai/init_reader.py
   - src/lingtai/init_schema.py
+  - src/lingtai/llm/openai/CONTRACT.md
   - src/lingtai/kernel/config_resolve.py
   - src/lingtai/cli.py
   - src/lingtai/agent.py
@@ -25,6 +26,11 @@ related_files:
   - tests/test_init_schema.py
   - tests/test_preset_materialization.py
   - tests/test_presets.py
+  - tests/test_claude_code_effort.py
+  - src/lingtai/llm/claude_code/effort.py
+  - tests/test_kimi_code_effort.py
+  - src/lingtai/llm/kimi_code/effort.py
+  - src/lingtai/kernel/config.py
 maintenance: |
   Keep related_files complete and repo-relative: the paired ANATOMY.md, the
   canonical init.jsonc, real reader/writer/validator code, affected composition
@@ -139,12 +145,115 @@ constructs a migration workspace, or performs a second notification path.
    This is a Nudge-transport concern, not an `init_reader` concern: no
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
-8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
-   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
+8. `manifest.llm.thinking` is validated against a **provider-scoped**
+8. `manifest.llm.thinking` is validated against a **provider-scoped**
+   vocabulary, not one universal tuple. Codex-family providers accept any
+   non-empty exact-model capability string (the reserved literal `default` is
+   rejected; exact endpoint/model capability belongs to the injected provider
+   contract in `src/lingtai/llm/openai/CONTRACT.md`). `provider="custom"`,
+   `api_compat="openai"`, `wire_api="responses"` accepts
+   `none|minimal|low|medium|high|xhigh`. The `claude-code`/`claude_code` route
+   accepts exactly `low|medium|high|xhigh|max` — the installed `claude` CLI's
+   own `--effort <level>` vocabulary. The `kimi-code`/`kimi_code` route accepts
+   exactly `low|high|max` — the K3 coding service's own native effort
+   vocabulary (the gateway's `medium`→high and `xhigh`→max compatibility
+   aliases are deliberately not surfaced). So `max` stays rejected on Responses,
+   `none`/`minimal` stay rejected on Claude, and `none`/`minimal`/`medium`/
+   `xhigh` stay rejected on Kimi. Every other provider remains out of scope.
    Custom omission keeps the existing `high` runtime default; Codex omission
-   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
-   fail validation rather than being normalized silently.
+   keeps its existing adapter-owned `xhigh` default; **Claude omission stays
+   omission** — no `--effort` flag is constructed at all, byte-identical to the
+   pre-contract command; **Kimi omission stays omission** — no
+   `KIMI_MODEL_THINKING_EFFORT` variable is set at all, byte-identical to the
+   pre-contract invocation. `default` is an internal omission sentinel, never a
+   user-configurable literal. Invalid values or scopes fail validation rather
+   than being normalized silently.
+9. For the Claude Code route, an explicit level is frozen at chat creation and
+   re-emitted on **every** physical CLI invocation of that session — first call,
+   `--resume` call, and each overflow-recovery retry within one logical send.
+   Effort never rebuilds the chat, resets the remote session id, or rewrites the
+   cached stable-context system block. Capability status is
+   `model_verified=false`: the installed CLI's flag vocabulary is verified,
+   per-model/account acceptance is not. This contract covers *configured*
+   effort only — there is no live-control, clear/reset, or default-restoration
+   claim, and whether `claude --resume <id>` without `--effort` retains a
+   session-saved level remains an unresolved upstream question.
+10. For the Kimi Code route, an explicit level is frozen at chat creation and
+   re-applied to the private environment of **every** physical CLI invocation
+   of that session — first call, `--session` resumed call, and each
+   overflow-recovery retry within one logical send. The model capability gate
+   **fails closed** at `create_chat`: explicit effort is accepted only for the
+   documented effort-capable coding ids (`k3`, `k3-256k`); the always-thinking
+   ids (`kimi-for-coding`, `kimi-for-coding-highspeed`) raise because they have
+   no effort dimension, and any other id raises rather than being optimistically
+   allowed. The gate judges every model the CLI could actually run: when an API
+   key is available the adapter drops `--model` and Kimi's env-model synthesis
+   resolves the *adapter's* model rather than the chat's, so a chat model that
+   diverges from the adapter model must clear the gate on **both** ids or the
+   explicit effort fails closed — an effort is never authorized against a model
+   that does not run. Omitted effort never raises, for any model.
+   LingTai-internal ancillary sessions (soul inquiry/consultation mirrors) use
+   `ancillary_session_thinking`: on the Kimi route they pass the omission
+   sentinel so a LingTai-injected legacy `"high"` can never trip the gate
+   against an always-thinking model, and every other provider keeps the legacy
+   default byte-identical. Effort never rebuilds the chat, resets the opaque
+   CLI session id, or rewrites the cached stable-context system block, and it
+   never reaches argv. Capability status is `model_verified=false`: the
+   env-var contract and vocabulary are documented, per-model/account acceptance
+   and installed-CLI-version behavior are not verified. This contract covers
+   *configured* effort only — there is no live-control, clear/reset, or
+   default-restoration claim, and `KIMI_MODEL_THINKING_KEEP` is deliberately
+   not set.
+
+   Zhipu/GLM (`provider="zhipu"` or `"glm"`, both registered spellings) is a
+   separate, provider-scoped route with its own vocabulary `none|high|max`.
+   The global `none|minimal|low|medium|high|xhigh` tuple is unchanged: `max` is
+   rejected for Codex/custom Responses, and `minimal|low|medium|xhigh` are
+   rejected for GLM. GLM is Chat-Completions-only; there is no Responses branch
+   and no `wire_api` handling for it. The exact wire is two independent
+   top-level fields, emitted via `extra_body` (which the SDK hoists to top-level
+   JSON siblings), never the Responses nested `reasoning` object:
+
+   | `manifest.llm.thinking` | `thinking` | `reasoning_effort` | effective |
+   |---|---|---|---|
+   | omitted / internal `default` / adapter `None` | *(absent)* | *(absent)* | provider default: enabled / max |
+   | `none` | `{"type": "disabled"}` | *(absent)* | no thinking |
+   | `high` | `{"type": "enabled"}` | `"high"` | enabled / high |
+   | `max` | `{"type": "enabled"}` | `"max"` | enabled / max |
+
+   `none` reuses the same *token* as Codex's "effort none" but reaches the same
+   observable outcome through a **different mechanism** — GLM's mode axis — not
+   a shared implementation. `clear_thinking` is never emitted: it is a
+   history-retention axis, not an effort axis.
+
+   Explicit values (`none`, `high`, `max`) are gated **fail-closed** to
+   normalized model id `glm-5.2` and raise before session construction on any
+   other model; matching normalizes the spelling while the configured spelling
+   is preserved verbatim on the wire. Omission is valid for every model and
+   emits no reasoning fields. Capability metadata is dated
+   (`zhipu_docs_20260805`) with `model_verified=false`.
+
+   **Compatibility change:** GLM omission now stays omission, so an untouched
+   GLM main agent moves from an accidental explicit `reasoning_effort: "high"`
+   to the provider default `max` — more reasoning tokens and higher latency.
+   That `high` was the cross-provider `AgentConfig` field default reaching GLM
+   through a negative condition, not a GLM-specific baseline, and native LingTai
+   daemons already omit the fields and already run at `max`; this aligns main
+   agents with them. Users who need the old tier now configure explicit `high`.
+
+   The decision is normalized once, before session construction, and frozen for
+   every turn and streaming call on that session. It drives both the wire bytes
+   and the safe observability fields (`reasoning_requested`,
+   `reasoning_normalized`, `reasoning_actual`, `reasoning_source`,
+   `reasoning_capability_source`) merged into `llm_call`, so a log line can
+   never report an effort the request did not carry; sessions without the
+   accessor keep the previous `llm_call` shape exactly. No credential, base URL,
+   prompt/body, session id, or raw provider payload enters those fields.
+
+   Both soul sites keep their hard-coded `thinking="high"`, which stays valid on
+   GLM-5.2. On a non-5.2 GLM model the fail-closed gate makes soul session
+   construction raise, and the existing `try/except` degrades to `None` rather
+   than crashing the agent.
 
 ## Contract tests
 
@@ -167,7 +276,37 @@ dismissal/repeat semantics for a capped finding.
 `tests/test_agent_config_hydration.py`, and
 `tests/test_preset_materialization.py` prove the accepted custom Responses
 scope, rejected out-of-scope values, and the distinct custom/Codex omission
-defaults through real config and session materialization.
+defaults through real config and session materialization. The same two schema
+suites prove the Claude Code five-value scope for both registered spellings and
+that `none`/`minimal`/case-and-whitespace aliases are rejected there while `max`
+stays rejected on Responses, and prove the Kimi Code three-value scope for both
+registered spellings with `none`/`minimal`/`medium`/`xhigh`/case-and-whitespace
+aliases rejected there while `max` stays rejected on Responses.
+`tests/test_codex_reasoning_contract.py` proves the exact registered Codex
+model capability, immutable construction capture, transport parity, and legacy
+fallthrough described by the nearest provider contract.
+`tests/test_claude_code_effort.py` is the Claude configured-effort contract
+test: it proves the omitted command is byte-identical to the pre-contract one,
+that each explicit level reaches the CLI exactly once on the first and every
+resumed invocation, that one logical send with overflow recovery reuses one
+frozen snapshot, that out-of-vocabulary values are rejected before any
+subprocess dispatch with a bounded message, that the `llm_call` record gains
+only the safe provider-neutral reasoning fields (and nothing at all for a
+provider that offers none), and the isolation properties — `generate()` emits no
+`--effort`, both provider spellings behave identically, and auth-env stripping
+and disallowed-tools placement are unchanged.
+`tests/test_kimi_code_effort.py` is the Kimi configured-effort contract test:
+it proves the omitted invocation is byte-identical to the pre-contract one
+(including for the always-thinking default model), that each explicit level
+reaches the private environment exactly once on the first and every resumed
+invocation and never reaches argv, that one logical send with overflow recovery
+reuses one frozen snapshot, that the model capability gate rejects
+always-thinking and unknown ids before any subprocess dispatch, that
+out-of-vocabulary values are rejected before dispatch with a bounded message,
+that the `llm_call` record gains only the safe provider-neutral reasoning
+fields (and nothing at all for a provider that offers none), and the isolation
+properties — `generate()` sets no variable, both provider spellings behave
+identically, and the CLI session identity and auth-env fallback are unchanged.
 
 ## Maintenance
 

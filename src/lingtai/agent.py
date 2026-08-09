@@ -18,7 +18,15 @@ from typing import Any
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    AgentConfig,
+    CLAUDE_THINKING_PROVIDERS,
+    KIMI_THINKING_PROVIDERS,
+    THINKING_OMITTED,
+    THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
+    resolve_main_thinking,
+)
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
@@ -94,16 +102,16 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         cache_miss_budget=manifest.get(
             "cache_miss_budget", defaults.cache_miss_budget
         ),
-        # Codex-family providers own their omitted-thinking default at the
-        # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
-        # value stays the "default" sentinel for them instead of being promoted
-        # to the legacy cross-provider "high" main-session default.
-        thinking=llm.get(
-            "thinking",
-            "default"
-            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
-            else defaults.thinking,
-        ),
+        # Codex-family, Claude Code, Kimi Code and Zhipu/GLM providers own
+        # their omitted-thinking semantics at the adapter (Codex:
+        # reasoning.effort "xhigh"; Claude Code: no ``--effort`` flag at all;
+        # Kimi Code: no KIMI_MODEL_THINKING_EFFORT environment variable at
+        # all; Zhipu/GLM: no thinking/reasoning_effort pair at all, so GLM
+        # applies its documented enabled/max default), so an omitted manifest
+        # value stays the "default" omission sentinel for them instead of
+        # being promoted to the legacy cross-provider "high" main-session
+        # default.
+        thinking=resolve_main_thinking(llm),
         # Molt thresholds and the context.molt message are kernel-fixed runtime
         # constants and are NOT agent-configurable. Stale manifest
         # molt_notice/molt_pressure/molt_urgency/molt_prompt values are

@@ -11,7 +11,11 @@ import uuid
 from typing import Any, Callable, TYPE_CHECKING
 
 from .config import (
+    CLAUDE_THINKING_PROVIDERS,
     CONTEXT_PRESSURE_HIGH_RATIO,
+    DEFAULT_THINKING,
+    KIMI_THINKING_PROVIDERS,
+    THINKING_OMITTED,
     AgentConfig,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
@@ -21,6 +25,8 @@ from .config import (
     CONTEXT_PRESSURE_RECONSTRUCTION_RATIO,  # back-compat alias for the above
     CONTEXT_PRESSURE_WARN_AFTER_ROUNDS,
     CONTEXT_PRESSURE_RECOVERY_TARGET,
+    THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
 )
 from .llm import (
     ChatSession,
@@ -28,6 +34,8 @@ from .llm import (
     LLMResponse,
     LLMService,
 )
+from .llm.policy import ReasoningEmission, ReasoningPolicy
+from .llm.reasoning import ReasoningConstructionResult
 from .llm_utils import (
     send_with_timeout,
     send_with_timeout_stream,
@@ -62,6 +70,59 @@ if TYPE_CHECKING:
 def _elapsed_ms(start: float) -> int:
     """Return non-negative elapsed milliseconds from a monotonic start."""
     return max(0, int((time.monotonic() - start) * 1000))
+
+
+# The ONLY reasoning keys a provider session may contribute to ``llm_call``.
+# This is a trust boundary, not a passthrough: the accessor is provider-owned
+# code, so an exact allowlist is what keeps a credential, a base URL, a prompt,
+# or a raw payload out of the log, and what stops a provider from overwriting
+# kernel-owned fields such as ``model`` / ``api_call_id``.
+_REASONING_OBSERVABILITY_KEYS = frozenset(
+    {
+        "reasoning_requested",
+        "reasoning_normalized",
+        "reasoning_actual",
+        "reasoning_source",
+        "reasoning_capability_source",
+    }
+)
+
+# Reasoning values are short enumerated tokens; anything longer is not a tier
+# name and has no business in a log line.
+_REASONING_OBSERVABILITY_MAX_LEN = 64
+
+
+def _reasoning_observability_fields(chat) -> dict:
+    """Return a session's safe reasoning log fields, or ``{}``.
+
+    Optional per-provider accessor. Any session that does not implement it — or
+    whose implementation misbehaves — contributes nothing, so `llm_call` stays
+    byte-identical for every provider that does not own a reasoning contract.
+    Observability must never be able to break a turn.
+
+    Whatever the accessor returns is filtered to
+    ``_REASONING_OBSERVABILITY_KEYS`` and to bounded plain strings. Unknown
+    keys, collisions with kernel-owned log fields, and non-string values are
+    dropped silently rather than trusted.
+    """
+    accessor = getattr(chat, "reasoning_observability", None)
+    if not callable(accessor):
+        return {}
+    try:
+        fields = accessor()
+    except Exception:  # pragma: no cover - defensive; logging must not raise
+        return {}
+    if not isinstance(fields, dict):
+        return {}
+    return {
+        key: value
+        for key, value in fields.items()
+        if key in _REASONING_OBSERVABILITY_KEYS
+        # ``type(value) is str`` rather than isinstance: a str subclass can
+        # carry arbitrary behavior, and bool is not a str either way.
+        and type(value) is str
+        and len(value) <= _REASONING_OBSERVABILITY_MAX_LEN
+    }
 
 
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
@@ -286,6 +347,57 @@ class SessionManager:
     # LLM communication
     # ------------------------------------------------------------------
 
+    def _effective_provider(self) -> str:
+        """Provider actually used for chat creation, lowercased.
+
+        ``AgentConfig.provider`` is None when the agent uses the LLMService's
+        own provider, so the service is the fallback authority — exactly the
+        provider ``create_session`` will route to.
+        """
+        provider = self._config.provider
+        if not provider:
+            try:
+                provider = self._llm_service.provider
+            except Exception:
+                provider = None
+        return str(provider or "").lower()
+
+    def _session_thinking(self) -> str:
+        """Configured thinking value to hand to chat creation/rebuild.
+
+        The Claude Code, Kimi Code and Codex routes own their own omission: a
+        constructor-omitted value stays the internal ``THINKING_OMITTED``
+        sentinel (the adapters then own what omission means on the wire —
+        Claude Code emits no ``--effort`` flag; Kimi Code emits no
+        ``KIMI_MODEL_THINKING_EFFORT`` environment variable at all, which also
+        keeps the always-thinking default model from rejecting an injected
+        effort; Codex sends ``reasoning.effort = "xhigh"``) instead of being
+        promoted to the legacy cross-provider ``"high"`` default. An explicit
+        value passes through unchanged — including a falsey one, which the
+        provider contracts reject loudly at ``create_chat`` rather than
+        papering over here. Every other provider keeps the historical
+        ``or "high"``.
+        """
+        thinking = self._config.thinking
+        provider = self._effective_provider()
+        if provider in (
+            *CLAUDE_THINKING_PROVIDERS,
+            *KIMI_THINKING_PROVIDERS,
+            *THINKING_PROVIDERS,
+        ):
+            if getattr(self._config, "thinking_omitted", False) or getattr(
+                self._config, "_thinking_constructor_omitted", False
+            ):
+                return THINKING_OMITTED
+            return thinking
+        if provider in ZHIPU_THINKING_PROVIDERS:
+            # Zhipu/GLM owns its whole decision (two-axis ``thinking`` +
+            # ``reasoning_effort``): pass the configured value exactly — falsey
+            # values included — so the provider normalizer can fail closed
+            # instead of a legacy ``or "high"`` rewrite hiding it.
+            return thinking
+        return thinking or DEFAULT_THINKING
+
     def ensure_session(self) -> ChatSession:
         """Ensure a persistent LLM session exists, creating one if needed."""
         if self._chat is None:
@@ -293,7 +405,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=self._session_thinking(),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -310,7 +422,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=self._session_thinking(),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -397,6 +509,24 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        reasoning = getattr(self._chat, "reasoning_emission", None)
+        if isinstance(reasoning, ReasoningEmission):
+            llm_call_fields["reasoning"] = reasoning.as_dict()
+
+        result_reader = getattr(self._chat, "reasoning_construction_result", None)
+        reasoning_result = result_reader() if callable(result_reader) else None
+        if isinstance(reasoning_result, ReasoningConstructionResult):
+            llm_call_fields.update(
+                reasoning_requested=(
+                    "omitted" if reasoning_result.requested is None
+                    else reasoning_result.requested
+                ),
+                reasoning_normalized=reasoning_result.normalized,
+                reasoning_actual=reasoning_result.actual,
+                reasoning_source=reasoning_result.source,
+                reasoning_capability_source=reasoning_result.capability_source,
+            )
+        llm_call_fields.update(_reasoning_observability_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

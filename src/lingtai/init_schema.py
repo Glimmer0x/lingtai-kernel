@@ -4,9 +4,13 @@ from __future__ import annotations
 import logging
 
 from lingtai.kernel.config import (
-    THINKING_LEVELS,
+    CLAUDE_THINKING_PROVIDERS,
+    KIMI_THINKING_PROVIDERS,
     THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
     llm_supports_thinking,
+    thinking_is_valid,
+    thinking_levels_for_llm,
 )
 
 log = logging.getLogger(__name__)
@@ -434,18 +438,42 @@ def validate_init(data: dict) -> list[str]:
                     + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
                 )
     if "thinking" in llm:
-        if not llm_supports_thinking(llm):
+        # The accepted vocabulary is provider-specific, so resolve it first:
+        # Claude Code takes the installed CLI's five ``--effort`` levels, Kimi
+        # Code takes the K3 coding service's three native effort levels, while
+        # Codex/custom Responses keep the six Responses values. ``max`` must
+        # stay rejected on Responses, ``none``/``minimal`` on Claude, and
+        # ``none``/``minimal``/``medium``/``xhigh`` on Kimi.
+        allowed = thinking_levels_for_llm(llm)
+        if allowed is None:
             raise ValueError(
                 "manifest.llm.thinking is currently supported only for "
                 "the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                f"({', '.join(THINKING_PROVIDERS)}), the Claude Code providers "
+                f"({', '.join(CLAUDE_THINKING_PROVIDERS)}), the Kimi Code "
+                f"providers ({', '.join(KIMI_THINKING_PROVIDERS)}) or custom "
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        provider = str(llm.get("provider") or "").lower()
+        if provider in THINKING_PROVIDERS:
+            # Codex thinking values are exact-model capabilities owned
+            # provider-locally; any non-empty exact string other than the
+            # reserved "default" sentinel is accepted.
+            if not isinstance(thinking, str) or not thinking or thinking == "default":
+                raise ValueError(
+                    "manifest.llm.thinking: expected a non-empty exact string; "
+                    "the reserved 'default' sentinel cannot be configured"
+                )
+        elif not isinstance(thinking, str) or thinking not in allowed:
+            scope = (
+                f" for provider {provider!r}"
+                if provider in ZHIPU_THINKING_PROVIDERS
+                else ""
+            )
             raise ValueError(
-                "manifest.llm.thinking: expected one of "
-                f"{', '.join(THINKING_LEVELS)}"
+                f"manifest.llm.thinking{scope}: expected one of "
+                f"{', '.join(allowed)}"
             )
     for key in llm:
         if key not in LLM_KNOWN:

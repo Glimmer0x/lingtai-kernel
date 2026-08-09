@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-
+from types import MappingProxyType
 
 # Accepted manifest.llm.thinking values, mirroring the upstream Responses
 # ``reasoning.effort`` payload values in ascending effort order. Explicit
@@ -19,23 +19,154 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Registered spellings of the native Claude Code route. Both already resolve to
+# the same ``ClaudeCodeAdapter`` in ``lingtai/llm/_register.py``, so both accept
+# the same explicit thinking vocabulary.
+CLAUDE_THINKING_PROVIDERS = ("claude-code", "claude_code")
 
-def llm_supports_thinking(llm: dict) -> bool:
-    """Return whether a manifest LLM block accepts explicit thinking effort.
+# Accepted manifest.llm.thinking values for the Claude Code route. This is the
+# installed ``claude`` CLI's own ``--effort <level>`` vocabulary and is
+# deliberately NOT the Responses tuple above: Claude has no ``none``/``minimal``
+# and Responses has no ``max``. The provider-local descriptor
+# (``lingtai/llm/claude_code/effort.py``) re-exports this tuple rather than
+# restating it, so the schema gate and the wire emitter cannot drift apart.
+# Capability status is ``model_verified=false``: the installed CLI's flag
+# parsing is verified, per-model/account acceptance is not.
+CLAUDE_THINKING_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
-    Responses-API compatible models are allowed by default: any block whose
-    wire is OpenAI Responses (``api_compat == "openai"`` and
-    ``wire_api == "responses"``) is accepted, regardless of provider. The
-    Codex family remains accepted through ``THINKING_PROVIDERS`` (it owns its
-    own wire/backend), as does any provider explicitly listed there.
+# Registered spellings of the native Kimi Code CLI route. Both already resolve
+# to the same ``KimiCodeAdapter`` in ``lingtai/llm/_register.py``, so both
+# accept the same explicit thinking vocabulary.
+KIMI_THINKING_PROVIDERS = ("kimi-code", "kimi_code")
+
+# Accepted manifest.llm.thinking values for the Kimi Code route. This is the
+# K3 coding service's own native effort vocabulary and is deliberately NOT the
+# Responses tuple above: Kimi has no ``none``/``minimal``, and Responses has no
+# ``max``. The compatibility aliases the coding gateway may itself accept
+# (``medium`` → high, ``xhigh`` → max) are deliberately NOT surfaced here — a
+# LingTai manifest names the level the provider actually documents. The
+# provider-local descriptor (``lingtai/llm/kimi_code/effort.py``) re-exports
+# this tuple rather than restating it, so the schema gate and the wire emitter
+# cannot drift apart. Capability status is ``model_verified=false``: the
+# env-var contract and vocabulary are documented, per-model/account acceptance
+# and installed-CLI-version behavior are not verified.
+KIMI_THINKING_LEVELS = ("low", "high", "max")
+
+# Zhipu/GLM registered provider spellings. ``_register.py`` maps both onto the
+# same ZhipuAdapter factory, so every validator, hydration branch, and test must
+# cover both or ``glm`` silently keeps the lossy generic mapping.
+ZHIPU_THINKING_PROVIDERS = ("zhipu", "glm")
+
+# GLM's provider-scoped vocabulary. Deliberately NOT merged into the global
+# ``THINKING_LEVELS`` tuple: ``max`` must stay rejected for Codex/custom
+# Responses, and ``minimal|low|medium|xhigh`` must stay rejected for GLM. The
+# tokens map onto GLM's two top-level Chat Completions axes
+# (``thinking.type`` + ``reasoning_effort``); ``lingtai/llm/zhipu/effort.py``
+# owns the wire rendering and imports this tuple so there is one vocabulary.
+ZHIPU_THINKING_LEVELS = ("none", "high", "max")
+
+# Internal omission sentinel for manifest.llm.thinking. It is never a
+# user-configurable literal: it means "the field was omitted", and each provider
+# adapter owns what omission means on its own wire (Codex maps it to
+# ``reasoning.effort = "xhigh"``; Claude Code emits no ``--effort`` flag and
+# Kimi Code emits no environment variable at all; Zhipu/GLM emits no
+# ``thinking``/``reasoning_effort`` pair). Validators reject it as an explicit
+# value.
+THINKING_OMITTED = "default"
+
+# Legacy cross-provider main-session default for a constructor-omitted
+# ``AgentConfig.thinking``. Providers that own their omission (Codex, Claude
+# Code, Kimi Code, Zhipu/GLM) opt out of it via ``THINKING_OMITTED``.
+DEFAULT_THINKING = "high"
+
+
+def thinking_levels_for_llm(llm: dict) -> tuple[str, ...] | None:
+    """Return the explicit thinking vocabulary a manifest LLM block accepts.
+
+    ``None`` means the block is out of scope entirely. Callers must validate an
+    explicit value against the *returned* tuple rather than a single global
+    tuple — the accepted vocabulary is provider-specific, so ``max`` stays
+    rejected on Responses, ``none``/``minimal`` stay rejected on Claude,
+    ``none``/``minimal``/``medium``/``xhigh`` stay rejected on Kimi Code, and
+    ``minimal``/``low``/``medium``/``xhigh`` stay rejected on Zhipu/GLM.
     """
     provider = str(llm.get("provider") or "").lower()
+    if provider in CLAUDE_THINKING_PROVIDERS:
+        return CLAUDE_THINKING_LEVELS
+    if provider in KIMI_THINKING_PROVIDERS:
+        return KIMI_THINKING_LEVELS
+    if provider in ZHIPU_THINKING_PROVIDERS:
+        return ZHIPU_THINKING_LEVELS
     if provider in THINKING_PROVIDERS:
-        return True
-    return (
+        return THINKING_LEVELS
+    if (
         str(llm.get("api_compat") or "").lower() == "openai"
         and str(llm.get("wire_api") or "").lower() == "responses"
-    )
+    ):
+        return THINKING_LEVELS
+    return None
+
+
+def llm_supports_thinking(llm: dict) -> bool:
+    """Return whether a manifest LLM block accepts explicit thinking effort."""
+    return thinking_levels_for_llm(llm) is not None
+
+
+def ancillary_session_thinking(provider: str | None) -> str:
+    """Provider-scoped thinking level for a LingTai-internal ancillary session.
+
+    Ancillary sessions (soul inquiry/consultation mirrors) are created by
+    LingTai's own code, not by an operator's ``manifest.llm.thinking``. A
+    provider that owns its own omission semantics (Kimi Code, Claude Code)
+    must not receive the legacy cross-provider ``DEFAULT_THINKING`` here
+    either: the always-thinking default model would reject an effort LingTai
+    injected itself. Such providers get ``THINKING_OMITTED`` (the adapter then
+    emits no effort control at all); every other provider keeps
+    ``DEFAULT_THINKING``, byte-identical to today.
+    """
+    if str(provider or "").lower() in (
+        *KIMI_THINKING_PROVIDERS,
+        *CLAUDE_THINKING_PROVIDERS,
+    ):
+        return THINKING_OMITTED
+    return DEFAULT_THINKING
+
+
+# Alias/coercion vocabulary for accepted explicit thinking inputs. This table
+# is deliberately empty: no alias or case coercion is currently authorized, so
+# normalization is the identity on today's vocabulary. A future alias must be
+# added here so acceptance (``thinking_is_valid``) and the captured canonical
+# value (``resolve_main_thinking``) change together in one owner. Provider
+# wire collapses (e.g. generic Chat's non-default -> "low") are emission
+# behavior and must NOT move into this table.
+THINKING_ALIASES: MappingProxyType[str, str] = MappingProxyType({})
+
+
+def normalize_thinking(value: object) -> object:
+    """Return the canonical spelling for an explicit thinking input."""
+    if isinstance(value, str):
+        return THINKING_ALIASES.get(value, value)
+    return value
+
+
+def thinking_is_valid(value: object) -> bool:
+    """Return the existing manifest thinking vocabulary/type result."""
+    return isinstance(value, str) and normalize_thinking(value) in THINKING_LEVELS
+
+
+def resolve_main_thinking(llm: dict) -> str:
+    """Resolve the existing main-session omission baseline."""
+    if "thinking" in llm:
+        return normalize_thinking(llm["thinking"])
+    provider = str(llm.get("provider") or "").lower()
+    if (
+        provider in THINKING_PROVIDERS
+        or provider in CLAUDE_THINKING_PROVIDERS
+        or provider in KIMI_THINKING_PROVIDERS
+        or provider in ZHIPU_THINKING_PROVIDERS
+    ):
+        return THINKING_OMITTED
+    return DEFAULT_THINKING
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt
@@ -119,6 +250,62 @@ def system_prompt_pressure_ratio() -> float:
 # prompts, status, or tool metadata.
 IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
 
+class _ThinkingConstructorOmitted:
+    """Unique identity sentinel marking "no thinking constructor argument"."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<thinking constructor omitted>"
+
+
+# Module-private constructor-omission sentinel for AgentConfig.thinking. It is a
+# unique object compared by IDENTITY, so no explicit string value — not even one
+# spelling out an internal sentinel name — can be reinterpreted as omission.
+# __post_init__ resolves it per provider scope and records the private
+# constructor-omission provenance fact; the sentinel never survives
+# construction and is not a configurable value.
+_THINKING_CONSTRUCTOR_OMITTED = _ThinkingConstructorOmitted()
+
+
+class _OmittedThinking:
+    """Module-private marker for a constructor-omitted ``thinking`` field.
+
+    Compared by IDENTITY only. It exists because ``AgentConfig.thinking``'s
+    historical default (``"high"``) is indistinguishable from an explicitly
+    configured ``"high"``, and the Claude Code route must not turn a silent
+    default into a real ``--effort high`` flag. ``__post_init__`` replaces it
+    with a concrete string, so no caller ever observes this object.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<AgentConfig.thinking omitted>"
+
+
+_THINKING_OMITTED_SENTINEL = _OmittedThinking()
+
+
+class _OmittedThinking:
+    """Module-private marker for a constructor-omitted ``thinking`` field.
+
+    Compared by IDENTITY only. It exists because ``AgentConfig.thinking``'s
+    historical default (``"high"``) is indistinguishable from an explicitly
+    configured ``"high"``, and the Kimi Code route must not turn a silent
+    default into a real ``KIMI_MODEL_THINKING_EFFORT=high`` — which the
+    always-thinking default model would reject outright. ``__post_init__``
+    replaces it with a concrete string, so no caller ever observes this object.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<AgentConfig.thinking omitted>"
+
+
+_THINKING_OMITTED_SENTINEL = _OmittedThinking()
+
 
 @dataclass
 class AgentConfig:
@@ -137,7 +324,13 @@ class AgentConfig:
     max_aed_attempts: int = 3   # max AED retry attempts per inbox message turn
     max_rpm: int = 60  # API requests-per-minute cap for this agent's provider; 0 = no gating. Shared across all agents in the same process that use the same (provider, base_url) pair (adapter cache key).
     thinking_budget: int | None = None
-    thinking: str = "high"  # reasoning/thinking tier passed to the main persistent LLM session
+    # Reasoning/thinking tier passed to the main persistent LLM session. The
+    # declared default is the module-private omitted sentinel, not a value:
+    # ``__post_init__`` resolves it per provider so a route that owns its own
+    # omission semantics (Claude Code, Codex, Kimi Code) keeps ``THINKING_OMITTED``
+    # instead of silently acquiring the legacy cross-provider ``"high"``. Every
+    # other provider still sees exactly ``"high"``.
+    thinking: str = _THINKING_OMITTED_SENTINEL  # type: ignore[assignment]
     data_dir: str | None = None  # for cache files (e.g., model context windows)
     soul_delay: float = DEFAULT_SOUL_DELAY_SECONDS  # seconds idle before soul whispers; large value = effectively off
     language: str = "en"  # legacy language field retained for compatibility; prompt.py no longer injects prose from it
@@ -187,6 +380,27 @@ class AgentConfig:
     snapshot_interval: float | None = None  # seconds between git snapshots; None = off
 
     def __post_init__(self):
+        # Resolve the constructor-omitted ``thinking`` sentinel before anything
+        # reads the field. Both provenance spellings are preserved so each PR's
+        # contract tests keep working: ``thinking_omitted`` (Claude Code / Kimi
+        # Code routes) and the legacy private ``_thinking_constructor_omitted``
+        # (Codex route). SessionManager, which knows the *effective* provider
+        # (this config's ``provider`` may be None, meaning "use the LLMService
+        # provider"), re-reads the provenance at its single create/rebuild seam.
+        self.thinking_omitted = self.thinking is _THINKING_OMITTED_SENTINEL
+        self._thinking_constructor_omitted = (
+            self.thinking is _THINKING_CONSTRUCTOR_OMITTED
+        )
+        if self.thinking_omitted or self._thinking_constructor_omitted:
+            provider = str(self.provider or "").lower()
+            self.thinking = (
+                THINKING_OMITTED
+                if provider in CLAUDE_THINKING_PROVIDERS
+                or provider in KIMI_THINKING_PROVIDERS
+                or provider in THINKING_PROVIDERS
+                else DEFAULT_THINKING
+            )
+
         # Clamp max_aed_attempts to at least 1.  A value of 0 or negative
         # causes the AED retry loop in turn.py to spin forever: aed_attempts
         # starts at 1 (incremented before the equality check) and never equals

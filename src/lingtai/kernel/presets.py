@@ -39,7 +39,16 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    CLAUDE_THINKING_PROVIDERS,
+    KIMI_THINKING_PROVIDERS,
+    THINKING_LEVELS,
+    THINKING_PROVIDERS,
+    ZHIPU_THINKING_PROVIDERS,
+    llm_supports_thinking,
+    thinking_is_valid,
+    thinking_levels_for_llm,
+)
 
 log = logging.getLogger(__name__)
 
@@ -358,18 +367,41 @@ def load_preset(
             f"preset {name!r} ({p}): context_limit must be an integer (got {type(ctx_limit).__name__})"
         )
     if "thinking" in llm:
-        if not llm_supports_thinking(llm):
+        # Provider-scoped vocabulary — see ``thinking_levels_for_llm``. Claude
+        # Code takes the installed CLI's five ``--effort`` levels; Kimi Code
+        # takes the K3 coding service's three native effort levels; Codex and
+        # custom Responses keep the six Responses values.
+        allowed = thinking_levels_for_llm(llm)
+        if allowed is None:
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking is currently "
                 "supported only for the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                f"({', '.join(THINKING_PROVIDERS)}), the Claude Code providers "
+                f"({', '.join(CLAUDE_THINKING_PROVIDERS)}), the Kimi Code "
+                f"providers ({', '.join(KIMI_THINKING_PROVIDERS)}) or custom "
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        provider = str(llm.get("provider") or "").lower()
+        if provider in THINKING_PROVIDERS:
+            # Codex thinking values are exact-model capabilities owned
+            # provider-locally; any non-empty exact string other than the
+            # reserved "default" sentinel is accepted.
+            if not isinstance(thinking, str) or not thinking or thinking == "default":
+                raise ValueError(
+                    f"preset {name!r} ({p}): manifest.llm.thinking must be a "
+                    "non-empty exact string; the reserved 'default' sentinel "
+                    "cannot be configured"
+                )
+        elif not isinstance(thinking, str) or thinking not in allowed:
+            scope = (
+                f" for provider {provider!r}"
+                if provider in ZHIPU_THINKING_PROVIDERS
+                else ""
+            )
             raise ValueError(
-                f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
-                f"{', '.join(THINKING_LEVELS)}"
+                f"preset {name!r} ({p}): manifest.llm.thinking{scope} must be "
+                f"one of {', '.join(allowed)}"
             )
 
     caps = manifest.get("capabilities", {})
