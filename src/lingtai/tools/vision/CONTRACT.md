@@ -54,11 +54,13 @@ credential read, or image read.
 
 `PROVIDERS["providers"]` is exactly: `gemini`, `anthropic`, `openai`,
 `openrouter`, `custom`, `deepseek`, `minimax`, `mimo`, `glm`, `zhipu`, `grok`,
-`qwen`, `kimi`, `codex`, `codex-pool`, `codex_pool`, `claude-code`, and
-`claude_code`. The local mlx-vlm pseudo-provider remains available only through
+`qwen`, `kimi`, `codex`, `codex-pool`, `codex_pool`, `claude-p`, `claude-code`,
+and `claude_code`. The local mlx-vlm pseudo-provider remains available only through
 explicit `add_capability(..., provider="local")` opt-in and is intentionally not
-advertised to wizards/check-caps. Claude Code is manual-only; Codex aliases use
-native Codex Responses; MiniMax uses the Anthropic route. OpenRouter and custom
+advertised to wizards/check-caps. Claude Code returns explicit "use the Claude
+CLI for vision" guidance (`claude -p "Analyze this image: <path>"` plus the
+manual reference); Codex aliases use native Codex Responses; MiniMax uses the
+Anthropic route. OpenRouter and custom
 deliberately try the current OpenAI-compatible model/endpoint/credential without
 preflighting image support; other compatible aliases use the current
 OpenAI/Anthropic identity. A real request failure is returned as a sanitized

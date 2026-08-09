@@ -47,8 +47,10 @@ result shape.
 - Setup lazily reaches `lingtai.services.vision` and the Codex pool selector.
 - Direct compatible aliases (`openrouter`, `deepseek`, `zhipu`, `glm`, `grok`,
   `qwen`, `kimi`, `custom`) use current OpenAI/Anthropic-compatible identity.
-- MiniMax uses Anthropic; Codex aliases use the Codex service; Claude Code and
-  unresolved/unsupported routes remain manual-only. No MCP fallback is used.
+- MiniMax uses Anthropic; Codex aliases use the Codex service; Claude Code
+  (`claude-code`/`claude_code`/`claude-p`) returns explicit "use the Claude CLI
+  for vision" guidance; unresolved/unsupported routes remain manual-only. No
+  MCP fallback is used.
 
 ## Composition
 

@@ -68,9 +68,9 @@ def test_setup_registers_exactly_one_public_vision_root(tmp_path):
     assert agent.tools["vision"]["glossary_package"] == "lingtai.tools.vision"
 
 
-def test_public_actions_are_exactly_analyze_and_manual():
+def test_public_actions_are_exactly_analyze_check_and_manual():
     schema = get_schema()
-    assert schema["properties"]["action"]["enum"] == ["analyze", "manual"]
+    assert schema["properties"]["action"]["enum"] == ["analyze", "check", "manual"]
 
 
 # ---------------------------------------------------------------------------
@@ -94,8 +94,8 @@ def test_root_schema_correlates_each_action_const_with_its_own_input():
         cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
         for cond in schema["allOf"]
     }
-    assert set(conditions) == {"analyze", "manual"}
-    assert set(conditions["analyze"]["properties"]) == {"image_path", "question"}
+    assert set(conditions) == {"analyze", "check", "manual"}
+    assert set(conditions["analyze"]["properties"]) == {"image_path", "question", "preset"}
     assert conditions["manual"]["properties"] == {}
     for cond in schema["allOf"]:
         # A strict ``if`` with a missing property matches vacuously; the guard
@@ -105,15 +105,22 @@ def test_root_schema_correlates_each_action_const_with_its_own_input():
 
 def test_both_child_input_schemas_are_exposed_before_invocation():
     branches = get_schema()["properties"]["input"]["oneOf"]
-    assert [b["title"] for b in branches] == ["analyze input", "manual input"]
+    assert [b["title"] for b in branches] == ["analyze input", "check input", "manual input"]
 
-    analyze_branch, manual_branch = branches
+    analyze_branch, check_branch, manual_branch = branches
     assert analyze_branch["required"] == ["image_path", "question"]
     assert analyze_branch["additionalProperties"] is False
     assert analyze_branch["properties"]["image_path"]["type"] == "string"
     # Optional ``question`` is a required nullable property, matching the
     # strict-object convention the other migrated families use.
     assert analyze_branch["properties"]["question"]["type"] == ["string", "null"]
+
+    # Optional ``preset`` on analyze is a nullable property.
+    assert analyze_branch["properties"]["preset"]["type"] == ["string", "null"]
+
+    # check takes only the optional preset; no image fields.
+    assert set(check_branch["properties"]) == {"preset"}
+    assert check_branch["additionalProperties"] is False
 
     assert manual_branch["properties"] == {}
     assert manual_branch["additionalProperties"] is False
@@ -450,7 +457,7 @@ def test_no_bare_manual_pointer_survives_in_any_vision_owned_surface():
 
 def test_family_registers_the_reserved_manual_child_once(tmp_path):
     mgr = _manager(tmp_path)
-    assert mgr._family.child_names == ("analyze", "manual")
+    assert mgr._family.child_names == ("analyze", "check", "manual")
     assert mgr._family.has_manual()
 
 
@@ -480,7 +487,7 @@ def test_manual_child_input_schema_is_the_generic_owners_object(tmp_path):
     """
     from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
-    manual_branch = get_schema()["properties"]["input"]["oneOf"][1]
+    manual_branch = get_schema()["properties"]["input"]["oneOf"][2]
     assert manual_branch["properties"] == MANUAL_INPUT_SCHEMA["properties"]
     assert manual_branch["additionalProperties"] is False
     assert manual_branch.get("required") == MANUAL_INPUT_SCHEMA["required"] == []
@@ -508,9 +515,9 @@ def test_vision_schema_survives_both_provider_wires():
         assert wire["required"] == ["action", "input", "reasoning"]
         assert wire["additionalProperties"] is False
         assert set(wire["properties"]) == {"action", "input", "reasoning", "summarize"}
-        assert wire["properties"]["action"]["enum"] == ["analyze", "manual"]
+        assert wire["properties"]["action"]["enum"] == ["analyze", "check", "manual"]
         branches = wire["properties"]["input"][combinator]
-        assert [b["title"] for b in branches] == ["analyze input", "manual input"]
+        assert [b["title"] for b in branches] == ["analyze input", "check input", "manual input"]
         for branch in branches:
             assert branch["additionalProperties"] is False
             assert not {"reasoning", "_reasoning", "summarize"} & set(
@@ -522,8 +529,8 @@ def test_vision_schema_survives_both_provider_wires():
             cond["if"]["properties"]["action"]["const"]: cond["then"]["properties"]["input"]
             for cond in wire["allOf"]
         }
-        assert set(correlated) == {"analyze", "manual"}
-        assert set(correlated["analyze"]["properties"]) == {"image_path", "question"}
+        assert set(correlated) == {"analyze", "check", "manual"}
+        assert set(correlated["analyze"]["properties"]) == {"image_path", "question", "preset"}
         assert correlated["manual"]["properties"] == {}
 
 
@@ -596,3 +603,238 @@ def test_dispatch_is_identical_regardless_of_originating_wire(tmp_path):
         {"action": "analyze", "input": {"image_path": str(img), "question": "Q"}, "reasoning": "responses-wire"}
     )
     assert chat_call == responses_call == {"status": "ok", "analysis": "same answer"}
+
+
+# ---------------------------------------------------------------------------
+# preset borrowing: one call may borrow another allowed preset's vision service
+# ---------------------------------------------------------------------------
+
+
+def _write_preset_borrow_fixture(tmp_path: Path) -> dict:
+    """Write init.json (allowed preset) plus a borrowable codex-pool preset file.
+
+    Returns the manifest dict mirrored in init.json for assertions.
+    """
+    preset_dir = tmp_path / "presets"
+    preset_dir.mkdir(parents=True, exist_ok=True)
+    (preset_dir / "codex-pool.json").write_text(
+        """{
+          "name": "codex-pool",
+          "description": {"summary": "fixture preset with gpt-5.6 vision"},
+          "manifest": {
+            "llm": {
+              "provider": "codex-pool",
+              "model": "gpt-5.6",
+              "base_url": "https://example.test/v1"
+            },
+            "capabilities": {
+              "vision": {"provider": "codex-pool"}
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    manifest = {
+        "preset": {"allowed": ["presets/codex-pool.json"]},
+    }
+    (tmp_path / "init.json").write_text(
+        '{"manifest": ' + __import__("json").dumps(manifest) + "}",
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def test_preset_borrow_rejects_a_preset_not_in_manifest_allowed(tmp_path):
+    # No init.json at all -> cannot resolve allowed, borrow fails closed.
+    mgr = _manager(tmp_path, _never_called_service())
+    svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
+    assert svc is None
+    assert identity == {}
+    assert "manifest.preset.allowed" in reason
+
+
+def test_preset_borrow_rejects_unlisted_preset_when_init_exists(tmp_path):
+    _write_preset_borrow_fixture(tmp_path)
+    mgr = _manager(tmp_path, _never_called_service())
+    svc, reason, identity = mgr._build_service_from_preset("presets/other.json")
+    assert svc is None
+    assert identity == {}
+    assert "not in manifest.preset.allowed" in reason
+
+
+def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
+    """The borrowed preset's llm/capabilities feed an identity shim, so the
+    codex-pool preset selects its own route instead of the active provider's."""
+    _write_preset_borrow_fixture(tmp_path)
+
+    borrowed = MagicMock(spec=VisionService)
+    borrowed.analyze_image.return_value = "borrowed gpt-5.6 answer"
+
+    with patch(
+        "lingtai.tools.vision._resolve_direct_service",
+        return_value=(borrowed, ""),
+    ) as mock_resolve:
+        mgr = _manager(tmp_path, _never_called_service())
+        svc, reason, identity = mgr._build_service_from_preset("presets/codex-pool.json")
+
+    assert svc is borrowed
+    assert reason == ""
+    assert identity == {"provider": "codex-pool", "model": "gpt-5.6", "base_url": "https://example.test/v1"}
+    mock_resolve.assert_called_once()
+    kwargs = mock_resolve.call_args.kwargs
+    identity = kwargs["identity_service"]
+    assert kwargs["provider"] == "codex-pool"
+    assert identity.provider == "codex-pool"
+    assert identity._model == "gpt-5.6"
+    assert identity._base_url == "https://example.test/v1"
+
+
+def test_analyze_with_preset_option_uses_the_borrowed_service(tmp_path):
+    """An analyze call carrying the optional preset field dispatches through the
+    borrowed service, not the default (never-called) service."""
+    _write_preset_borrow_fixture(tmp_path)
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"fake")
+    borrowed = MagicMock(spec=VisionService)
+    borrowed.analyze_image.return_value = "borrowed answer"
+
+    with patch(
+        "lingtai.tools.vision._resolve_direct_service",
+        return_value=(borrowed, ""),
+    ):
+        mgr = _manager(tmp_path, _never_called_service())
+        result = mgr.handle(
+            {
+                "action": "analyze",
+                "input": {
+                    "image_path": str(img),
+                    "question": "What color?",
+                    "preset": "presets/codex-pool.json",
+                },
+                "reasoning": "borrow codex-pool vision",
+            }
+        )
+    assert result == {"status": "ok", "analysis": "borrowed answer"}
+    borrowed.analyze_image.assert_called_once_with(str(img), prompt="What color?")
+
+
+def test_analyze_preset_borrow_failure_is_sanitized_and_teaches_manual(tmp_path):
+    """A borrow failure (e.g. preset not authorized) returns the explicit error
+    and points to the full accepted manual envelope."""
+    _write_preset_borrow_fixture(tmp_path)
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"fake")
+
+    mgr = _manager(tmp_path, _never_called_service())
+    result = mgr.handle(
+        {
+            "action": "analyze",
+            "input": {
+                "image_path": str(img),
+                "question": None,
+                "preset": "presets/other.json",
+            },
+            "reasoning": "borrow unlisted preset",
+        }
+    )
+    assert result["status"] == "error"
+    assert "not in manifest.preset.allowed" in result["message"]
+    assert "vision(action='manual', input={}" in result["message"]
+    assert "reasoning=" in result["message"]
+
+
+def test_analyze_without_preset_still_uses_the_default_route(tmp_path):
+    """Omitting the preset option leaves the pre-existing default routing intact."""
+    _write_preset_borrow_fixture(tmp_path)
+    img = tmp_path / "photo.png"
+    img.write_bytes(b"fake")
+    svc = MagicMock(spec=VisionService)
+    svc.analyze_image.return_value = "default answer"
+
+    with patch("lingtai.tools.vision._resolve_direct_service") as mock_resolve:
+        mgr = _manager(tmp_path, svc)
+        result = mgr.handle(
+            {
+                "action": "analyze",
+                "input": {"image_path": str(img), "question": "Q"},
+                "reasoning": "default route",
+            }
+        )
+    mock_resolve.assert_not_called()
+    assert result == {"status": "ok", "analysis": "default answer"}
+
+def test_check_default_route_reports_ok_without_image(tmp_path):
+    """check with no preset reports the default route and never sends an image."""
+    svc = MagicMock(spec=VisionService)
+    svc.analyze_image.side_effect = AssertionError("check must not call analyze_image")
+    agent = _StubAgent(tmp_path)
+    agent.service = MagicMock()
+    agent.service.provider = "codex-pool"
+    agent.service.model = "gpt-5.6"
+    mgr = VisionManager(agent, vision_service=svc)
+
+    result = mgr.handle(
+        {"action": "check", "input": {"preset": None}, "reasoning": "which vision works"}
+    )
+    assert result == {
+        "status": "ok",
+        "route": "default",
+        "provider": "codex-pool",
+        "model": "gpt-5.6",
+    }
+    svc.analyze_image.assert_not_called()
+
+
+def test_check_no_default_route_returns_manual_reason(tmp_path):
+    reason = (
+        "No direct vision provider was configured; use vision(action='manual', "
+        "input={}, reasoning='no direct vision provider is configured')."
+    )
+    mgr = VisionManager(_StubAgent(tmp_path), vision_service=None, manual_reason=reason)
+    result = mgr.handle(
+        {"action": "check", "input": {"preset": None}, "reasoning": "r"}
+    )
+    assert result["status"] == "error"
+    assert "No direct vision provider" in result["message"]
+
+
+def test_check_preset_reports_identity_without_image(tmp_path):
+    """check with a preset borrows its service and reports provider/model."""
+    _write_preset_borrow_fixture(tmp_path)
+    borrowed = MagicMock(spec=VisionService)
+    borrowed.analyze_image.side_effect = AssertionError("check must not analyze")
+
+    with patch(
+        "lingtai.tools.vision._resolve_direct_service",
+        return_value=(borrowed, ""),
+    ):
+        mgr = _manager(tmp_path, _never_called_service())
+        result = mgr.handle(
+            {
+                "action": "check",
+                "input": {"preset": "presets/codex-pool.json"},
+                "reasoning": "check codex-pool vision",
+            }
+        )
+    assert result["status"] == "ok"
+    assert result["route"] == "preset:presets/codex-pool.json"
+    assert result["provider"] == "codex-pool"
+    assert result["model"] == "gpt-5.6"
+    borrowed.analyze_image.assert_not_called()
+
+
+def test_check_unlisted_preset_fails_sanitized(tmp_path):
+    """check fails closed when the preset is not authorized."""
+    _write_preset_borrow_fixture(tmp_path)
+    mgr = _manager(tmp_path, _never_called_service())
+    result = mgr.handle(
+        {
+            "action": "check",
+            "input": {"preset": "presets/other.json"},
+            "reasoning": "r",
+        }
+    )
+    assert result["status"] == "error"
+    assert "not in manifest.preset.allowed" in result["message"]
+    assert "vision(action='manual', input={}" in result["message"]

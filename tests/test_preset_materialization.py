@@ -580,7 +580,10 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
     mentions daemon. daemon is always-on (CORE_DEFAULTS), so init.json's
     daemon.max_emanations=30 must be carried into the materialized manifest;
     otherwise apply_core_defaults later re-adds daemon={} and the override is
-    lost. Non-core capabilities the preset omits are still dropped (the swap).
+    lost. vision is also a CORE_DEFAULTS capability (always registered, default
+    route inherits the active LLM), so an explicit init.json vision override
+    survives materialization too. Non-core capabilities the preset omits are
+    still dropped (the swap).
     """
     plib = _make_preset_lib(tmp_path, {
         "codex": {
@@ -599,7 +602,7 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
         tmp_path, active_preset=str(plib / "codex.json"),
         manifest_extra={"capabilities": {
             "daemon": {"max_emanations": 30},   # core default — must survive
-            "vision": {"provider": "custom"},   # non-core, preset omits — must drop
+            "vision": {"provider": "custom"},   # core default — must survive
         }},
     )
     a = _make_probe_agent(wd)
@@ -608,10 +611,11 @@ def test_materialize_preserves_core_default_override_when_preset_omits_it(tmp_pa
     # Core-default daemon override carried forward despite preset omitting it.
     assert "daemon" in caps
     assert caps["daemon"]["max_emanations"] == 30
+    # Core-default vision override is carried forward the same way.
+    assert "vision" in caps
+    assert caps["vision"] == {"provider": "custom"}
     # Preset still owns the explicit opt-in set, emitted canonically.
     assert "web" in caps
-    # Non-core optional capability that the preset omits is NOT carried over.
-    assert "vision" not in caps
 
 
 def test_materialize_core_default_no_init_override_left_to_apply_core_defaults(tmp_path, monkeypatch):

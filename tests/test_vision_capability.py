@@ -258,12 +258,30 @@ def test_generic_openai_compatible_unknown_wire_remains_manual(tmp_path):
 
 
 def test_claude_code_remains_manual_only(tmp_path):
+    """Claude Code providers return explicit "use the Claude CLI" guidance."""
     agent = make_provider_agent(
         tmp_path, provider="claude-code", model="text-only", base_url="https://relay.example/v1"
     )
     mgr = setup(agent, provider="claude-code", api_key="sk-test")
     assert mgr._vision_service is None
+    assert "claude -p" in mgr._manual_reason
+    assert "vision(action='manual'" in mgr._manual_reason
     assert mgr.manual()["status"] in {"ok", "degraded"}
+
+
+@pytest.mark.parametrize("provider", ["claude-p", "claude-code", "claude_code"])
+def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
+    """Every claude-family spelling routes to the claude-cli guidance comment."""
+    agent = make_provider_agent(
+        tmp_path, provider=provider, model="text-only", base_url="https://relay.example/v1"
+    )
+    mgr = setup(agent, provider=provider, api_key="sk-test")
+    assert mgr._vision_service is None
+    assert "claude -p" in mgr._manual_reason
+    assert "vision(action='manual'" in mgr._manual_reason
+    result = mgr._dispatch_analyze({"image_path": "x.png", "question": None})
+    assert result["status"] == "error"
+    assert "claude -p" in result["message"]
 
 
 def test_vision_empty_response_is_error(tmp_path):
@@ -349,7 +367,7 @@ def test_local_vision_is_advertised_and_requires_model(tmp_path):
 
 def test_local_vision_missing_model_result_guides_with_consent(tmp_path):
     """The analyze result on a missing-service setup failure guides setup with consent."""
-    with patch("lingtai.services.vision.openai.OpenAIVisionService") as mock_svc_cls:
+    with patch("lingtai.services.vision.openai.OpenAIVisionService") as _mock_svc_cls:
         agent = make_mock_agent(tmp_path)
         mgr = setup(agent, provider="local")
 

@@ -4,7 +4,7 @@ description: >
   Use this manual when the vision capability has no usable provider route or
   reports a direct setup/request failure and needs safe, provider-neutral
   troubleshooting guidance.
-last_changed_at: 2026-07-27T00:00:00Z
+last_changed_at: 2026-08-09T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
@@ -24,7 +24,16 @@ it does not discover, install, start, or invoke a backend.
 
 - `vision(action="analyze", input={"image_path": "...", "question": null},
   reasoning="...")` — the direct image request. `question` is optional: send
-  `null` to use the default "Describe what you see in this image."
+  `null` to use the default "Describe what you see in this image." The optional
+  `preset` input field borrows another allowed preset's vision service for this
+  one call (e.g. `"preset": "codex-pool"`); it must be a path listed in
+  `manifest.preset.allowed`.
+- `vision(action="check", input={"preset": null}, reasoning="...")` — resolve
+  which vision route actually works without sending an image. With a `preset`
+  value it borrows that preset's service and reports the resolved
+  provider/model; with `null` it checks the default route. It constructs the
+  service but never makes a provider call, so it costs nothing and cannot fail
+  on image content.
 - `vision(action="manual", input={}, reasoning="...")` — this guidance. Its
   input is strictly empty and it performs no analyze operation.
 
@@ -35,19 +44,66 @@ other action, is rejected before anything is sent to a provider.
 
 ## Route behavior and failures
 
-For OpenRouter and custom OpenAI-compatible presets, `analyze` first tries the
-current endpoint, model, and credential. It does not reject the route merely
-because downstream image support cannot be known in advance. Any direct setup or
-request failure returns a sanitized vision tool result that reports the failure
-type and points here for explicit alternatives; it never exposes exception
-contents.
+`vision` is always registered. With no explicit `provider`, `analyze` defaults
+its route to the active LLM's own Responses API (model, endpoint, and
+credential inherited from the current provider). For OpenRouter and custom
+OpenAI-compatible presets, `analyze` first tries the current endpoint, model,
+and credential. It does not reject the route merely because downstream image
+support cannot be known in advance. A call may instead borrow another allowed
+preset's vision service with the `preset` input option; that preset must be
+listed in `manifest.preset.allowed`, and its own provider/model/credential
+identity (e.g. a `codex-pool` preset selecting its OAuth pool) is used for that
+one call. Any direct setup or request failure returns a sanitized vision tool
+result that reports the failure type and points here for explicit alternatives;
+it never exposes exception contents.
+
+## Claude backend: use the Claude CLI for vision
+
+When the active provider is a Claude-family backend (`claude-code`, `claude_code`,
+or the `claude-p` vision alias), the vision capability does not proxy Claude's
+own CLI authentication. The analyze call fails closed with explicit guidance
+instead of constructing a service:
+
+> You are using claude as backend, therefore to use vision run `claude -p`;
+> see the vision manual for more details.
+
+### How Claude CLI vision works
+
+Claude Code attaches images by file path: when the prompt references an image
+path, the CLI reads the file and sends it to the model as an image input block
+alongside the text. `-p` / `--print` is the non-interactive print mode, so the
+analysis is returned as plain text on stdout — ideal for scripting.
+
+- Run in print mode with the image path referenced in the prompt:
+  `claude -p "Analyze this image: /path/to/image.png"`.
+- Supported image formats include JPEG, PNG, and GIF (GIF uses the first
+  frame). The CLI uses its own authentication (claude.ai subscription, API
+  key, or a configured provider) and its own cost model.
+- The CLI may also accept the image as a positional argument or via paste in
+  interactive mode; print mode with the path in the prompt is the scriptable
+  route.
+
+### Progressive disclosure to the official docs
+
+For the latest authoritative explanation of image input, supported formats,
+output formats, and model support, progressively read the Claude Code CLI
+documentation on the official website:
+
+- CLI reference: <https://code.claude.com/docs/en/cli-reference>
+- Image workflows: <https://code.claude.com/docs/en/common-workflows>
+
+This manual never auto-invokes the CLI; running `claude -p` is an explicit
+operator/agent action with the CLI's own auth and cost model.
 
 ## Stay on the active preset
 
 Inspect the identity already shown in the prompt: the current provider, model,
-and sanitized endpoint. Do not substitute another provider, model, credential,
-endpoint, or wire protocol, and never silently switch or auto-invoke an MCP.
-Retry only after the operator has corrected the active preset.
+and sanitized endpoint. The default route follows the active LLM; do not
+substitute another provider, model, credential, endpoint, or wire protocol, and
+never silently switch or auto-invoke an MCP. If the active route cannot see
+images, the call fails explicitly; borrow another preset's vision service only
+when it is already authorized in `manifest.preset.allowed`. Retry only after the
+operator has corrected the active preset.
 
 ## Find the current preset's method
 
@@ -136,11 +192,13 @@ defaults to `http://localhost:11434/v1`; change it when the server runs on a
 non-default port (the `/v1` OpenAI-compatible suffix is required). `api_key` is
 optional - local servers ignore it, so a placeholder is synthesized.
 
-> **Preset note.** If your agent uses an active preset (a `manifest.preset`
-> block), the preset's `manifest.capabilities` replace `init.json`'s for
-> non-core opt-in capabilities like `vision`. Add the `vision` entry to the
-> preset file (or the `default` preset) rather than only to `init.json`, then
-> refresh.
+> **Preset note.** `vision` is always registered; an explicit `capabilities.vision`
+> entry is **not** required to make the tool appear. The default route inherits
+> the active LLM's own Responses API. A capability-manifest entry (in
+> `init.json` or the active preset) is only needed to override that default,
+> e.g. to point at `provider="local"`. To borrow another preset's vision
+> service for a single call, list that preset in `manifest.preset.allowed` and
+> pass `preset` on the analyze call; no `capabilities.vision` edit is needed.
 
 ### 3. Use it
 
@@ -155,7 +213,7 @@ sanitized setup failure instead, check the troubleshooting table below.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| "No direct vision provider was configured" | The `vision` capability is not in the effective manifest. Add it to the preset (see the preset note above), then refresh. |
+| "No direct vision provider was configured" | No explicit provider and no usable active-LLM route. The tool is always registered; either borrow an allowed preset's vision service via the `preset` option, or configure a local route (see below), then refresh. |
 | "Local vision needs an explicit model" | No `model` is set in `settings/vision.json` or the capability manifest. Set `model` to a pulled/served vision model name, then refresh. |
 | "Local vision settings are invalid" | `settings/vision.json` has an unknown field, bad type, or a schema_version other than 1. Fix the file and refresh. |
 | Connection refused on the endpoint | The local server is not running. Start it (`ollama serve` or the desktop app) and retry. |
