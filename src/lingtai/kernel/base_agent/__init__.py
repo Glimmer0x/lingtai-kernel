@@ -547,6 +547,20 @@ class BaseAgent:
         manifest_data = _build_manifest(self)
         self._workdir.write_manifest(manifest_data)
 
+        # Construction is MANUAL.md's third mechanical regeneration point
+        # (template-version check only) — the one avatars reach, since they
+        # never pass through refresh or molt before first use. Fail-soft: a
+        # manual problem must never break construction.
+        try:
+            from ..agent_manual import collect_agent_facts, ensure_agent_manual
+
+            ensure_agent_manual(
+                self._working_dir,
+                facts=collect_agent_facts(self, manifest=manifest_data),
+            )
+        except Exception:
+            pass
+
         # Auto-inject identity into system prompt from manifest
         self._prompt_manager.write_section(
             "identity",

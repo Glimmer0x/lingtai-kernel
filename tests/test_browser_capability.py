@@ -203,8 +203,13 @@ def test_web_action_input_search_to_link_ref_browse(tmp_path):
         })
         assert browsed["status"] == "ok"
         assert browsed["requested_url"] == "https://public.example/page"
+        # A root-level key that IS a declared property of the selected
+        # action's schema and is entirely absent from ``input`` is relocated
+        # into ``input`` rather than rejected (issue #1251) — the search must
+        # run with the relocated query.
         flat = handler({"action": "search", "input": {}, "query": "legacy flat"})
-        assert flat["error_code"] == "INVALID_ARGUMENT"
+        assert flat["status"] == "ok"
+        assert search.queries == ["mission interval", "legacy flat"]
         engine = handler({"action": "manual", "input": {"engine": "duckduckgo"}})
         assert engine["error_code"] == "INVALID_ARGUMENT"
         for legacy_key in ("parameters", "parameter"):

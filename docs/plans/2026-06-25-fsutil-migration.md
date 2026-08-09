@@ -60,7 +60,8 @@ These are migration *candidates*, not a commitment to change every one.
 ### Stage 1 — riskiest crash-sensitive / model-visible state (do first)
 - [x] `workdir.py::WorkingDir.write_manifest` (`.agent.json`) — **migrated here**
 - [x] `base_agent/__init__.py::_write_status_snapshot` (`.status.json`) — migrated with byte-parity coverage and opt-in existing-mode retention
-- [ ] `workdir.py::write_resolved_manifest` (`manifest.resolved.json`, trailing newline → pass explicit newline or keep inline)
+- [x] `workdir.py::write_resolved_manifest` (`manifest.resolved.json`, trailing newline kept via `atomic_write_text(json.dumps(...) + "\n")`; unique sibling temp removes the fixed-`.tmp` race) — migrated in the #756 PR
+- [x] `adapters/posix/mail.py` `message.json` writes (`PosixFilesystemMailAdapter` `send`, pseudo-agent claim delivery, runtime-probe ack) — migrated to `atomic_write_json` in the #756 PR
 - [x] notification files (`.notification/*.json`) — migrated to `atomic_write_json` (`adapters/posix/notification_store.py`)
 - [ ] `tools/email/primitives.py` message/`message.json` writes (currently direct `write_text`; some non-contact paths can escape non-ASCII)
 - [ ] `tools/email/manager.py` contact persistence (already atomic via `mkstemp`+`os.replace`; migrate for consistency)
@@ -73,7 +74,8 @@ These are migration *candidates*, not a commitment to change every one.
 
 ### Stage 3 — broader writes + retire local helpers
 - [ ] `migrate/*.py` write/replace sites
-- [ ] `tools/soul/config.py`, psyche snapshot/molt/archive writers
+- [x] `tools/soul/config.py` init.json persistence (`_atomic_write_init` → `atomic_write_text(fsync=True)`) — migrated in the #756 PR
+- [ ] psyche snapshot/molt/archive writers
 - [ ] remaining `read_json(default=...)`-style local readers → `_fsutil.read_json`
 
 Each checkbox above should land as (or within) its own PR with format-parity

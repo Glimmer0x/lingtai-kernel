@@ -220,6 +220,7 @@ the network root (`<parent>/..`):
   .prompt                         # first-turn brief (parent identity + reasoning), consumed once
   .rules                          # distributed rules signal
   logs/spawn.stderr               # captured child stderr for boot diagnosis
+  logs/agent.log                  # rotating stdlib logging (boot + runtime warnings)
   system/ knowledge/ exports/ combo.json   # deep mode only
 ```
 

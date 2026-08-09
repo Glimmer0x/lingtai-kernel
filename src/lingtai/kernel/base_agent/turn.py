@@ -1231,19 +1231,22 @@ def _turn_boundary_housekeeping(agent) -> None:
        so the trio's order and error-handling contract are unchanged.
 
     Steps 2 and 3 are best-effort and must never abort the turn, so each is
-    guarded independently. This deliberately excludes the standalone
-    IDLE-boundary notification check in ``_run_loop``, which has different
-    control flow and must not be folded in here.
+    guarded independently and its failures are logged as structured events
+    (``turn_boundary_notification_sync_error`` /
+    ``turn_boundary_rescan_error``) instead of being silently swallowed.
+    This deliberately excludes the standalone IDLE-boundary notification
+    check in ``_run_loop``, which has different control flow and must not be
+    folded in here.
     """
     _check_molt_pressure(agent)
     try:
         agent._sync_notifications()
-    except Exception:
-        pass
+    except Exception as e:
+        agent._log("turn_boundary_notification_sync_error", error=str(e))
     try:
         agent._rescan_large_tool_results()
-    except Exception:
-        pass
+    except Exception as e:
+        agent._log("turn_boundary_rescan_error", error=str(e))
 
 
 def _is_context_molt_call(tc) -> bool:

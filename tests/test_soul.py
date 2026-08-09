@@ -665,3 +665,48 @@ def test_consultation_fire_discards_late_result_after_state_change(monkeypatch):
     # consultation_discarded_state event.
     agent._tc_inbox.enqueue.assert_not_called()
     assert any(name == "consultation_fire" for name, _ in agent._logs)
+
+
+# ---------------------------------------------------------------------------
+# _atomic_write_init — _fsutil migration format parity + error contract
+# ---------------------------------------------------------------------------
+
+def test_atomic_write_init_format_parity(tmp_path):
+    """The _fsutil-migrated init.json write is byte-identical to the legacy
+    format (indent=2, ensure_ascii=False, trailing newline) and leaves no
+    temp file beside init.json."""
+    import json as _json
+
+    from lingtai.tools.soul.config import _atomic_write_init
+
+    init_path = tmp_path / "init.json"
+    data = {
+        "manifest": {"soul": {"voice": "内省", "delay": 120}},
+        "principle": "p",
+    }
+    err = _atomic_write_init(init_path, data)
+    assert err is None
+
+    expected = _json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    assert init_path.read_text(encoding="utf-8") == expected
+    # ensure_ascii=False really round-trips non-ASCII bytes
+    assert "内省" in init_path.read_text(encoding="utf-8")
+    assert _json.loads(init_path.read_text(encoding="utf-8")) == data
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_write_init_error_string_on_failure(tmp_path):
+    """An unwritable target returns the truncated error-string contract (no
+    exception escapes) and leaves no temp litter behind."""
+    from lingtai.tools.soul.config import _atomic_write_init
+
+    ro_dir = tmp_path / "ro"
+    ro_dir.mkdir()
+    ro_dir.chmod(0o500)
+    try:
+        err = _atomic_write_init(ro_dir / "init.json", {"manifest": {}})
+        assert err is not None
+        assert err.startswith("failed to write init.json:")
+    finally:
+        ro_dir.chmod(0o700)
+    assert not list(ro_dir.glob("*.tmp"))

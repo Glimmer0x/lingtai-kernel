@@ -3,13 +3,15 @@
 Before consolidation, three turn.py branches inlined the same trio:
 
     _check_molt_pressure(agent)          # bare — errors propagate
-    try: agent._sync_notifications()     # guarded — errors swallowed
-    except Exception: pass
-    try: agent._rescan_large_tool_results()  # guarded — errors swallowed
-    except Exception: pass
+    try: agent._sync_notifications()     # guarded — errors logged
+    except Exception as e: agent._log("turn_boundary_notification_sync_error", ...)
+    try: agent._rescan_large_tool_results()  # guarded — errors logged
+    except Exception as e: agent._log("turn_boundary_rescan_error", ...)
 
-These tests pin that exact contract on `_turn_boundary_housekeeping` so the
-refactor cannot silently change which step swallows errors or the call order.
+These tests pin that contract on `_turn_boundary_housekeeping` so the
+refactor cannot silently change which step swallows errors, drops the
+observability log, or reorders the calls (issue #657: notification sync
+errors were previously swallowed with zero logging).
 """
 
 import pytest
@@ -20,6 +22,7 @@ from lingtai.kernel.base_agent import turn
 class _FakeAgent:
     def __init__(self):
         self.calls = []
+        self.logged = []
         # No "context" intrinsic → real _check_molt_pressure returns early,
         # but tests monkeypatch it anyway to assert it is invoked first.
         self._intrinsics = {}
@@ -36,6 +39,9 @@ class _FakeAgent:
         if self.rescan_raises:
             raise RuntimeError("boom-rescan")
 
+    def _log(self, event_type: str, **fields) -> None:
+        self.logged.append((event_type, fields))
+
 
 def test_runs_trio_in_order(monkeypatch):
     agent = _FakeAgent()
@@ -44,22 +50,29 @@ def test_runs_trio_in_order(monkeypatch):
     turn._turn_boundary_housekeeping(agent)
     assert molt_called == [agent]
     assert agent.calls == ["sync", "rescan"]
+    assert agent.logged == []
 
 
-def test_sync_error_is_swallowed_and_rescan_still_runs(monkeypatch):
+def test_sync_error_is_logged_and_rescan_still_runs(monkeypatch):
     agent = _FakeAgent()
     agent.sync_raises = True
     monkeypatch.setattr(turn, "_check_molt_pressure", lambda a: None)
     turn._turn_boundary_housekeeping(agent)  # must not raise
     assert agent.calls == ["sync", "rescan"]
+    assert agent.logged == [
+        ("turn_boundary_notification_sync_error", {"error": "boom-sync"})
+    ]
 
 
-def test_rescan_error_is_swallowed(monkeypatch):
+def test_rescan_error_is_logged(monkeypatch):
     agent = _FakeAgent()
     agent.rescan_raises = True
     monkeypatch.setattr(turn, "_check_molt_pressure", lambda a: None)
     turn._turn_boundary_housekeeping(agent)  # must not raise
     assert agent.calls == ["sync", "rescan"]
+    assert agent.logged == [
+        ("turn_boundary_rescan_error", {"error": "boom-rescan"})
+    ]
 
 
 def test_molt_pressure_error_propagates(monkeypatch):

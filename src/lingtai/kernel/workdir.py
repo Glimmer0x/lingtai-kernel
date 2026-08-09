@@ -8,7 +8,6 @@ Core-owned ``lingtai.kernel.workdir_lease.WorkdirLeasePort`` and its production
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ _MANIFEST_CORRUPT_FILE = ".agent.json.corrupt"
 _HEARTBEAT_FILE = ".agent.heartbeat"
 _STATUS_FILE = ".status.json"
 _INIT_FILE = "init.json"
+_MANUAL_FILE = "MANUAL.md"
 _SYSTEM_DIR = "system"
 _LOGS_DIR = "logs"
 _HISTORY_DIR = "history"
@@ -74,6 +74,10 @@ class WorkdirLayout:
         return self.root / _INIT_FILE
 
     @property
+    def manual(self) -> Path:
+        return self.root / _MANUAL_FILE
+
+    @property
     def system_dir(self) -> Path:
         return self.root / _SYSTEM_DIR
 
@@ -104,10 +108,6 @@ class WorkdirLayout:
     @property
     def resolved_manifest(self) -> Path:
         return self.system_dir / _RESOLVED_MANIFEST_FILE
-
-    @property
-    def resolved_manifest_tmp(self) -> Path:
-        return self.system_dir / (_RESOLVED_MANIFEST_FILE + ".tmp")
 
     def notification_file(self, channel: str) -> Path:
         """Path to a ``.notification/<channel>.json`` file (no validation)."""
@@ -189,10 +189,12 @@ def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
     (issue #259).
 
     Secrets (api_key/password/token-like fields) are removed recursively.
-    The write is atomic (``.tmp`` → ``os.replace``) and best-effort: returns
-    the artifact path on success, None when *data* has no manifest or the
-    write failed.
+    The write is atomic (unique sibling temp → ``os.replace`` via
+    ``_fsutil.atomic_write_text``) and best-effort: returns the artifact path
+    on success, None when *data* has no manifest or the write failed.
     """
+    from ._fsutil import atomic_write_text
+
     manifest = data.get("manifest") if isinstance(data, dict) else None
     if not isinstance(manifest, dict):
         return None
@@ -210,14 +212,11 @@ def write_resolved_manifest(working_dir: Path | str, data: dict) -> Path | None:
 
     try:
         layout = workdir_layout(working_dir)
-        layout.system_dir.mkdir(parents=True, exist_ok=True)
         target = layout.resolved_manifest
-        tmp = layout.resolved_manifest_tmp
-        tmp.write_text(
+        atomic_write_text(
+            target,
             json.dumps(artifact, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
         )
-        os.replace(str(tmp), str(target))
         return target
     except (OSError, TypeError, ValueError):
         return None

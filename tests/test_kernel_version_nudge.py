@@ -30,6 +30,18 @@ def _reset_fast_gate(agent):
     agent._nudge_kernel_version_state["last_probe_ts"] = 0.0
 
 
+def _probe_and_consume(agent):
+    """Start the async fetch, wait for the worker, then consume its result
+    with a second check() -- mirroring the old synchronous contract for tests
+    that assert post-fetch state."""
+    kv.check(agent)
+    pending = kv._fetch_slot(agent)
+    assert pending is not None, "expected the async fetch to start"
+    pending.thread.join()
+    _reset_fast_gate(agent)
+    kv.check(agent)
+
+
 def test_installed_runtime_refresh_nudge_does_not_hit_remote(tmp_path, monkeypatch):
     agent = _Agent(tmp_path)
     monkeypatch.setattr(
@@ -97,11 +109,15 @@ def test_runtime_version_direction_is_fail_safe_and_equal_pairs_probe_remote(
             "_fetch_latest_version",
             lambda: (_ for _ in ()).throw(AssertionError("remote should not be queried")),
         )
-    kv.check(agent)
     if source is None:
+        kv.check(agent)
+        pending = kv._fetch_slot(agent)
+        assert pending is not None
+        pending.thread.join()
         assert calls == [True]
         assert _entries(tmp_path) == []
     else:
+        kv.check(agent)
         entry = _entries(tmp_path)[0]
         assert entry["source"] == source
         assert entry["suggested_action"] == action
@@ -202,7 +218,7 @@ def test_local_refresh_match_clears_mismatch_tracking_and_stale_nudge(tmp_path, 
     )
     monkeypatch.setattr(kv, "_fetch_latest_version", lambda: "0.14.2")
     _reset_fast_gate(agent)
-    kv.check(agent)
+    _probe_and_consume(agent)
     assert _entries(tmp_path) == []
 
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
@@ -250,7 +266,7 @@ def test_match_after_refresh_clears_local_nudge_during_remote_outage(tmp_path, m
         lambda: (_ for _ in ()).throw(RuntimeError("both official mirrors unavailable")),
     )
 
-    kv.check(agent)
+    _probe_and_consume(agent)
 
     assert _entries(tmp_path) == []
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
@@ -302,7 +318,7 @@ def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_pa
 
     monkeypatch.setattr(kv, "_fetch_latest_version", latest)
 
-    kv.check(agent)
+    _probe_and_consume(agent)
 
     entries = _entries(tmp_path)
     assert len(entries) == 1
@@ -321,9 +337,12 @@ def test_remote_update_check_uses_bounded_probe_not_daily_product_cadence(tmp_pa
     assert state["kernel_version"]["checked_installed_version"] == "0.14.1"
     assert state["kernel_version"]["latest_seen"] == "0.14.2"
 
+    # A later probe starts a fresh fetch (the single-flight slot was consumed).
     _reset_fast_gate(agent)
-    monkeypatch.setattr(kv, "_fetch_latest_version", latest)
     kv.check(agent)
+    pending = kv._fetch_slot(agent)
+    assert pending is not None
+    pending.thread.join()
     assert calls["n"] == 2
     assert _entries(tmp_path)[0]["latest"] == "0.14.2"
 
@@ -383,7 +402,7 @@ def test_current_remote_version_clears_existing_kernel_nudge(tmp_path, monkeypat
     monkeypatch.setattr(kv, "_today_utc", lambda: "2026-06-24")
     monkeypatch.setattr(kv, "_fetch_latest_version", lambda: "0.14.1")
 
-    kv.check(agent)
+    _probe_and_consume(agent)
 
     assert "nudge" not in snapshot_notifications(tmp_path)
     state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
@@ -621,7 +640,7 @@ def test_mirror_mismatch_is_reported_without_selecting_a_version(tmp_path, monke
         ),
     )
 
-    kv.check(agent)
+    _probe_and_consume(agent)
 
     entry = _entries(tmp_path)[0]
     assert entry["source"] == "release-manifest-mirror-mismatch"
@@ -843,3 +862,146 @@ def test_release_manifest_same_version_content_or_hash_mismatch_is_not_accepted(
 
     with pytest.raises(kv._MirrorMismatchError):
         kv._fetch_latest_version()
+
+
+def test_check_does_not_block_on_slow_fetch(tmp_path, monkeypatch):
+    """#730: a slow remote probe must not hold the 1s heartbeat tick."""
+    import threading as _threading
+    import time as _time
+
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+    )
+    release = _threading.Event()
+
+    def slow_fetch():
+        release.wait(5.0)  # a slow-but-successful probe
+        return "0.17.0"
+
+    monkeypatch.setattr(kv, "_fetch_latest_version", slow_fetch)
+
+    started = _time.monotonic()
+    kv.check(agent)
+    elapsed = _time.monotonic() - started
+
+    assert elapsed < 0.5, f"check() blocked the heartbeat for {elapsed:.2f}s (#730)"
+    assert _entries(tmp_path) == []
+    assert kv._fetch_slot(agent) is not None
+    # Cleanup: let the worker finish so no daemon thread outlives the test.
+    release.set()
+    kv._fetch_slot(agent).thread.join()
+
+
+def test_fetch_result_consumed_on_later_probe(tmp_path, monkeypatch):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.14.1", "0.14.1", None),
+    )
+    monkeypatch.setattr(kv, "_today_utc", lambda: "2026-07-17")
+    monkeypatch.setattr(kv, "_fetch_latest_version", lambda: "0.14.2")
+
+    kv.check(agent)  # starts the async fetch; the tick returns immediately
+    pending = kv._fetch_slot(agent)
+    assert pending is not None
+    pending.thread.join()
+    _reset_fast_gate(agent)
+    kv.check(agent)  # a later probe consumes the finished fetch
+
+    entries = _entries(tmp_path)
+    assert len(entries) == 1
+    assert entries[0]["latest"] == "0.14.2"
+    state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
+    assert state["kernel_version"]["latest_seen"] == "0.14.2"
+    assert state["kernel_version"]["last_remote_check_date"] == "2026-07-17"
+    assert kv._fetch_slot(agent) is None
+
+
+def test_fetch_error_recorded_asynchronously(tmp_path, monkeypatch):
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+    )
+    monkeypatch.setattr(
+        kv,
+        "_fetch_latest_version",
+        lambda: (_ for _ in ()).throw(RuntimeError("both official mirrors unavailable")),
+    )
+
+    kv.check(agent)
+    pending = kv._fetch_slot(agent)
+    assert pending is not None
+    pending.thread.join()
+    _reset_fast_gate(agent)
+    kv.check(agent)
+
+    state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
+    assert "unavailable" in state["kernel_version"]["last_error"]
+    assert state["kernel_version"]["last_remote_check_date"] == kv._today_utc()
+    assert kv._fetch_slot(agent) is None
+
+
+def test_single_flight(tmp_path, monkeypatch):
+    import threading as _threading
+
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+    )
+    starts = []
+    original_start = kv._start_fetch
+
+    def counting_start(a):
+        starts.append(a)
+        return original_start(a)
+
+    monkeypatch.setattr(kv, "_start_fetch", counting_start)
+    release = _threading.Event()
+
+    def slow_fetch():
+        release.wait(5.0)
+        return "0.17.0"
+
+    monkeypatch.setattr(kv, "_fetch_latest_version", slow_fetch)
+
+    kv.check(agent)
+    _reset_fast_gate(agent)
+    kv.check(agent)
+    _reset_fast_gate(agent)
+    kv.check(agent)
+
+    assert len(starts) == 1  # repeated due probes never spawn a second worker
+    release.set()
+    kv._fetch_slot(agent).thread.join()
+
+
+def test_fetch_deadline_abandons_stuck_worker(tmp_path, monkeypatch):
+    import time as _time
+
+    agent = _Agent(tmp_path)
+    monkeypatch.setattr(
+        kv,
+        "_runtime_info",
+        lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+    )
+    # Simulate a worker started past the deadline whose ``done`` never fires
+    # (e.g. a wedged DNS lookup).
+    agent._nudge_kernel_fetch = kv._PendingFetch(
+        thread=None,
+        started_ts=_time.time() - kv._FETCH_DEADLINE_SECONDS - 1.0,
+    )
+
+    kv.check(agent)
+
+    assert kv._fetch_slot(agent) is None
+    state = json.loads((tmp_path / ".notification" / ".nudge_state.json").read_text())
+    assert state["kernel_version"]["last_error"] == "fetch timed out"
+    assert state["kernel_version"]["last_remote_check_date"] == kv._today_utc()

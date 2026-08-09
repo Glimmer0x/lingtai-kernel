@@ -256,6 +256,11 @@ def _stop(agent, timeout: float = 5.0) -> None:
     ThreadPoolExecutor workers and external CLI process groups can otherwise
     keep this interpreter visible in `ps` after heartbeat/lock are gone, which
     makes refresh watchers race the duplicate-process guard.
+
+    The workdir lease release is unconditional: every teardown step after the
+    main-loop join runs inside a ``try`` whose ``finally`` releases the lease,
+    so a raising intermediate step (session close, manifest write, heartbeat
+    stop, …) can never wedge ``.agent.lock`` (issue #661).
     """
     agent._log("agent_stop")
     agent._cancel_soul_timer()
@@ -283,28 +288,34 @@ def _stop(agent, timeout: float = 5.0) -> None:
             pass
     if agent._thread:
         agent._thread.join(timeout=timeout)
-    _shutdown_daemon_runtime(agent, reason="agent_stop")
-    agent._session.close()
+    try:
+        _shutdown_daemon_runtime(agent, reason="agent_stop")
+        agent._session.close()
 
-    # Stop MailService if configured
-    if agent._mail_service is not None:
-        try:
-            agent._mail_service.stop()
-        except Exception:
-            pass
+        # Stop MailService if configured
+        if agent._mail_service is not None:
+            try:
+                agent._mail_service.stop()
+            except Exception:
+                pass
 
-    # Close the event journal if configured.
-    if agent._event_journal is not None:
-        try:
-            agent._event_journal.close()
-        except Exception:
-            pass
+        # Close the event journal if configured.
+        if agent._event_journal is not None:
+            try:
+                agent._event_journal.close()
+            except Exception:
+                pass
 
-    # Persist final state, stop heartbeat, release the workdir lease — order
-    # matters. See docstring above; heartbeat must remain fresh until this point.
-    agent._workdir.write_manifest(agent._build_manifest())
-    _stop_heartbeat(agent)
-    agent._workdir_lease.release()
+        # Persist final state, stop heartbeat, release the workdir lease — order
+        # matters. See docstring above; heartbeat must remain fresh until this point.
+        agent._workdir.write_manifest(agent._build_manifest())
+        _stop_heartbeat(agent)
+    finally:
+        # The workdir lease MUST be released even when an intermediate teardown
+        # step raises (session close, manifest write, heartbeat stop, …).
+        # Otherwise .agent.lock stays wedged and the agent cannot restart
+        # without manual intervention (issue #661).
+        agent._workdir_lease.release()
 
 
 def _shutdown_daemon_runtime(agent, *, reason: str) -> None:
@@ -532,9 +543,11 @@ def _heartbeat_loop(agent) -> None:
         # Per-agent periodic checks that publish to `.notification/nudge.json`
         # when something needs the agent's attention (e.g. a newer lingtai
         # wheel is installed on disk than the version this process imported).
-        # Each check throttles itself; the dispatcher wraps individual calls
-        # so a misbehaving check cannot block the heartbeat loop. See
-        # `nudge/ANATOMY.md`.
+        # Each check throttles itself; the dispatcher only guards against
+        # checks that *raise* -- latency inside a check is latency between
+        # heartbeat writes. Invariant: checks must never block on the network;
+        # long work is handed to a background thread (see
+        # `nudge/kernel_version.py`). See `nudge/ANATOMY.md`.
         try:
             from ..nudge import run_checks as _run_nudge_checks
             _run_nudge_checks(agent)
@@ -734,6 +747,17 @@ def _perform_refresh(
         agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
     else:
         agent._save_chat_history()
+    # Refresh is one of MANUAL.md's mechanical regeneration points (template-
+    # version check only). Fail-soft: a manual problem must never break refresh.
+    try:
+        from ..agent_manual import collect_agent_facts, ensure_agent_manual
+
+        ensure_agent_manual(agent._working_dir, facts=collect_agent_facts(agent))
+    except Exception:
+        try:
+            agent._log("agent_manual_ensure_failed", stage="refresh")
+        except Exception:
+            pass
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
     # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
     # called a module-level _build_launch_cmd shadow that always returned

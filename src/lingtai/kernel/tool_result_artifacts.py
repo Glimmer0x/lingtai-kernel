@@ -4,8 +4,10 @@ Two related concerns live here:
 
 1. **Preventive spill** (``spill_oversized_result``) — called by ``ToolExecutor``
    on every newly-built tool result.  If serialized content exceeds
-   ``PREVENTIVE_MAX_CHARS`` (200_000 hard ceiling), the full original is written to
-   ``<workdir>/tmp/tool-results/<…>.{json,txt}`` and a compact manifest dict
+   ``PREVENTIVE_MAX_CHARS`` (200_000 hard ceiling), the content is written to
+   ``<workdir>/tmp/tool-results/<…>.{json,txt}`` redacted through
+   ``redact_for_trajectory`` (same durable-surface treatment as events.jsonl
+   and chat-history archives) and a compact manifest dict
    (``status="spilled"``, ``artifact="lingtai_tool_result_spill"``) replaces
    the wire-bound content.
 
@@ -39,6 +41,7 @@ from typing import Any, Callable
 
 from .workdir import workdir_layout
 from ._fsutil import atomic_write_text
+from .trace_redaction import redact_for_trajectory
 
 # Stable, namespaced literal stamped into every manifest produced by this
 # module.  Detectors require it for new manifests; older manifests that
@@ -233,7 +236,9 @@ def spill_oversized_result(
     history may have been compacted in a previous pass).  If the serialized
     length is ``<= max_chars``, returns ``result`` unchanged.
 
-    Otherwise writes the *full* canonical serialization to
+    Otherwise writes the canonical serialization — redacted through
+    ``redact_for_trajectory`` exactly like other durable trajectory surfaces
+    (events.jsonl, chat-history archives) — to
     ``<working_dir>/tmp/tool-results/<timestamp>-<tool>-<id>-<uuid>.<ext>``
     and returns a small dict containing a warning, the artifact paths (both
     workdir-relative and absolute), original size, cap, tool/call metadata,
@@ -290,8 +295,17 @@ def spill_oversized_result(
     if working_dir is not None:
         wd = Path(working_dir)
         spill_dir = workdir_layout(wd).tool_results_dir
+        # Durable-surface redaction: the artifact file must carry the same
+        # redaction as events.jsonl / chat-history archives.  Redact the
+        # serialized text itself (not the pre-serialization object) so results
+        # that are not JSON-native (dataclasses, custom objects serialized via
+        # ``default=str``) also have their stringified secrets covered.  The
+        # manifest's size fields and the wire-bound preview intentionally stay
+        # on the raw original (the preview is LLM-visible ephemeral content,
+        # redacted again at every durable write).
+        artifact_text = redact_for_trajectory(serialized_text)
         spill_path_str, spill_path_abs, spill_failed = write_artifact_file(
-            serialized_text,
+            artifact_text,
             directory=spill_dir,
             working_dir=wd,
             filename=filename,

@@ -526,6 +526,15 @@ def _context_molt(agent, args: dict) -> dict:
         session_journal_path=session_journal_path,
     )
 
+    # Molt is one of MANUAL.md's mechanical regeneration points (template-
+    # version check only). Fail-soft: a manual problem must never break a molt.
+    try:
+        from lingtai.kernel.agent_manual import collect_agent_facts, ensure_agent_manual
+
+        ensure_agent_manual(agent._working_dir, facts=collect_agent_facts(agent))
+    except Exception:
+        pass
+
     # Post-molt reminder. ToolExecutor strips visible ``reasoning`` and
     # injects ``_reasoning``; accept the plain key too so direct callers
     # (tests, in-process invocations) behave the same.

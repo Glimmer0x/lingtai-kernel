@@ -5,6 +5,7 @@ related_files:
   - ANATOMY.md
   - ENVIRONMENT_VARIABLES.md
   - GLOSSARY.md
+  - src/lingtai/kernel/agent_manual/CONTRACT.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md

@@ -55,9 +55,16 @@ def _goarch():
         return "arm"
     return machine
 
+try:
+    from importlib.metadata import version as _lingtai_version
+    _lingtai_version_value = _lingtai_version("lingtai")
+except Exception:
+    _lingtai_version_value = None
+
 print(json.dumps({
     "os": _goos(),
     "arch": _goarch(),
+    "lingtai_version": _lingtai_version_value,
     "python": {
         "sys_platform": sys.platform,
         "machine": platform.machine(),
@@ -169,6 +176,33 @@ def _test_venv_detail(venv_dir: Path, *, warn_marker_error: bool) -> tuple[bool,
         return False, "import lingtai timed out"
 
 
+def _running_lingtai_version() -> str | None:
+    """Return the version of the lingtai package the current process runs.
+
+    Queries importlib.metadata directly rather than importing the lingtai
+    package, so provisioning code never triggers the lazy facade's package
+    imports (and never risks an import cycle). Returns None when the
+    distribution is not installed or metadata cannot be read.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("lingtai")
+    except Exception:
+        return None
+
+
+def _is_local_dev_version(version: str) -> bool:
+    """Return True for PEP 440 local/dev versions that were never published.
+
+    A version with a ``+`` local segment or a ``.dev`` release segment (e.g.
+    ``0.5.0.dev3+g1234abc``) exists only in local checkouts, so pinning it in a
+    provisioning ``pip install`` would always fail. Pre-releases without those
+    markers (e.g. ``1.0.0rc1``) may be published and stay pinnable.
+    """
+    return "+" in version or ".dev" in version.lower()
+
+
 def _create_venv(venv_dir: Path) -> None:
     """Create a fresh venv and install lingtai into it."""
     # Select before filesystem mutation so an unsupported target or exhausted PATH
@@ -184,16 +218,33 @@ def _create_venv(venv_dir: Path) -> None:
         check=True,
     )
 
-    # Install lingtai
+    # Install lingtai, pinned to the running kernel's version so a child agent
+    # launched through CPR or cli.run provisions the same kernel that spawned it
+    # instead of whatever is newest on PyPI (issue #758). Fall back to an
+    # unpinned install for local/dev versions that were never published, and if
+    # a published pin is temporarily unavailable (index lag, yank).
     pip = str(venv_dir / "bin" / "pip")
     if sys.platform == "win32":
         pip = str(venv_dir / "Scripts" / "pip.exe")
 
+    version = _running_lingtai_version()
+    specs = []
+    if version and not _is_local_dev_version(version):
+        specs.append(f"lingtai=={version}")
+    specs.append("lingtai")
+
     print("Installing lingtai...", file=sys.stderr)
-    subprocess.run(
-        [pip, "install", "lingtai"],
-        check=True,
-    )
+    for spec in specs:
+        try:
+            subprocess.run([pip, "install", spec], check=True)
+            break
+        except subprocess.CalledProcessError:
+            if spec == specs[-1]:
+                raise
+            print(
+                f"warning: install of {spec} failed; trying fallback",
+                file=sys.stderr,
+            )
     _write_env_marker_best_effort(venv_dir)
     print("Runtime ready.", file=sys.stderr)
 
@@ -505,6 +556,7 @@ def _current_process_env_marker() -> dict:
         "lingtai_env_version": _LINGTAI_ENV_VERSION,
         "os": _goos(),
         "arch": _goarch(),
+        "lingtai_version": _running_lingtai_version(),
         "python": {
             "sys_platform": sys.platform,
             "machine": platform.machine(),
@@ -621,6 +673,19 @@ def _env_marker_status_detail(
                     f"environment marker Python {version_major}.{version_minor} is "
                     f"outside supported range {policy.supported_range}",
                 )
+    # Informational kernel-version skew diagnostic. A venv provisioned by an
+    # older kernel (or upgraded in place) may carry a different lingtai version
+    # than this process. Never treat that as a hard mismatch: the shared managed
+    # venv must not be destroyed and rebuilt just because a differently-versioned
+    # process touched it. Surface it instead so `env-marker check` and
+    # diagnostics can see it (issue #758).
+    venv_version = current.get("lingtai_version")
+    process_version = _running_lingtai_version()
+    if venv_version and process_version and venv_version != process_version:
+        return (
+            _MARKER_MATCH,
+            f"lingtai version skew: venv has {venv_version}, process runs {process_version}",
+        )
     return _MARKER_MATCH, ""
 
 

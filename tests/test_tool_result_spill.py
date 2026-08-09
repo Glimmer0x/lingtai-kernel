@@ -190,6 +190,54 @@ def test_spill_oversized_dict_writes_artifact(tmp_path):
     assert on_disk == payload
 
 
+def test_spill_string_artifact_redacts_secrets(tmp_path):
+    """Spilled string artifacts must be redacted like other durable surfaces (#626)."""
+    api_key = "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    assert len(api_key) > 22, "shape guard: sk- + 20+ token chars"
+    big = f'cat config.json -> {{"api_key": "{api_key}"}}\n' + ("x" * (CAP * 2))
+
+    out = _spill_oversized_result(
+        big,
+        max_chars=CAP,
+        tool_name="read",
+        tool_call_id="tc-redact-str",
+        working_dir=tmp_path,
+    )
+
+    assert out["status"] == "spilled"
+    artifact = tmp_path / out["spill_path"]
+    on_disk = artifact.read_text(encoding="utf-8")
+    assert api_key not in on_disk, "spill artifact must not store the raw secret"
+    assert "<REDACTED:" in on_disk, "artifact must carry a redaction placeholder"
+    # Non-secret bulk content must survive redaction untouched.
+    assert "x" * 100 in on_disk
+
+
+def test_spill_dict_artifact_redacts_secrets(tmp_path):
+    """JSON-serialized dict artifacts must also be redacted (#626)."""
+    token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    assert len(token) > 33, "shape guard: ghp_ + 30+ token chars"
+    payload = {
+        "status": "ok",
+        "output": f"token={token}",
+        "blob": "Y" * (CAP * 2),
+    }
+
+    out = _spill_oversized_result(
+        payload,
+        max_chars=CAP,
+        tool_name="read",
+        tool_call_id="tc-redact-dict",
+        working_dir=tmp_path,
+    )
+
+    assert out["status"] == "spilled"
+    artifact = tmp_path / out["spill_path"]
+    on_disk = artifact.read_text(encoding="utf-8")
+    assert token not in on_disk, "spill artifact must not store the raw token"
+    assert "<REDACTED:" in on_disk, "artifact must carry a redaction placeholder"
+
+
 def test_spill_handles_missing_working_dir():
     """When working_dir is None the manifest still returns, with spill_error."""
     big = "Z" * (CAP * 2)
