@@ -16,6 +16,8 @@ related_files:
   - "reference/substrate-manual/SKILL.md"
   - "reference/environment-variables/SKILL.md"
   - "src/lingtai/intrinsic_skills/notification-manual/SKILL.md"
+  - "src/lingtai/kernel/agent_readme/CONTRACT.md"
+  - "src/lingtai/kernel/agent_readme/README.md.tpl"
 maintenance: >
   When editing this file, treat related_files as maintained inner links for the prompt/guidance
   source graph. Before changing behavior or prose, crawl the listed files, update any affected
@@ -32,6 +34,11 @@ This section is kernel-owned and cross-app stable. It holds the minimal operatin
 model every LingTai agent must keep resident. The expanded runtime/substrate
 router is `system-manual`; it routes the full substrate expansion to
 `reference/substrate-manual/SKILL.md`.
+
+**This is the progressive-disclosure entrance for how an agent's body works.**
+A human reaching the agent folder starts at `README.md` (the welcome/navigation
+file); this section is where mechanism questions land. Deeper detail on every
+mechanism below is one hop away via `related_files` and `system-manual`.
 
 ## I · Body and extensions
 
@@ -66,12 +73,16 @@ The bundled `runtime-update-checks` manual is only for local read-only diagnosis
 and refresh mechanics. A `source_drift` nudge stays local to those mechanics and
 does not enter release-migration routing.
 
+> deeper: system-manual → substrate-manual §1 (extension decision tree)
+
 ## II · Life states
 
 Agents are ACTIVE, IDLE, STUCK, ASLEEP, or SUSPENDED. The key operational split:
 ASLEEP still has listeners and wakes by mail; SUSPENDED is process-dead and needs
 CPR or external restart. Use sleep/lull for routine rest; suspend only when you
 want process death.
+
+> deeper: substrate-manual §2 (lifecycle states)
 
 ## III · Communication
 
@@ -80,6 +91,8 @@ on the channel where the message arrived. Treat notification previews as hints;
 read the producer channel when the preview is truncated, ambiguous, lacks a clear
 new-message marker, includes media/attachments, or needs exact anchoring. Use
 producer-specific read/dismiss verbs before generic notification dismissals.
+
+> deeper: notification-manual + producer channel manuals
 
 ## IV · Memory and molt
 
@@ -97,11 +110,15 @@ current session) also nudges a molt: when `_meta.agent_meta.agent_state.context.
 says the cache-miss budget is reached, molt to shed the carried context and
 restore cache efficiency.
 
+> deeper: context-manual (molt / summarize / rebuild)
+
 ## V · Idle and soul
 
 When there is nothing concrete to do, go idle. Idle keeps listeners alive and lets
 soul flow reflect. Do not use timed sleep as a default wait. Soul flow is advice,
 not command; verify external-event claims through the relevant channel.
+
+> deeper: soul-manual
 
 ## VI · Nudge policy
 
@@ -114,6 +131,8 @@ complete environment catalogue defines accepted values, invalid-value fallback,
 and read/reload behavior; read `system-manual` →
 `reference/environment-variables/SKILL.md` before changing an environment
 variable.
+
+> deeper: system-manual → environment-variables/SKILL.md
 
 ## VII · Tool tiers and system operations
 
@@ -222,3 +241,5 @@ dedicated `notification` tool (`check`, `dismiss_channel`, `dismiss_event`,
 `nirvana`) and the full operating model, read the `system-manual` router; it
 routes substrate details to `reference/substrate-manual/SKILL.md`. For
 notification details, read the first-level `notification-manual` skill.
+
+> deeper: substrate-manual §11 (preset runtime model)

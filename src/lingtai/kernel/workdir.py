@@ -20,6 +20,7 @@ _MANIFEST_CORRUPT_FILE = ".agent.json.corrupt"
 _HEARTBEAT_FILE = ".agent.heartbeat"
 _STATUS_FILE = ".status.json"
 _INIT_FILE = "init.json"
+_README_FILE = "README.md"
 _SYSTEM_DIR = "system"
 _LOGS_DIR = "logs"
 _HISTORY_DIR = "history"
@@ -72,6 +73,9 @@ class WorkdirLayout:
     def init_json(self) -> Path:
         return self.root / _INIT_FILE
 
+    @property
+    def readme(self) -> Path:
+        return self.root / _README_FILE
 
     @property
     def system_dir(self) -> Path:
