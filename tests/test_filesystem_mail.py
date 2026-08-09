@@ -967,3 +967,82 @@ def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):
     assert "phase=own_inbox_slice" in caplog.text
     assert "agent=agent01" in caplog.text
     assert "do-not-log-body" not in caplog.text
+
+
+def test_pseudo_outbox_corrupt_utf8_skipped_does_not_crash(tmp_path):
+    """A pseudo-outbox message.json with invalid UTF-8 must be skipped, not
+    crash the poll loop.
+
+    Regression for #1063: ``read_text(encoding="utf-8")`` raises
+    ``UnicodeDecodeError`` (a ``ValueError``), which the old
+    ``except (json.JSONDecodeError, OSError)`` guard did not catch — a single
+    corrupt file escaped ``_poll_pseudo_outboxes`` and killed the whole
+    mail-delivery thread.
+    """
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    agent_dir = base / "agent01"
+    pseudo_dir.mkdir()
+    agent_dir.mkdir()
+    (agent_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+    outbox_dir = pseudo_dir / "mailbox" / "outbox"
+    corrupt_dir = outbox_dir / "corrupt-msg"
+    corrupt_dir.mkdir(parents=True)
+    # 0xff is never a valid UTF-8 byte.
+    (corrupt_dir / "message.json").write_bytes(b'{"message": "\xff", "to": ["agent01"]}')
+
+    good_dir = outbox_dir / "good-msg"
+    good_dir.mkdir()
+    (good_dir / "message.json").write_text(
+        json.dumps({"message": "valid", "to": ["agent01"]}),
+        encoding="utf-8",
+    )
+
+    svc = PosixFilesystemMailAdapter(
+        working_dir=agent_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    received: list[dict] = []
+    # Must not raise: the corrupt entry is skipped and the valid one is
+    # still claimed and dispatched in the same pass.
+    svc._poll_pseudo_outboxes(received.append)
+
+    assert received == [{"message": "valid", "to": ["agent01"]}]
+    assert not good_dir.exists()  # valid message claimed into pseudo sent/
+    assert corrupt_dir.exists()  # corrupt entry left in place for inspection
+
+
+def test_own_inbox_corrupt_utf8_skipped_does_not_crash(tmp_path):
+    """A corrupt message.json in the own inbox must be skipped by the poll
+    slice, not crash the poll loop.
+
+    Regression for #1063: ``UnicodeDecodeError`` escaped the slice's read
+    guard and killed the mail-delivery thread.
+    """
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01")
+    inbox = agent_dir / "mailbox" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+
+    corrupt_entry = inbox / "corrupt-msg"
+    corrupt_entry.mkdir()
+    (corrupt_entry / "message.json").write_bytes(b'{"message": "\xff"}')
+
+    good_entry = inbox / "good-msg"
+    good_entry.mkdir()
+    (good_entry / "message.json").write_text(
+        json.dumps({"message": "ok"}),
+        encoding="utf-8",
+    )
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    # Deterministic entry order: corrupt first, valid second.
+    svc._own_inbox_iter = iter([corrupt_entry, good_entry])
+    received: list[dict] = []
+    assert svc._poll_own_inbox_slice(received.append) is True
+
+    assert received == [{"message": "ok"}]

@@ -306,7 +306,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                         payload = json.loads(msg_file.read_text(encoding="utf-8"))
                         on_message(payload)
                         dispatched += 1
-                    except (json.JSONDecodeError, OSError):
+                    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                         pass
                     self._seen.add(entry.name)
 
@@ -392,7 +392,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 continue
             try:
                 payload = json.loads(msg_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 continue
 
             # Normalize `to` to a list of strings.
