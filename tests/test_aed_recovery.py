@@ -527,3 +527,194 @@ def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
     assert fields["response_model"] == "gpt-test"
     assert fields["finish_reason"] == "stop"
     assert fields["api_call_id"] == "api_tc"
+
+
+# ---------------------------------------------------------------------------
+# Issue #593: 429 rate-limit backoff (Retry-After aware) and 4xx fail-fast
+# ---------------------------------------------------------------------------
+
+
+class _StatusError(Exception):
+    """Minimal provider-shaped error exposing status_code + optional headers/body."""
+
+    def __init__(self, status_code: int, *, headers=None, body=None, message=None):
+        super().__init__(message or f"HTTP {status_code}")
+        self.status_code = status_code
+        self.response = SimpleNamespace(
+            headers=headers or {},
+            status_code=status_code,
+        )
+        if body is not None:
+            self.body = body
+
+
+def test_rate_limit_classifier():
+    assert turn._is_rate_limit_error(_StatusError(429)) is True
+    assert turn._is_rate_limit_error(_StatusError(400)) is False
+    assert turn._is_rate_limit_error(_StatusError(503)) is False
+    assert turn._is_rate_limit_error(RuntimeError("usage_limit_reached")) is True
+    assert turn._is_rate_limit_error(RuntimeError("rate limit exceeded")) is True
+    assert turn._is_rate_limit_error(RuntimeError("boom")) is False
+
+
+def test_client_error_classifier():
+    assert turn._is_client_error(_StatusError(400)) is True
+    assert turn._is_client_error(_StatusError(401)) is True
+    assert turn._is_client_error(_StatusError(429)) is False
+    assert turn._is_client_error(_StatusError(503)) is False
+    assert turn._is_client_error(RuntimeError("400 bad request")) is True
+    assert turn._is_client_error(RuntimeError("messages_parameter_illegal")) is True
+    assert turn._is_client_error(RuntimeError("boom")) is False
+
+
+def test_retry_after_extraction_shapes():
+    assert turn._rate_limit_retry_after_seconds(
+        _StatusError(429, headers={"Retry-After": "42"})
+    ) == 42.0
+    assert turn._rate_limit_retry_after_seconds(
+        _StatusError(429, headers={"retry-after": "120"})
+    ) == 120.0
+    assert turn._rate_limit_retry_after_seconds(
+        _StatusError(429, body={"resets_in_seconds": 24896})
+    ) == 24896.0
+    err = RuntimeError("usage limit reached; resets_in_seconds: 15")
+    assert turn._rate_limit_retry_after_seconds(err) == 15.0
+    assert turn._rate_limit_retry_after_seconds(_StatusError(429)) is None
+    assert turn._rate_limit_retry_after_seconds(
+        _StatusError(429, headers={"X-Other": "1"})
+    ) is None
+
+
+def test_retry_after_http_date_parsing():
+    from datetime import datetime, timedelta, timezone
+
+    future = datetime.now(timezone.utc) + timedelta(seconds=90)
+    http_date = future.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    parsed = turn._rate_limit_retry_after_seconds(
+        _StatusError(429, headers={"Retry-After": http_date})
+    )
+    assert parsed is not None and 80 <= parsed <= 100
+
+
+def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    calls = {"n": 0}
+    sleeps: list[float] = []
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise _StatusError(429, headers={"Retry-After": "3"})
+        _agent._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda s: sleeps.append(s))
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 3
+    rate_logs = [f for name, f in agent._logs if name == "aed_rate_limit_retry"]
+    assert len(rate_logs) == 2
+    assert all(f["retry_after_s"] == 3.0 for f in rate_logs)
+    assert all(f["backoff_s"] == 3.0 for f in rate_logs)
+    assert sleeps == [3.0, 3.0]
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
+    # Rate-limit recovery must not compact history (quota is the problem,
+    # not the wire) and must not consume the transient backoff budget.
+    assert not any(name == "aed_history_compacted" for name, _ in agent._logs)
+    assert not any(name == "aed_transient_retry" for name, _ in agent._logs)
+
+
+def test_rate_limit_error_without_retry_after_uses_exponential_backoff(tmp_path, monkeypatch):
+    agent = _make_run_loop_agent(tmp_path)
+    calls = {"n": 0}
+    sleeps: list[float] = []
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        raise _StatusError(429)
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(turn.time, "sleep", lambda s: sleeps.append(s))
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == turn._RATE_LIMIT_RETRY_LIMIT + 1
+    rate_logs = [f for name, f in agent._logs if name == "aed_rate_limit_retry"]
+    assert len(rate_logs) == turn._RATE_LIMIT_RETRY_LIMIT
+    assert [f["backoff_s"] for f in rate_logs] == [5.0, 10.0, 20.0]
+    assert [f["retry_after_s"] for f in rate_logs] == [None, None, None]
+    assert sleeps == [5.0, 10.0, 20.0]
+    assert any(name == "aed_rate_limit_exhausted" for name, _ in agent._logs)
+    assert agent._asleep.is_set()
+    assert not any(name == "aed_history_compacted" for name, _ in agent._logs)
+    assert not any(name == "aed_attempt" for name, _ in agent._logs)
+
+
+def test_client_error_fails_fast_when_compaction_cannot_change_wire(tmp_path, monkeypatch):
+    from lingtai.kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 3
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        raise _StatusError(400, message="messages_parameter_illegal")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(
+        turn,
+        "_compact_history_before_retry",
+        lambda _agent, *, source: CompactionStats(compacted_blocks=0),
+    )
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    # One API attempt only: compaction changed nothing, so the remaining AED
+    # budget is not burned on an identical failing wire.
+    assert calls["n"] == 1
+    assert any(name == "aed_client_error_noop" for name, _ in agent._logs)
+    assert any(name == "aed_attempt" and f["attempt"] == 1 for name, f in agent._logs)
+    assert not any(name == "aed_attempt" and f["attempt"] == 2 for name, f in agent._logs)
+    assert agent._asleep.is_set()
+    assert getattr(agent, "rebuilds", 0) == 0
+
+
+def test_client_error_retries_when_compaction_changed_wire(tmp_path, monkeypatch):
+    from lingtai.kernel.tool_result_artifacts import CompactionStats
+
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 3
+    calls = {"n": 0}
+
+    def fake_handle(_agent, _msg):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _StatusError(400, message="messages_parameter_illegal")
+        _agent._shutdown.set()
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    monkeypatch.setattr(
+        turn,
+        "_compact_history_before_retry",
+        lambda _agent, *, source: CompactionStats(compacted_blocks=2),
+    )
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+
+    assert calls["n"] == 2
+    assert not any(name == "aed_client_error_noop" for name, _ in agent._logs)
+    assert getattr(agent, "rebuilds", 0) == 1
