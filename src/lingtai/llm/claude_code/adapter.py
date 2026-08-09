@@ -75,6 +75,14 @@ _OVERFLOW_MARKERS = (
     "input is too long",
 )
 
+# The replacement mode removes Claude Code's native coding-agent prompt while
+# retaining the LingTai protocol/tools in the stable system block. Append stays
+# available as an explicit compatibility mode.
+_SYSTEM_PROMPT_FILE_FLAGS = {
+    "append": "--append-system-prompt-file",
+    "replace": "--system-prompt-file",
+}
+
 # Sentinel for ``_invoke_raw``'s optional ``system_prompt_file`` argument so a
 # caller can explicitly pass ``None`` (no system-prompt file — used by the
 # one-shot ``generate`` path) while the default still resolves to the adapter's
@@ -225,7 +233,7 @@ class ClaudeCodeChatSession(ChatSession):
         adapter: "ClaudeCodeAdapter",
         model: str,
         system_prompt: str,
-        tools: list[FunctionSchema],
+        tools: list[FunctionSchema] | None,
         interface: ChatInterface,
         context_window: int,
         effort_argv: list[str] | None = None,
@@ -233,7 +241,9 @@ class ClaudeCodeChatSession(ChatSession):
         self._adapter = adapter
         self._model = model
         self._system_prompt = system_prompt
-        self._tools = tools
+        # Normalized the same way ``update_tools`` already normalizes later
+        # updates, so ``_system_block_digest`` can always iterate ``_tools``.
+        self._tools = list(tools) if tools else []
         self._interface = interface
         self._context_window = context_window
         # Frozen at construction, never re-read from mutable adapter state.
@@ -460,9 +470,9 @@ class ClaudeCodeChatSession(ChatSession):
     def _render_prompt(self, entry_start: int = 0) -> str:
         """Serialise only the conversation into the per-turn user message.
 
-        The stable context (protocol + system prompt + tools) is passed via
-        ``--append-system-prompt-file`` so it lives in the system block that
-        Claude Code caches across turns; only the growing conversation (which
+        The stable context (protocol + system prompt + tools) is passed via the
+        mode-selected system-prompt-file flag so it lives in the system block
+        that Claude Code caches across turns; only the growing conversation (which
         changes every turn) is sent as the user message. This is what makes
         prompt caching effective: previously the whole stable context was
         embedded in the user message, which is rewritten every turn as the
@@ -565,7 +575,12 @@ class ClaudeCodeAdapter(LLMAdapter):
         strip_env: tuple[str, ...] | list[str] | None = None,
         extra_argv: list[str] | None = None,
         context_window: int = _DEFAULT_CONTEXT_WINDOW,
+        system_prompt_mode: str = "replace",
     ) -> None:
+        if system_prompt_mode not in _SYSTEM_PROMPT_FILE_FLAGS:
+            allowed = ", ".join(sorted(_SYSTEM_PROMPT_FILE_FLAGS))
+            raise ValueError(f"system_prompt_mode must be one of: {allowed}")
+        self._system_prompt_mode = system_prompt_mode
         self._model = model or "sonnet"
         self._cli_path = cli_path
         self._disallowed = (
@@ -588,12 +603,12 @@ class ClaudeCodeAdapter(LLMAdapter):
 
         # Stable context file for prompt caching. Claude Code puts a cache
         # breakpoint on the *system* block, so the stable protocol/system/tools
-        # context must be passed via ``--append-system-prompt-file`` (it then
-        # lives in the cached system block) instead of being embedded in the
-        # per-turn user message, which is rewritten every turn as the
-        # conversation grows (forcing a full cache write each turn). The file
-        # path is stable per adapter instance; the session rewrites its content
-        # only when the system prompt or tools change.
+        # context must be passed via the mode-selected system-prompt-file flag
+        # instead of being embedded in the per-turn user message, which is
+        # rewritten every turn as the conversation grows (forcing a full cache
+        # write each turn). The file path is stable per adapter instance; the
+        # session rewrites its content only when the system prompt or tools
+        # change.
         self._system_prompt_file = Path(tempfile.gettempdir()) / (
             f"lingtai-claude-sp-{uuid.uuid4().hex[:12]}.txt"
         )
@@ -716,9 +731,11 @@ class ClaudeCodeAdapter(LLMAdapter):
         """Run ``claude -p`` once. Returns (result_text, usage, envelope).
 
         ``system_prompt_file`` defaults to the adapter's stable prompt-cache
-        file (the chat path). Pass ``None`` to omit the flag entirely — used
-        by the one-shot ``generate`` path, which has no cross-turn cache to
-        protect and must not reuse (or poison) the chat system-prompt file.
+        file (the chat path), and ``system_prompt_mode`` selects whether Claude
+        appends or replaces its native system prompt. Pass ``None`` to omit the
+        flag entirely — used by the one-shot ``generate`` path, which has no
+        cross-turn cache to protect and must not reuse (or poison) the chat
+        system-prompt file.
 
         ``effort_argv`` is the session's already-frozen Claude effort decision
         (``["--effort", <level>]``, or empty for omitted). Defaults to
@@ -735,7 +752,10 @@ class ClaudeCodeAdapter(LLMAdapter):
         if system_prompt_file is _UNSET:
             system_prompt_file = self._system_prompt_file
         if system_prompt_file:
-            cmd += ["--append-system-prompt-file", str(system_prompt_file)]
+            cmd += [
+                _SYSTEM_PROMPT_FILE_FLAGS[self._system_prompt_mode],
+                str(system_prompt_file),
+            ]
         # Claude Code's dedicated reasoning control: one ``--effort`` flag,
         # appended exactly once, and only when the caller hasn't supplied its
         # own ``--effort`` via extra_argv (never a duplicate flag).

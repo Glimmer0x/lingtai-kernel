@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import openai
+import pytest
 
 from lingtai.llm.openai.adapter import OpenAIChatSession
 from lingtai.kernel.llm.interface import (
@@ -276,12 +277,51 @@ def test_recovery_gives_up_after_max_rounds():
     def do_call():
         raise _make_overflow_error()
 
+    pre = len(iface._entries)
     try:
         session._run_with_overflow_recovery(do_call)
-    except openai.BadRequestError:
-        pass
+    except openai.BadRequestError as exc:
+        # Earlier-round trims are NOT rolled back on the failure path
+        # (issue #653): history is shorter, and the loss is recorded on
+        # the exception so adapters can surface a notice after their
+        # error-revert step.
+        assert len(iface._entries) < pre
+        total_dropped, rounds = exc._overflow_trim_stats
+        assert rounds == session._OVERFLOW_MAX_ROUNDS
+        assert total_dropped >= rounds  # at least one entry dropped per round
     else:
         raise AssertionError("expected BadRequestError after max rounds")
+
+
+def test_recovery_attaches_trim_stats_when_trim_stalls():
+    """The 'cannot trim further' terminal path also records earlier trims."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=3)  # few entries: trimming stalls quickly
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    def do_call():
+        raise _make_overflow_error()
+
+    with pytest.raises(openai.BadRequestError) as ei:
+        session._run_with_overflow_recovery(do_call)
+    total_dropped, rounds = ei.value._overflow_trim_stats
+    assert total_dropped > 0
+    assert rounds < session._OVERFLOW_MAX_ROUNDS  # stalled, not max rounds
+
+
+def test_recovery_attaches_no_stats_when_nothing_trimmed():
+    """Untrimmable overflow (system only) records no stats -> no notice."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    session = _make_session(client=MagicMock(), interface=iface)
+
+    def do_call():
+        raise _make_overflow_error()
+
+    with pytest.raises(openai.BadRequestError) as ei:
+        session._run_with_overflow_recovery(do_call)
+    assert getattr(ei.value, "_overflow_trim_stats", None) is None
 
 
 def test_recovery_reraises_non_overflow_400():
@@ -362,3 +402,95 @@ def test_send_passes_through_when_no_overflow():
                 raise AssertionError("unexpected [kernel] notice in interface")
     # User message was added, assistant reply was recorded — net +2.
     assert len(iface._entries) == pre_len + 2
+
+
+def _always_overflow(**kw):
+    """Side-effect for a client whose every call overflows the context."""
+    raise _make_overflow_error()
+
+
+def _kernel_notices(iface: ChatInterface) -> list[str]:
+    return [
+        b.text
+        for e in iface._entries
+        for b in e.content
+        if isinstance(b, TextBlock) and b.text.startswith("[kernel]")
+    ]
+
+
+def test_send_terminal_overflow_injects_notice_and_persists_trim():
+    """Terminal overflow failure (issue #653): the trimmed entries stay gone,
+    but the agent now learns about the loss via a [kernel] notice instead of
+    a silent re-raise."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=50)
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = _always_overflow
+    session = _make_session(client=client, interface=iface)
+
+    pre = len(iface._entries)
+    with pytest.raises(openai.BadRequestError):
+        session.send("brand new question")
+
+    # The pending user message was reverted by the adapter's drop_trailing.
+    texts = [
+        b.text for e in iface._entries for b in e.content
+        if isinstance(b, TextBlock)
+    ]
+    assert "brand new question" not in texts
+    # The recovery trims persist (history is shorter than before the send).
+    assert len(iface._entries) < pre
+    # Exactly one notice about the dropped entries was injected after the
+    # revert (a pre-revert injection would have been stripped).
+    notices = _kernel_notices(iface)
+    assert len(notices) == 1
+    assert "dropped" in notices[0].lower()
+    assert "molt" in notices[0].lower()
+
+
+def test_send_stream_terminal_overflow_injects_notice_and_persists_trim():
+    """Same guarantee on the streaming path."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+    _seed_history(iface, n_pairs=50)
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = _always_overflow
+    session = _make_session(client=client, interface=iface)
+
+    pre = len(iface._entries)
+    with pytest.raises(openai.BadRequestError):
+        session.send_stream("brand new streamed question")
+
+    texts = [
+        b.text for e in iface._entries for b in e.content
+        if isinstance(b, TextBlock)
+    ]
+    assert "brand new streamed question" not in texts
+    assert len(iface._entries) < pre
+    notices = _kernel_notices(iface)
+    assert len(notices) == 1
+    assert "dropped" in notices[0].lower()
+    assert "molt" in notices[0].lower()
+
+
+def test_send_terminal_overflow_untrimmable_no_notice():
+    """System-only history: nothing can be trimmed, so no loss occurred and
+    no notice is injected — the provider error is re-raised as before."""
+    iface = ChatInterface()
+    iface.add_system("sys")
+
+    client = MagicMock()
+    client.chat.completions.create.side_effect = _always_overflow
+    session = _make_session(client=client, interface=iface)
+
+    with pytest.raises(openai.BadRequestError):
+        session.send("q")
+
+    assert _kernel_notices(iface) == []
+    # System entry only: the pending user message was reverted and nothing
+    # else was touched.
+    assert len(iface._entries) == 1
+    assert iface._entries[0].role == "system"

@@ -963,6 +963,11 @@ class ChatInterface:
         Uses the canonical entries (not provider-specific formats), so the
         estimate is provider-agnostic.  Falls back to current_system_prompt
         and current_tools if explicit args are not provided.
+
+        ``ToolResultBlock.metadata`` sidecars are counted because wire
+        converters project them into the provider payload — omitting them
+        makes the estimate understate stateless full-replay requests
+        (issue #1013).
         """
         from ..token_counter import count_tokens
         import json
@@ -997,6 +1002,14 @@ class ChatInterface:
                         else json.dumps(block.content, default=str)
                     )
                     total += count_tokens(content_str)
+                    # The runtime metadata sidecar is projected into the
+                    # provider payload by every wire converter
+                    # (interface_converters._project_tool_result), so it must
+                    # be counted here too — otherwise stateless full replay
+                    # can overflow while the estimate reports a low context
+                    # usage (issue #1013).
+                    if isinstance(block.metadata, dict) and block.metadata:
+                        total += count_tokens(json.dumps(block.metadata, default=str))
                 elif isinstance(block, ThinkingBlock):
                     total += count_tokens(block.text)
 

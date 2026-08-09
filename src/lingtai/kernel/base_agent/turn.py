@@ -17,7 +17,11 @@ from ..safety_limits import (
 )
 from ..tool_executor import ToolExecutor
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
-from ..llm.base import is_all_empty_response
+from ..llm.base import (
+    is_all_empty_response,
+    llm_replay_terminal_flags,
+    safe_exception_description,
+)
 from ..meta_block import (
     attach_active_notifications,
     attach_active_runtime,
@@ -113,6 +117,41 @@ _TRANSIENT_MSG_FRAGMENTS = (
     "service unavailable",
     "bad gateway",
     "gateway timeout",
+)
+
+# Issue #593: 429 / quota / rate-limit errors are transient along the *time*
+# axis — the same wire succeeds once the limit resets — so they must be
+# retried with backoff (ideally honoring the ``Retry-After`` header) instead of
+# being funneled through the generic AED path, which retries with no delay and
+# compacts history that has nothing to do with the rate limit.
+_RATE_LIMIT_RETRY_LIMIT = 3
+_RATE_LIMIT_BACKOFF_START_S = 5.0
+_RATE_LIMIT_BACKOFF_MAX_S = 60.0
+_RATE_LIMIT_MSG_FRAGMENTS = (
+    "rate limit",
+    "rate_limit",
+    "rate-limit",
+    "too many requests",
+    "quota",
+    "usage limit",
+    "usage_limit",
+    "usage_limit_reached",
+    "resets_in_seconds",
+    "throttl",
+    "429",
+)
+
+# Deterministic 4xx client errors (excluding 429, which is handled above).
+# A 400/401/403/404-style error means the request itself is wrong on our side:
+# retrying the identical wire is guaranteed to fail again, so the AED branch
+# must only retry when retroactive compaction actually changes the wire.
+_CLIENT_ERROR_MSG_FRAGMENTS = (
+    "bad request",
+    "400 bad request",
+    "messages_parameter_illegal",
+    "invalid request",
+    "invalid parameter",
+    "malformed request",
 )
 
 
@@ -294,7 +333,10 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     The adapter zoo wraps HTTP failures through different SDK exception
     classes.  Prefer explicit status-code handling when present; otherwise
     fall back to stable class names and conservative message fragments.
-    4xx errors (including quota/rate limit) are not treated as transient here.
+    4xx errors (including quota/rate limit) are not treated as transient here:
+    429/rate-limit errors get their own backoff branch (``_is_rate_limit_error``)
+    and deterministic 4xx client errors fail fast in the AED branch
+    (``_is_client_error``) instead of burning retries on an unchanged wire.
     """
     if isinstance(exc, EmptyLLMResponseError):
         return True
@@ -314,8 +356,106 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     if name in _TRANSIENT_EXC_NAMES:
         return True
 
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _TRANSIENT_MSG_FRAGMENTS)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """Return True for provider 429 / quota / rate-limit errors.
+
+    429 is transient along the *time* axis (the same wire succeeds after the
+    limit resets) but must not ride the generic transient branch: it needs
+    backoff (ideally ``Retry-After`` aware) and must never burn AED attempts
+    or compaction on an unchanged wire.  ``_is_transient_provider_error``
+    intentionally excludes all 4xx, so rate limits get their own branch here.
+    """
+    status_code = _exception_status_code(exc)
+    if status_code is not None:
+        return status_code == 429
+    msg = (str(exc) or "").lower()
+    return any(fragment in msg for fragment in _RATE_LIMIT_MSG_FRAGMENTS)
+
+
+def _is_client_error(exc: Exception) -> bool:
+    """Return True for deterministic 4xx client errors (excluding 429).
+
+    400/401/403/404-style errors mean the request itself is wrong on our side.
+    Retrying the identical wire is guaranteed to fail again; the only
+    wire-changing recovery is retroactive compaction, so the AED branch fails
+    fast when compaction has nothing to rewrite.
+    """
+    status_code = _exception_status_code(exc)
+    if status_code is not None:
+        return 400 <= status_code < 500 and status_code != 429
+    msg = (str(exc) or "").lower()
+    return any(fragment in msg for fragment in _CLIENT_ERROR_MSG_FRAGMENTS)
+
+
+def _parse_retry_after(value: object) -> float | None:
+    """Parse a ``Retry-After`` value: delta-seconds or HTTP-date (RFC 7231)."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return float(text)
+    try:
+        from datetime import datetime, timezone
+        from email.utils import parsedate_to_datetime
+
+        parsed = parsedate_to_datetime(text)
+        if parsed is not None:
+            delta = (parsed - datetime.now(timezone.utc)).total_seconds()
+            return max(delta, 0.0)
+    except Exception:  # noqa: BLE001 — best-effort parsing, never raise
+        pass
+    return None
+
+
+def _rate_limit_retry_after_seconds(exc: Exception) -> float | None:
+    """Best-effort ``Retry-After`` / ``resets_in_seconds`` extraction.
+
+    The adapter zoo wraps rate-limit failures differently: some SDKs put the
+    header on ``exc.response.headers``, some on ``exc.headers``, OpenAI-style
+    errors carry ``exc.body`` as a dict, and zhipu reports ``resets_in_seconds``
+    in the error payload/string.  All shapes are probed defensively; returns
+    ``None`` when nothing usable is found so the caller falls back to
+    exponential backoff.
+    """
+    for attr in ("retry_after", "retry_after_seconds"):
+        parsed = _parse_retry_after(getattr(exc, attr, None))
+        if parsed is not None:
+            return parsed
+    response = getattr(exc, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None)
+        getter = getattr(headers, "get", None)
+        if getter is not None:
+            for key in ("Retry-After", "retry-after", "retry_after"):
+                try:
+                    parsed = _parse_retry_after(getter(key))
+                except Exception:  # noqa: BLE001
+                    parsed = None
+                if parsed is not None:
+                    return parsed
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            for key in ("retry_after", "retry-after", "Retry-After", "resets_in_seconds"):
+                parsed = _parse_retry_after(body.get(key))
+                if parsed is not None:
+                    return parsed
+    import re
+
+    for key in ("resets_in_seconds", "retry_after", "retry-after"):
+        match = re.search(
+            rf"{re.escape(key)}[\"'=:\s]+(\d+)", str(exc) or "", re.IGNORECASE
+        )
+        if match:
+            return float(match.group(1))
+    return None
 
 
 def _tool_call_summary(tool_calls) -> dict:
@@ -498,7 +638,7 @@ def _prepare_aed_retry_message(agent, err_desc: str) -> Message:
 # is "the wire is too long" and whose only safe recovery is to shrink the
 # transcript before retry.  Distinct from generic transient errors:
 # retrying transiently on the same unchanged wire just repeats the failure.
-# Matched case-insensitively against ``str(exc)``.
+# Matched case-insensitively against a render-safe exception description.
 _OVER_WINDOW_MSG_FRAGMENTS = (
     "context window",
     "context_window",
@@ -527,7 +667,7 @@ def _is_over_window_error(exc: Exception) -> bool:
     """
     if isinstance(exc, EmptyLLMResponseError):
         return False
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _OVER_WINDOW_MSG_FRAGMENTS)
 
 
@@ -782,6 +922,7 @@ def _run_loop(agent) -> None:
             sleep_state = AgentState.IDLE
             aed_attempts = 0
             transient_attempts = 0
+            rate_limit_attempts = 0
             skip_post_turn_save = False
             # lingtai#672: bind the current turn's immutable Telegram origin
             # ONCE at dequeue time, before any LLM/tool work can read or
@@ -816,14 +957,23 @@ def _run_loop(agent) -> None:
                     # If a prior provider API error was surfaced to the Task Card
                     # this turn, mark it recovered (observe-only/fail-open); a
                     # clean first-attempt turn reported nothing, so this no-ops.
-                    if aed_attempts or transient_attempts:
+                    if aed_attempts or transient_attempts or rate_limit_attempts:
                         _recover_api_error_on_task_card(agent)
                     transient_attempts = 0
+                    rate_limit_attempts = 0
                     break  # success (chat saved after each session.send inside)
                 except Exception as e:
                     from ..llm_utils import WorkerStillRunningError
 
-                    err_desc = str(e) or repr(e)
+                    # Read replay-safety markers before invoking any provider
+                    # exception rendering hooks.  The rendering itself is also
+                    # fail-closed so a hostile ``__str__``/``__repr__`` cannot
+                    # bypass terminal rollback or escape the run loop.
+                    (
+                        partial_stream_terminal,
+                        no_aed_retry_terminal,
+                    ) = llm_replay_terminal_flags(e)
+                    err_desc = safe_exception_description(e)
 
                     # Account selection has already exhausted the configured
                     # Codex candidates. This is deterministic for this turn,
@@ -848,7 +998,7 @@ def _run_loop(agent) -> None:
                         agent._asleep.set()
                         break
 
-                    if getattr(e, "_lingtai_partial_stream", False):
+                    if partial_stream_terminal:
                         # Provider output has already reached the human-facing
                         # stream. Replaying this turn through transient retry or
                         # AED would duplicate/mix visible content, so terminate
@@ -860,6 +1010,23 @@ def _run_loop(agent) -> None:
                             exception=type(e).__name__,
                         )
                         skip_post_turn_save = True
+                        break
+
+                    if no_aed_retry_terminal:
+                        # The provider adapter has already spent its complete,
+                        # request-owned recovery budget. Rebuilding the session
+                        # would replay the same request outside that budget.
+                        agent._log(
+                            "llm_no_aed_retry_terminal",
+                            error=err_desc[:300],
+                            exception=type(e).__name__,
+                        )
+                        logger.warning(
+                            f"[{agent.agent_name}] Provider recovery exhausted: {err_desc}"
+                        )
+                        _report_api_error_to_task_card(agent, e, terminal=True)
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
                         break
 
                     if isinstance(e, WorkerStillRunningError):
@@ -922,6 +1089,66 @@ def _run_loop(agent) -> None:
                             error=err_desc[:300],
                             exception=type(e).__name__,
                         )
+
+                    # Issue #593: 429 / quota / rate-limit errors are transient
+                    # along the time axis — the same wire succeeds after the
+                    # limit resets.  They must NOT spend AED attempts or
+                    # compaction (which would permanently discard history for
+                    # zero benefit): wait out Retry-After when the provider
+                    # sends it, otherwise exponential backoff, then resend.
+                    if not over_window and _is_rate_limit_error(e):
+                        if rate_limit_attempts < _RATE_LIMIT_RETRY_LIMIT:
+                            rate_limit_attempts += 1
+                            retry_after_s = _rate_limit_retry_after_seconds(e)
+                            if retry_after_s is not None:
+                                backoff_s = min(
+                                    max(retry_after_s, 1.0),
+                                    _RATE_LIMIT_BACKOFF_MAX_S,
+                                )
+                            else:
+                                backoff_s = min(
+                                    _RATE_LIMIT_BACKOFF_START_S
+                                    * (2.0 ** (rate_limit_attempts - 1)),
+                                    _RATE_LIMIT_BACKOFF_MAX_S,
+                                )
+                            if agent._session.chat is not None:
+                                agent._session.chat.interface.close_pending_tool_calls(
+                                    reason=f"rate_limit_retry: {err_desc[:200]}",
+                                    tool_completed=True,
+                                )
+                            agent._log(
+                                "aed_rate_limit_retry",
+                                attempt=rate_limit_attempts,
+                                max_attempts=_RATE_LIMIT_RETRY_LIMIT,
+                                backoff_s=backoff_s,
+                                retry_after_s=retry_after_s,
+                                error=err_desc[:300],
+                            )
+                            logger.warning(
+                                f"[{agent.agent_name}] AED rate-limit retry "
+                                f"{rate_limit_attempts}/{_RATE_LIMIT_RETRY_LIMIT}: {err_desc}",
+                            )
+                            _report_api_error_to_task_card(
+                                agent, e,
+                                attempt=rate_limit_attempts,
+                                max_attempts=_RATE_LIMIT_RETRY_LIMIT,
+                                terminal=False,
+                            )
+                            time.sleep(backoff_s)
+                            msg = _prepare_aed_retry_message(agent, err_desc)
+                            continue
+
+                        # Budget exhausted: the limit has not reset yet.  Retrying
+                        # (or compacting) now would burn quota and destroy history
+                        # for zero benefit — go ASLEEP and wait for refresh/human.
+                        agent._log(
+                            "aed_rate_limit_exhausted",
+                            attempts=rate_limit_attempts,
+                            error=err_desc[:300],
+                        )
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
+                        break
 
                     if not over_window and _is_transient_provider_error(e):
                         if transient_attempts < _TRANSIENT_AED_RETRY_LIMIT:
@@ -1063,10 +1290,45 @@ def _run_loop(agent) -> None:
                     # the already-shrunk wire.  Over-window errors get a
                     # distinct source tag so AED logs make the cause
                     # auditable.
-                    _compact_history_before_retry(
+                    _compact_stats = _compact_history_before_retry(
                         agent,
                         source="aed_over_window" if over_window else "aed_deterministic",
                     )
+
+                    # Issue #593: a deterministic 4xx client error only becomes
+                    # retryable if the wire actually changes.  When retroactive
+                    # compaction spilled nothing, the rebuilt session ships the
+                    # same bytes and fails the same way — fail fast instead of
+                    # burning the remaining AED budget on guaranteed-to-fail
+                    # retries.  (429 and over-window errors are routed elsewhere.)
+                    if (
+                        not over_window
+                        and _is_client_error(e)
+                        and (
+                            _compact_stats is None
+                            or _compact_stats.compacted_blocks == 0
+                        )
+                    ):
+                        agent._log(
+                            "aed_client_error_noop",
+                            attempts=aed_attempts,
+                            error=err_desc[:300],
+                        )
+                        logger.warning(
+                            f"[{agent.agent_name}] AED client error with no wire "
+                            f"change ({type(e).__name__}); skipping further retries: "
+                            f"{err_desc}",
+                        )
+                        _report_api_error_to_task_card(
+                            agent,
+                            _original_provider_exc,
+                            attempt=aed_attempts,
+                            max_attempts=agent._config.max_aed_attempts,
+                            terminal=True,
+                        )
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
+                        break
 
                     # Rebuild session with current config, preserving history
                     if agent._session.chat is not None:

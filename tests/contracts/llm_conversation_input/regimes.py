@@ -359,7 +359,7 @@ def _build_claude_code() -> tuple[Any, Any]:
     # ``adapter._invoke(prompt, model)``. Mock only that seam; capture the prompt.
     calls: list[str] = []
 
-    def _fake_invoke(prompt, model):
+    def _fake_invoke(prompt, model, **kwargs):
         calls.append(prompt)
         return (
             {"action": "final", "text": "ok"},

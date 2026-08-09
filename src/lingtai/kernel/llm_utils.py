@@ -9,6 +9,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
 from .llm import LLMResponse
+from .llm.base import llm_replay_terminal_flags
 from .logging import get_logger
 
 _logger = get_logger()
@@ -50,22 +51,40 @@ def _send(
     retry_timeout: float,
     agent_name: str,
 ) -> LLMResponse:
-    """Send a message to the LLM. Single attempt with timeout."""
+    """Send a message to the LLM. Single attempt with timeout.
+
+    Note: on Python >= 3.11, ``except TimeoutError`` alone cannot distinguish a
+    wait-slice expiry from a worker-raised builtin ``TimeoutError`` (``socket
+    .timeout`` / ``asyncio.TimeoutError`` are aliases of it); ``future.done()``
+    is the discriminator and must stay part of this loop.
+    """
     future: Future = submit_fn()
     t0 = time.monotonic()
     while True:
         elapsed = time.monotonic() - t0
         remaining = retry_timeout - elapsed
         if remaining <= 0:
-            _wait_for_worker_settle(future, elapsed, agent_name)
+            settled = _wait_for_worker_settle(future, elapsed, agent_name)
+            if settled is not None:
+                return settled
             raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
         wait = min(_LLM_WARN_INTERVAL, remaining)
         try:
             return future.result(timeout=wait)
         except TimeoutError:
+            if future.done():
+                # The worker settled: either it raised its own TimeoutError
+                # (socket.timeout / asyncio.TimeoutError / concurrent.futures
+                # TimeoutError are all the builtin TimeoutError on >=3.11) or it
+                # finished during the race after our wait expired. Either way
+                # the worker is gone and its cleanup already ran — surface the
+                # real outcome instead of misreading it as "not responding".
+                return future.result(timeout=0)
             elapsed = time.monotonic() - t0
             if elapsed >= retry_timeout:
-                _wait_for_worker_settle(future, elapsed, agent_name)
+                settled = _wait_for_worker_settle(future, elapsed, agent_name)
+                if settled is not None:
+                    return settled
                 raise TimeoutError(f"LLM API call timed out after {elapsed:.0f}s")
             _logger.warning(
                 "[%s] LLM API not responding after %.0fs...",
@@ -73,7 +92,9 @@ def _send(
             )
 
 
-def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> None:
+def _wait_for_worker_settle(
+    future: Future, elapsed: float, agent_name: str
+) -> LLMResponse | None:
     """Wait briefly for the worker future to finish after the main-thread
     watchdog expires. The worker's HTTP timeout should fire at (or near) the
     same moment via the per-call ``timeout`` plumbed down to the SDK, letting
@@ -81,13 +102,32 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
     synchronously before we propagate. Without this wait, AED's recovery
     races with the worker's in-progress mutations.
 
+    If the worker COMPLETED SUCCESSFULLY during grace, return its LLMResponse
+    and the caller must use it instead of raising: visible chunks may already
+    be delivered and the assistant response committed to the canonical
+    interface, so discarding the success as a plain transient TimeoutError
+    would reopen transient/AED replay after committed output. Returns None
+    when the worker failed with an ordinary (replayable) exception.
+
     If the worker is still running after the grace period, raise a distinct
     WorkerStillRunningError. AED must not treat this as an ordinary timeout
     because the provider worker may still mutate the shared ChatInterface.
+
+    A worker that settled with its own builtin ``TimeoutError`` (``socket
+    .timeout`` / ``asyncio.TimeoutError`` / ``concurrent.futures.TimeoutError``
+    are all the same class on >= 3.11) is NOT still running: its except-block
+    already ran ``drop_trailing``. Use ``future.done()`` to tell the two apart
+    rather than ``except TimeoutError`` alone.
     """
     try:
-        future.result(timeout=_WORKER_SETTLE_GRACE)
+        result = future.result(timeout=_WORKER_SETTLE_GRACE)
     except TimeoutError:
+        if future.done():
+            # The worker settled with its own TimeoutError (socket.timeout,
+            # asyncio.TimeoutError, and concurrent.futures.TimeoutError are all
+            # the builtin TimeoutError on >=3.11). Its except-block already ran
+            # drop_trailing — same as any other worker error.
+            return
         _logger.error(
             "[%s] LLM worker thread still running after %.0fs + %.0fs grace — "
             "interface state may be inconsistent. Refusing AED retry.",
@@ -99,11 +139,24 @@ def _wait_for_worker_settle(future: Future, elapsed: float, agent_name: str) -> 
             agent_name=agent_name,
             future=future,
         )
-    except Exception:
-        # Worker raised something other than timeout — that's fine, its
-        # except-block already ran drop_trailing. Swallow here; main thread
-        # re-raises its own TimeoutError.
-        pass
+    except Exception as worker_exc:
+        # Worker raised something other than timeout — its except-block
+        # already ran drop_trailing. An exact kernel replay-terminal wrapper
+        # means visible output was delivered or a provider-owned recovery
+        # budget was consumed; replacing it with a plain TimeoutError would
+        # reopen transient retries/AED past that budget, so rethrow the exact
+        # wrapper. Ordinary worker exceptions are still swallowed and the
+        # main thread re-raises its own TimeoutError.
+        partial_stream, no_aed_retry = llm_replay_terminal_flags(worker_exc)
+        if partial_stream or no_aed_retry:
+            raise
+        return None
+    _logger.warning(
+        "[%s] LLM worker completed successfully during the settle grace after "
+        "the %.0fs watchdog expired; using the completed response",
+        agent_name, elapsed,
+    )
+    return result
 
 
 class _SubmitFn:
