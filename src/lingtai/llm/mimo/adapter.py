@@ -368,5 +368,4 @@ class MimoAdapter(OpenAIAdapter):
             stateless_replay=True,
             compact_token_limit=self._mimo_compact_token_limit,
         )
-        session.reasoning_emission = construction.emission()
         return session

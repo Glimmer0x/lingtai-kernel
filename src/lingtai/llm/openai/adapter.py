@@ -1006,14 +1006,23 @@ def responses_reasoning_construction(
 
     Route-local wrappers (generic/custom Responses, Codex, DeepSeek, MiMo)
     delegate here but each owns its complete result under its own route id.
-    ``default``/``None`` omit the field; explicit values pass through
-    verbatim; anything else raises the historical Responses-specific error.
+    An omitted/``default`` thinking level maps to the explicit ``xhigh``
+    effort (the kernel's canonical default, matching main's
+    ``_responses_reasoning_kwargs`` and the Codex route's longstanding
+    behavior); explicit values pass through verbatim; anything else raises
+    the historical Responses-specific error.
     """
     if requested is None:
         requested = "default" if thinking is None else thinking
     if thinking in (None, "default"):
         return ReasoningConstruction(
-            route=route, requested=requested, disposition="omitted", source=source
+            route=route,
+            requested=requested,
+            disposition="emitted",
+            json_delta=(("reasoning", {"effort": "xhigh"}),),
+            emitted_path="reasoning.effort",
+            emitted_value="xhigh",
+            source=source or "responses-default",
         )
     if thinking not in THINKING_LEVELS:
         raise ValueError(
@@ -2918,7 +2927,6 @@ class OpenAIAdapter(LLMAdapter):
             stateless_replay=self._responses_stateless_replay,
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
-        session.reasoning_emission = construction.emission()
         return session
 
     def _create_completions_session(
@@ -2965,6 +2973,15 @@ class OpenAIAdapter(LLMAdapter):
         # two-axis ``thinking`` + ``reasoning_effort`` pair) override
         # ``_chat_reasoning_kwargs`` and own the whole decision.
         extra_kwargs.update(self._chat_reasoning_kwargs(thinking, model))
+
+        # Subclass-provided extra_body (e.g. OpenRouter's reasoning-text
+        # opt-out, ``reasoning: {include: false}``). Merge rather than
+        # overwrite so callers adding their own extra_body via extra_kwargs
+        # aren't clobbered.
+        sub_extra_body = self._adapter_extra_body()
+        if sub_extra_body:
+            existing = extra_kwargs.get("extra_body") or {}
+            extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
 
         session = self._session_class(
             client=self._client,
@@ -6219,8 +6236,9 @@ class CodexOpenAIAdapter(OpenAIAdapter):
         # thinking level sends an explicit ``reasoning.effort = "xhigh"``
         # instead of omitting the field (omitting it would fall back to the
         # Codex backend's own, lower default). Explicit levels pass through
-        # unchanged, and the generic OpenAI Responses route keeps its
-        # omit-on-default behavior.
+        # unchanged. The shared primitive now maps omitted/``default`` to
+        # ``xhigh`` for every Responses route, so this override only exists
+        # to keep the ``codex-default`` source provenance distinct.
         defaulted = thinking in (None, "default")
         return responses_reasoning_construction(
             "xhigh" if defaulted else thinking,
@@ -6352,6 +6370,4 @@ class CodexOpenAIAdapter(OpenAIAdapter):
             compact_token_limit=self._codex_compact_token_limit,
             reasoning_result=reasoning_result,
         )
-        if construction is not None:
-            session.reasoning_emission = construction.emission()
         return session

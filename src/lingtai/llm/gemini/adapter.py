@@ -855,7 +855,6 @@ class GeminiAdapter(LLMAdapter):
         session = GeminiChatSession(
             chat, context_window=context_window, interface=interface
         )
-        session.reasoning_emission = construction.emission()
         return self._wrap_with_gate(session)
 
     def _create_interactions_session(
@@ -911,7 +910,6 @@ class GeminiAdapter(LLMAdapter):
                 context_window=context_window,
                 interface=interface,
             )
-            session.reasoning_emission = construction.emission()
             return session
 
         # If seeding with conversation history, use pre-converted TurnParam
@@ -926,7 +924,6 @@ class GeminiAdapter(LLMAdapter):
             context_window=context_window,
             interface=interface,
         )
-        session.reasoning_emission = construction.emission()
 
         if seed_turns:
             session._pending_seed_turns = seed_turns

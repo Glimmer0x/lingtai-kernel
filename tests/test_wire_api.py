@@ -460,6 +460,26 @@ def test_generate_chat_completions_json_schema_keeps_response_format():
     assert kwargs["response_format"]["json_schema"]["strict"] is True
 
 
+def test_openrouter_chat_requests_carry_reasoning_include_false():
+    """OpenRouter's adapter extra_body must reach the wire on Chat Completions.
+
+    Regression pin: the reasoning-consolidation branch dropped the
+    ``_adapter_extra_body()`` merge from ``_create_completions_session``, so
+    OpenRouter's ``reasoning: {include: false}`` opt-out silently vanished
+    from every request.
+    """
+    from lingtai.llm.openrouter.adapter import OpenRouterAdapter
+
+    adapter = OpenRouterAdapter(api_key="fake")
+    adapter._client = _both_client()
+    session = adapter.create_chat("gpt-5.5", "system prompt")
+
+    session.send("hello")
+
+    kwargs = adapter._client.chat.completions.create.call_args.kwargs
+    assert kwargs["extra_body"] == {"reasoning": {"include": False}}
+
+
 # ---------------------------------------------------------------------------
 # Identity / .agent.json safelist: wire_api must NOT be surfaced
 # ---------------------------------------------------------------------------

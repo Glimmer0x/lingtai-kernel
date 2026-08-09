@@ -191,18 +191,20 @@ def _cli_reasoning_construction(
 ) -> ReasoningConstruction:
     """Claude Code CLI route owner (``first``/``resume`` phases).
 
-    The CLI exposes no reasoning flag or environment variable, so both
-    phases contribute an empty argv/env delta: a ``default``/``None`` policy
-    is omitted and any other captured value is dropped from the actual
-    command. The command builder (``_invoke_raw``) consumes this result, so
-    a future CLI flag must flow through here or the evidence goes stale
-    loudly rather than silently.
+    The CLI's effort control does not flow through this construction: the
+    frozen ``ClaudeEffort`` carrier (``effort.argv``) owns the ``--effort``
+    flag on the actual command. This mapper therefore always contributes an
+    empty argv/env delta and records ``omitted`` — it never claims a
+    configured value was dropped, because the value reaches the CLI through
+    the effort carrier. The command builder (``_invoke_raw``) consumes this
+    result for argv/env deltas, so a future CLI reasoning flag must flow
+    through here or the record goes stale loudly rather than silently.
     """
     requested = "default" if thinking is None else thinking
     return ReasoningConstruction(
         route="claude-code/cli",
         requested=requested,
-        disposition="omitted" if thinking in (None, "default") else "dropped",
+        disposition="omitted",
         phase=phase,
     )
 
@@ -371,7 +373,6 @@ class ClaudeCodeChatSession(ChatSession):
             phase="resume" if self._remote_session_id else "first",
         )
         self._reasoning_construction = construction
-        self.reasoning_emission = construction.emission()
 
     def _reset_remote_session(self) -> None:
         self._remote_session_id = None

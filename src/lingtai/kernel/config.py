@@ -273,29 +273,12 @@ class _OmittedThinking:
 
     Compared by IDENTITY only. It exists because ``AgentConfig.thinking``'s
     historical default (``"high"``) is indistinguishable from an explicitly
-    configured ``"high"``, and the Claude Code route must not turn a silent
-    default into a real ``--effort high`` flag. ``__post_init__`` replaces it
-    with a concrete string, so no caller ever observes this object.
-    """
-
-    __slots__ = ()
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
-        return "<AgentConfig.thinking omitted>"
-
-
-_THINKING_OMITTED_SENTINEL = _OmittedThinking()
-
-
-class _OmittedThinking:
-    """Module-private marker for a constructor-omitted ``thinking`` field.
-
-    Compared by IDENTITY only. It exists because ``AgentConfig.thinking``'s
-    historical default (``"high"``) is indistinguishable from an explicitly
-    configured ``"high"``, and the Kimi Code route must not turn a silent
-    default into a real ``KIMI_MODEL_THINKING_EFFORT=high`` — which the
-    always-thinking default model would reject outright. ``__post_init__``
-    replaces it with a concrete string, so no caller ever observes this object.
+    configured ``"high"``, and the routes that own their omission (Claude
+    Code must not turn a silent default into a real ``--effort high`` flag;
+    Kimi Code must not turn it into ``KIMI_MODEL_THINKING_EFFORT=high``,
+    which the always-thinking default model would reject outright) must not
+    lose that provenance. ``__post_init__`` replaces it with a concrete
+    string, so no caller ever observes this object.
     """
 
     __slots__ = ()
@@ -383,10 +366,11 @@ class AgentConfig:
         # Resolve the constructor-omitted ``thinking`` sentinel before anything
         # reads the field. Both provenance spellings are preserved so each PR's
         # contract tests keep working: ``thinking_omitted`` (Claude Code / Kimi
-        # Code routes) and the legacy private ``_thinking_constructor_omitted``
-        # (Codex route). SessionManager, which knows the *effective* provider
-        # (this config's ``provider`` may be None, meaning "use the LLMService
-        # provider"), re-reads the provenance at its single create/rebuild seam.
+        # Code / Zhipu-GLM / Codex routes) and the legacy private
+        # ``_thinking_constructor_omitted`` (Codex route). SessionManager, which
+        # knows the *effective* provider (this config's ``provider`` may be
+        # None, meaning "use the LLMService provider"), re-reads the provenance
+        # at its single create/rebuild seam.
         self.thinking_omitted = self.thinking is _THINKING_OMITTED_SENTINEL
         self._thinking_constructor_omitted = (
             self.thinking is _THINKING_CONSTRUCTOR_OMITTED
@@ -398,6 +382,7 @@ class AgentConfig:
                 if provider in CLAUDE_THINKING_PROVIDERS
                 or provider in KIMI_THINKING_PROVIDERS
                 or provider in THINKING_PROVIDERS
+                or provider in ZHIPU_THINKING_PROVIDERS
                 else DEFAULT_THINKING
             )
 

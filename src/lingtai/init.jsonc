@@ -56,7 +56,7 @@
       //
       // Custom OpenAI-compatible Responses may add an explicit reasoning
       // effort after setting api_compat="openai" and wire_api="responses".
-      // Its exact vocabulary remains none/minimal/low/medium/high/xhigh;
+      // Its exact vocabulary remains none/minimal/low/medium/high/xhigh/max;
       // omission keeps the existing high runtime default.
       // Registered Codex values are exact-model-specific (not this global
       // list). Do not write the reserved literal "default": omit thinking to

@@ -791,7 +791,6 @@ class AnthropicAdapter(LLMAdapter):
             client_kwargs=self._client_kwargs,
             context_window=context_window,
         )
-        session.reasoning_emission = construction.emission()
         return self._wrap_with_gate(session)
 
     def generate(

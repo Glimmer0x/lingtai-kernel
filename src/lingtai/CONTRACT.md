@@ -146,19 +146,18 @@ constructs a migration workspace, or performs a second notification path.
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
 8. `manifest.llm.thinking` is validated against a **provider-scoped**
-8. `manifest.llm.thinking` is validated against a **provider-scoped**
    vocabulary, not one universal tuple. Codex-family providers accept any
    non-empty exact-model capability string (the reserved literal `default` is
    rejected; exact endpoint/model capability belongs to the injected provider
    contract in `src/lingtai/llm/openai/CONTRACT.md`). `provider="custom"`,
    `api_compat="openai"`, `wire_api="responses"` accepts
-   `none|minimal|low|medium|high|xhigh`. The `claude-code`/`claude_code` route
+   `none|minimal|low|medium|high|xhigh|max`. The `claude-code`/`claude_code` route
    accepts exactly `low|medium|high|xhigh|max` — the installed `claude` CLI's
    own `--effort <level>` vocabulary. The `kimi-code`/`kimi_code` route accepts
    exactly `low|high|max` — the K3 coding service's own native effort
    vocabulary (the gateway's `medium`→high and `xhigh`→max compatibility
-   aliases are deliberately not surfaced). So `max` stays rejected on Responses,
-   `none`/`minimal` stay rejected on Claude, and `none`/`minimal`/`medium`/
+   aliases are deliberately not surfaced). So `none`/`minimal` stay rejected on
+   Claude, and `none`/`minimal`/`medium`/
    `xhigh` stay rejected on Kimi. Every other provider remains out of scope.
    Custom omission keeps the existing `high` runtime default; Codex omission
    keeps its existing adapter-owned `xhigh` default; **Claude omission stays
