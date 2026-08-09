@@ -413,3 +413,49 @@ def test_active_watchdog_no_progress_age_is_wall(tmp_path):
     _run_one_tick(agent)
     assert agent._active_stuck_logged is True
     agent._write_status_snapshot.assert_called_once_with()
+
+
+def test_heartbeat_loop_survives_io_error_in_tick(tmp_path, caplog):
+    """Issue #660: a transient I/O error must not silently kill the heartbeat thread.
+
+    The top-level guard around the loop body logs the error and keeps
+    beating; previously an unwrapped OSError (e.g. disk full while
+    publishing the heartbeat tick) propagated out of the thread entry
+    point and the liveness thread died silently.
+    """
+    clock = FakeLifecycleClock(wall=5_000.0, monotonic=10.0)
+    agent = _one_tick_heartbeat_agent(
+        clock, state=AgentState.IDLE, snapshot_interval=None, tmp_path=tmp_path
+    )
+
+    waits: list[int] = []
+
+    def stop_after_two(_seconds: float) -> None:
+        waits.append(1)
+        if len(waits) >= 2:
+            agent._heartbeat_thread = None
+
+    agent._heartbeat_stop.wait.side_effect = stop_after_two
+
+    ticks: list[str] = []
+
+    def flaky_tick(_agent) -> None:
+        ticks.append("tick")
+        if len(ticks) == 1:
+            raise OSError("disk full")
+
+    with patch.object(
+        lifecycle_mod, "_write_heartbeat_tick", side_effect=flaky_tick
+    ), patch.object(lifecycle_mod, "_check_rules_file"), patch.object(
+        lifecycle_mod, "_maybe_sleep_after_idle_timeout"
+    ), patch(
+        "lingtai.kernel.nudge.run_checks"
+    ), patch(
+        "lingtai.kernel.nudge.run_system_notifications"
+    ):
+        lifecycle_mod._heartbeat_loop(agent)
+
+    # The loop survived the first-tick OSError and beat again instead of
+    # propagating the exception out of the loop's entry point.
+    assert len(ticks) == 2
+    assert "heartbeat loop caught exception, continuing" in caplog.text
