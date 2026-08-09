@@ -176,6 +176,92 @@ def test_aed_manifest_fields_reject_wrong_type(field, value):
         validate_init(data)
 
 
+def test_activeness_type():
+    """activeness is hydrated into AgentConfig by build_agent_config, so it
+    must be schema-known (str | null) and must not warn as unknown."""
+    data = _valid_init()
+    data["manifest"]["activeness"] = "balanced"
+    warnings = validate_init(data)
+    assert not any("activeness" in w for w in warnings), (
+        f"valid manifest.activeness should not warn, got: {warnings}"
+    )
+
+    data["manifest"]["activeness"] = None
+    validate_init(data)
+
+    data["manifest"]["activeness"] = 3
+    with pytest.raises(ValueError, match="manifest.activeness"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("value", [None, 30, 2.5])
+def test_snapshot_interval_accepts_valid_values(value):
+    """snapshot_interval accepts null (off) or positive int/float seconds
+    without an 'unknown field' warning (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["snapshot_interval"] = value
+    warnings = validate_init(data)
+    assert not any("snapshot_interval" in w for w in warnings), (
+        f"valid manifest.snapshot_interval should not warn, got: {warnings}"
+    )
+
+
+@pytest.mark.parametrize("value", ["30", True, 0, -5])
+def test_snapshot_interval_rejects_bad_values(value):
+    """snapshot_interval must reject strings, bools, and non-positive numbers
+    at validation time instead of hydrating them verbatim into the lifecycle
+    snapshot loop (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["snapshot_interval"] = value
+    with pytest.raises(ValueError, match="manifest.snapshot_interval"):
+        validate_init(data)
+
+
+@pytest.mark.parametrize("value", [360, 360.5])
+def test_aed_timeout_accepts_positive_numbers(value):
+    """aed_timeout accepts positive int/float seconds (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["aed_timeout"] = value
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_aed_timeout_rejects_non_positive(value):
+    """aed_timeout must be > 0 — a zero/negative STUCK window is meaningless
+    and would previously pass validation unchecked (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["aed_timeout"] = value
+    with pytest.raises(ValueError, match="manifest.aed_timeout"):
+        validate_init(data)
+
+
+def test_max_aed_attempts_rejects_below_one():
+    """max_aed_attempts must be >= 1, matching the AgentConfig.__post_init__
+    clamp but failing at validation instead of silently clamping (issue #736)."""
+    data = _valid_init()
+    data["manifest"]["max_aed_attempts"] = 0
+    with pytest.raises(ValueError, match="manifest.max_aed_attempts"):
+        validate_init(data)
+
+
+def test_max_turns_is_legacy_ignored():
+    """max_turns is recognized-and-ignored: build_agent_config deliberately
+    ignores it (tool-loop safety is kernel-owned), so the schema must not
+    advertise it as a live typed knob (issue #736)."""
+    from lingtai.init_schema import MANIFEST_LEGACY_IGNORED, MANIFEST_OPTIONAL
+
+    assert "max_turns" in MANIFEST_LEGACY_IGNORED
+    assert "max_turns" not in MANIFEST_OPTIONAL
+
+    data = _valid_init()  # already contains max_turns: 50
+    warnings = validate_init(data)
+    assert not any("max_turns" in w for w in warnings)
+
+    # A stale non-int value is tolerated — nothing reads it.
+    data["manifest"]["max_turns"] = "999"
+    validate_init(data)
+
+
 def test_wrong_type_capabilities():
     data = _valid_init()
     data["manifest"]["capabilities"] = ["file", "bash"]
@@ -575,6 +661,50 @@ def test_manifest_known_fields_all_typed():
     assert not untyped, (
         f"Fields in MANIFEST_KNOWN but not type-checked (missing from "
         f"MANIFEST_OPTIONAL or MANIFEST_REQUIRED): {sorted(untyped)}"
+    )
+
+
+def test_hydrator_manifest_keys_are_schema_known():
+    """The hydrator (build_agent_config) and the validation schema must not
+    drift: every manifest key the hydrator reads must be schema-known AND
+    type-checked, so a honored field can never validate with only an
+    'unknown field' warning while its value goes unchecked (issue #736)."""
+    import ast
+    import inspect
+
+    from lingtai.agent import build_agent_config
+    from lingtai.init_schema import (
+        MANIFEST_KNOWN,
+        MANIFEST_OPTIONAL,
+        MANIFEST_REQUIRED,
+    )
+
+    tree = ast.parse(inspect.getsource(build_agent_config))
+    keys = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "manifest"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+    # Guard against silent no-ops: if build_agent_config stops reading keys
+    # via manifest.get(...), this test must fail loudly, not match nothing.
+    assert keys, (
+        "build_agent_config no longer reads manifest keys via manifest.get — "
+        "update this drift guard"
+    )
+    assert keys <= MANIFEST_KNOWN, (
+        f"hydrator reads manifest keys unknown to init_schema: "
+        f"{sorted(keys - MANIFEST_KNOWN)}"
+    )
+    typed = set(MANIFEST_OPTIONAL) | set(MANIFEST_REQUIRED)
+    assert keys <= typed, (
+        f"hydrator reads manifest keys that are not type-checked: "
+        f"{sorted(keys - typed)}"
     )
 
 
