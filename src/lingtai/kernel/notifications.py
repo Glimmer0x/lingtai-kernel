@@ -721,6 +721,8 @@ def dismiss_channel(
             "cleared": existed,
             "forced": bool(force),
         }
+        if not existed:
+            result["cause"] = "already_empty"
         if ack_reason:
             result["reason"] = ack_reason
         if large_ref_ids:
@@ -824,6 +826,7 @@ def dismiss_channel(
                 "status": "ok",
                 "channel": channel,
                 "cleared": False,
+                "cause": "no_matching_event",
                 "removed": 0,
                 "remaining": remaining,
                 "forced": bool(force),

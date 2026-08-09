@@ -83,6 +83,7 @@ def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["cleared"] is False
+    assert res["cause"] == "already_empty"
     assert res["channel"] == "soul"
 
 
@@ -95,6 +96,7 @@ def test_dismiss_mcp_dotted_channel(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["cleared"] is True
+    assert "cause" not in res
     assert "mcp.telegram" not in snapshot_notifications(tmp_path)
 
 
@@ -558,7 +560,31 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
     assert result["status"] == "ok"
     assert result["removed"] == 0
     assert result["remaining"] == 0
+    assert result["cleared"] is False
+    assert result["cause"] == "no_matching_event"
     assert snapshot_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
+
+
+def test_system_event_dismiss_unknown_event_id_reports_cause(tmp_path: Path) -> None:
+    agent = _StubAgent(tmp_path)
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
+    )
+    agent._notification_fp = fingerprint_notifications(tmp_path)
+
+    result = _dismiss_event(agent, event_id="evt_missing")
+
+    assert result["status"] == "ok"
+    assert result["cleared"] is False
+    assert result["cause"] == "no_matching_event"
+    assert result["removed"] == 0
+    assert result["remaining"] == 1
+    assert result["event_id"] == "evt_missing"
+    # The unmatched event stays pending.
+    events = snapshot_notifications(tmp_path)["system"]["data"]["events"]
+    assert [ev["event_id"] for ev in events] == ["evt_a"]
 
 
 # ---------------------------------------------------------------------------
