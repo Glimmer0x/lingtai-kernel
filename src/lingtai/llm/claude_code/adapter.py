@@ -225,7 +225,7 @@ class ClaudeCodeChatSession(ChatSession):
         adapter: "ClaudeCodeAdapter",
         model: str,
         system_prompt: str,
-        tools: list[FunctionSchema],
+        tools: list[FunctionSchema] | None,
         interface: ChatInterface,
         context_window: int,
         effort_argv: list[str] | None = None,
@@ -233,7 +233,9 @@ class ClaudeCodeChatSession(ChatSession):
         self._adapter = adapter
         self._model = model
         self._system_prompt = system_prompt
-        self._tools = tools
+        # Normalized the same way ``update_tools`` already normalizes later
+        # updates, so ``_system_block_digest`` can always iterate ``_tools``.
+        self._tools = list(tools) if tools else []
         self._interface = interface
         self._context_window = context_window
         # Frozen at construction, never re-read from mutable adapter state.
