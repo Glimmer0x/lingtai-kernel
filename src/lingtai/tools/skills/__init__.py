@@ -103,31 +103,20 @@ def _scan_one_skill(directory: Path) -> tuple[list[dict], list[dict]]:
 
 
 def _compose_paths(agent: "BaseAgent", paths: list[str]) -> list[str]:
-    """Union the declared Tier-1 paths with the registered plugins' skills.
+    """Union the declared Tier-1 paths (vanilla skills only).
 
-    An Agent Plugin declared in ``init.json`` ``manifest.plugins`` is registered
-    before capability setup (see ``services.plugin_registry.register_plugins``),
-    and one thing registration produces is the absolute path of every *validated*
-    skill directory inside each declared plugin. Composing those here — rather
-    than copying the skill files anywhere — is what makes a plugin's skills
-    appear in this catalog as ordinary skills, with their ``location`` pointing
-    inside the plugin, so the plugin remains their visible source and
-    uninstalling it removes them by simply not being declared any more.
+    Plugin skills deliberately stay out of the vanilla skills catalog: a
+    declared plugin's skills are listed in the ``plugins`` system-prompt field
+    (inside the plugin, readable via file/read from ``<source>``) rather than
+    composed into this catalog. This keeps the two namespaces parallel and
+    closed, per the Agent Plugins presentation contract: ``skills`` shows only
+    vanilla skills, ``plugins`` shows plugin packages as a whole.
 
-    They are per-skill paths and not the plugin's ``skills/`` parent on purpose:
-    a skill directory whose resolved path escapes the plugin root is rejected at
-    registration, and handing this scan the parent would mount it anyway.
-
-    Declared paths come first, plugin paths after, duplicates dropped: an
-    operator who also lists a plugin's skill directory explicitly gets one scan,
-    not two entries per skill.
+    Declared paths come first, duplicates dropped: an operator who lists a
+    directory twice gets one scan, not two entries per skill.
     """
-    ordered = list(paths)
-    ordered.extend(
-        p for p in getattr(agent, "_plugin_skill_paths", []) or [] if isinstance(p, str)
-    )
     seen: set[str] = set()
-    return [p for p in ordered if not (p in seen or seen.add(p))]
+    return [p for p in paths if not (p in seen or seen.add(p))]
 
 
 # ---------------------------------------------------------------------------

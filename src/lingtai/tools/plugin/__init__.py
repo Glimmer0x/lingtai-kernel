@@ -128,13 +128,19 @@ def _registered_entries(agent: "BaseAgent", snapshot: dict) -> list[dict]:
         entry = dict(plugin)
         entry.pop("skill_paths", None)
         entry["skipped"] = list(plugin.get("skipped") or [])
+        # Closed namespace: a plugin's skills live inside the plugin (readable
+        # via file/read from <source>) and are listed in the plugins field as
+        # <skill_names>; they are never composed into the vanilla skills
+        # catalog. skills_mounted therefore means "visible as the plugin's own
+        # skills", not "composed into the skills catalog".
         entry["skills_mounted"] = bool(plugin.get("skills")) and skills_on
         if plugin.get("skills") and not skills_on:
             entry["skipped"].append({
                 "component": "skills/",
                 "reason": (
                     "skills capability is not enabled on this agent, so the "
-                    "plugin's skills were not composed into any catalog"
+                    "plugin's skills are listed in the plugins field without a "
+                    "skills-catalog composition"
                 ),
             })
         entries.append(entry)

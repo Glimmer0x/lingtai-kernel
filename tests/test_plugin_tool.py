@@ -304,21 +304,23 @@ def test_escaping_skill_is_absent_from_the_composed_skills_catalog(tmp_path):
     assert entry["skills"] == ["good"]
     assert any("escapes plugin root" in s["reason"] for s in entry["skipped"])
 
-    # Drive the real reconcile — the composed catalog, not just the snapshot.
-    before = skillsmod._reconcile(agent, [])["catalog_size"]
-    body = _prompt_section_named(agent, "skills")
-    assert "name: good" in body
-    assert "name: leaked" not in body, "a skipped skill must not reach the prompt"
-    assert str(outside) not in body
+    # Drive the real reconcile — the plugin field (closed namespace), not the
+    # vanilla skills catalog. Plugin skills stay inside the plugin; only the
+    # plugin prompt section lists them (as <skill_names>), the skills catalog
+    # never composes them in.
+    skillsmod._reconcile(agent, [])
+    plugin_body = _prompt_section_named(agent, "plugin")
+    assert "<name>mixed</name>" in plugin_body
+    assert "<skill_names>good</skill_names>" in plugin_body
+    assert "leaked" not in plugin_body, "a skipped skill must not reach the prompt"
+    assert str(outside) not in plugin_body
 
-    # And it is the containment gate doing it, not an empty mount: undeclaring
-    # the plugin drops exactly the one skill that was allowed through.
-    _refresh_plugins(agent, [])
-    assert skillsmod._reconcile(agent, [])["catalog_size"] == before - 1
+    skills_body = _prompt_section_named(agent, "skills")
+    assert "name: good" not in skills_body, "plugin skills stay out of the vanilla catalog"
 
 
 def test_nested_skills_are_reported_exactly_as_they_mount(tmp_path):
-    """F2: `skills/group/nested/SKILL.md` mounts, so it must also be reported."""
+    """F2: `skills/group/nested/SKILL.md` is reported in the plugin field."""
     plugin_dir = _write_plugin(tmp_path / "plugins", "deep")
     nested = plugin_dir / "skills" / "group" / "nested"
     nested.mkdir(parents=True)
@@ -338,8 +340,9 @@ def test_nested_skills_are_reported_exactly_as_they_mount(tmp_path):
     assert problems == []
 
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
-    body = _prompt_section_named(agent, "skills")
-    assert "name: nested" in body and "name: top" in body
+    body = _prompt_section_named(agent, "plugin")
+    assert "<skill_names>group/nested, top</skill_names>" in body
+    assert "<skills>2</skills>" in body
     entry = _info(agent)["registered"][0]
     assert entry["skill_count"] == 2
 
@@ -460,12 +463,14 @@ def test_prompt_marks_an_inherited_plugin_as_discovered_only(tmp_path):
     assert "<mcp_registered>" not in catalog
 
 
-def test_empty_catalog_renders_an_empty_section(tmp_path):
+def test_empty_catalog_renders_a_resident_section(tmp_path):
+    """The plugins field is resident: with nothing declared it still explains itself."""
     agent, _workdir = _mk_agent(tmp_path, [str(tmp_path / "nothing-here")])
     section = agent._prompt_manager._sections.get("plugin")
     assert section is not None
     body = section["content"] if isinstance(section, dict) else str(section)
-    assert body == ""
+    assert "No Agent Plugins" in body
+    assert "plugin/<name>/plugin.json" in body
 
 
 def test_plugin_inherits_skills_capability_paths_for_discovery_only(tmp_path):
@@ -677,16 +682,18 @@ def _prompt_section_named(agent, name: str) -> str:
     return section["content"] if isinstance(section, dict) else str(section)
 
 
-def test_declared_plugin_skill_appears_in_the_skills_catalog(tmp_path):
-    """The mount that matters: the skill shows up as an ordinary skill."""
+def test_declared_plugin_skill_appears_in_the_plugin_field(tmp_path):
+    """The mount that matters: the skill shows up in the plugins field."""
     plugin_dir = _write_plugin(tmp_path / "plugins", "alpha", skills=["greeter"])
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
 
-    body = _prompt_section_named(agent, "skills")
-    assert "name: greeter" in body
-    # Composed, not copied: the catalog location still points inside the plugin,
-    # so the plugin stays the visible source of its own skill.
-    assert f"location: {plugin_dir / 'skills' / 'greeter' / 'SKILL.md'}" in body
+    body = _prompt_section_named(agent, "plugin")
+    assert "<name>alpha</name>" in body
+    assert "<skill_names>greeter</skill_names>" in body
+    # Closed namespace: the vanilla skills catalog does not compose it in.
+    assert "name: greeter" not in _prompt_section_named(agent, "skills")
+    # The plugin stays the visible source; <source> points inside the plugin.
+    assert str(plugin_dir) in body
 
 
 def test_an_inherited_plugins_skill_stays_out_of_the_catalog(tmp_path):
@@ -1037,16 +1044,16 @@ def test_undeclaring_a_plugin_prunes_its_registry_records(tmp_path):
     assert agent._plugin_registration["mcp_pruned"] == ["greeter"]
 
 
-def test_uninstalling_removes_the_skill_from_the_catalog(tmp_path):
+def test_uninstalling_removes_the_skill_from_the_plugin_field(tmp_path):
     plugin_dir = _write_plugin(tmp_path / "plugins", "alpha", skills=["greeter"])
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
-    assert "name: greeter" in _prompt_section_named(agent, "skills")
+    assert "<skill_names>greeter</skill_names>" in _prompt_section_named(agent, "plugin")
 
-    from lingtai.tools import skills as skillsmod
+    from lingtai.tools import plugin as pluginmod
 
     _refresh_plugins(agent, [])
-    skillsmod._reconcile(agent, [])
-    assert "name: greeter" not in _prompt_section_named(agent, "skills")
+    pluginmod._reconcile(agent, [])
+    assert "greeter" not in _prompt_section_named(agent, "plugin")
 
 
 def test_pruning_leaves_records_the_plugin_system_does_not_own(tmp_path):
@@ -1215,7 +1222,7 @@ def test_cli_shaped_boot_registers_once_and_is_idempotent(tmp_path):
     assert agent._plugin_registration["mcp_pruned"] == []
     assert [r["name"] for r in _registry_lines(workdir)] == ["greeter"]
     assert len(_events(workdir, "plugin_register")) == 2
-    assert "name: greeter" in _prompt_section_named(agent, "skills")
+    assert "<skill_names>greeter</skill_names>" in _prompt_section_named(agent, "plugin")
 
 
 # ---------------------------------------------------------------------------
@@ -1283,9 +1290,10 @@ def test_the_shipped_example_plugin_registers_end_to_end(tmp_path):
     assert entry["mcp_registered"] == ["hello-lingtai"]
     assert entry["skipped"] == []
 
-    # Its skill is a real catalog entry, located inside the plugin.
-    body = _prompt_section_named(agent, "skills")
-    assert "name: hello-lingtai" in body
+    # Its skill is a plugin-field entry, located inside the plugin.
+    body = _prompt_section_named(agent, "plugin")
+    assert "<skill_names>hello-lingtai</skill_names>" in body
+    assert str(EXAMPLE_PLUGIN) in body
 
     # Its server holds a registry record whose ${PLUGIN_ROOT} arg resolved to
     # the real on-disk script, so the record is runnable as written.
@@ -1332,3 +1340,39 @@ def test_manual_ships_with_the_package():
     assert "### Uninstalling" in body
     assert "### Canonical config key" in body
     assert "`manifest.plugins` is the **canonical** declaration key" in body
+
+
+def test_default_plugin_root_is_scanned_without_declaration(tmp_path):
+    """<workdir>/plugin/<name>/plugin.json registers with no init.json entry."""
+    agent, workdir = _mk_agent(tmp_path, plugins=[])
+    root = workdir / "plugin"
+    _write_plugin(root, "auto", skills=["hi"], mcp_servers={"s": {"type": "stdio", "command": "node"}})
+    _refresh_plugins(agent, [])
+    from lingtai.tools import plugin as pluginmod
+    pluginmod._reconcile(agent, [])
+
+    assert "<name>auto</name>" in _prompt_section_named(agent, "plugin")
+    assert "<skill_names>hi</skill_names>" in _prompt_section_named(agent, "plugin")
+    assert "<mcp_names>s</mcp_names>" in _prompt_section_named(agent, "plugin")
+    # The MCP is registered (runnable) but hidden from the vanilla mcp field.
+    assert [r["name"] for r in _registry_lines(workdir)] == ["s"]
+    assert "<name>s</name>" not in _prompt_section_named(agent, "mcp")
+
+
+def test_plugin_sourced_mcp_is_hidden_from_the_vanilla_mcp_field(tmp_path):
+    """Registered plugin MCPs appear only under plugins, not <registered_mcp>."""
+    agent, workdir = _mk_agent(tmp_path, plugins=[])
+    root = workdir / "plugin"
+    _write_plugin(root, "auto", mcp_servers={"s": {"type": "stdio", "command": "node"}})
+    _refresh_plugins(agent, [])
+    from lingtai.tools import plugin as pluginmod
+    pluginmod._reconcile(agent, [])
+    assert "<mcp_names>s</mcp_names>" in _prompt_section_named(agent, "plugin")
+    assert "<name>s</name>" not in _prompt_section_named(agent, "mcp")
+
+
+def test_mcp_field_is_resident_when_no_standalone_servers(tmp_path):
+    """The mcp field explains itself even with an empty registry."""
+    agent, _workdir = _mk_agent(tmp_path, plugins=[])
+    body = _prompt_section_named(agent, "mcp")
+    assert "No standalone MCP servers" in body
