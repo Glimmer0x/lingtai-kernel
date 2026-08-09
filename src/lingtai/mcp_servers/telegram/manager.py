@@ -258,12 +258,12 @@ def _mirror_identity_account(value: str) -> str | None:
 
 # Emoji reactions for different states (Bot API 7.0+). Three explicit
 # boundaries so a human can see how far an inbound message has travelled:
-#   📧 received  - transport/ingress received the update
+#   👌 received  - transport/ingress received the update
 #   👀 seen       - successfully delivered into the agent inbox
-#   ✔️ replied    - a reply targeting that message was sent
-REACTION_RECEIVED = [{"type": "emoji", "emoji": "📧"}]   # Ingress received
+#   ✍️ replied    - a reply targeting that message was sent
+REACTION_RECEIVED = [{"type": "emoji", "emoji": "👌"}]   # Ingress received
 REACTION_SEEN = [{"type": "emoji", "emoji": "👀"}]        # Delivered to agent inbox
-REACTION_REPLIED = [{"type": "emoji", "emoji": "✔️"}]   # Reply sent
+REACTION_REPLIED = [{"type": "emoji", "emoji": "✍️"}]   # Reply sent
 REACTION_DONE = REACTION_REPLIED  # deprecated alias
 
 

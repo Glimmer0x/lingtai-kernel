@@ -2,9 +2,9 @@
 
 A human should be able to tell how far an inbound message has travelled:
 
-- \U0001f4e7 received: the transport/ingress accepted the update.
+- \U0001f44c received: the transport/ingress accepted the update.
 - \U0001f440 seen: the update was successfully delivered into the agent inbox.
-- \u2714\ufe0f replied: a reply targeting that message was sent.
+- \u270d\ufe0f replied: a reply targeting that message was sent.
 
 These tests drive ``TelegramManager`` with a fake account that records
 reaction calls, so the ordering and the exact emoji are locked.
@@ -113,9 +113,9 @@ def test_received_then_seen_on_delivered_inbox(tmp_path):
     manager = _manager(tmp_path, acct, delivered=True)
     manager.on_incoming("mybot", _incoming_message())
 
-    # Ingress first: received (\U0001f4e7), then delivered: seen (\U0001f440).
+    # Ingress first: received (\U0001f44c), then delivered: seen (\U0001f440).
     assert [(chat, mid, em) for (chat, mid, em) in acct.reactions] == [
-        (12345, 8, "\U0001f4e7"),
+        (12345, 8, "\U0001f44c"),
         (12345, 8, "\U0001f440"),
     ]
 
@@ -127,7 +127,7 @@ def test_seen_skipped_when_inbox_delivery_fails(tmp_path):
 
     # Only the received boundary fires; no seen reaction for a failed inbox push.
     assert [(chat, mid, em) for (chat, mid, em) in acct.reactions] == [
-        (12345, 8, "\U0001f4e7"),
+        (12345, 8, "\U0001f44c"),
     ]
 
 
@@ -143,9 +143,9 @@ def test_replied_reaction_on_reply_to_original_message(tmp_path):
         "text": "hi back",
     })
 
-    # The reply targets the original Telegram message: replied (\u2714\ufe0f).
+    # The reply targets the original Telegram message: replied (\u270d\ufe0f).
     assert [(chat, mid, em) for (chat, mid, em) in acct.reactions] == [
-        (12345, 8, "\u2714\ufe0f"),
+        (12345, 8, "\u270d\ufe0f"),
     ]
 
 
