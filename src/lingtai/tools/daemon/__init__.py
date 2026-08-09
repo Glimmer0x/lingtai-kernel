@@ -477,10 +477,17 @@ def _parent_host_tool_floor() -> frozenset[str]:
         the same reason optional parent tools are: the floor is host primitives
         only, and a capability joining ``CORE_DEFAULTS`` must not silently widen
         it.
+      * ``vision`` — always registered since it joined ``CORE_DEFAULTS``, but
+        its route is provider-bound (the default inherits the active LLM's
+        Responses API; the ``preset`` analyze option borrows another allowed
+        preset's identity). A preset emanation has no independent vision
+        service of its own, so vision must NOT silently fall back to the
+        parent host floor either; it is available only when the preset's own
+        sandbox provides it.
     The result is exactly {shell, file}.
     """
     from lingtai.tools.registry import CORE_DEFAULTS  # noqa: PLC0415
-    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp", "plugin"})
+    return frozenset(set(CORE_DEFAULTS) - EMANATION_BLACKLIST - {"mcp", "plugin", "vision"})
 
 
 # Env vars that override Claude Code's normal first-party OAuth credentials.

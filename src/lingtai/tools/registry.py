@@ -141,8 +141,11 @@ BUILTIN_TOOLS: dict[str, str] = {
 #
 # ``shell`` defaults to {"yolo": True} (unsandboxed). Hosts that want a sandbox
 # pass {"policy_file": "..."} in init.json, which overrides the default kwargs.
-# ``vision`` and ``web_search`` are NOT in this set — they require provider
-# config and API keys, so they stay explicit opt-in.
+# ``vision`` is always registered: its provider defaults to the active LLM
+# (the agent's own Responses API), and the analyze call may explicitly borrow
+# another preset's vision service via the ``preset`` option. ``web_search``
+# is NOT in this set — it requires provider config and API keys, so it stays
+# explicit opt-in.
 CORE_DEFAULTS: dict[str, dict] = {
     "knowledge": {},
     "skills": {},
@@ -156,6 +159,7 @@ CORE_DEFAULTS: dict[str, dict] = {
     "plugin": {},
     "task_card": {},
     "file": {},
+    "vision": {},
 }
 
 
