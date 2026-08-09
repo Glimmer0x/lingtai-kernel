@@ -167,7 +167,8 @@ def test_gated_session_routes_send_through_gate():
     # never landing in the proxy __dict__.
     assert wrapped.pre_request_hook is inner.pre_request_hook
     assert "pre_request_hook" not in wrapped.__dict__
-    # Unrelated metadata writes stay proxy-local; inner identity is untouched.
+    # Metadata writes forward to the inner session (issue #724) — the proxy is
+    # transparent in both directions; only _inner/_gate stay proxy-local.
     wrapped.session_id = "proxy-sess"
 
     result = wrapped.send("hi")  # drive the real gate
@@ -175,7 +176,7 @@ def test_gated_session_routes_send_through_gate():
     inner.send.assert_called_once_with("hi")
     assert fired == [inner.interface]
     assert wrapped.session_id == "proxy-sess"
-    assert inner.session_id == "inner-sess"
+    assert inner.session_id == "proxy-sess"
     a._gate.shutdown()
 
 

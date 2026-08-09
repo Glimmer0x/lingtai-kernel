@@ -20,18 +20,39 @@ class _GatedSession:
     """Thin proxy that routes session.send / send_stream through the gate.
 
     Hoisted from the MiniMax adapter so every provider gets rate gating
-    by inheritance. Read-only attribute access falls through to the inner
-    session via __getattr__; attribute writes (e.g. ``chat.session_id =
-    ...`` from LLMService.create_session) land on the proxy itself, which
-    is fine because subsequent reads of those names hit the proxy first
-    and never reach __getattr__.
+    by inheritance. The proxy is transparent in *both* directions:
+    attribute reads fall through to the inner session via ``__getattr__``
+    and attribute writes forward to the inner session via ``__setattr__``
+    (except the proxy's own two slots, ``_inner`` and ``_gate``). That
+    write-forwarding is load-bearing: the inner session reads its own
+    attributes internally — every adapter's ``send()``/``send_stream()``
+    fires ``self.pre_request_hook(...)`` and ``ChatSession.get_state()``
+    reads ``session_id``/``_agent_type``/``_tracked``. If writes landed on
+    the proxy, those internal reads would see stale class defaults and the
+    kernel drain hook would silently never fire under rate gating.
     """
+
+    # The only state that genuinely belongs to the proxy, not the inner
+    # session. Everything else set through the proxy goes to the inner.
+    _PROXY_SLOTS = frozenset({"_inner", "_gate"})
 
     def __init__(self, inner: ChatSession, gate: "APICallGate"):
         # Use object.__setattr__ to avoid triggering any subclass __setattr__
         # and to land these on the proxy itself, not the inner.
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_gate", gate)
+
+    def __setattr__(self, name, value):
+        if name in self._PROXY_SLOTS:
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._inner, name, value)
+
+    def __delattr__(self, name):
+        if name in self._PROXY_SLOTS:
+            object.__delattr__(self, name)
+        else:
+            delattr(self._inner, name)
 
     @property
     def interface(self):
