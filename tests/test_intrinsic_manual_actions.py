@@ -179,7 +179,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
     assert len(file_schema["properties"]["input"]["oneOf"]) == 6
     vision_schema = vision_tool.get_schema()
     assert vision_schema["required"] == ["action", "input", "reasoning"]
-    assert len(vision_schema["properties"]["input"]["oneOf"]) == 2
+    assert len(vision_schema["properties"]["input"]["oneOf"]) == 3
     task_card_schema = task_card_tool.get_schema()
     assert task_card_schema["required"] == ["action", "input", "reasoning"]
     assert len(task_card_schema["properties"]["input"]["oneOf"]) == 6
