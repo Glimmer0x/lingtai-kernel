@@ -688,7 +688,14 @@ class WechatManager:
         if not user_id:
             return {"error": "Cannot determine user_id from message"}
 
-        return self._handle_send({"user_id": user_id, "text": text})
+        result = self._handle_send({"user_id": user_id, "text": text})
+        # Replying handles the message: mark it read so the unread counter
+        # drains after a reply (mirrors the Telegram addon's reply handler).
+        # Only mark when the send actually succeeded.
+        if result.get("status") == "ok":
+            self._read_ids.add(message_id)
+            self._save_read()
+        return result
 
     def _handle_search(self, args: dict) -> dict:
         query = args.get("query", "")

@@ -106,7 +106,8 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 
 ## READING: read / check / search
 
-- `check`: list recent conversations with unread counts.
+- `check`: list recent conversations with unread counts. Unread counts
+  incoming messages only — your own outgoing replies are never counted.
 - `read`: read messages from one chat (`chat_id`; optional `limit`). Reading
   marks messages read and clears the wake notification mirror.
 - `search`: regex search over message text/sender/update type (`query`;

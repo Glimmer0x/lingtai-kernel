@@ -3879,7 +3879,14 @@ class TelegramManager:
                     "taskcard": taskcard,
                 }
             conversations[cid]["total"] += 1
-            if msg.get("id") and msg["id"] not in read_ids:
+            # Unread counts incoming messages only: sent records (which carry
+            # a "to" field) are messages the agent itself produced and must
+            # not inflate the counter (same rule the WeChat addon documents).
+            if (
+                msg.get("id")
+                and not msg.get("to")
+                and msg["id"] not in read_ids
+            ):
                 conversations[cid]["unread"] += 1
 
         return {
