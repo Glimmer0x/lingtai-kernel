@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 from lingtai.init_reader import read_init
 from lingtai.kernel.nudge import (
@@ -312,3 +313,385 @@ def test_config_shape_nudge_consumes_outcome_and_clears_after_explicit_repair(tm
     repaired = read_init(tmp_path)
     check_init_config(agent, repaired)
     assert _entries(tmp_path) == []
+
+
+def _seed_finding(tmp_path, agent):
+    """Seed an init_config_shape finding via the real consumer/store path."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    required = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"bash": {"yolo": True}},
+        },
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init = tmp_path / "init.json"
+    init.write_text(json.dumps(required), encoding="utf-8")
+    check_init_config(agent, read_init(tmp_path))
+    return init
+
+
+def _assert_persisted_non_benign(tmp_path, expected_stage, expect_mapping=False):
+    """Assert the persisted init_config_shape entry is the non-benign UNKNOWN
+    classification with the exact stage/behavior sentence, optional
+    supplemental mapping, and untouched raw bytes."""
+    entries = _entries(tmp_path)
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "init_config_shape"
+    assert entries[0]["title"] == "init.json configuration shape could not be classified"
+    assert "READ_FAILED" in entries[0]["detail"]
+    assert f"Failure stage: {expected_stage}; behavior: KEEP_PREVIOUS_EFFECTIVE." in entries[0]["detail"]
+    if expect_mapping:
+        assert any(
+            p.get("raw_path") == "manifest.capabilities.bash"
+            for p in entries[0].get("compatibility_paths", [])
+        )
+    else:
+        # Isolated axis must NOT fabricate a supplemental mapping: the
+        # persisted paths stay empty and the detail renders the none marker.
+        assert entries[0].get("compatibility_paths", []) == []
+        assert "Compatibility mapping: none." in entries[0]["detail"]
+    return entries[0]
+
+
+def test_failed_preset_lifecycle_preserves_and_clears(tmp_path):
+    """PRESET failure, mixed evidence, seeded finding: same-kind entry is
+    replaced by the non-benign classification with exact stage/behavior and
+    supplemental mapping; raw bytes untouched; repair clears."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    from lingtai.init_reader import reader_callbacks
+
+    agent = _Agent(tmp_path)
+    init = _seed_finding(tmp_path, agent)
+    seeded_raw = init.read_text(encoding="utf-8")
+
+    def broken_load_preset(name, working_dir=None):
+        raise KeyError(name)
+
+    materialize, prepare = reader_callbacks(tmp_path, load_preset=broken_load_preset)
+    manifest = json.loads(init.read_text(encoding="utf-8"))["manifest"]
+    manifest["preset"] = {"active": "missing", "default": "missing", "allowed": ["missing"]}
+    manifest["llm"]["context_limit"] = 500000
+    manifest["context_limit"] = 350000
+    bad = json.dumps({"manifest": manifest, **{
+        "covenant": "operator contract", "pad": "durable state"}})
+    init.write_text(bad, encoding="utf-8")
+
+    failed = read_init(tmp_path, materialize=materialize, prepare=prepare,
+                       failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "PRESET"
+    assert failed.finding_decision.value == "UNKNOWN"
+
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "PRESET", expect_mapping=True)
+    assert init.read_text(encoding="utf-8") == bad
+    assert seeded_raw != bad
+
+    # Repair to a canonical init.json -> PASS clears the finding.
+    repaired_required = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"shell": {"yolo": True}},
+        },
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init.write_text(json.dumps(repaired_required), encoding="utf-8")
+    check_init_config(agent, read_init(tmp_path))
+    assert _entries(tmp_path) == []
+
+
+def test_failed_preset_lifecycle_isolated_seeded(tmp_path):
+    """PRESET failure, isolated (no bash->shell mixing), from a seeded
+    finding: the same-kind entry is replaced with exact non-benign detail."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    from lingtai.init_reader import reader_callbacks
+
+    agent = _Agent(tmp_path)
+    init = tmp_path / "init.json"
+    required = {
+        "manifest": {"llm": {"provider": "openai", "model": "gpt-4o"}},
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init.write_text(json.dumps(required), encoding="utf-8")
+    # Seed the same kind so the failure replaces rather than inserts.
+    upsert(agent, "init_config_shape", {"title": "seed", "detail": "stale"})
+    assert len(_entries(tmp_path)) == 1
+    seeded_raw = init.read_text(encoding="utf-8")
+
+    def broken_load_preset(name, working_dir=None):
+        raise KeyError(name)
+
+    materialize, prepare = reader_callbacks(tmp_path, load_preset=broken_load_preset)
+    manifest = json.loads(init.read_text(encoding="utf-8"))["manifest"]
+    manifest["preset"] = {"active": "missing", "default": "missing", "allowed": ["missing"]}
+    bad = json.dumps({"manifest": manifest, **{
+        "covenant": "operator contract", "pad": "durable state"}})
+    init.write_text(bad, encoding="utf-8")
+    failed = read_init(tmp_path, materialize=materialize, prepare=prepare,
+                       failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "PRESET"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "PRESET", expect_mapping=False)
+    assert init.read_text(encoding="utf-8") == bad
+    assert seeded_raw != bad
+
+
+def test_failed_resolve_lifecycle_seeded(tmp_path, monkeypatch):
+    """RESOLVE failure via a scoped monkeypatch seam, seeded finding: exact
+    stage/behavior sentence + raw no-write, without touching module globals."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    from lingtai import init_reader
+
+    agent = _Agent(tmp_path)
+    init = _seed_finding(tmp_path, agent)
+
+    def broken_resolve(data, working_dir):
+        raise OSError("deliberate resolve failure")
+
+    seeded_raw = init.read_text(encoding="utf-8")
+    monkeypatch.setattr(init_reader, "resolve_paths", broken_resolve)
+    failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "RESOLVE"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "RESOLVE", expect_mapping=True)
+    # Raw bytes still equal the seeded file (resolver never wrote).
+    assert init.read_text(encoding="utf-8") == seeded_raw
+
+
+def test_failed_validate_lifecycle_seeded_mixed(tmp_path):
+    """VALIDATE failure with mixed bash->shell evidence, seeded same-kind:
+    exact stage sentence, supplemental mapping preserved, raw untouched."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+
+    agent = _Agent(tmp_path)
+    required = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"bash": {"yolo": True}},
+        },
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init = tmp_path / "init.json"
+    init.write_text(json.dumps(required), encoding="utf-8")
+    upsert(agent, "init_config_shape", {"title": "seed", "detail": "stale"})
+    assert len(_entries(tmp_path)) == 1
+
+    bad = dict(required)
+    bad["manifest"]["context_limit"] = "not-an-int"
+    raw_bad = json.dumps(bad)
+    init.write_text(raw_bad, encoding="utf-8")
+    failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "VALIDATE"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "VALIDATE", expect_mapping=True)
+    assert init.read_text(encoding="utf-8") == raw_bad
+
+
+def test_failed_resolve_lifecycle_seeded_isolated(tmp_path, monkeypatch):
+    """RESOLVE failure isolated (no bash->shell mixing), seeded same-kind:
+    exact stage sentence, raw untouched via scoped monkeypatch seam."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    from lingtai import init_reader
+
+    agent = _Agent(tmp_path)
+    required = {
+        "manifest": {"llm": {"provider": "openai", "model": "gpt-4o"}},
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init = tmp_path / "init.json"
+    init.write_text(json.dumps(required), encoding="utf-8")
+    upsert(agent, "init_config_shape", {"title": "seed", "detail": "stale"})
+    assert len(_entries(tmp_path)) == 1
+    seeded_raw = init.read_text(encoding="utf-8")
+
+    def broken_resolve(data, working_dir):
+        raise OSError("deliberate resolve failure")
+
+    monkeypatch.setattr(init_reader, "resolve_paths", broken_resolve)
+    failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "RESOLVE"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "RESOLVE", expect_mapping=False)
+    assert init.read_text(encoding="utf-8") == seeded_raw
+
+
+def test_failed_validate_lifecycle_seeded_isolated(tmp_path):
+    """VALIDATE failure, isolated, seeded finding: exact stage/behavior
+    sentence and raw bytes untouched."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+
+    agent = _Agent(tmp_path)
+    required = {
+        "manifest": {"llm": {"provider": "openai", "model": "gpt-4o"}},
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    init = tmp_path / "init.json"
+    init.write_text(json.dumps(required), encoding="utf-8")
+    # Seed the same kind (init_config_shape) so replacement is observable.
+    upsert(agent, "init_config_shape", {"title": "seed", "detail": "stale"})
+    assert len(_entries(tmp_path)) == 1
+
+    bad = dict(required)
+    bad["manifest"] = {"llm": {"provider": "openai", "model": "gpt-4o"},
+                       "context_limit": "not-an-int"}
+    raw_bad = json.dumps(bad)
+    init.write_text(raw_bad, encoding="utf-8")
+    failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "VALIDATE"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "VALIDATE", expect_mapping=False)
+    assert init.read_text(encoding="utf-8") == raw_bad
+
+
+def test_blocked_lifecycle_renders_blocked_title_and_preserves_raw(tmp_path):
+    """A BLOCKED shape conflict through the real consumer/store path renders
+    the blocked title with exact stage/behavior and does not touch raw
+    init.json (seeded finding replaced in place)."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+
+    agent = _Agent(tmp_path)
+    init = _seed_finding(tmp_path, agent)
+
+    required = {
+        "manifest": {
+            "llm": {"provider": "openai", "model": "gpt-4o"},
+            "capabilities": {"bash": {"yolo": False}, "shell": {"yolo": True}},
+        },
+        "covenant": "operator contract",
+        "pad": "durable state",
+    }
+    raw = json.dumps(required)
+    init.write_text(raw, encoding="utf-8")
+    failed = read_init(tmp_path, failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.shape_decision.value == "BLOCKED"
+    assert failed.finding_decision.value == "BLOCKED"
+
+    check_init_config(agent, failed)
+    entries = _entries(tmp_path)
+    assert len(entries) == 1
+    assert entries[0]["title"] == "init.json configuration shape is blocked by a conflict"
+    assert "Failure stage: CONFLICT; behavior: KEEP_PREVIOUS_EFFECTIVE." in entries[0]["detail"]
+    assert init.read_text(encoding="utf-8") == raw
+
+
+def test_failed_lifecycle_keeps_supplemental_compatibility_mapping(tmp_path):
+    """Mixed evidence on PRESET failure: compatibility mapping survives as
+    supplemental data while the headline classification stays UNKNOWN; raw
+    bytes untouched."""
+    from lingtai.kernel.nudge.init_config import check as check_init_config
+    from lingtai.init_reader import reader_callbacks
+
+    agent = _Agent(tmp_path)
+    init = _seed_finding(tmp_path, agent)
+
+    def broken_load_preset(name, working_dir=None):
+        raise KeyError(name)
+
+    materialize, prepare = reader_callbacks(tmp_path, load_preset=broken_load_preset)
+    manifest = json.loads(init.read_text(encoding="utf-8"))["manifest"]
+    manifest["preset"] = {"active": "missing", "default": "missing", "allowed": ["missing"]}
+    bad = json.dumps({"manifest": manifest, **{
+        "covenant": "operator contract", "pad": "durable state"}})
+    init.write_text(bad, encoding="utf-8")
+    failed = read_init(tmp_path, materialize=materialize, prepare=prepare,
+                       failure_behavior="KEEP_PREVIOUS_EFFECTIVE")
+    assert failed.status.value == "READ_FAILED"
+    assert failed.stage == "PRESET"
+    assert failed.finding_decision.value == "UNKNOWN"
+    check_init_config(agent, failed)
+    _assert_persisted_non_benign(tmp_path, "PRESET", expect_mapping=True)
+    assert init.read_text(encoding="utf-8") == bad
+
+
+def _frontmatter_related_files(text):
+    """Parse the leading YAML frontmatter and return the related_files list."""
+    import re
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    assert m, "missing frontmatter"
+    block = m.group(1)
+    lines = [ln.strip() for ln in block.splitlines()]
+    in_related = False
+    files = []
+    for ln in lines:
+        if ln.startswith("related_files:"):
+            in_related = True
+            continue
+        if in_related:
+            if ln.startswith("- "):
+                files.append(ln[2:].strip())
+            elif ln and not ln.startswith("-") and not ln.startswith("  -"):
+                break
+    return files
+
+
+def test_context_limit_ownership_model_is_documented_across_normative_sources():
+    """The preset-nested / init-root context_limit ownership model and the
+    manual route must stay synchronized across the owner Contract, paired
+    Anatomy, canonical init.jsonc, substrate manual, and the system-manual
+    router. Parses frontmatter related_files (not substrings) and asserts
+    source-specific direction semantics."""
+    root = Path(__file__).parents[1]
+    contract_path = root / "src/lingtai/CONTRACT.md"
+    anatomy_path = root / "src/lingtai/ANATOMY.md"
+    init_jsonc_path = root / "src/lingtai/init.jsonc"
+    router_path = root / "src/lingtai/intrinsic_skills/system-manual/SKILL.md"
+    substrate_path = root / "src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"
+    contract = contract_path.read_text(encoding="utf-8")
+    anatomy = anatomy_path.read_text(encoding="utf-8")
+    init_jsonc = init_jsonc_path.read_text(encoding="utf-8")
+    router = router_path.read_text(encoding="utf-8")
+    substrate = substrate_path.read_text(encoding="utf-8")
+
+    router_ref = "src/lingtai/intrinsic_skills/system-manual/SKILL.md"
+    substrate_ref = "src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"
+
+    # 1. Owner-twin manual-edge parity: both Contract and Anatomy declare the
+    #    router and substrate reference as frontmatter related_files, and the
+    #    router actually reaches the substrate reference.
+    for text, name in ((contract, "CONTRACT.md"), (anatomy, "ANATOMY.md")):
+        rf = _frontmatter_related_files(text)
+        assert router_ref in rf, f"{name} missing router in related_files"
+        assert substrate_ref in rf, f"{name} missing substrate reference in related_files"
+    assert substrate_ref in router or "reference/substrate-manual/SKILL.md" in router, \
+        "system-manual router does not reach substrate reference"
+
+    # 2. Ownership vocabulary in all normative sources.
+    for text, name in ((contract, "CONTRACT.md"), (anatomy, "ANATOMY.md"), (substrate, "substrate")):
+        assert "manifest.llm.context_limit" in text, f"{name} missing nested preset location"
+        assert "manifest.context_limit" in text, f"{name} missing init root location"
+    assert "manifest.llm.context_limit" in init_jsonc
+
+    # 3. Source-specific direction assertions.
+    #    Contract: nested init key is not a runtime source; mapping is nested
+    #    raw -> root effective; m001 relocates preset documents only.
+    assert "never a runtime source" in contract
+    assert "manifest.context_limit` effective" in contract
+    assert "m001 relocates preset documents" in contract
+    #    Anatomy: same direction with the raw/effective arrow.
+    assert "raw → `manifest.context_limit` effective" in anatomy
+    #    init.jsonc: root is the canonical home sentence.
+    assert "Canonical home for agent init.json / effective manifest" in init_jsonc
+    #    substrate: documents the split ownership and the compatibility path.
+    assert "split by document type" in substrate or "split by\ndocument type" in substrate
+    assert "nested raw" in substrate and "root effective" in substrate
+
+    # 4. The old "open implementation question" framing must not regress.
+    assert "root-vs-LLM `context_limit` semantics" not in substrate

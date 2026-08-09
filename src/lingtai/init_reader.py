@@ -66,9 +66,18 @@ class InitReadOutcome:
 
     @property
     def finding_decision(self) -> InitShapeDecision:
-        """Combine shape and ignored-field facts without conflating their axes."""
+        """Combine shape and ignored-field facts without conflating their axes.
+
+        A failed read always wins: even when an earlier compatibility
+        observation set shape=NUDGE, a later PRESET/VALIDATE/RESOLVE failure
+        must be classified as a failure (UNKNOWN, or BLOCKED when the shape
+        itself was blocked), not as a benign PASS/NUDGE that could clear the
+        init-config Nudge under KEEP_PREVIOUS_EFFECTIVE.
+        """
         if self.shape_decision is InitShapeDecision.BLOCKED:
             return InitShapeDecision.BLOCKED
+        if self.status is InitReadStatus.READ_FAILED:
+            return InitShapeDecision.UNKNOWN
         if self.shape_decision is InitShapeDecision.UNKNOWN:
             return InitShapeDecision.UNKNOWN
         if self.shape_decision is InitShapeDecision.NUDGE or self.ignored_paths:
@@ -296,6 +305,20 @@ def read_init(
             )
         manifest["capabilities"] = normalized
 
+    # context_limit ownership is split: an authored *preset* stores it inside
+    # manifest.llm (m001 relocates preset documents only), but agent init.json
+    # and the materialized effective manifest keep it at manifest root
+    # (AgentConfig hydrates manifest.context_limit; materialize_active_preset
+    # pops the preset's llm value onto the root). A nested manifest.llm.
+    # context_limit on an init.json is therefore never a runtime source: with
+    # no active preset it is dead data, and with an active preset materialization
+    # replaces the whole llm block from the preset. Surface a stray nested key as
+    # a compatibility path (nested raw -> root effective) so the Nudge points the
+    # Agent at the field that actually takes effect. Key presence is checked with
+    # membership, not .get(), so absent and explicit null are still flagged.
+    llm_block = manifest.get("llm")
+    stray_nested_context_limit = isinstance(llm_block, dict) and "context_limit" in llm_block
+
     try:
         if materialize is not None:
             materialize(data)
@@ -400,6 +423,14 @@ def read_init(
         )
 
     ignored = _ignored_paths(data, warnings)
+    if stray_nested_context_limit:
+        mapping = {
+            "raw_path": "manifest.llm.context_limit",
+            "effective_path": "manifest.context_limit",
+        }
+        if mapping not in compatibility_paths:
+            compatibility_paths.append(mapping)
+        shape = InitShapeDecision.NUDGE
     status = InitReadStatus.READ_OK_WITH_IGNORED_FIELDS if ignored else InitReadStatus.FULLY_EFFECTIVE
     return InitReadOutcome(
         status,
