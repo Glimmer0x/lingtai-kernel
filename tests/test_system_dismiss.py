@@ -23,7 +23,11 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from lingtai.tools import notification as notif_intrinsic
-from lingtai.kernel.notifications import is_generic_dismiss_guarded
+from lingtai.kernel.notifications import (
+    DISMISS_CAUSE_ALREADY_EMPTY,
+    DISMISS_CAUSE_NO_MATCHING_EVENT,
+    is_generic_dismiss_guarded,
+)
 from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications, publish_test_payload
 
 # Shared with test_notification_tool.py — see tests/_notification_helpers.py.
@@ -83,7 +87,8 @@ def test_dismiss_channel_is_idempotent_when_absent(tmp_path: Path) -> None:
 
     assert res["status"] == "ok"
     assert res["cleared"] is False
-    assert res["cause"] == "already_empty"
+    # Wire literal pinned alongside the Core constant that produces it.
+    assert res["cause"] == DISMISS_CAUSE_ALREADY_EMPTY == "already_empty"
     assert res["channel"] == "soul"
 
 
@@ -561,7 +566,7 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
     assert result["removed"] == 0
     assert result["remaining"] == 0
     assert result["cleared"] is False
-    assert result["cause"] == "no_matching_event"
+    assert result["cause"] == DISMISS_CAUSE_NO_MATCHING_EVENT
     assert snapshot_notifications(tmp_path)["system"]["data"] == ["not", "a", "dict"]
 
 
@@ -578,7 +583,8 @@ def test_system_event_dismiss_unknown_event_id_reports_cause(tmp_path: Path) -> 
 
     assert result["status"] == "ok"
     assert result["cleared"] is False
-    assert result["cause"] == "no_matching_event"
+    # Wire literal pinned alongside the Core constant that produces it.
+    assert result["cause"] == DISMISS_CAUSE_NO_MATCHING_EVENT == "no_matching_event"
     assert result["removed"] == 0
     assert result["remaining"] == 1
     assert result["event_id"] == "evt_missing"
