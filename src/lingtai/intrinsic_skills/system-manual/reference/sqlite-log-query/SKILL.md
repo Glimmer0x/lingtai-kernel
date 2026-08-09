@@ -4,11 +4,13 @@ description: >
   Nested system-manual reference for the additive SQLite/`log.sqlite` sidecar
   over LingTai's JSONL runtime traces. Read it when you need
   `lingtai-agent log doctor|query|rebuild`, read-only SQL safety and WAL/rebuild
-  caveats, the events/chat_entries/token_entries schema, SQL recipes, or the
-  redaction rules. Trajectory mining is the sibling `trajectory-mining`.
-version: 1.3.0
+  caveats, the events/chat_entries/token_entries schema, quick-start snippets,
+  SQL recipes (`tool_call_id` lifecycle, tool result stats and percentiles,
+  spilled/large tool results), gotchas, or the redaction rules. Runtime trace
+  forensics start here; trajectory mining is the sibling `trajectory-mining`.
+version: 1.4.0
 tags: [lingtai, system-manual, sqlite, log.sqlite, runtime-logs, trace, jsonl, daemon, event-log, pitfalls, observability]
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-08-09T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/trajectory-mining/SKILL.md
@@ -25,6 +27,39 @@ sources of truth. Use it to answer questions that are painful with `grep`: which
 event types are hottest, what happened inside daemon runs, what chat-history
 turn surrounded a failure, whether notification/daemon/context events are
 storming, or how token usage is distributed across main/soul/daemon sources.
+
+## Start here for log.sqlite (quick start)
+
+First-use, copy-pasteable snippets. `log.sqlite` lives at `logs/log.sqlite`
+under the agent directory (`AGENT_DIR=/path/to/project/.lingtai/agent-name`).
+Open it read-only and run the three first checks:
+
+```bash
+sqlite3 -readonly logs/log.sqlite '.tables'
+sqlite3 -readonly logs/log.sqlite 'pragma table_info(events);'
+sqlite3 -readonly logs/log.sqlite \
+  "select type, count(*) as n from events group by type order by n desc limit 20;"
+```
+
+Plain `sqlite3 logs/log.sqlite` opens the file read-write; for inspection
+prefer `-readonly` (or the Python URI form below) so you never accidentally
+write the sidecar. Equivalent read-only Python:
+
+```python
+import sqlite3
+
+db_path = "/path/to/.lingtai/<agent>/logs/log.sqlite"
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+for row in conn.execute(
+    "select type, count(*) from events group by type order by count(*) desc limit 20;"
+):
+    print(row)
+```
+
+The five recipes in **Query recipes** below (event type counts, per-tool result
+length, percentiles, `tool_call_id` lifecycle, large/spilled results) are
+directly copy-pasteable. The **Safety contract** and **Gotchas** sections apply
+to every query.
 
 ## Safety contract
 
@@ -49,6 +84,21 @@ storming, or how token usage is distributed across main/soul/daemon sources.
 - **Never paste secrets.** Logs and chat history can contain URLs, tokens,
   prompts, and user data — including raw `fields_json`/`entry_json`. Apply the
   redaction rules below before sharing anything.
+
+## Gotchas
+
+- The event-kind column is **`type`**, not `event_type`.
+- The structured event payload lives in **`fields_json`** (chat rows in
+  `entry_json`); reach into it with `json_extract(fields_json, '$.key')`.
+- `log.sqlite` is **derived and rebuildable**; JSONL remains authoritative.
+  A missing sidecar is a rebuildable index gap, never lost facts.
+- Open the sidecar **read-only** for inspection: `sqlite3 -readonly`, the
+  `file:...?mode=ro` URI, or `lingtai-agent log query`. Never write to it
+  directly.
+- For exact forensic payloads, follow `source_file` / `source_offset` back to
+  the JSONL source.
+- `fields_json`/`entry_json` can carry URLs, tokens, prompts, and user data —
+  redact before sharing anything.
 
 ## Commands
 
@@ -180,6 +230,74 @@ FROM events
 GROUP BY source_kind, type
 ORDER BY n DESC
 LIMIT 50;
+```
+
+Per-tool result length aggregation (`$.result` holds the tool output text):
+
+```sql
+SELECT json_extract(fields_json, '$.tool_name') AS tool,
+       COUNT(*) AS n,
+       CAST(AVG(length(json_extract(fields_json, '$.result'))) AS INT) AS avg_result_len,
+       MAX(length(json_extract(fields_json, '$.result'))) AS max_result_len,
+       SUM(CASE WHEN length(json_extract(fields_json, '$.result')) > 5000 THEN 1 ELSE 0 END) AS over_5000
+FROM events
+WHERE type = 'tool_result'
+  AND json_extract(fields_json, '$.result') IS NOT NULL
+GROUP BY tool
+ORDER BY n DESC
+LIMIT 20;
+```
+
+Nearest-rank percentiles of tool result lengths (SQLite window functions):
+
+```sql
+WITH ranked AS (
+  SELECT length(json_extract(fields_json, '$.result')) AS result_len,
+         ROW_NUMBER() OVER (ORDER BY length(json_extract(fields_json, '$.result'))) AS rn,
+         COUNT(*) OVER () AS n
+  FROM events
+  WHERE type = 'tool_result'
+    AND json_extract(fields_json, '$.result') IS NOT NULL
+)
+SELECT MAX(CASE WHEN rn <= CAST(n * 0.50 + 0.5 AS INTEGER) THEN result_len END) AS p50,
+       MAX(CASE WHEN rn <= CAST(n * 0.90 + 0.5 AS INTEGER) THEN result_len END) AS p90,
+       MAX(CASE WHEN rn <= CAST(n * 0.95 + 0.5 AS INTEGER) THEN result_len END) AS p95,
+       MAX(CASE WHEN rn <= CAST(n * 0.99 + 0.5 AS INTEGER) THEN result_len END) AS p99,
+       MAX(result_len) AS max_len
+FROM ranked;
+```
+
+Trace one `tool_call_id` lifecycle. A full lifecycle typically spans
+`tool_call_received` -> `tool_reasoning` -> `tool_call_normalized` ->
+`tool_call_approved` -> `tool_call` -> `tool_call_dispatch_start` ->
+`tool_call_dispatch_done` -> `tool_result` -> `tool_result_durable_log_visible`
+-> `tool_result_model_visible` (daemon runs prefix some of these with
+`daemon_` and carry `run_id`):
+
+```sql
+SELECT ts, type, source_kind, run_id,
+       json_extract(fields_json, '$.tool_name') AS tool,
+       substr(fields_json, 1, 160) AS fields
+FROM events
+WHERE json_extract(fields_json, '$.tool_call_id') = 'call_00_XXXX'
+   OR json_extract(fields_json, '$.tool_trace_id') = 'call_00_XXXX'
+ORDER BY ts;
+```
+
+Find large/spilled tool results. `tool_result_spilled` rows keep the real size
+in `$.original_char_count` and point to `$.spill_path`:
+
+```sql
+SELECT id, ts, type,
+       json_extract(fields_json, '$.tool_name') AS tool,
+       COALESCE(json_extract(fields_json, '$.original_char_count'),
+                length(json_extract(fields_json, '$.result'))) AS result_len,
+       json_extract(fields_json, '$.spill_path') AS spill_path
+FROM events
+WHERE type IN ('tool_result', 'tool_result_spilled')
+  AND json_extract(fields_json, '$.result') IS NOT NULL
+ORDER BY result_len DESC
+LIMIT 20;
 ```
 
 Recent chat-history entries:

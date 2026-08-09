@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.11.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 1.12.0
+last_changed_at: "2026-08-09T00:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -55,7 +55,9 @@ The router table is the routing authority; this list is the inventory.
   description: |
     SQLite/`log.sqlite` runtime trace inspection: `lingtai-agent log
     doctor|query|rebuild`, JSONL source-of-truth rules, read-only SQL safety,
-    the events/chat_entries/token_entries schema, SQL recipes, and redaction.
+    the events/chat_entries/token_entries schema, quick-start snippets, SQL
+    recipes (`tool_call_id` lifecycle, tool result stats/percentiles, spilled
+    results), gotchas, and redaction.
 - name: trajectory-mining
   location: reference/trajectory-mining/SKILL.md
   description: |
@@ -112,7 +114,7 @@ The router table is the routing authority; this list is the inventory.
 | `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets")` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `context-manual` → `reference/summarize-manual/SKILL.md` |
-| SQLite; `log.sqlite`; LingTai runtime logs; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes | `reference/sqlite-log-query/SKILL.md` |
+| SQLite; `log.sqlite`; LingTai runtime logs; runtime trace inspection; JSONL traces; `lingtai-agent log doctor`; `lingtai-agent log query`; `lingtai-agent log rebuild`; events/chat_entries schema; daemon/chat-history trace indexing; WAL/live-read caveats; SQL recipes; `tool_call_id` lifecycle; tool result stats and percentiles; spilled/large tool results | `reference/sqlite-log-query/SKILL.md` |
 | Trajectory mining; trajectory/anomaly mining; improvement digests; finding schema and validation; cheap-model daemon strategy; mining prompt templates; periodic mining mode | `reference/trajectory-mining/SKILL.md` |
 | Notifications; direct `notification(action='manual', input={})`; check/dismiss_channel/dismiss_event/dismiss_ref/manual; `.notification/<channel>.json`; channel allowlist; the top-level `instructions` field in the `.notification/<channel>.json` envelope; protected channels; generic vs producer dismiss; stale-version/force; legacy `large_tool_result` dismiss | `notification-manual` |
 | About to call `system(action="refresh")`; preset swap/revert pre-flight; "will this refresh break something?"; refresh returned but MCP/tools/LLM look wrong; refresh failed | `reference/refresh-precheck/SKILL.md` |

@@ -13,7 +13,11 @@ key returns the key itself.
 from __future__ import annotations
 
 import json
+import logging
+from collections import defaultdict
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _DIR = Path(__file__).parent
 _CACHE: dict[str, dict[str, str]] = {}
@@ -58,14 +62,33 @@ def register_strings(lang: str, strings: dict[str, str]) -> None:
     table.update(strings)
 
 
+def _render(value: str, kwargs: dict, key: str) -> str:
+    """Render *value* with *kwargs*, falling back to the raw template.
+
+    Templates are written by translators and can contain literal braces (e.g.
+    JSON-ish examples embedded in prose) that ``str.format_map`` would
+    mis-parse as format fields. Rendering must never raise: a slightly odd
+    string in a tool description is strictly better than a ValueError inside
+    the agent loop. On failure, log a warning naming the key so the offending
+    template can be found, and return the raw template unchanged.
+    """
+    try:
+        return value.format_map(defaultdict(str, kwargs))
+    except (ValueError, KeyError, IndexError, AttributeError) as e:
+        log.warning(
+            "i18n: template render failed for key %r (%s); returning raw template",
+            key,
+            e,
+        )
+        return value
+
+
 def t(lang: str, key: str, **kwargs) -> str:
     """Translate a key. Falls back to English, then returns the key itself.
 
     Extra kwargs not referenced in the template are silently ignored
     (needed because en/zh templates may use different subsets of kwargs).
     """
-    from collections import defaultdict
-
     table = _load(lang)
     value = table.get(key)
     if value is None and lang != "en":
@@ -73,5 +96,5 @@ def t(lang: str, key: str, **kwargs) -> str:
     if value is None:
         return key
     if kwargs:
-        return value.format_map(defaultdict(str, kwargs))
+        return _render(value, kwargs, key)
     return value
