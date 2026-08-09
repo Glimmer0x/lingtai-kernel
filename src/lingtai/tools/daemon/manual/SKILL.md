@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.10.0
-last_changed_at: 2026-07-27T00:00:00Z
+version: 0.10.1
+last_changed_at: 2026-08-09T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -165,7 +165,13 @@ are the three that change state.
     daemon backends. Its `finish(status, summary?, reason?, artifacts?)` tool is
     the hard terminal-success contract: only `finish(status="done")` permits
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
-    silent success. Secret `env`/`headers` values are redacted in prompts.
+    silent success. A daemon that ends without calling `finish()` is reported
+    as a missing-finish failure; that is not necessarily proof the underlying
+    task failed — before treating the work as lost, inspect the run's trace
+    and the full final text preserved in the run directory's physical
+    `result.txt` (the run directory is the `path` that `check` reports;
+    `result_path` stays null on this failure path). Secret `env`/`headers`
+    values are redacted in prompts.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set

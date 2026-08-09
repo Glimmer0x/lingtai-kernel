@@ -1927,7 +1927,11 @@ class DaemonManager:
             "contract, background-and-wait is invalid: do not start a background "
             "job and end your turn expecting a later notification or re-entry. "
             "Run required validation synchronously with an explicit timeout, "
-            "inspect its result in this run, then call `finish`."
+            "inspect its result in this run, then call `finish`. If the run "
+            "ends without calling `finish(status=...)`, the parent will "
+            "report it as missing-finish — that is not proof of failure; "
+            "the parent should inspect the run's trace and the full final "
+            "text preserved in the run directory's physical `result.txt`."
         )
 
     @staticmethod
@@ -2034,6 +2038,13 @@ class DaemonManager:
             detail += f"; reason: {completion.reason}"
         if completion.summary:
             detail += f"; summary: {completion.summary}"
+        if completion.error == _DAEMON_MISSING_COMPLETION_ERROR:
+            detail += (
+                ". The run ended without a finish() signal; this does not "
+                "necessarily mean the task failed — before concluding, "
+                "inspect the run's trace and the full final text preserved "
+                "in the run directory's physical result.txt"
+            )
         exc = RuntimeError(
             "daemon completion MCP contract did not permit success: "
             f"{detail}. Final text: {final_text[:500]}"
