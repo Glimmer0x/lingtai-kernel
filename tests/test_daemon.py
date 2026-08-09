@@ -4371,6 +4371,90 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
     }
 
 
+def test_run_emanation_detached_child_merges_public_provider_defaults(
+    tmp_path, monkeypatch
+):
+    """Detached-child reconstruction must merge the public ``provider_defaults`` map.
+
+    The parent serializes the effective provider bucket into the manifest under
+    the public ``provider_defaults`` key; the private ``_provider_defaults``
+    alias never crosses the process boundary. The child's ``_run_emanation``
+    receives ``preset_llm`` carrying that public map and must merge the nested
+    ``provider_defaults[provider]`` bucket — otherwise fields like
+    ``wire_api: responses`` are dropped, the wire degrades to ``auto``, and a
+    Responses provider is misrouted to Chat Completions.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "custom"
+    agent.service.model = "glm-5.1"
+    agent.service._base_url = "https://proxy.example/v1"
+    agent.service._context_window = 200000
+    agent.service._key_resolver = lambda provider: "token"
+    agent.service._api_key = "sk-effective"
+    agent.service.api_key = "sk-effective"
+    agent.service._provider_defaults = {
+        "custom": {
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
+        }
+    }
+
+    captured = {}
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", _capturing_fake_service(captured))
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-detached-defaults"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    # Exactly what a detached child receives: a manifest ``llm``/``preset_llm``
+    # block whose provider bucket lives under the PUBLIC ``provider_defaults``
+    # key (no ``_provider_defaults`` alias survives serialization).
+    child_preset_llm = {
+        "provider": "custom",
+        "model": "glm-5.1",
+        "api_key": "sk-effective",
+        "base_url": "https://proxy.example/v1",
+        "context_window": 200000,
+        "provider_defaults": {
+            "custom": {
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "max_rpm": 9,
+                "default_headers": {"x-test": "1"},
+            }
+        },
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, schemas, dispatch, "x", cancel, preset_llm=child_preset_llm
+    )
+
+    assert result == "daemon done"
+    # The nested wire_api=responses bucket survives the child reconstruction and
+    # reaches LLMService (merged over the top-level manifest-derived keys, e.g.
+    # base_url), so the adapter selects OpenAIResponsesSession instead of
+    # degrading to auto/Chat Completions.
+    assert captured["init"]["provider_defaults"] == {
+        "custom": {
+            "api_compat": "openai",
+            "base_url": "https://proxy.example/v1",
+            "wire_api": "responses",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
+        }
+    }
+
+
 def test_implicit_parent_preset_llm_does_not_resolve_primary_key(tmp_path):
     """``_implicit_parent_preset_llm`` reads the parent's effective key directly.
 

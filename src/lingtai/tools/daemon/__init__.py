@@ -2848,6 +2848,21 @@ class DaemonManager:
             base_defaults = effective_preset_llm["_provider_defaults"]
         else:
             base_defaults = self._llm_defaults_from_manifest(effective_preset_llm)
+            # A detached child receives the provider bucket under the public
+            # ``provider_defaults`` key (the private ``_provider_defaults`` alias
+            # never crosses the process boundary). Merge the nested bucket so
+            # provider-specific fields such as ``wire_api`` / ``api_compat`` /
+            # ``max_rpm`` survive the reconstruction; without this a Responses
+            # provider degrades to ``auto`` and is misrouted to Chat Completions.
+            public_defaults = effective_preset_llm.get("provider_defaults")
+            if isinstance(public_defaults, dict):
+                nested = public_defaults.get(provider)
+                if not isinstance(nested, dict):
+                    nested = public_defaults.get(str(provider).lower())
+                if isinstance(nested, dict) and nested:
+                    merged = dict(base_defaults)
+                    merged.update(nested)
+                    base_defaults = merged
         from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 
         context_window = effective_preset_llm.get("context_limit")
