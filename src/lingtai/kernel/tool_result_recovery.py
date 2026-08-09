@@ -4,11 +4,22 @@ The event log may contain a real ``tool_result`` for a tool call whose
 model-visible ``ToolResultBlock`` was later rolled back by a failed LLM
 continuation.  Before synthesizing an abort placeholder, heal paths can ask
 this module to replay that already-executed result from ``logs/events.jsonl``.
+
+Besides the canonical executed-tool record, a kernel-internal synthetic
+recovery record (``BaseAgent._inject_notification_pair``) may carry the
+extension fields ``result_metadata`` / ``synthesized`` / ``redacted``.  They
+are honored ONLY when the event has exactly ``origin="kernel_notification_sync"``
+and ``tool_name="notification"``; any other record — even with lookalike
+fields — recovers with the defaults (``metadata={}``, ``synthesized=False``).
+A ``redacted: true`` replay is lossy by design: the rebuilt block gets a
+``metadata["redacted"] = True`` marker so callers trigger producer
+reconciliation (LICC contract "Synthetic pair durability and heal replay").
 """
 from __future__ import annotations
 
+import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -35,6 +46,11 @@ class _RecoveredEvent:
     event_ts: Any
     event_tool_name: str | None
     stats: _ScanStats
+    # Synthetic-recovery extension fields; populated only for
+    # origin="kernel_notification_sync" records (see module docstring).
+    result_metadata: dict = field(default_factory=dict)
+    synthesized: bool = False
+    redacted: bool = False
 
 
 def recover_tool_result_block_from_events(
@@ -125,15 +141,27 @@ def recover_tool_result_block_from_events(
         event_ts=_bounded_scalar(recovered.event_ts),
         result_type=type(capped).__name__,
         spilled=capped is not recovered.result,
+        recovered_synthesized=recovered.synthesized,
+        recovered_redacted=recovered.redacted,
         scanned_events=recovered.stats.scanned_events,
         scanned_bytes=recovered.stats.scanned_bytes,
         **spill_fields,
     )
+    metadata = (
+        copy.deepcopy(recovered.result_metadata)
+        if recovered.result_metadata
+        else {}
+    )
+    if recovered.redacted:
+        # Non-equivalence marker: the durable record holds only the redacted
+        # projection; _meta.redacted lets callers trigger reconciliation.
+        metadata["redacted"] = True
     return ToolResultBlock(
         id=tool_call_id,
         name=tool_name,
         content=capped,
-        synthesized=False,
+        metadata=metadata,
+        synthesized=recovered.synthesized,
     )
 
 
@@ -177,11 +205,28 @@ def _find_latest_tool_result_event(
                 continue
         if "result" not in event:
             continue
+        # Extension fields trusted ONLY under the exact kernel provenance
+        # discriminator; lookalike fields elsewhere keep the defaults.
+        result_metadata: dict = {}
+        synthesized = False
+        redacted = False
+        if (
+            event.get("origin") == "kernel_notification_sync"
+            and event.get("tool_name") == "notification"
+        ):
+            raw_metadata = event.get("result_metadata")
+            if isinstance(raw_metadata, dict):
+                result_metadata = raw_metadata
+            synthesized = event.get("synthesized") is True
+            redacted = event.get("redacted") is True
         return _RecoveredEvent(
             result=event.get("result"),
             event_ts=event.get("ts"),
             event_tool_name=event.get("tool_name"),
             stats=stats,
+            result_metadata=result_metadata,
+            synthesized=synthesized,
+            redacted=redacted,
         )
     return None
 

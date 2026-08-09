@@ -482,8 +482,10 @@ class ChatInterface:
         Used by recovery paths — AED retry, session restore from crashed
         process — to bring the interface into a valid state before appending
         a new user entry. Synthetic placeholders carry the reason string so the
-        model has context on the next turn; recovered real results keep their
-        original content and are marked ``synthesized=False``.
+        model has context on the next turn; recovered results keep their
+        original content, metadata, and recorded ``synthesized`` state
+        (``False`` for ordinary executed-tool replays, ``True`` for replayed
+        kernel-synthesized notification pairs).
 
         When ``tool_completed`` is True, the caller knows the tool already
         executed successfully and the real failure was the LLM continuation
@@ -518,7 +520,9 @@ class ChatInterface:
                 and recovered.id == b.id
                 and recovered.name == b.name
             ):
-                recovered.synthesized = False
+                # Keep the recovered block's own synthesized state: coercing
+                # to False would misclassify a replayed kernel-synthetic
+                # notification pair as a real execution result.
                 results.append(recovered)
                 continue
             results.append(

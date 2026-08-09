@@ -2179,6 +2179,226 @@ def test_inject_notification_pair_emits_block_injected_event(tmp_path: Path) -> 
     assert "notification_guidance" not in notifs["email"]
 
 
+def _make_agent_with_real_event_journal(tmp_path: Path):
+    """Agent stub keeping the REAL ``BaseAgent._log`` + production journal
+    (redaction, sqlite index, ``logs/events.jsonl``) — no ``_log`` override."""
+    import queue
+    import time as time_mod
+
+    from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.state import AgentState
+
+    chat = _make_chat_stub()
+
+    class _WallClock:
+        def wall_seconds(self) -> float:
+            return time_mod.time()
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
+            self._notification_block_id = None
+            self._chat_stub = chat
+            self.agent_name = "stub"
+            self.inbox = queue.Queue()
+            self._event_journal = PosixJsonlEventJournalAdapter(workdir)
+            self._lifecycle_clock = _WallClock()
+            self._runtime_identity_event_fields = {}
+            self._deferred_notifications_count = 0
+            self._deferred_notifications_oldest_at = None
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source="main"):
+            pass
+
+        def _wake_nap(self, *_a, **_kw):
+            pass
+
+        def _set_state(self, *_a, **_kw):
+            pass
+
+        def _reset_uptime(self):
+            pass
+
+    return _Agent(tmp_path)
+
+
+def _read_journal_events(tmp_path: Path) -> list[dict]:
+    events_path = tmp_path / "logs" / "events.jsonl"
+    if not events_path.is_file():
+        return []
+    return [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_notification_replay_e2e_heal_restores_full_envelope(tmp_path: Path) -> None:
+    """#419 E2E on the production journal: sync → durable recovery record →
+    provider rollback → heal replays the full envelope (content + metadata +
+    synthesized=True) → unchanged follow-up sync injects no duplicate."""
+    import copy as copy_mod
+
+    publish_test_payload(
+        tmp_path, "email", {"count": 2, "data": {"count": 2, "digest": "2 unread"}}
+    )
+    agent = _make_agent_with_real_event_journal(tmp_path)
+
+    agent._sync_notifications()
+    iface = agent._chat_stub.interface
+    assert len(iface.entries) == 2
+    original = iface.entries[1].content[0]
+    call_id = original.id
+    assert original.synthesized is True and original.metadata
+    original_content = copy_mod.deepcopy(original.content)
+    original_metadata = copy_mod.deepcopy(original.metadata)
+    assert agent._notification_fp == fingerprint_notifications(tmp_path)
+
+    # Durable self-contained recovery record; deliberately not the canonical
+    # ToolExecutor lifecycle (no trace id, no visibility event).
+    events = _read_journal_events(tmp_path)
+    event = [
+        e for e in events
+        if e.get("type") == "tool_result" and e.get("tool_call_id") == call_id
+    ][-1]
+    assert event["tool_name"] == "notification"
+    assert event["tool_args"] == {
+        "action": "check", "input": {}, "reasoning": "kernel notification sync"
+    }
+    assert event["result"] == original_content
+    assert event["result_metadata"] == original_metadata
+    assert event["synthesized"] is True
+    assert event["origin"] == "kernel_notification_sync"
+    assert event["redacted"] is False
+    assert "tool_trace_id" not in event
+    assert "tool_result_durable_log_visible" not in [e.get("type") for e in events]
+
+    # Provider/adapter rollback of the completed result, then heal.
+    iface.entries.pop()
+    assert iface.has_pending_tool_calls()
+    assert agent._heal_pending_tool_calls(reason="test_provider_rollback") is True
+    assert not iface.has_pending_tool_calls()
+    recovered = iface.entries[-1].content[0]
+    assert recovered.id == call_id and recovered.name == "notification"
+    assert recovered.content == original_content
+    assert recovered.metadata == original_metadata
+    assert recovered.synthesized is True
+    types = [e.get("type") for e in _read_journal_events(tmp_path)]
+    assert "tool_result_replayed_from_log" in types
+    assert "tool_result_replay_miss" not in types
+
+    # Unchanged follow-up sync: fingerprint short-circuits, no duplicate pair.
+    entries_before = len(iface.entries)
+    agent._sync_notifications()
+    assert len(iface.entries) == entries_before
+    assert iface.entries[-1].content[0].metadata == original_metadata
+    pair_events = [
+        e for e in _read_journal_events(tmp_path)
+        if e.get("type") == "notification_pair_injected"
+    ]
+    assert len(pair_events) == 1
+
+
+def test_notification_replay_e2e_redacted_secret_marks_and_reconciles(
+    tmp_path: Path,
+) -> None:
+    """Security contract: the raw secret never lands in events.jsonl; a
+    redacted replay carries the _meta.redacted marker and resets the
+    committed fingerprint so the next sync re-injects full producer state."""
+    import copy as copy_mod
+
+    from lingtai.kernel.trace_redaction import redact_for_trajectory
+
+    secret = "sk-live-SUPERSECRET-123"
+    publish_test_payload(
+        tmp_path,
+        "system",
+        {"data": {"events": [{"source": "daemon", "body": f"deploy failed: {secret}"}]}},
+    )
+    agent = _make_agent_with_real_event_journal(tmp_path)
+
+    agent._sync_notifications()
+    iface = agent._chat_stub.interface
+    original = iface.entries[1].content[0]
+    original_content = copy_mod.deepcopy(original.content)
+    original_metadata = copy_mod.deepcopy(original.metadata)
+    assert secret in json.dumps([original.content, original.metadata])
+    committed_fp = agent._notification_fp
+    assert committed_fp == fingerprint_notifications(tmp_path)
+
+    events_path = tmp_path / "logs" / "events.jsonl"
+    assert secret not in events_path.read_text(encoding="utf-8")
+    durable = [
+        e for e in _read_journal_events(tmp_path) if e.get("type") == "tool_result"
+    ][-1]
+    assert durable["redacted"] is True
+
+    # Rollback + heal: replay is exactly the redacted projection, marked.
+    iface.entries.pop()
+    assert agent._heal_pending_tool_calls(reason="test_provider_rollback") is True
+    recovered = iface.entries[-1].content[0]
+    assert recovered.id == original.id and recovered.synthesized is True
+    assert recovered.content == original_content
+    expected_metadata = redact_for_trajectory(original_metadata)
+    expected_metadata["redacted"] = True
+    assert recovered.metadata == expected_metadata
+    assert secret not in json.dumps([recovered.content, recovered.metadata])
+    events = _read_journal_events(tmp_path)
+    types = [e.get("type") for e in events]
+    assert "tool_result_replay_miss" not in types
+    replayed = [e for e in events if e.get("type") == "tool_result_replayed_from_log"][-1]
+    assert replayed["recovered_synthesized"] is True
+    assert replayed["recovered_redacted"] is True
+    assert "notification_redacted_replay_resync" in types
+
+    # Fingerprint reset → the unchanged producer state re-injects fully.
+    assert agent._notification_fp == ()
+    entries_before = len(iface.entries)
+    agent._sync_notifications()
+    assert len(iface.entries) == entries_before + 2
+    final = iface.entries[-1].content[0]
+    assert final.synthesized is True
+    assert secret in json.dumps([final.content, final.metadata])
+    assert agent._notification_fp == committed_fp
+    assert secret not in events_path.read_text(encoding="utf-8")
+
+
+def test_notification_recovery_record_failure_does_not_abort_injection(
+    tmp_path: Path,
+) -> None:
+    """Fail-open: a recovery-record write failure never aborts injection and
+    surfaces as recovery_record_error on notification_pair_injected."""
+    publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+    agent = _make_agent_with_real_event_journal(tmp_path)
+    real_log = agent._log
+
+    def _failing_tool_result_log(evt: str, **fields) -> None:
+        if evt == "tool_result":
+            raise RuntimeError("simulated journal failure for tool_result")
+        real_log(evt, **fields)
+
+    agent._log = _failing_tool_result_log
+    assert agent._inject_notification_pair(snapshot_notifications(tmp_path)) is True
+    iface = agent._chat_stub.interface
+    assert len(iface.entries) == 2
+    assert iface.entries[1].content[0].synthesized is True
+    events = _read_journal_events(tmp_path)
+    types = [e.get("type") for e in events]
+    assert "tool_result" not in types
+    assert "notification_block_injected" in types
+    pair = [e for e in events if e.get("type") == "notification_pair_injected"][-1]
+    assert pair["recovery_record_error"] == "RuntimeError"
+
+
 def test_inject_notification_pair_adds_telegram_persistent_and_strips_ephemeral(
     tmp_path: Path,
 ) -> None:
