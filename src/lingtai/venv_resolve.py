@@ -127,7 +127,13 @@ def _test_venv_detail(venv_dir: Path, *, warn_marker_error: bool) -> tuple[bool,
     python = venv_python(venv_dir)
     if not os.path.isfile(python):
         return False, f"python executable missing at {python}"
-    marker_status, marker_detail = _env_marker_status_detail(venv_dir)
+    # Managed (default runtime) venvs are revalidated against the current
+    # selection policy so a venv created under an older policy is recreated
+    # instead of accepted on marker self-consistency alone. User-configured
+    # venv_paths stay exempt (the owner chose them deliberately).
+    # (Jason review P1-2, 2026-08-08.)
+    policy = _python_selection_policy() if _is_default_runtime_dir(venv_dir) else None
+    marker_status, marker_detail = _env_marker_status_detail(venv_dir, policy=policy)
     if marker_status == _MARKER_MISMATCH:
         return False, marker_detail or "environment marker mismatch"
     try:
@@ -280,9 +286,15 @@ def _python_selection_policy() -> _PythonSelectionPolicy:
         )
 
     if architecture == "arm64" and macos_major >= 14:
-        maximum = (3, 14)
+        # Managed-runtime wheel floor: the release workflow builds cp311/cp312/
+        # cp313 wheels only (no cp314 yet), so a managed selector that chose
+        # Python 3.14 here would fall onto a source build that can omit the
+        # native Rust sidecar when Rust is unavailable. Keep the managed cap at
+        # 3.13 even though onnxruntime 1.28.0 ships a cp314 ARM wheel; a user who
+        # installs lingtai from source under 3.14 remains free to do so outside
+        # the managed selector. (Jason review P1-1, 2026-08-08.)
+        maximum = (3, 13)
         candidate_names = (
-            "python3.14",
             "python3.13",
             "python3.12",
             "python3.11",
@@ -546,7 +558,11 @@ def _env_marker_status(venv_dir: Path) -> str:
     return status
 
 
-def _env_marker_status_detail(venv_dir: Path) -> tuple[str, str]:
+def _env_marker_status_detail(
+    venv_dir: Path,
+    *,
+    policy: _PythonSelectionPolicy | None = None,
+) -> tuple[str, str]:
     try:
         raw = _marker_path(venv_dir).read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -575,9 +591,28 @@ def _env_marker_status_detail(venv_dir: Path) -> tuple[str, str]:
         return _MARKER_ERROR, f"environment marker probe failed: {exc}"
     except json.JSONDecodeError as exc:
         return _MARKER_ERROR, f"environment marker probe returned invalid JSON: {exc}"
-    if _env_marker_matches(marker, current):
-        return _MARKER_MATCH, ""
-    return _MARKER_MISMATCH, "environment marker Python identity does not match this venv"
+    if not _env_marker_matches(marker, current):
+        return _MARKER_MISMATCH, "environment marker Python identity does not match this venv"
+    # Managed-runtime venvs must also satisfy the current selection policy, not
+    # merely agree with themselves. A pre-existing venv created under an older
+    # policy (e.g. a Python 3.14 managed venv on arm64/macOS 13, which now caps
+    # at 3.13) must be rejected and recreated rather than stamped as usable.
+    # (Jason review P1-2, 2026-08-08.)
+    if policy is not None:
+        marker_python = marker.get("python") or {}
+        version_major = marker_python.get("version_major")
+        version_minor = marker_python.get("version_minor")
+        if isinstance(version_major, int) and isinstance(version_minor, int):
+            version = (version_major, version_minor)
+            if version < policy.minimum or (
+                policy.maximum is not None and version > policy.maximum
+            ):
+                return (
+                    _MARKER_MISMATCH,
+                    f"environment marker Python {version_major}.{version_minor} is "
+                    f"outside supported range {policy.supported_range}",
+                )
+    return _MARKER_MATCH, ""
 
 
 def _write_env_marker(venv_dir: Path) -> None:
@@ -597,7 +632,13 @@ def _write_env_marker_best_effort(venv_dir: Path) -> None:
 
 
 def _remove_mismatched_managed_venv(venv_dir: Path) -> None:
-    if _env_marker_status(venv_dir) == _MARKER_MISMATCH:
+    # Revalidate against the current policy, not just marker self-consistency,
+    # so a managed venv left over from an older policy (e.g. Python 3.14 on
+    # arm64/macOS 13, now capped at 3.13) is removed before recreation.
+    # (Jason review P1-2, 2026-08-08.)
+    policy = _python_selection_policy()
+    status, _detail = _env_marker_status_detail(venv_dir, policy=policy)
+    if status == _MARKER_MISMATCH:
         shutil.rmtree(venv_dir)
 
 

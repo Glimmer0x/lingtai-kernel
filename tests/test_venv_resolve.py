@@ -313,7 +313,7 @@ def _assert_selector_probe_call(args: list[str], kwargs: dict, path: str) -> Non
             "darwin",
             "aarch64",
             "14.7",
-            ("python3.14", "python3.13", "python3.12", "python3.11", "python3", "python"),
+            ("python3.13", "python3.12", "python3.11", "python3", "python"),
         ),
         (
             "darwin",
@@ -368,9 +368,12 @@ def test_find_python_uses_exact_target_candidate_order(
     assert searched == list(expected_names)
 
 
-def test_arm_macos14_prefers_compatible_python314(
+def test_arm_macos14_prefers_compatible_python313(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The managed selector caps at Python 3.13 on arm64/macOS 14+ because the
+    release workflow builds only cp311/cp312/cp313 wheels; a 3.14 choice would
+    fall onto a source build (Jason review P1-1, 2026-08-08)."""
     _set_selector_host(
         monkeypatch,
         sys_platform="darwin",
@@ -384,10 +387,10 @@ def test_arm_macos14_prefers_compatible_python314(
         return f"/mock/{name}"
 
     def fake_run(args: list[str], **kwargs):
-        _assert_selector_probe_call(args, kwargs, "/mock/python3.14")
+        _assert_selector_probe_call(args, kwargs, "/mock/python3.13")
         return _completed_probe(
             args[0],
-            (3, 14, 2),
+            (3, 13, 9),
             sys_platform="darwin",
             machine="arm64",
             macos_version="14.6",
@@ -396,8 +399,8 @@ def test_arm_macos14_prefers_compatible_python314(
     monkeypatch.setattr(venv_resolve.shutil, "which", fake_which)
     monkeypatch.setattr(venv_resolve.subprocess, "run", fake_run)
 
-    assert venv_resolve._find_python() == "/mock/python3.14"
-    assert searched == ["python3.14"]
+    assert venv_resolve._find_python() == "/mock/python3.13"
+    assert searched == ["python3.13"]
 
 
 @pytest.mark.parametrize("machine", ["arm64", "x86_64"])
@@ -503,7 +506,7 @@ def test_bad_probe_rejects_only_candidate_then_falls_back(
         machine="arm64",
         macos_version="14.4",
     )
-    paths = {"python3.14": "/mock/bad", "python3.13": "/mock/good"}
+    paths = {"python3.13": "/mock/bad", "python3.12": "/mock/good"}
     probed: list[str] = []
 
     def fake_which(name: str) -> str | None:
@@ -516,7 +519,7 @@ def test_bad_probe_rejects_only_candidate_then_falls_back(
         if path == "/mock/good":
             return _completed_probe(
                 path,
-                (3, 13, 9),
+                (3, 12, 8),
                 sys_platform="darwin",
                 machine="aarch64",
                 macos_version="15.0",
@@ -571,16 +574,16 @@ def test_find_python_deduplicates_aliases_by_resolved_path(
     )
     shared = tmp_path / "shared-python"
     shared.write_text("", encoding="utf-8")
-    alias_one = tmp_path / "python3.14"
-    alias_two = tmp_path / "python3.13"
+    alias_one = tmp_path / "python3.13"
+    alias_two = tmp_path / "python3.12"
     alias_one.symlink_to(shared)
     alias_two.symlink_to(shared)
-    good = tmp_path / "python3.12"
+    good = tmp_path / "python3.11"
     good.write_text("", encoding="utf-8")
     paths = {
-        "python3.14": str(alias_one),
-        "python3.13": str(alias_two),
-        "python3.12": str(good),
+        "python3.13": str(alias_one),
+        "python3.12": str(alias_two),
+        "python3.11": str(good),
     }
     probed: list[str] = []
 
@@ -595,7 +598,7 @@ def test_find_python_deduplicates_aliases_by_resolved_path(
             return subprocess.CompletedProcess(args, 0, stdout="not-json", stderr="")
         return _completed_probe(
             path,
-            (3, 12, 8),
+            (3, 11, 8),
             sys_platform="darwin",
             machine="arm64",
             macos_version="14.4",
@@ -757,3 +760,41 @@ def test_create_venv_preserves_platform_specific_pip_path(
         ["/mock/python", "-m", "venv", str(venv)],
         [str(venv / expected_pip), "install", "lingtai"],
     ]
+
+
+def test_managed_venv_with_obsolete_python_version_is_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pre-existing managed venv whose marker records a Python version outside
+    the current selection policy (e.g. Python 3.14 on arm64/macOS 13, now capped
+    at 3.13) is revalidated against the policy and treated as mismatched, not
+    accepted on marker self-consistency alone. (Jason review P1-2, 2026-08-08.)"""
+    _set_selector_host(
+        monkeypatch,
+        sys_platform="darwin",
+        machine="arm64",
+        macos_version="13.6",
+    )
+    managed = tmp_path / "runtime" / "venv"
+    monkeypatch.setattr(venv_resolve, "_DEFAULT_RUNTIME_DIR", managed)
+    _write_python_executable(managed)
+    marker = venv_resolve._current_process_env_marker()
+    marker["python"]["version_major"] = 3
+    marker["python"]["version_minor"] = 14
+    _write_marker(managed, marker)
+    # The venv's own probe must agree with the marker (both 3.14) so the marker
+    # check is self-consistent and only the policy comparison rejects it.
+    monkeypatch.setattr(
+        venv_resolve, "_current_venv_env_marker", lambda _path: dict(marker)
+    )
+
+    status, detail = venv_resolve._env_marker_status_detail(
+        managed, policy=venv_resolve._python_selection_policy()
+    )
+    assert status == "mismatch"
+    assert "outside supported range 3.11-3.13" in detail
+    # And the managed cleanup path removes it.
+    assert managed.exists()
+    venv_resolve._remove_mismatched_managed_venv(managed)
+    assert not managed.exists()

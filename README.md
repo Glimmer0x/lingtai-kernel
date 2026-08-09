@@ -62,15 +62,20 @@ Python >= 3.11; use a local `.venv`. The code baseline remains open-ended at Pyt
 >= 3.11, while the managed macOS runtime and direct dependency follow this wheel
 compatibility matrix:
 
-| Target interpreter | Supported Python | Direct `onnxruntime` requirement |
-|---|---|---|
-| Apple Silicon, macOS 14+ | 3.11–3.14 | 1.28.0 |
-| Apple Silicon, macOS 13 | 3.11–3.13 | 1.23.2 |
-| Intel/Rosetta, macOS 13+ | 3.11–3.13 | 1.23.2 |
+| Target interpreter | Supported Python (package/deps) | Managed runtime selector | Direct `onnxruntime` requirement |
+|---|---|---|---|
+| Apple Silicon, macOS 14+ | 3.11–3.14 | 3.11–3.13 | 1.28.0 |
+| Apple Silicon, macOS 13 | 3.11–3.13 | 3.11–3.13 | 1.23.2 |
+| Intel/Rosetta, macOS 13+ | 3.11–3.13 | 3.11–3.13 | 1.23.2 |
 
 The confirmed `onnxruntime` wheels make macOS 13 the support floor. Only Apple
-Silicon on macOS 14+ supports Python 3.14 in this matrix; an x86_64 process under
-Rosetta follows the Intel row.
+Silicon on macOS 14+ supports Python 3.14 in the dependency matrix (onnxruntime
+1.28.0 publishes a cp314 ARM wheel); an x86_64 process under Rosetta follows the
+Intel row. The **managed runtime selector** caps at Python 3.13 on every macOS
+cell because the release workflow builds only cp311/cp312/cp313 wheels for
+LingTai itself — a managed 3.14 choice would fall onto a source build that can
+omit the native Rust sidecar when Rust is unavailable. Python 3.14 remains
+usable for source installs outside the managed selector.
 
 ```bash
 git clone https://github.com/Lingtai-AI/lingtai-kernel.git
