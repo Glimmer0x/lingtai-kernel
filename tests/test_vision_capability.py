@@ -264,7 +264,7 @@ def test_claude_code_remains_manual_only(tmp_path):
     )
     mgr = setup(agent, provider="claude-code", api_key="sk-test")
     assert mgr._vision_service is None
-    assert "claude cli" in mgr._manual_reason.lower()
+    assert "claude -p" in mgr._manual_reason
     assert "vision(action='manual'" in mgr._manual_reason
     assert mgr.manual()["status"] in {"ok", "degraded"}
 
@@ -277,11 +277,11 @@ def test_claude_family_returns_cli_guidance_not_service(tmp_path, provider):
     )
     mgr = setup(agent, provider=provider, api_key="sk-test")
     assert mgr._vision_service is None
-    assert "claude cli" in mgr._manual_reason.lower()
     assert "claude -p" in mgr._manual_reason
+    assert "vision(action='manual'" in mgr._manual_reason
     result = mgr._dispatch_analyze({"image_path": "x.png", "question": None})
     assert result["status"] == "error"
-    assert "claude cli" in result["message"].lower()
+    assert "claude -p" in result["message"]
 
 
 def test_vision_empty_response_is_error(tmp_path):

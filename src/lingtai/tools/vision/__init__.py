@@ -764,14 +764,12 @@ def _resolve_direct_service(
             # does not proxy the CLI's own authentication (claude.ai
             # subscription, API key, configured provider), so there is no
             # direct service to construct: the agent is told to run
-            # ``claude -p`` with the image path and read the vision manual
-            # for the exact steps.
+            # ``claude -p`` and read the vision manual for the exact steps.
             manual_reason = (
-                "The claude backend uses the Claude CLI for vision: run "
-                "`claude -p \"Analyze this image: <path>\"` with the CLI's "
-                "own authentication, and read the vision manual for details: "
+                "Claude is the backend. To use vision, run `claude -p`; "
+                "see the vision manual for more details: "
                 "vision(action='manual', input={}, reasoning='claude vision "
-                "uses the claude cli')."
+                "details')."
             )
         elif provider_key in _CODEX_FAMILY:
             # Codex vision is a standalone Responses request. It may share
