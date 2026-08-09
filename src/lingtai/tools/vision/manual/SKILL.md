@@ -20,7 +20,7 @@ it does not discover, install, start, or invoke a backend.
 
 ## Call shape
 
-`vision` is one action-separated tool with exactly two actions:
+`vision` is one action-separated tool with these actions:
 
 - `vision(action="analyze", input={"image_path": "...", "question": null},
   reasoning="...")` — the direct image request. `question` is optional: send
@@ -34,10 +34,18 @@ it does not discover, install, start, or invoke a backend.
   provider/model; with `null` it checks the default route. It constructs the
   service but never makes a provider call, so it costs nothing and cannot fail
   on image content.
+- `vision(action="list", input={}, reasoning="...")` — mechanically enumerate
+  the available vision routes without any provider call. It reports the default
+  route (active provider/model, whether it supports vision, its endpoint
+  classification, and whether it is a Responses-API vision model) plus every
+  preset listed in `manifest.preset.allowed` that declares a vision capability
+  (its provider/model, endpoint classification, and whether the model is valid
+  for the Responses API vision endpoint). It never constructs a service or
+  reads a credential.
 - `vision(action="manual", input={}, reasoning="...")` — this guidance. Its
   input is strictly empty and it performs no analyze operation.
 
-`reasoning` is required on both actions and is recorded in your diary; it never
+`reasoning` is required on every action and is recorded in your diary; it never
 becomes part of the image request. Optional `summarize` is a root presentation
 control, not action input. An unknown action, or an input field belonging to the
 other action, is rejected before anything is sent to a provider.
@@ -56,6 +64,24 @@ identity (e.g. a `codex-pool` preset selecting its OAuth pool) is used for that
 one call. Any direct setup or request failure returns a sanitized vision tool
 result that reports the failure type and points here for explicit alternatives;
 it never exposes exception contents.
+
+### Borrow flow
+
+To use another already-authorized preset's vision service for one image request:
+
+1. Run `vision(action="list", input={}, reasoning="...")` first to see which
+   allowed presets declare vision and which of those are Responses-API vision
+   models.
+2. Optionally run `vision(action="check", input={"preset": "<allowed preset>"},
+   reasoning="...")` to resolve the borrowed route and its provider/model
+   without sending an image.
+3. Then run `vision(action="analyze",
+   input={"image_path": "...", "preset": "<allowed preset>"},
+   reasoning="...")` to send one image request through that preset's service.
+
+The preset must be listed in `manifest.preset.allowed`; borrowing never
+silently switches the active preset, reads another preset's secret, or
+auto-invokes MCP.
 
 ## Claude backend: use the Claude CLI for vision
 

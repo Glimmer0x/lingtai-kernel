@@ -25,10 +25,11 @@ value, so a placeholder is synthesized. Configure it with
 
 ``vision`` is migrated to the LingTai Tool Protocol v2 action-separated shape
 (``src/lingtai/tools/CONTRACT.md``): one public ``vision`` tool whose canonical
-children are ``analyze`` and the family-owned reserved ``manual``, composed and
-dispatched by the generic ``lingtai.tools.tool_family`` infrastructure. The
-public tool name and both action values are unchanged; only the call envelope
-moved from flat arguments to ``action``/``input``/``reasoning``/``summarize``.
+children are ``analyze``/``check``/``list`` plus the family-owned reserved
+``manual``, composed and dispatched by the generic
+``lingtai.tools.tool_family`` infrastructure. The public tool name and action
+values are unchanged; only the call envelope moved from flat arguments to
+``action``/``input``/``reasoning``/``summarize``.
 Provider routing, credential/identity resolution, and every analyze/manual
 result shape are untouched by that migration.
 """
@@ -94,6 +95,31 @@ def _same_codex_family(requested: str, active: str) -> bool:
     active provider-default bucket (``_codex_bucket_route``).
     """
     return requested in _CODEX_FAMILY and active in _CODEX_FAMILY
+
+
+def _vision_endpoint(provider: str | None) -> str:
+    """Classify a provider's vision endpoint for the mechanical ``list`` action.
+
+    Pure string classification — never constructs a service, reads a
+    credential, or touches the network.
+    """
+    key = (provider or "").lower()
+    if key in _CODEX_FAMILY:
+        return "responses"
+    if key in _CLAUDE_CLI_FAMILY:
+        return "claude-cli"
+    if key == "local":
+        return "openai-compatible-local"
+    if key == "mlx":
+        return "mlx-on-device"
+    if key in PROVIDERS.get("providers", ()):
+        return "provider-service"
+    return "unknown"
+
+
+def _responses_vision(provider: str | None) -> bool:
+    """Return whether a provider routes vision through the Responses API."""
+    return bool(provider and provider.lower() in _CODEX_FAMILY)
 
 
 def _normalize_codex_auth_path(raw: object) -> str | None:
@@ -222,10 +248,18 @@ _CHECK_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_LIST_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
 
 def _build_family(
     analyze_handler: Any = _unused,
     check_handler: Any = _unused,
+    list_handler: Any = _unused,
     manual_child: ChildTool | None = None,
 ) -> ToolFamily:
     """Build vision's family from the one canonical child declaration.
@@ -236,14 +270,15 @@ def _build_family(
     and each ``VisionManager``'s dispatching family come from here, so child
     names, schemas, titles, and order cannot drift between the wire surface
     and the dispatcher. Defaults build the non-dispatching variant; the
-    manager passes its bound ``analyze``/``check`` handlers and the real
-    reserved ``manual`` child from ``build_manual_child``.
+    manager passes its bound ``analyze``/``check``/``list`` handlers and the
+    real reserved ``manual`` child from ``build_manual_child``.
     """
     return ToolFamily(
         "vision",
         [
             ChildTool("analyze", _ANALYZE_INPUT_SCHEMA, analyze_handler, title="analyze input"),
             ChildTool("check", _CHECK_INPUT_SCHEMA, check_handler, title="check input"),
+            ChildTool("list", _LIST_INPUT_SCHEMA, list_handler, title="list input"),
             manual_child
             or ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
         ],
@@ -287,11 +322,12 @@ class VisionManager:
         self._vision_service = vision_service
         self._manual_reason = manual_reason
         # Same canonical child declaration the module-level schema-only family
-        # uses, with this instance's bound analyze/check handlers and the real
-        # reserved ``manual`` child registered directly (unwrapped).
+        # uses, with this instance's bound analyze/check/list handlers and the
+        # real reserved ``manual`` child registered directly (unwrapped).
         self._family = _build_family(
             self._dispatch_analyze,
             self._dispatch_check,
+            self._dispatch_list,
             build_manual_child(agent, "vision"),
         )
 
@@ -364,6 +400,9 @@ class VisionManager:
                 kwargs[key] = llm[key]
         api_key = kwargs.pop("api_key", None)
         api_key_env = kwargs.pop("api_key_env", None)
+        # ``provider`` is passed positionally below; drop the capability copy so
+        # ``_resolve_direct_service`` never receives it twice (TypeError).
+        kwargs.pop("provider", None)
         service, service_reason = _resolve_direct_service(
             self._agent,
             provider,
@@ -512,6 +551,56 @@ class VisionManager:
             "model": getattr(active_service, "model", None),
         }
 
+    def _dispatch_list(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
+        # mechanical enumeration; never constructs a service or makes a provider call
+        import json as _json
+        from lingtai.kernel.presets import load_preset, resolve_allowed_presets
+
+        active_service = getattr(self._agent, "service", None)
+        active_provider = getattr(active_service, "provider", None)
+        active_model = getattr(active_service, "_model", None)
+        default_endpoint = _vision_endpoint(active_provider)
+        default = {
+            "provider": active_provider,
+            "model": active_model,
+            "configured": self._vision_service is not None,
+            "supports_vision": bool(self._vision_service is not None or default_endpoint != "unknown"),
+            "endpoint": default_endpoint,
+            "responses_vision": _responses_vision(active_provider),
+        }
+        allowed: list[str] = []
+        init_path = Path(self._agent._working_dir) / "init.json"
+        if init_path.is_file():
+            try:
+                init_data = _json.loads(init_path.read_text(encoding="utf-8"))
+                manifest = init_data.get("manifest") or {}
+                allowed = sorted(
+                    {str(p) for p in resolve_allowed_presets(manifest, self._agent._working_dir)}
+                    | {str(p) for p in (manifest.get("preset", {}).get("allowed") or [])}
+                )
+            except Exception:
+                allowed = []
+        presets: list[dict[str, Any]] = []
+        for ref in allowed:
+            try:
+                preset = load_preset(ref, working_dir=self._agent._working_dir, run_migrations=lambda _path: None)
+            except Exception:
+                continue
+            pm = preset.get("manifest") or {}
+            llm = pm.get("llm") or {}
+            vision_cap = (pm.get("capabilities") or {}).get("vision") or {}
+            provider = vision_cap.get("provider") or llm.get("provider")
+            if not provider:
+                continue
+            presets.append({
+                "preset": ref,
+                "provider": provider,
+                "model": vision_cap.get("model") or llm.get("model"),
+                "endpoint": _vision_endpoint(provider),
+                "responses_vision": _responses_vision(provider),
+            })
+        return {"status": "ok", "default": default, "presets": presets, "count": len(presets)}
+
     def _adapt_manual_result(self, mcp_result: dict[str, Any]) -> dict[str, Any]:
         # Host-owned flattening of the manual child's canonical result into
         # vision's pre-migration ``status``/``action``/``manual`` shape (plus
@@ -633,7 +722,8 @@ def _resolve_direct_service(
             manual_reason = (
                 f"Local vision settings are invalid: {exc}; fix "
                 "settings/vision.json or pass provider='local' with "
-                "base_url/model kwargs; see vision(action='manual')."
+                "base_url/model kwargs; see vision(action='manual', input={}, "
+                "reasoning='local vision settings are invalid')."
             )
         else:
             local_base_url = (
