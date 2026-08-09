@@ -68,6 +68,12 @@ class SystemPromptManager:
         "rules",
         "brief",
         "skills",
+        # Registered plugin packages and standalone MCP servers sit parallel to
+        # vanilla skills: each is a resident catalog field (written by the
+        # plugin/mcp capabilities, kept adjacent to skills so the agent sees the
+        # three capability namespaces side by side).
+        "plugin",
+        "mcp",
         "knowledge",
         "identity",
         "character",
@@ -118,8 +124,8 @@ class SystemPromptManager:
             "meta_guidance", "comment",
         ),
         (
-            "rules", "brief", "skills", "knowledge", "identity", "character",
-            "pad",
+            "rules", "brief", "skills", "plugin", "mcp", "knowledge",
+            "identity", "character", "pad",
         ),
     )
 

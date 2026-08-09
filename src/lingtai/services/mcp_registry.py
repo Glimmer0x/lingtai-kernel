@@ -418,8 +418,18 @@ def _build_identity_xml(identity: dict | None, indent: str = "    ") -> list[str
 def _build_registry_xml(
     records: list[dict], identities: dict[str, dict] | None = None
 ) -> str:
-    if not records:
-        return ""
+    # Plugin-sourced MCP servers are presented in the ``plugins`` field (as the
+    # plugin's own <mcp_names>), not in the vanilla <registered_mcp> catalog.
+    visible = [r for r in records if not str(r.get("source", "")).startswith("plugin:")]
+    if not visible:
+        return (
+            "No standalone MCP servers are registered for this agent. Register "
+            "one by adding an entry under `mcp` in your init.json (or a record "
+            "in mcp_registry.jsonl) and run system(action=\"refresh\"). MCPs "
+            "bundled inside Agent Plugins are listed in the `plugins` field. "
+            "See the mcp-manual skill in .library/intrinsic/capabilities/mcp/ "
+            "for the full registration contract."
+        )
     identities = identities or {}
     lines = [
         "The following MCP servers are registered for this agent. To activate "
@@ -432,7 +442,7 @@ def _build_registry_xml(
         "",
         "<registered_mcp>",
     ]
-    for r in records:
+    for r in visible:
         lines.append("  <mcp>")
         lines.append(f"    <name>{_escape_xml(r['name'])}</name>")
         lines.append(f"    <summary>{_escape_xml(r['summary'])}</summary>")

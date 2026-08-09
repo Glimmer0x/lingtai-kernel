@@ -808,6 +808,12 @@ def register_plugins(working_dir: Path, declared: list[str]) -> dict:
 
     working_dir = Path(working_dir)
     declared = list(declared or [])
+    # Default plugin root: <workdir>/plugin/ is scanned automatically when it
+    # exists, so dropping a plugin directory there needs no init.json entry.
+    # Explicit declarations still come first and win duplicate names.
+    default_plugin_dir = working_dir / "plugin"
+    if default_plugin_dir.is_dir() and str(default_plugin_dir) not in declared:
+        declared = [str(default_plugin_dir)] + declared
     records, problems, paths_report = read_plugins(working_dir, declared)
 
     # Pass 1 — decide what the registry should hold, and why anything is skipped.
@@ -942,7 +948,17 @@ def _plugin_xml(record: dict, mount: str, indent: str = "  ") -> list[str]:
     if record.get("summary"):
         lines.append(f"{indent}  <summary>{_escape_xml(record['summary'])}</summary>")
     lines.append(f"{indent}  <skills>{record['skill_count']}</skills>")
+    skill_names = record.get("skills") or []
+    if skill_names:
+        lines.append(
+            f"{indent}  <skill_names>{_escape_xml(', '.join(skill_names))}</skill_names>"
+        )
     lines.append(f"{indent}  <mcp_servers>{record['mcp_server_count']}</mcp_servers>")
+    mcp_names = record.get("mcp_servers") or []
+    if mcp_names:
+        lines.append(
+            f"{indent}  <mcp_names>{_escape_xml(', '.join(mcp_names))}</mcp_names>"
+        )
     if mount == "registered":
         registered = record.get("mcp_registered") or []
         lines.append(
@@ -975,16 +991,23 @@ def _build_registry_xml(
     """
     discovered = discovered or []
     if not registered and not discovered:
-        return ""
+        return (
+            "No Agent Plugins (agent-plugins.org, v1.0.0) are registered or "
+            "discovered for this agent. Drop a plugin directory under "
+            "<workdir>/plugin/<name>/plugin.json (or declare it in init.json "
+            "manifest.plugins) and refresh to mount it. See "
+            "plugin(action=\"manual\") for the plugin-manual."
+        )
 
     preamble = (
         "The following Agent Plugins (agent-plugins.org, v1.0.0) are visible to "
         "this agent. <mount>registered</mount> means the plugin was declared in "
-        "init.json manifest.plugins and mounted at boot: its skills are in your "
-        "skills catalog (located inside the plugin, not copied into .library/) "
-        "and each name in <mcp_registered> holds an mcp_registry.jsonl record "
-        "with source=\"plugin:<name>\" — registered, but NOT running, so "
-        "activation still needs an init.json top-level mcp entry. "
+        "init.json manifest.plugins and mounted at boot: its skills stay inside "
+        "the plugin (readable via file/read from <source>, not composed into the "
+        "vanilla skills catalog) and each name in <mcp_registered> holds an "
+        "mcp_registry.jsonl record with source=\"plugin:<name>\" — registered, "
+        "but NOT running, so activation still needs an init.json top-level mcp "
+        "entry. "
         "<mount>discovered</mount> means the plugin was only found on an "
         "inherited skills path: nothing is mounted, its skills are NOT in your "
         "catalog and its MCP servers are NOT registered. Call "
