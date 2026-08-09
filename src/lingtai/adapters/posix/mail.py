@@ -82,6 +82,11 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         # mailboxes. Keep iterator progress across poll ticks so Phase 2 can
         # be sliced instead of restarting from the first historical entry.
         self._own_inbox_iter: Iterator[Path] | None = None
+        # Directory names observed in the current own-inbox pass. When a pass
+        # completes, ids in ``_seen`` that were not observed and whose inbox
+        # directories no longer exist are pruned so ``_seen`` tracks the live
+        # inbox instead of all history (see ``_prune_seen_to_live_inbox``).
+        self._own_inbox_observed: set[str] = set()
         self._own_inbox_slice_seconds = 0.05
         self._own_inbox_slice_entries = 200
         self._mail_poll_slow_seconds = 1.0
@@ -196,7 +201,9 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
         Existing messages are recorded in ``_seen`` so they are not
         re-delivered.  New directories that appear with a ``message.json``
-        trigger *on_message*.
+        trigger *on_message*. After each complete own-inbox pass, ``_seen``
+        is pruned to ids whose inbox directories still exist (archived or
+        deleted messages drop out of the dedupe set).
         """
         # Snapshot existing inbox entries so we don't re-notify
         if self._inbox_dir.is_dir():
@@ -279,6 +286,7 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 return False
             if self._own_inbox_iter is None:
                 self._own_inbox_iter = iter(self._inbox_dir.iterdir())
+                self._own_inbox_observed = set()
 
             while not self._poll_stop.is_set() and visited < limit:
                 # Every branch below—including cheap `_seen` skips—must pay
@@ -289,10 +297,16 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 try:
                     entry = next(self._own_inbox_iter)
                 except StopIteration:
+                    # Complete pass: prune _seen to ids whose inbox dirs still
+                    # exist (archived/deleted messages drop out). Pruning only
+                    # here, on a full scan, means a partial pass can never
+                    # evict live entries.
+                    self._prune_seen_to_live_inbox()
                     self._reset_own_inbox_iter()
                     return visited > 0
 
                 visited += 1
+                self._own_inbox_observed.add(entry.name)
                 # _seen only holds handled directory names or pseudo-claim
                 # UUIDs, so skip before the stat.
                 if entry.name in self._seen:
@@ -331,6 +345,28 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         close = getattr(iterator, "close", None)
         if callable(close):
             close()
+
+    def _prune_seen_to_live_inbox(self) -> None:
+        """Evict ``_seen`` ids whose inbox directories no longer exist.
+
+        Called only after a complete own-inbox pass (iterator exhausted), so a
+        partial scan can never evict live entries. Candidates are ``_seen`` ids
+        that were not observed in this pass; each is verified on disk before
+        eviction. The existence check matters because the own-inbox pass spans
+        many poll ticks: a pseudo-agent claim pre-marks an id in ``_seen``
+        before placing the inbox copy, so an id created mid-pass may not be
+        yielded by this pass's iterator even though its directory exists —
+        evicting it would re-dispatch an already-delivered message.
+
+        Pruning is safe: a missing directory can never be re-dispatched by the
+        poll loop, and mailbox ids are timestamp-prefixed so an old id does not
+        recur as a new message.
+        """
+        if not self._seen:
+            return
+        for name in self._seen - self._own_inbox_observed:
+            if not (self._inbox_dir / name).exists():
+                self._seen.discard(name)
 
     def _log_slow_mail_phase(self, phase: str, start: float, **fields: object) -> None:
         elapsed = time.monotonic() - start

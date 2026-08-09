@@ -92,7 +92,10 @@ co-located owning ANATOMY.md files.
   `message.json` atomically via `os.replace`
   (`send()`, `src/lingtai/adapters/posix/mail.py:102`; atomic write at :184);
   `listen()`/`stop()` own the 0.5-second daemon poll loop with pseudo-outbox
-  priority and per-phase `OSError` isolation.
+  priority and per-phase `OSError` isolation; the own-inbox dedupe set `_seen`
+  is pruned to ids whose inbox directories still exist after each complete
+  inbox pass, so archived/deleted messages drop out instead of accumulating
+  forever.
 - `PosixWorkdirLeaseAdapter` implements `WorkdirLeasePort` by holding an exclusive
   non-blocking `fcntl.flock` on `<workdir>/.agent.lock`
   (`src/lingtai/adapters/posix/workdir_lease.py:27-95`); `acquire()` polls at

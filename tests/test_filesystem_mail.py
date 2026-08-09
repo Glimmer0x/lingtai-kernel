@@ -466,6 +466,10 @@ def test_seen_inbox_entries_skip_stat_before_is_dir(tmp_path):
     agent_dir = _make_agent_dir(tmp_path, "agent_a")
     real_inbox = agent_dir / "mailbox" / "inbox"
     real_inbox.mkdir(parents=True)
+    # The seen entry must be a live inbox directory: the poll loop prunes
+    # _seen ids whose inbox dirs are gone, so a fake name with no backing
+    # directory would be evicted and re-statted on the next tick.
+    (real_inbox / "already-seen").mkdir()
 
     stat_attempted = threading.Event()
     scan_finished = threading.Event()
@@ -967,3 +971,180 @@ def test_mail_poll_slow_phase_telemetry_is_body_free(tmp_path, caplog):
     assert "phase=own_inbox_slice" in caplog.text
     assert "agent=agent01" in caplog.text
     assert "do-not-log-body" not in caplog.text
+
+
+def test_seen_pruned_after_inbox_dir_removed(tmp_path):
+    """_seen drops ids whose inbox dirs are archived/deleted after a pass."""
+    import shutil
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    entry = inbox / "20260701T000000-1a2b"
+    entry.mkdir()
+    (entry / "message.json").write_text(json.dumps({"message": "old"}))
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.add(entry.name)  # snapshot seed, like listen()
+
+    received: list[dict] = []
+    # Complete pass: observes the seen entry, dispatches nothing.
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert entry.name in svc._seen
+
+    # EmailManager._archive moves the dir out of the inbox.
+    archive = agent_dir / "mailbox" / "archive"
+    archive.mkdir(parents=True)
+    shutil.move(str(entry), str(archive / entry.name))
+
+    # Next complete pass (empty inbox) prunes the missing id without dispatch.
+    assert svc._poll_own_inbox_slice(received.append) is False
+    assert entry.name not in svc._seen
+    assert received == []
+
+
+def test_seen_retains_live_inbox_entries_after_prune(tmp_path):
+    """Pruning keeps ids whose dirs still exist and never re-dispatches."""
+    import shutil
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    keep = "20260702T000000-bbbb"
+    drop = "20260701T000000-aaaa"
+    for name in (drop, keep):
+        d = inbox / name
+        d.mkdir()
+        (d / "message.json").write_text(json.dumps({"message": name}))
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.update([drop, keep])
+
+    # Archive only the first entry, then run a complete pass.
+    archive = agent_dir / "mailbox" / "archive"
+    archive.mkdir(parents=True)
+    shutil.move(str(inbox / drop), str(archive / drop))
+
+    received: list[dict] = []
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert svc._seen == {keep}
+    assert received == []
+
+
+def test_pseudo_claimed_id_survives_prune(tmp_path):
+    """A pseudo-claim id whose inbox copy exists must not be evicted."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    base = tmp_path
+    pseudo_dir = base / "human"
+    my_dir = base / "agent_a"
+    pseudo_dir.mkdir()
+    my_dir.mkdir()
+    outbox_msg = pseudo_dir / "mailbox" / "outbox" / "claimed-1"
+    outbox_msg.mkdir(parents=True)
+    payload = {
+        "from": "human",
+        "to": ["agent_a"],
+        "message": "hi",
+        "received_at": "2026-08-01T00:00:00.000Z",
+    }
+    (outbox_msg / "message.json").write_text(json.dumps(payload))
+
+    svc = PosixFilesystemMailAdapter(
+        working_dir=my_dir,
+        pseudo_agent_subscriptions=["../human"],
+    )
+    received: list[dict] = []
+    svc._poll_pseudo_outboxes(received.append)
+    assert "claimed-1" in svc._seen
+    assert (my_dir / "mailbox" / "inbox" / "claimed-1" / "message.json").is_file()
+    assert received == [payload]
+
+    # A complete own-inbox pass that observes the copy keeps the id.
+    assert svc._poll_own_inbox_slice(received.append) is True
+    assert "claimed-1" in svc._seen
+
+    # The sliced pass spans ticks while a claim copy can land mid-pass: an
+    # iterator snapshot taken before the copy existed must not evict the id
+    # (its directory exists, so the prune must keep it).
+    svc._own_inbox_iter = iter([])
+    svc._own_inbox_observed = set()
+    assert svc._poll_own_inbox_slice(received.append) is False
+    assert "claimed-1" in svc._seen
+
+
+def test_partial_scan_does_not_prune(tmp_path):
+    """An OSError mid-pass skips pruning: partial observations are unsafe."""
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    live = inbox / "live-msg"
+    live.mkdir()
+    (live / "message.json").write_text(json.dumps({"message": "x"}))
+
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc._seen.add("gone-msg")  # stale id whose dir does not exist
+
+    class FlakyIter:
+        def __init__(self, entries):
+            self._it = iter(entries)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            n = next(self._it)
+            if n is None:
+                raise OSError("simulated mid-scan failure")
+            return n
+
+    class FlakyInboxDir:
+        def __init__(self, path, entries):
+            self.path = path
+            self.entries = entries
+
+        def is_dir(self):
+            return self.path.is_dir()
+
+        def iterdir(self):
+            return FlakyIter(self.entries)
+
+        def __truediv__(self, child):
+            return self.path / child
+
+    svc._inbox_dir = FlakyInboxDir(inbox, [live, None])
+    assert svc._poll_own_inbox_slice(lambda _p: None) is True
+    # Partial pass: the stale id must survive; pruning happens only on a
+    # complete scan.
+    assert "gone-msg" in svc._seen
+    assert "live-msg" in svc._seen  # dispatched before the failure
+
+
+def test_listen_prunes_seen_after_archive(tmp_path):
+    """End-to-end: listen() prunes archived ids within a few poll ticks."""
+    import shutil
+    import time
+    from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+    agent_dir = _make_agent_dir(tmp_path, "agent01", mailbox=True)
+    inbox = agent_dir / "mailbox" / "inbox"
+    old = inbox / "20260701T000000-1a2b"
+    old.mkdir()
+    (old / "message.json").write_text(json.dumps({"message": "old"}))
+
+    received: list[dict] = []
+    svc = PosixFilesystemMailAdapter(agent_dir, mailbox_rel="mailbox")
+    svc.listen(on_message=lambda p: received.append(p))
+    try:
+        assert old.name in svc._seen  # snapshot seed
+        archive = agent_dir / "mailbox" / "archive"
+        archive.mkdir(parents=True)
+        shutil.move(str(old), str(archive / old.name))
+        deadline = time.time() + 3.0
+        while time.time() < deadline and old.name in svc._seen:
+            time.sleep(0.1)
+        assert old.name not in svc._seen
+        # The archived message was never re-delivered.
+        assert received == []
+    finally:
+        svc.stop()
