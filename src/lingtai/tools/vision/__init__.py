@@ -575,8 +575,8 @@ class VisionManager:
                 init_data = _json.loads(init_path.read_text(encoding="utf-8"))
                 manifest = init_data.get("manifest") or {}
                 allowed = sorted(
-                    {str(p) for p in resolve_allowed_presets(manifest, self._agent._working_dir)}
-                    | {str(p) for p in (manifest.get("preset", {}).get("allowed") or [])}
+                    {str(Path(p).expanduser()) for p in resolve_allowed_presets(manifest, self._agent._working_dir)}
+                    | {str(Path(p).expanduser()) for p in (manifest.get("preset", {}).get("allowed") or [])}
                 )
             except Exception:
                 allowed = []

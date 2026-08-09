@@ -1041,6 +1041,53 @@ def test_list_action_enumerates_default_route_and_vision_capable_presets(tmp_pat
     assert result["count"] == 1
 
 
+def test_list_action_dedupes_tilde_and_absolute_allowed_refs(tmp_path, monkeypatch):
+    """A preset declared both as ``~/.lingtai-tui/...`` and as an absolute path
+    in manifest.preset.allowed is enumerated once: the mechanical list
+    normalizes every allowed ref to its expanded absolute path before merging,
+    so the same file cannot appear twice."""
+    vision_preset = tmp_path / ".lingtai-tui" / "presets" / "saved" / "codex-pool.json"
+    vision_preset.parent.mkdir(parents=True, exist_ok=True)
+    vision_preset.write_text(
+        """{
+          "name": "codex-pool",
+          "description": {"summary": "fixture preset with gpt-5.6 vision"},
+          "manifest": {
+            "llm": {"provider": "codex-pool", "model": "gpt-5.6"},
+            "capabilities": {"vision": {"provider": "codex-pool"}}
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    manifest = {
+        "preset": {
+            "allowed": [
+                "~/.lingtai-tui/presets/saved/codex-pool.json",
+                str(vision_preset),
+            ]
+        }
+    }
+    (tmp_path / "init.json").write_text(
+        '{"manifest": ' + __import__("json").dumps(manifest) + "}",
+        encoding="utf-8",
+    )
+    agent = _StubAgent(tmp_path)
+    agent.service = MagicMock()
+    agent.service.provider = "deepseek"
+    agent.service._model = "deepseek-v4-flash"
+    mgr = VisionManager(agent, vision_service=None)
+
+    result = mgr.handle({"action": "list", "input": {}, "reasoning": "enumerate vision routes"})
+
+    assert result["status"] == "ok"
+    assert result["count"] == 1
+    assert len(result["presets"]) == 1
+    assert result["presets"][0]["preset"] == str(vision_preset)
+    assert result["presets"][0]["provider"] == "codex-pool"
+
+
 @pytest.mark.parametrize(
     ("provider", "expected_endpoint", "expected_responses"),
     [
