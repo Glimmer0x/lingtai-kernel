@@ -1343,6 +1343,17 @@ def _parse_tool_calls(raw_tool_calls) -> list[ToolCall]:
 
 def _parse_response(raw) -> LLMResponse:
     """Parse a raw OpenAI ChatCompletion into a provider-agnostic LLMResponse."""
+    if not hasattr(raw, "choices"):
+        # Defense-in-depth: a non-conforming gateway (e.g. an OpenAI-compatible
+        # endpoint that returns a scalar string) must surface a typed protocol
+        # error instead of failing through a bare attribute dereference. This
+        # is deliberately a TypeError, not a ValueError: the response object
+        # has the wrong type, not merely an empty payload.
+        raise TypeError(
+            "OpenAI-compatible endpoint returned a non-ChatCompletion response "
+            "(expected an object with a `choices` list); check the provider's "
+            "wire_api/endpoint compatibility"
+        )
     if not raw.choices:
         return LLMResponse(raw=raw)
 

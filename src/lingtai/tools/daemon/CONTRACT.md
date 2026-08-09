@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 8
-last_changed_at: "2026-08-09"
+contract_version: 9
+last_changed_at: "2026-08-10"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
@@ -39,6 +39,7 @@ related_files:
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/mimo/ANATOMY.md
   - tests/test_daemon_contract_doc.py
+  - tests/test_task_card_proactivity.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon.py
   - tests/test_daemon_empty_parity.py
@@ -270,6 +271,19 @@ conditional: use the Task Card only when Telegram is connected and a Task Card
 is available for the current turn, and read `telegram(action='manual')` for the
 `Programmable Task Card` details. Daemon does not create or require a watcher
 and does not import or call Telegram/Task Card runtime code.
+
+A card-worthy dispatch — two or more tasks in the batch, or an explicitly
+requested `timeout` at or above 900s — additionally appends one nudge sentence
+to `handoff` naming the dispatched count and suggesting
+`task_card(action='start')`. An omitted `timeout` never qualifies on its own:
+the default ceiling describes no actual run length, so a single daemon
+dispatched without an explicit long `timeout` is not card-worthy. The nudge
+also appears only when the agent has the Task Card capability enabled and no
+watch is currently active, so a quick single daemon, an agent with the
+capability disabled, and a fleet dispatched under a live card all receive the
+plain `handoff` unchanged. The active-watch check is a duck-typed read-only
+probe; daemon still imports no Task Card runtime code and never starts a watch
+itself.
 
 ## Capability Invariants
 
@@ -789,6 +803,7 @@ Re-check this contract when touching:
 | `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |
 | `compact.action` is required; `manual` is read-only, omission is refused, and explicit `run` resets with fresh post-compact metadata | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_compact_schema_requires_explicit_run_or_manual_action`, `::test_compact_missing_action_is_refused_without_reset`, `::test_compact_success_prunes_to_system_call_and_result` |
 | `reclaim` cancels running emanations; agent stop shuts the daemon down first | `src/lingtai/tools/daemon/__init__.py` | `tests/test_lifecycle_daemon_shutdown.py::test_agent_stop_shuts_down_daemon_before_heartbeat_and_lock` |
+| `emanate`'s explicit `timeout` (schema: `minimum: 5`, no `maximum`) is an uncapped override reaching `daemon.json` and `supervisor_manifest.json` unchanged; omitting it (`null`) falls back to the manager's default. Unlike `timeout`, `max_turns` has a schema `maximum` and IS capped at the manager's ceiling. | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_per_batch_limits.py::test_emanate_honors_explicit_timeout_above_default_ceiling`, `::test_emanate_caps_max_turns_at_ceiling` |
 
 ## Verification Matrix
 

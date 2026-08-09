@@ -627,3 +627,21 @@ def test_daemon_llm_defaults_from_manifest_retains_wire_api():
     }
     defaults = DaemonManager._llm_defaults_from_manifest(llm)
     assert defaults["wire_api"] == "responses"
+
+
+def test_parse_chat_completion_rejects_non_object_response():
+    """A scalar string from a non-conforming gateway yields a typed error.
+
+    Regression for the detached-daemon misroute: when a provider configured
+    with ``wire_api: responses`` was reconstructed as ``auto`` and routed to
+    ``/chat/completions``, a scalar-string response crashed with
+    ``AttributeError: 'str' object has no attribute 'choices'``. The adapter
+    must reject the wrong-typed payload with a clear TypeError instead of
+    dereferencing ``.choices`` on it.
+    """
+    import pytest
+
+    from lingtai.llm.openai.adapter import _parse_response
+
+    with pytest.raises(TypeError, match="non-ChatCompletion"):
+        _parse_response("{\"error\": \"not a chat completion\"}")

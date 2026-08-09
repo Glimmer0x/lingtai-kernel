@@ -107,17 +107,28 @@ def test_emanate_respects_per_batch_timeout(tmp_path, monkeypatch):
     assert records[0]["manifest"]["timeout_s"] == 600.0
 
 
-def test_emanate_caps_timeout_at_ceiling(tmp_path, monkeypatch):
+def test_emanate_honors_explicit_timeout_above_default_ceiling(tmp_path, monkeypatch):
+    """An explicit ``timeout`` is a public, uncapped override (schema advertises
+    only ``minimum: 5``, no ``maximum``) — unlike ``max_turns``, which the
+    schema caps at ``DEFAULT_MAX_TURNS``. It must reach both the run's
+    daemon.json state and the detached supervisor_manifest.json unchanged,
+    not get silently clamped down to the parent's default-when-omitted value."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
     records = install_fake_detached_owner(monkeypatch)
 
-    out = mgr.handle({"action": "emanate", "timeout": 99999,
+    assert mgr._timeout == 3600.0  # default ceiling, unrelated to this call's override
+    out = mgr.handle({"action": "emanate", "timeout": 10800,
                       "tasks": [{"task": "x", "tools": ["file"]}]})
 
     assert out["status"] == "dispatched"
-    wait_daemon_terminal(records[0]["run_dir"])
-    assert records[0]["manifest"]["timeout_s"] == mgr._timeout
+    state = wait_daemon_terminal(records[0]["run_dir"])
+    # supervisor_manifest.json (read via the fake supervisor's request.manifest_path)
+    assert records[0]["manifest"]["timeout_s"] == 10800.0
+    # daemon.json durable state
+    assert state["timeout_s"] == 10800.0
+    # the parent's own default-when-omitted ceiling is untouched by this call
+    assert mgr._timeout == 3600.0
 
 
 def test_emanate_rejects_zero_timeout(tmp_path):

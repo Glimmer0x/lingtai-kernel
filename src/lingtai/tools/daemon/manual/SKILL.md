@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.10.1
-last_changed_at: 2026-08-09T00:00:00Z
+version: 0.11.0
+last_changed_at: 2026-08-10T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -167,11 +167,23 @@ are the three that change state.
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
     silent success. A daemon that ends without calling `finish()` is reported
     as a missing-finish failure; that is not necessarily proof the underlying
-    task failed — before treating the work as lost, inspect the run's trace
-    and the full final text preserved in the run directory's physical
-    `result.txt` (the run directory is the `path` that `check` reports;
-    `result_path` stays null on this failure path). Secret `env`/`headers`
-    values are redacted in prompts.
+    task failed — before treating the work as lost, inspect the run's trace/result
+    and the full final text preserved in the run directory's
+    physical `result.txt` (the run directory is the `path` that `check`
+    reports; `result_path` stays null on this failure path). Secret
+    `env`/`headers` values are redacted in prompts.
+  - `plugin` answers **which Agent Plugins belong to this daemon run**. It is
+    optional and is an array of paths; each item may be a plugin directory
+    containing `plugin.json`, or a plugin search root whose immediate children
+    are plugin directories. Relative paths resolve against the parent agent
+    working directory. The runtime reads each plugin manifest and injects a
+    compact plugin section (name, summary, skills list, mcp list) into the
+    daemon system prompt. The built-in LingTai backend also mounts the plugin's
+    `skills/` as skill context and its `mcp.json` servers as task-scoped MCP
+    clients, exactly like the main agent mounts plugins. CLI backends that
+    cannot mount plugins yet receive the plugin's skills and mcp.json servers
+    separately as normal skill/mcp oneshot context until the whole-plugin
+    injection matures.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set
@@ -279,6 +291,11 @@ are the three that change state.
   `telegram(action='manual')` and follow its `Programmable Task Card` section.
   The daemon tool does not create a Task Card automatically or require a
   watcher; daemon lifecycle and terminal-notification behavior are unchanged.
+  A card-worthy dispatch — two or more tasks, or an explicitly requested
+  `timeout` of 900s or more — appends one extra nudge sentence to `handoff`
+  when you have no active watch: start one with `task_card(action='start')` so
+  a human can follow the fleet instead of watching it run dark. The nudge
+  disappears once a watch is running.
 - **`check` still resolves a daemon after refresh/molt.** A refresh/molt gives
   you a fresh daemon registry with no in-memory entries, but the run folders
   and their notifications survive on disk. New daemon ids are compact run ids
