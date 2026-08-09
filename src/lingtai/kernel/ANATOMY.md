@@ -143,7 +143,7 @@ The kernel root holds the coordinator (`base_agent/`) plus a flat collection of 
 - `trace_redaction.py` — small deterministic redactor for durable trajectory writes. It redacts high-confidence token/key/password shapes in nested dict/list/string payloads before event/chat traces are persisted, without mutating the live in-memory conversation.
 - `time_veil.py` — coarse-time rendering for state-aware prompts.
 - `loop_guard.py` — ACTIVE-turn tool-call progress meter plus narrow loop detectors. The total-call ceiling is a large emergency fuse from `safety_limits.py`, not a normal workflow boundary or manifest-controlled setting; duplicate-call and invalid-tool checks remain focused loop detectors; duplicate keys strip `_reasoning` as metadata so semantically identical poll/list calls cannot bypass detection by changing rationale text.
-- `logging.py` — logger configuration (separate from the `services/logging.py` event-log service).
+- `logging.py` — logger configuration (separate from the `services/logging.py` event-log service). `setup_logging` is idempotent per handler type: repeated calls never stack duplicate stream or file handlers (`logging.py:25`, `logging.py:33`).
 - `llm_utils.py` — small shared helpers used by adapter implementations.
 - `types.py` — shared type aliases.
 
