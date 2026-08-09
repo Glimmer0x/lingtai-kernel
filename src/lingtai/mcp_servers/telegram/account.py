@@ -23,6 +23,7 @@ from lingtai.mcp_servers.local_commands import (
     TaskCardSettingsPort,
 )
 
+from . import _runtime as tg_runtime
 from . import updates as tg_updates
 
 logger = logging.getLogger(__name__)
@@ -513,11 +514,14 @@ class TelegramAccount:
                 "automatic and programmable Task Cards are hidden for this agent; "
                 "internal mechanics still run."
             )
-        self.send_message(
-            chat_id,
+        payload = (
             f"📋 taskcard: {enabled} · normal rows: {normal_rows} — {description}\n"
-            "Usage: /taskcard on | /taskcard off | /taskcard N (1-10)",
+            "Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
         )
+        hint = tg_runtime.task_card_drift_hint()
+        if hint is not None:
+            payload += f"\n{hint}"
+        self.send_message(chat_id, payload)
 
     def _cmd_taskcard_menu(self, chat_id: int, message_id: int | None = None) -> None:
         """Show the interactive Task Card settings menu (kanban-style)."""
@@ -530,6 +534,9 @@ class TelegramAccount:
             f"👁️ Rows: {normal_rows} (latest API-call groups)\n\n"
             "Tap to change:"
         )
+        hint = tg_runtime.task_card_drift_hint()
+        if hint is not None:
+            menu_text += f"\n\n{hint}"
         keyboard = inline_keyboard_options(
             [
                 {"text": "◀️ Rows −", "data": "tc:rows_dec"},
