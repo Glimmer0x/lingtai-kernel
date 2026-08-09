@@ -272,11 +272,24 @@ class TypingIndicatorManager:
 
     Sends typing indicator immediately, then re-sends every 5 seconds
     (Telegram auto-expires them). Best-effort — never blocks or fails.
+
+    lingtai#672: each typing loop carries a bounded TTL lease so the
+    indicator can never run forever even if ``stop_typing`` is never
+    called (e.g. the turn ends without a successful send — AED
+    exhaustion, provider failure, cancellation). The lease is a hard
+    guarantee, not a best-effort hint: the loop exits once the deadline
+    passes and the chat is removed from the active set.
     """
 
-    def __init__(self) -> None:
+    #: Default lease for one typing indicator loop. Generous enough for
+    #: normal multi-minute turns; short enough that a stuck turn cannot
+    #: leave the chat stuck in "typing…" for minutes.
+    DEFAULT_TYPING_TTL_SECONDS = 120.0
+
+    def __init__(self, ttl_seconds: float = DEFAULT_TYPING_TTL_SECONDS) -> None:
         self._active_chats: dict[tuple[str, int], threading.Event] = {}
         self._lock = threading.Lock()
+        self._ttl_seconds = ttl_seconds
 
     def start_typing(self, account: Any, chat_id: int) -> None:
         """Start sending typing indicators for a chat."""
@@ -286,6 +299,7 @@ class TypingIndicatorManager:
                 return  # Already typing
             stop_event = threading.Event()
             self._active_chats[key] = stop_event
+        deadline = time.monotonic() + self._ttl_seconds
 
         def _typing_loop() -> None:
             while not stop_event.is_set():
@@ -294,8 +308,12 @@ class TypingIndicatorManager:
                 except Exception as e:
                     log.debug("Typing indicator failed for %s:%s: %s",
                               account.alias, chat_id, e)
-                # Wait 4 seconds (Telegram expires at 5s)
-                stop_event.wait(4.0)
+                # Wait 4 seconds (Telegram expires at 5s), but never past the
+                # TTL lease — a stuck turn must not leave "typing…" forever.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                stop_event.wait(min(4.0, remaining))
             # Clean up
             with self._lock:
                 self._active_chats.pop(key, None)
@@ -727,6 +745,9 @@ class TelegramManager:
     def stop(self) -> None:
         self._stop_programmable_task_card_poller()
         self._stop_task_card_tail()
+        # lingtai#672: stop any in-flight typing indicators on shutdown so a
+        # dying process cannot leave a chat stuck in "typing…".
+        _typing_manager.stop_all()
         self._service.stop()
 
     # ------------------------------------------------------------------

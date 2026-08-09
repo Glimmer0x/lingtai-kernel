@@ -149,6 +149,91 @@ def _report_api_error_to_task_card(
         pass
 
 
+# lingtai#672: user-visible, sanitized notice sent exactly once when AED
+# exhausts. Fixed text — never embeds ``err_desc`` (which may carry
+# secrets, absolute paths, or provider internals).
+_AED_EXHAUSTED_USER_MESSAGE = (
+    "\u26a0\ufe0f The model service is temporarily unavailable and I couldn't "
+    "finish processing your request. I've paused to recover \u2014 please try "
+    "again in a little while."
+)
+
+
+def _aed_origin_route(agent):
+    """Derive ``(account, chat_id)`` of the current turn's originating
+    Telegram chat from the notification store, or ``None`` when unavailable.
+
+    Mirrors ``BaseAgent._setup_telegram_task_card``: the first Telegram
+    preview's ``message_ref`` is ``<account>:<chat_id>:<message_id>``.
+    Fail-open — any anomaly returns ``None`` and never raises.
+    """
+    try:
+        from ..notifications import is_channel_allowed
+        store = getattr(agent, "_notification_store", None)
+        if store is None:
+            return None
+        notifications = store.snapshot(is_channel_allowed)
+        telegram_data = notifications.get("mcp.telegram")
+        if not telegram_data or not isinstance(telegram_data, dict):
+            return None
+        data = telegram_data.get("data", {})
+        previews = data.get("previews", []) if isinstance(data, dict) else []
+        if not previews:
+            return None
+        first = previews[0] if isinstance(previews, list) and previews else {}
+        message_ref = first.get("message_ref", "") if isinstance(first, dict) else ""
+        if not message_ref or not isinstance(message_ref, str):
+            return None
+        parts = message_ref.split(":", 2)
+        if len(parts) < 2:
+            return None
+        account = parts[0]
+        try:
+            chat_id = int(parts[1])
+        except (ValueError, TypeError):
+            return None
+        return account, chat_id
+    except Exception:
+        return None
+
+
+def _notify_aed_exhaustion_origin(agent) -> None:
+    """Best-effort one-shot sanitized notice to the originating chat.
+
+    lingtai#672: when AED exhausts the agent falls ASLEEP without any
+    user-visible reply, leaving IM users (and Telegram's typing indicator)
+    hanging. Send exactly ONE sanitized failure notice to the conversation
+    that originated the current turn through the existing ``telegram`` tool
+    handler (the same seam an LLM tool call would use) — never a new
+    outbound channel, never ``err_desc``. Strictly fail-open: any failure is
+    logged and swallowed so the AED/ASLEEP decision is never affected.
+    """
+    try:
+        handler = getattr(agent, "_tool_handlers", {}).get("telegram")
+        if handler is None:
+            return
+        route = _aed_origin_route(agent)
+        if route is None:
+            return
+        account, chat_id = route
+        handler({
+            "action": "send",
+            "input": {
+                "account": account,
+                "chat_id": chat_id,
+                "text": _AED_EXHAUSTED_USER_MESSAGE,
+                "rendering_mode": "plain_text",
+            },
+            "reasoning": "aed_exhausted_notice",
+        })
+        agent._log("aed_exhausted_notice", status="sent")
+    except Exception as exc:
+        try:
+            agent._log("aed_exhausted_notice_failed", error=str(exc)[:200])
+        except Exception:
+            pass
+
+
 def _recover_api_error_on_task_card(agent) -> None:
     """Observe-only companion to :func:`_report_api_error_to_task_card`."""
     recover = getattr(agent, "_recover_task_card_api_error", None)
@@ -904,6 +989,12 @@ def _run_loop(agent) -> None:
                             )
 
                         agent._log("aed_exhausted", attempts=aed_attempts, error=err_desc)
+                        # lingtai#672: send ONE sanitized, user-visible failure
+                        # notice to the originating IM conversation through the
+                        # existing telegram tool handler before going ASLEEP, so
+                        # the human is not left staring at an unanswered request
+                        # (and a typing indicator that never stops). Fail-open.
+                        _notify_aed_exhaustion_origin(agent)
                         sleep_state = AgentState.ASLEEP
                         agent._asleep.set()
                         break
