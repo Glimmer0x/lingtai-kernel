@@ -145,6 +145,22 @@ def _is_strict_ltp_v2_family_schema(schema: Any) -> bool:
     )
 
 
+def _schema_declares_reasoning_param(schema: Any) -> bool:
+    """True if a tool's own parameter schema has somewhere for reasoning to go.
+
+    Covers both the LTP-v2 envelope's ``reasoning`` and any third-party tool
+    that happens to declare its own ``reasoning``/``_reasoning`` parameter
+    directly. Used by ``_dispatch_tool`` to decide whether the ``_reasoning``
+    audit key is safe to forward as-is or must be dropped before dispatch.
+    """
+    if not isinstance(schema, dict):
+        return False
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    return "reasoning" in properties or "_reasoning" in properties
+
+
 class Agent(BaseAgent):
     """BaseAgent with composable capabilities.
 
@@ -1174,19 +1190,28 @@ class Agent(BaseAgent):
         in-process and legacy MCP handlers consume that existing shape.  A native
         MCP ToolFamily instead validates the original closed LTP-v2 envelope, so
         the wrapper composition root restores the public key immediately before
-        the inherited handler dispatch.  The input ToolCall is never mutated.
+        the inherited handler dispatch.  Third-party MCP tools with flat,
+        auto-generated parameter schemas declare no ``reasoning``/``_reasoning``
+        at all; forwarding the audit key would fail their strict schema-validated
+        calls, so it is dropped instead.  The input ToolCall is never mutated.
         """
         if tc.name in getattr(self, "_mcp_tool_names", set()):
             schemas = [schema for schema in self._tool_schemas if schema.name == tc.name]
-            if (
-                len(schemas) == 1
-                and _is_strict_ltp_v2_family_schema(schemas[0].parameters)
-                and "_reasoning" in tc.args
-            ):
-                args = dict(tc.args)
-                reasoning = args.pop("_reasoning")
-                args.setdefault("reasoning", reasoning)
-                tc = ToolCall(name=tc.name, args=args, id=tc.id)
+            if len(schemas) == 1 and "_reasoning" in tc.args:
+                params = schemas[0].parameters
+                if _is_strict_ltp_v2_family_schema(params):
+                    args = dict(tc.args)
+                    reasoning = args.pop("_reasoning")
+                    args.setdefault("reasoning", reasoning)
+                    tc = ToolCall(name=tc.name, args=args, id=tc.id)
+                elif not _schema_declares_reasoning_param(params):
+                    # Third-party MCP tools expose flat, auto-generated parameter
+                    # schemas with no LTP-v2 envelope and no reasoning parameter
+                    # of their own; the audit key has nowhere to go, so drop it
+                    # instead of failing a strict schema-validated call.
+                    args = dict(tc.args)
+                    args.pop("_reasoning", None)
+                    tc = ToolCall(name=tc.name, args=args, id=tc.id)
         return super()._dispatch_tool(tc)
 
     def _expand_agent_placeholders(self, value):
