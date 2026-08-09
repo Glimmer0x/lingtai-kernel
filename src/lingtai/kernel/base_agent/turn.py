@@ -159,13 +159,44 @@ _AED_EXHAUSTED_USER_MESSAGE = (
 )
 
 
-def _aed_origin_route(agent):
+def _parse_telegram_route(message_ref: Any) -> tuple[str, int] | None:
+    """Strictly parse ``'<account>:<chat_id>:<message_id>'`` to ``(account, chat_id)``.
+
+    Mirrors the Telegram manager's ``_parse_compound_id`` route grammar:
+    exactly three colon-separated parts, a non-empty account, an integer
+    ``chat_id`` that is not the reserved synthetic ``updates`` bucket, and an
+    integer ``message_id``.  Anything else — malformed refs, empty account,
+    extra segments, non-numeric ids, the synthetic events bucket — returns
+    ``None`` (never raises).  This rejects ambiguous/malformed routes so an
+    AED notice can never be mis-sent to a fabricated chat.
+    """
+    if not isinstance(message_ref, str) or not message_ref:
+        return None
+    parts = message_ref.split(":")
+    if len(parts) != 3 or not parts[0]:
+        return None
+    if parts[1] == "updates":
+        # Reserved synthetic events bucket — no real chat to send into.
+        return None
+    try:
+        chat_id = int(parts[1])
+        message_id = int(parts[2])
+    except (ValueError, TypeError):
+        return None
+    if message_id < 0:
+        return None
+    return parts[0], chat_id
+
+
+def _aed_origin_route(agent) -> tuple[str, int] | None:
     """Derive ``(account, chat_id)`` of the current turn's originating
     Telegram chat from the notification store, or ``None`` when unavailable.
 
-    Mirrors ``BaseAgent._setup_telegram_task_card``: the first Telegram
-    preview's ``message_ref`` is ``<account>:<chat_id>:<message_id>``.
-    Fail-open — any anomaly returns ``None`` and never raises.
+    Mirrors ``BaseAgent._setup_telegram_task_card``: Telegram previews carry
+    ``message_ref`` = ``<account>:<chat_id>:<message_id>``.  Returns the first
+    *valid* Telegram route (rejecting malformed refs and the synthetic
+    ``updates`` bucket so a callback-first preview cannot shadow the real
+    chat).  Fail-open — any anomaly returns ``None`` and never raises.
     """
     try:
         from ..notifications import is_channel_allowed
@@ -180,24 +211,18 @@ def _aed_origin_route(agent):
         previews = data.get("previews", []) if isinstance(data, dict) else []
         if not previews:
             return None
-        first = previews[0] if isinstance(previews, list) and previews else {}
-        message_ref = first.get("message_ref", "") if isinstance(first, dict) else ""
-        if not message_ref or not isinstance(message_ref, str):
-            return None
-        parts = message_ref.split(":", 2)
-        if len(parts) < 2:
-            return None
-        account = parts[0]
-        try:
-            chat_id = int(parts[1])
-        except (ValueError, TypeError):
-            return None
-        return account, chat_id
+        for first in previews:
+            if not isinstance(first, dict):
+                continue
+            route = _parse_telegram_route(first.get("message_ref", ""))
+            if route is not None:
+                return route
+        return None
     except Exception:
         return None
 
 
-def _notify_aed_exhaustion_origin(agent) -> None:
+def _notify_aed_exhaustion_origin(agent, route: tuple[str, int] | None) -> None:
     """Best-effort one-shot sanitized notice to the originating chat.
 
     lingtai#672: when AED exhausts the agent falls ASLEEP without any
@@ -207,16 +232,20 @@ def _notify_aed_exhaustion_origin(agent) -> None:
     handler (the same seam an LLM tool call would use) — never a new
     outbound channel, never ``err_desc``. Strictly fail-open: any failure is
     logged and swallowed so the AED/ASLEEP decision is never affected.
+
+    ``route`` is the immutable origin captured when the turn was dequeued
+    (see ``_run_loop``) — never a live re-read of the coalesced notification
+    snapshot, so a later chat or a dismissed notification cannot lose or
+    misroute the notice.
     """
+    if route is None:
+        return
+    account, chat_id = route
     try:
         handler = getattr(agent, "_tool_handlers", {}).get("telegram")
         if handler is None:
             return
-        route = _aed_origin_route(agent)
-        if route is None:
-            return
-        account, chat_id = route
-        handler({
+        result = handler({
             "action": "send",
             "input": {
                 "account": account,
@@ -226,10 +255,24 @@ def _notify_aed_exhaustion_origin(agent) -> None:
             },
             "reasoning": "aed_exhausted_notice",
         })
-        agent._log("aed_exhausted_notice", status="sent")
+        # Interpret the handler result truthfully: the Telegram family returns
+        # ``{status: 'error', ...}`` mappings for send failures instead of
+        # raising, so record ``failed`` in that case rather than ``sent``.
+        if isinstance(result, dict) and str(result.get("status", "ok")).lower() in (
+            "error", "failed", "failure",
+        ):
+            agent._log("aed_exhausted_notice", status="failed")
+        else:
+            agent._log("aed_exhausted_notice", status="sent")
     except Exception as exc:
+        # Sanitized failure audit: log the exception class and a fixed
+        # category only — never raw handler text, which may carry
+        # secrets/paths/provider internals.
         try:
-            agent._log("aed_exhausted_notice_failed", error=str(exc)[:200])
+            agent._log(
+                "aed_exhausted_notice_failed",
+                error_type=type(exc).__name__,
+            )
         except Exception:
             pass
 
@@ -740,6 +783,12 @@ def _run_loop(agent) -> None:
             aed_attempts = 0
             transient_attempts = 0
             skip_post_turn_save = False
+            # lingtai#672: bind the current turn's immutable Telegram origin
+            # ONCE at dequeue time, before any LLM/tool work can read or
+            # replace the notification snapshot.  The AED-exhaust notice
+            # consumes this captured route, never a live re-read, so a later
+            # chat or a dismissed notification cannot lose/misroute it.
+            turn_origin = _aed_origin_route(agent)
             while True:
                 try:
                     # Fail closed: if a prior turn already poisoned the
@@ -994,7 +1043,15 @@ def _run_loop(agent) -> None:
                         # existing telegram tool handler before going ASLEEP, so
                         # the human is not left staring at an unanswered request
                         # (and a typing indicator that never stops). Fail-open.
-                        _notify_aed_exhaustion_origin(agent)
+                        # Publish the observable ASLEEP state explicitly (like
+                        # the worker-hang exit) so supervisors/humans see
+                        # ASLEEP, not a terminal STUCK, even though the final
+                        # guard skips `_set_state` once `_asleep` is set.
+                        agent._set_state(
+                            AgentState.ASLEEP,
+                            reason=f"AED exhausted after {aed_attempts} attempts",
+                        )
+                        _notify_aed_exhaustion_origin(agent, turn_origin)
                         sleep_state = AgentState.ASLEEP
                         agent._asleep.set()
                         break

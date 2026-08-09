@@ -277,8 +277,17 @@ class TypingIndicatorManager:
     indicator can never run forever even if ``stop_typing`` is never
     called (e.g. the turn ends without a successful send — AED
     exhaustion, provider failure, cancellation). The lease is a hard
-    guarantee, not a best-effort hint: the loop exits once the deadline
-    passes and the chat is removed from the active set.
+    guarantee, not a best-effort hint:
+
+    - the deadline is checked *before* every API send and recomputed
+      after it, so no action can be issued at/after expiry;
+    - every lease has its own identity; a worker only removes its own
+      mapping (``current is lease``), so a stale worker can never delete
+      a newer lease for the same chat;
+    - workers are tracked and ``stop_all`` boundedly joins them;
+    - ``start_typing`` after shutdown has begun is a no-op, and repeated
+      starts renew/replace the active lease instead of silently
+      inheriting an expiring one.
     """
 
     #: Default lease for one typing indicator loop. Generous enough for
@@ -286,59 +295,129 @@ class TypingIndicatorManager:
     #: leave the chat stuck in "typing…" for minutes.
     DEFAULT_TYPING_TTL_SECONDS = 120.0
 
-    def __init__(self, ttl_seconds: float = DEFAULT_TYPING_TTL_SECONDS) -> None:
-        self._active_chats: dict[tuple[str, int], threading.Event] = {}
+    #: Bounded join timeout for workers when stopping all typing.
+    STOP_JOIN_TIMEOUT_SECONDS = 5.0
+
+    def __init__(
+        self,
+        ttl_seconds: float = DEFAULT_TYPING_TTL_SECONDS,
+        *,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        # Validate custom TTL: finite and strictly positive, so a bad
+        # config cannot silently disable the hard bound.
+        try:
+            ttl = float(ttl_seconds)
+        except (TypeError, ValueError):
+            raise ValueError(f"ttl_seconds must be a finite positive number, got {ttl_seconds!r}")
+        if not math.isfinite(ttl) or ttl <= 0:
+            raise ValueError(f"ttl_seconds must be a finite positive number, got {ttl_seconds!r}")
+        self._active_chats: dict[tuple[str, int], _TypingLease] = {}
         self._lock = threading.Lock()
-        self._ttl_seconds = ttl_seconds
+        self._ttl_seconds = ttl
+        self._shutdown = False
+        # Injectable monotonic clock (defaults to wall monotonic).  Tests use
+        # a fake clock to prove the hard deadline deterministically.
+        self._clock = clock if clock is not None else time.monotonic
 
     def start_typing(self, account: Any, chat_id: int) -> None:
-        """Start sending typing indicators for a chat."""
+        """Start sending typing indicators for a chat.
+
+        Repeated start for an already-active chat renews/replaces the lease
+        (signals the old one, installs a fresh deadline) instead of inheriting
+        an expiring lease. After shutdown begins this is a no-op.
+        """
         key = (account.alias, chat_id)
         with self._lock:
-            if key in self._active_chats:
-                return  # Already typing
-            stop_event = threading.Event()
-            self._active_chats[key] = stop_event
-        deadline = time.monotonic() + self._ttl_seconds
+            if self._shutdown:
+                return
+            previous = self._active_chats.get(key)
+            lease = _TypingLease(chat_id=chat_id)
+            if previous is not None:
+                previous.stop_event.set()  # signal old worker; it will remove only its own mapping
+            self._active_chats[key] = lease
+        deadline = self._clock() + self._ttl_seconds
 
         def _typing_loop() -> None:
-            while not stop_event.is_set():
+            while not lease.stop_event.is_set():
+                # Hard bound: check remaining BEFORE every API call so a
+                # send can never be issued at/after the deadline, then
+                # recompute after the send before deciding to wait.
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
                 try:
                     account.send_chat_action(chat_id, "typing")
                 except Exception as e:
                     log.debug("Typing indicator failed for %s:%s: %s",
                               account.alias, chat_id, e)
-                # Wait 4 seconds (Telegram expires at 5s), but never past the
-                # TTL lease — a stuck turn must not leave "typing…" forever.
-                remaining = deadline - time.monotonic()
+                remaining = deadline - self._clock()
                 if remaining <= 0:
                     break
-                stop_event.wait(min(4.0, remaining))
-            # Clean up
+                # Wait 4 seconds (Telegram expires at 5s), but never past the
+                # TTL lease — a stuck turn must not leave "typing…" forever.
+                lease.stop_event.wait(min(4.0, remaining))
+            # Clean up — only if this lease is still the active one for the
+            # chat, so a stale worker cannot delete a newer lease.
             with self._lock:
-                self._active_chats.pop(key, None)
+                if self._active_chats.get(key) is lease:
+                    self._active_chats.pop(key, None)
 
         thread = threading.Thread(
             target=_typing_loop,
             daemon=True,
             name=f"typing-{account.alias}-{chat_id}",
         )
+        # Start first, then publish the handle: a concurrent ``stop_all``
+        # between start and assignment sees ``thread is None`` and skips the
+        # join, but the stop event is already set so the worker exits on its
+        # first loop check (bounded, no deadlock).  Assigning before start
+        # would let ``join()`` race a not-yet-started thread.
         thread.start()
+        with self._lock:
+            lease.thread = thread
 
     def stop_typing(self, account: Any, chat_id: int) -> None:
         """Stop sending typing indicators for a chat."""
         key = (account.alias, chat_id)
         with self._lock:
-            stop_event = self._active_chats.get(key)
-        if stop_event:
-            stop_event.set()
+            lease = self._active_chats.get(key)
+        if lease is not None:
+            lease.stop_event.set()
 
     def stop_all(self) -> None:
-        """Stop all typing indicators."""
+        """Stop all typing indicators and boundedly join their workers.
+
+        Signals every active lease, clears the active map, and joins each
+        tracked worker for a bounded time. After this call no background
+        typing worker is left alive.
+        """
         with self._lock:
-            for stop_event in self._active_chats.values():
-                stop_event.set()
+            self._shutdown = True
+            leases = list(self._active_chats.values())
+            for lease in leases:
+                lease.stop_event.set()
             self._active_chats.clear()
+        for lease in leases:
+            thread = lease.thread
+            if thread is not None:
+                thread.join(timeout=self.STOP_JOIN_TIMEOUT_SECONDS)
+
+
+class _TypingLease:
+    """Per-chat typing lease: stop signal plus the owning worker thread.
+
+    Identity comes from object identity — a worker removes its mapping only
+    when ``self._active_chats[key] is lease``, so a stale worker cannot
+    delete a lease that replaced it.
+    """
+
+    __slots__ = ("stop_event", "thread", "chat_id")
+
+    def __init__(self, chat_id: int) -> None:
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.chat_id = chat_id
 
 
 # Global typing indicator manager
@@ -745,10 +824,13 @@ class TelegramManager:
     def stop(self) -> None:
         self._stop_programmable_task_card_poller()
         self._stop_task_card_tail()
-        # lingtai#672: stop any in-flight typing indicators on shutdown so a
-        # dying process cannot leave a chat stuck in "typing…".
-        _typing_manager.stop_all()
+        # lingtai#672: quiesce the producers FIRST (service.stop() signals and
+        # joins every account poll thread, so no in-flight callback can start
+        # a new typing lease), then stop_all() signals and boundedly joins
+        # every typing worker. Order matters: stopping typing before the
+        # producers lets a late callback re-enter after the clear.
         self._service.stop()
+        _typing_manager.stop_all()
 
     # ------------------------------------------------------------------
     # Action dispatch
