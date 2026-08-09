@@ -20,6 +20,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from lingtai.mcp_servers.task_card.event_projection import TaskCardEventProjection
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from tests._notification_store_helpers import FakeNotificationStore
 
@@ -522,30 +523,27 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
     manager, service = _manager(tmp_path, acct)
     _pre_resident(acct, 555, manager)
 
-    def carrier(call_id, out, miss, rate):
+    def carrier(call_id, out, miss, rate, context=None):
+        token_usage = {
+            "current_call": {
+                "output": out,
+                "cache_miss": miss,
+                "cache_rate": rate,
+            }
+        }
+        if context is not None:
+            token_usage["session"] = {"context_tokens": context}
         return json.dumps({
             "type": "notification_block_injected",
             "call_id": call_id,
-            "_meta": {
-                "agent_meta": {
-                    "agent_state": {
-                        "token_usage": {
-                            "current_call": {
-                                "output": out,
-                                "cache_miss": miss,
-                                "cache_rate": rate,
-                            }
-                        }
-                    }
-                }
-            },
+            "_meta": {"agent_meta": {"agent_state": {"token_usage": token_usage}}},
         })
 
     _write_lines(_events_path(tmp_path), [
         _tool_call_line(call_id="c1", ts=100.0),
-        carrier("c1", 412, 31_000, 0.97716),
+        carrier("c1", 412, 31_000, 0.97716, "junk"),
         _tool_call_line(call_id="c2", ts=103.4),
-        carrier("c2", 1_234, 512_345, 0.55),
+        carrier("c2", 1_234, 512_345, 0.55, 259_800),
     ])
 
     manager._poll_event_tail()
@@ -555,7 +553,7 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
     assert "API 3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "55.0%" in rendered         # cache rate (one decimal per Jason)
+    assert "API 3.4s ↓1.2k ↑512.3k ◌ 259.8k | 55.0%" in rendered
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -612,8 +610,23 @@ def test_pure_text_turn_renders_api_usage_from_llm_response(tmp_path):
     # llm_response usage rides the divider: output, cache miss, cache rate.
     assert "\u2193123" in rendered
     assert "\u2191100" in rendered   # 1000 - 900 cache miss
-    assert "90.0%" in rendered      # 900/1000
+    assert "◌ 1.0k | 90.0%" in rendered  # context=input_tokens; rate=900/1000
 
+
+
+def test_divider_context_fallbacks():
+    cases = (
+        (
+            {"output": 200, "cache_miss": 2_400, "cache_rate": 0.99, "context": "junk"},
+            "API 8.5s ↓200 ↑2.4k 99.0%",
+        ),
+        (
+            {"output": 200, "cache_miss": 2_400, "context": 259_800},
+            "API 8.5s ↓200 ↑2.4k ◌ 259.8k",
+        ),
+    )
+    for usage, expected in cases:
+        assert TaskCardEventProjection.format_divider_info(8.5, usage) == expected
 
 def test_pure_text_turn_api_line_has_no_bullet(tmp_path):
     """The API divider info line must not carry the bullet prefix (it would
