@@ -474,7 +474,8 @@ class TaskCardEventProjection:
         """
         parts: list[str] = []
         if api_delay_s is not None and api_delay_s > 0:
-            parts.append(f"API {api_delay_s:.1f}s")
+            delay_emoji = "⚡" if api_delay_s < 5 else "⏰" if api_delay_s < 30 else "🐢"
+            parts.append(f"{delay_emoji} {api_delay_s:.1f}s")
         if isinstance(usage, dict) and usage:
             out = usage.get("output")
             miss = usage.get("cache_miss")

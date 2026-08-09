@@ -509,7 +509,7 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The api delay is rendered on the group divider line, not in tool rows.
-    assert "API 3.4s" in rendered
+    assert "⚡ 3.4s" in rendered
     # Tool rows no longer carry the api suffix.
     assert "3.4s api" not in rendered
 
@@ -550,10 +550,10 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The visible tail (last group) carries its own API delay + arrows + rate.
-    assert "API 3.4s" in rendered
+    assert "⚡ 3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "API 3.4s ↓1.2k ↑512.3k ◌ 259.8k | 55.0%" in rendered
+    assert "⚡ 3.4s ↓1.2k ↑512.3k ◌ 259.8k | 55.0%" in rendered
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -571,7 +571,7 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     ])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "API 3.4s" in rendered
+    assert "⚡ 3.4s" in rendered
     assert "\u2191" not in rendered
     assert "\u2193" not in rendered
 
@@ -618,11 +618,11 @@ def test_divider_context_fallbacks():
     cases = (
         (
             {"output": 200, "cache_miss": 2_400, "cache_rate": 0.99, "context": "junk"},
-            "API 8.5s ↓200 ↑2.4k 99.0%",
+            "⏰ 8.5s ↓200 ↑2.4k 99.0%",
         ),
         (
             {"output": 200, "cache_miss": 2_400, "context": 259_800},
-            "API 8.5s ↓200 ↑2.4k ◌ 259.8k",
+            "⏰ 8.5s ↓200 ↑2.4k ◌ 259.8k",
         ),
     )
     for usage, expected in cases:
