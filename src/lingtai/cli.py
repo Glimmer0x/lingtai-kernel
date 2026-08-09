@@ -17,8 +17,8 @@ from lingtai.adapters.lifecycle_clock import SystemLifecycleClockAdapter
 from lingtai.adapters.refresh_watcher import select_refresh_watcher
 from lingtai.adapters.workdir_lease import select_workdir_lease
 from lingtai.kernel.config_resolve import (
-    resolve_env,
     load_env_file,
+    resolve_env_checked,
 )
 from lingtai.init_reader import InitReadStatus, read_init, reader_callbacks
 from lingtai.llm.service import (
@@ -62,6 +62,19 @@ def load_init(working_dir: Path) -> dict:
     return outcome.data
 
 
+def _raise_env_miss(message: str, env_file: str | None) -> None:
+    """Boot-time hard failure when ``manifest.llm.api_key_env`` cannot resolve.
+
+    A fresh agent with no API key can never make an LLM call, so failing fast
+    at boot with a message naming the variable is strictly better than an
+    opaque provider auth error on the first turn.
+    """
+    raise ValueError(
+        f"{message}; the agent cannot boot without it "
+        f"(env_file: {env_file!r})"
+    )
+
+
 def build_agent(data: dict, working_dir: Path) -> Agent:
     """Construct Agent from validated init data.
 
@@ -83,7 +96,12 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
     m = data["manifest"]
     llm = m["llm"]
 
-    api_key = resolve_env(llm.get("api_key"), llm.get("api_key_env"))
+    api_key = resolve_env_checked(
+        llm.get("api_key"),
+        llm.get("api_key_env"),
+        context="manifest.llm.api_key_env",
+        warn=lambda m: _raise_env_miss(m, env_file),
+    )
 
     # Default 60 matches AgentConfig.max_rpm — agents whose init.json
     # predates this field cooperatively share the network-wide 60 RPM cap

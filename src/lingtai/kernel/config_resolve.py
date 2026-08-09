@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 
@@ -75,6 +76,45 @@ def resolve_env(value: str | None, env_name: str | None) -> str | None:
     return value
 
 
+def resolve_env_checked(
+    value: str | None,
+    env_name: str | None,
+    *,
+    context: str = "",
+    warn=None,
+) -> str | None:
+    """``resolve_env`` plus a diagnostic when *env_name* is named but misses.
+
+    ``resolve_env`` itself stays silent because the generic ``*_env`` paths
+    (capability kwargs via ``_resolve_env_fields``, preset resolution) treat an
+    absent variable as routine. Callers where a miss is always a
+    misconfiguration (the LLM api-key path at boot/refresh) pass a ``warn``
+    callback; the default prints a warning to stderr.
+
+    ``warn`` receives one message argument. Returns the same value as
+    ``resolve_env`` (possibly ``None``).
+    """
+    resolved = resolve_env(value, env_name)
+    if env_name and resolved is None:
+        msg = (
+            f"{context}: environment variable {env_name!r} is unset or empty "
+            "and no fallback value is configured"
+        )
+        (warn or (lambda m: print(f"warning: {m}", file=sys.stderr)))(msg)
+    return resolved
+
+
+def _strip_matched_quotes(val: str) -> str:
+    """Strip exactly one layer of symmetric matching quotes (dotenv semantics).
+
+    ``'"v"'`` keeps its inner double quotes (``"v"``) rather than collapsing
+    both layers; an unmatched leading or trailing quote is preserved verbatim.
+    """
+    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+        return val[1:-1]
+    return val
+
+
 def load_env_file(path: str | Path, *, overwrite: bool = False) -> None:
     """Load a .env file into os.environ.
 
@@ -91,11 +131,20 @@ def load_env_file(path: str | Path, *, overwrite: bool = False) -> None:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        key, _, val = line.partition("=")
-        if not _:
+        # Copy-pasted shell lines (`export KEY=val`) are the most common way
+        # env files are produced; every mainstream dotenv implementation
+        # accepts the `export ` prefix.
+        if line.startswith("export ") or line.startswith("export\t"):
+            line = line[len("export"):].lstrip()
+        key, sep, val = line.partition("=")
+        if not sep:
             continue
         key = key.strip()
-        val = val.strip().strip("'\"")
+        # A malformed key would otherwise write a bogus name (e.g. the old
+        # `export KEY` behavior) that no lookup can ever find.
+        if not key or " " in key:
+            continue
+        val = _strip_matched_quotes(val.strip())
         if overwrite or key not in os.environ:
             os.environ[key] = val
 

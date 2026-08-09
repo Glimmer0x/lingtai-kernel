@@ -348,6 +348,36 @@ def test_deep_refresh_reseals(tmp_path):
     assert agent._sealed is True
 
 
+@patch("lingtai.agent.LLMService")
+def test_refresh_logs_env_resolve_warning(mock_llm_service, tmp_path, monkeypatch):
+    """A refresh whose api_key_env no longer resolves warns instead of dying.
+
+    A live agent must not be killed by a hot-edited env_file that transiently
+    loses the named variable; the diagnostic lands in the agent log.
+    """
+    init = _make_init()
+    init["manifest"]["llm"]["api_key"] = None
+    init["manifest"]["llm"]["api_key_env"] = "TEST_REFRESH_MISSING_KEY"
+    env_file = tmp_path / ".env"
+    env_file.write_text("UNRELATED=1\n")
+    init["env_file"] = str(env_file)
+    agent = _make_agent(tmp_path, init)
+
+    logged = []
+    monkeypatch.setattr(
+        agent, "_log", lambda *args, **kwargs: logged.append((args, kwargs))
+    )
+    monkeypatch.delenv("TEST_REFRESH_MISSING_KEY", raising=False)
+
+    agent._setup_from_init()
+
+    assert any(
+        args and args[0] == "env_resolve_warning"
+        and "TEST_REFRESH_MISSING_KEY" in str(kwargs.get("message", ""))
+        for args, kwargs in logged
+    )
+
+
 def test_live_refresh_rebuilds_service_for_effective_context_window(tmp_path, monkeypatch):
     from lingtai.llm.service import CONSERVATIVE_CONTEXT_WINDOW
 

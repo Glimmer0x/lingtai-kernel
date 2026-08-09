@@ -158,7 +158,7 @@ def test_load_env_file_missing():
 
 
 def test_resolve_env_prefers_env_var():
-    from lingtai.cli import resolve_env
+    from lingtai.kernel.config_resolve import resolve_env
     os.environ["TEST_RESOLVE_KEY"] = "from-env"
     try:
         assert resolve_env("raw-value", "TEST_RESOLVE_KEY") == "from-env"
@@ -167,15 +167,145 @@ def test_resolve_env_prefers_env_var():
 
 
 def test_resolve_env_falls_back_to_raw():
-    from lingtai.cli import resolve_env
+    from lingtai.kernel.config_resolve import resolve_env
     os.environ.pop("NONEXISTENT_KEY_12345", None)
     assert resolve_env("raw-value", "NONEXISTENT_KEY_12345") == "raw-value"
 
 
 def test_resolve_env_no_env_name():
-    from lingtai.cli import resolve_env
+    from lingtai.kernel.config_resolve import resolve_env
     assert resolve_env("raw-value", None) == "raw-value"
     assert resolve_env(None, None) is None
+
+
+def test_load_env_file_export_prefix(tmp_path):
+    """`export KEY=val` lines set KEY, never a bogus `export KEY` name."""
+    from lingtai.cli import load_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text("export TEST_EXPORT_KEY=bar\n")
+    try:
+        load_env_file(env_path)
+        assert os.environ.get("TEST_EXPORT_KEY") == "bar"
+        assert not any(k.startswith("export ") for k in os.environ)
+    finally:
+        os.environ.pop("TEST_EXPORT_KEY", None)
+
+
+def test_load_env_file_export_tab_prefix(tmp_path):
+    """`export\tKEY=val` (tab separator) also parses."""
+    from lingtai.cli import load_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text("export\tTEST_TAB_KEY=baz\n")
+    try:
+        load_env_file(env_path)
+        assert os.environ.get("TEST_TAB_KEY") == "baz"
+    finally:
+        os.environ.pop("TEST_TAB_KEY", None)
+
+
+def test_load_env_file_matched_quotes_single_layer(tmp_path):
+    """Exactly one layer of symmetric quotes is stripped (dotenv semantics)."""
+    from lingtai.cli import load_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text('A="v"\nB=\'v\'\nC=\'"v"\'\n')
+    for k in ("A", "B", "C"):
+        os.environ.pop(k, None)
+    try:
+        load_env_file(env_path)
+        assert os.environ["A"] == "v"
+        assert os.environ["B"] == "v"
+        # Inner double quotes survive: one layer only.
+        assert os.environ["C"] == '"v"'
+    finally:
+        for k in ("A", "B", "C"):
+            os.environ.pop(k, None)
+
+
+def test_load_env_file_unmatched_quote_preserved(tmp_path):
+    """Values ending/starting in a lone quote round-trip untouched."""
+    from lingtai.cli import load_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text('A=abc"\nB="abc\n')
+    for k in ("A", "B"):
+        os.environ.pop(k, None)
+    try:
+        load_env_file(env_path)
+        assert os.environ["A"] == 'abc"'
+        assert os.environ["B"] == '"abc'
+    finally:
+        for k in ("A", "B"):
+            os.environ.pop(k, None)
+
+
+def test_load_env_file_malformed_key_skipped(tmp_path):
+    """A key with an internal space never becomes an env var name."""
+    from lingtai.cli import load_env_file
+    env_path = tmp_path / ".env"
+    env_path.write_text("some words=x\n")
+    before = set(os.environ)
+    load_env_file(env_path)
+    assert set(os.environ) == before
+
+
+def test_resolve_env_checked_warns_on_miss():
+    """A named but unresolvable variable triggers the warn callback."""
+    from lingtai.kernel.config_resolve import resolve_env_checked
+    os.environ.pop("MISSING_VAR_759", None)
+    captured = []
+    result = resolve_env_checked(
+        None, "MISSING_VAR_759", context="t", warn=captured.append
+    )
+    assert result is None
+    assert captured and "MISSING_VAR_759" in captured[0]
+
+
+def test_resolve_env_checked_silent_on_hit_and_fallback():
+    """No diagnostic when the variable resolves or a fallback value exists."""
+    from lingtai.kernel.config_resolve import resolve_env_checked
+    os.environ["HIT_VAR_759"] = "yes"
+    captured = []
+    try:
+        assert (
+            resolve_env_checked(None, "HIT_VAR_759", context="t", warn=captured.append)
+            == "yes"
+        )
+        assert (
+            resolve_env_checked(None, None, context="t", warn=captured.append) is None
+        )
+        assert (
+            resolve_env_checked(
+                "fallback", "MISSING_VAR_759", context="t", warn=captured.append
+            )
+            == "fallback"
+        )
+    finally:
+        os.environ.pop("HIT_VAR_759", None)
+    assert captured == []
+
+
+@patch("lingtai.cli.LLMService")
+@patch("lingtai.cli.Agent")
+@patch("lingtai.cli.PosixFilesystemMailAdapter")
+def test_build_agent_raises_on_unresolvable_api_key_env(
+    mock_mail, mock_agent, mock_llm, tmp_path
+):
+    """A named api_key_env that resolves to nothing fails fast at boot."""
+    from lingtai.cli import load_init, build_agent
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("UNRELATED_KEY=value\n")
+    _write_init(tmp_path)
+    data = load_init(tmp_path)
+    data["manifest"]["llm"]["api_key"] = None
+    data["manifest"]["llm"]["api_key_env"] = "TEST_LLM_KEY_MISSING"
+    data["env_file"] = str(env_file)
+
+    os.environ.pop("TEST_LLM_KEY_MISSING", None)
+    try:
+        with pytest.raises(ValueError, match="TEST_LLM_KEY_MISSING"):
+            build_agent(data, tmp_path)
+    finally:
+        os.environ.pop("TEST_LLM_KEY_MISSING", None)
 
 
 @patch("lingtai.cli.LLMService")
