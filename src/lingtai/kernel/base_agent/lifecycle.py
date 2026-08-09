@@ -747,17 +747,6 @@ def _perform_refresh(
         agent._log("refresh_chat_history_save_skipped", reason=effective_skip_reason)
     else:
         agent._save_chat_history()
-    # Refresh is one of MANUAL.md's mechanical regeneration points (template-
-    # version check only). Fail-soft: a manual problem must never break refresh.
-    try:
-        from ..agent_manual import collect_agent_facts, ensure_agent_manual
-
-        ensure_agent_manual(agent._working_dir, facts=collect_agent_facts(agent))
-    except Exception:
-        try:
-            agent._log("agent_manual_ensure_failed", stage="refresh")
-        except Exception:
-            pass
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns
     # None) and Agent (returns the real `lingtai-agent run` cmd). A prior version
     # called a module-level _build_launch_cmd shadow that always returned
