@@ -766,8 +766,8 @@ def _resolve_direct_service(
             # direct service to construct: the agent is told to run
             # ``claude -p`` and read the vision manual for the exact steps.
             manual_reason = (
-                "Claude is the backend. To use vision, run `claude -p`; "
-                "see the vision manual for more details: "
+                "You are using claude as backend, therefore to use vision run "
+                "`claude -p`; see the vision manual for more details: "
                 "vision(action='manual', input={}, reasoning='claude vision "
                 "details')."
             )
