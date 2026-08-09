@@ -296,3 +296,55 @@ class TestSelfSleep:
         assert agent._state == AgentState.ASLEEP
         assert agent._asleep.is_set()
         assert not agent._shutdown.is_set()
+
+
+class TestHeartbeatNeverBlocksOnNetwork:
+
+    def test_slow_kernel_version_fetch_does_not_stall_heartbeat(self, tmp_path, monkeypatch):
+        """#730 regression: the kernel_version remote probe runs off the
+        heartbeat thread, so a fetch slower than the 2s is_alive threshold
+        never makes a live agent look dead."""
+        import time
+        from lingtai.kernel import BaseAgent
+        from lingtai.kernel.nudge import kernel_version as kv
+        agent = BaseAgent(
+            intrinsics=_TEST_INTRINSICS,
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=tmp_path / "test_agent", workdir_lease=make_test_lease(),
+        agent_presence=PosixAgentPresenceStoreAdapter(tmp_path / "test_agent"), snapshot_port=make_test_snapshot_port(), lifecycle_clock=SystemLifecycleClockAdapter(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test_agent"),
+        )
+        # Force the nudge remote path: non-dev runtime with installed == running.
+        monkeypatch.setattr(
+            kv,
+            "_runtime_info",
+            lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
+        )
+        # A fetch slower than the 2s is_alive threshold.
+        monkeypatch.setattr(
+            kv,
+            "_fetch_latest_version",
+            lambda: (time.sleep(3.0), "0.17.0")[1],
+        )
+
+        hb_file = agent._working_dir / ".agent.heartbeat"
+        agent._start_heartbeat()
+
+        samples = []
+        deadline = time.monotonic() + 4.5
+        while time.monotonic() < deadline:
+            if hb_file.exists():
+                try:
+                    samples.append((time.time(), float(hb_file.read_text())))
+                except ValueError:
+                    pass
+            time.sleep(0.2)
+
+        pending = kv._fetch_slot(agent)
+        if pending is not None:
+            pending.thread.join()
+        agent._stop_heartbeat()
+
+        assert len(samples) >= 3
+        stale = [(wall, ts) for wall, ts in samples if wall - ts >= 2.0]
+        assert not stale, f"heartbeat went stale during the slow fetch (#730): {stale[:3]}"

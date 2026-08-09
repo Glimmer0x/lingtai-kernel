@@ -532,9 +532,11 @@ def _heartbeat_loop(agent) -> None:
         # Per-agent periodic checks that publish to `.notification/nudge.json`
         # when something needs the agent's attention (e.g. a newer lingtai
         # wheel is installed on disk than the version this process imported).
-        # Each check throttles itself; the dispatcher wraps individual calls
-        # so a misbehaving check cannot block the heartbeat loop. See
-        # `nudge/ANATOMY.md`.
+        # Each check throttles itself; the dispatcher only guards against
+        # checks that *raise* -- latency inside a check is latency between
+        # heartbeat writes. Invariant: checks must never block on the network;
+        # long work is handed to a background thread (see
+        # `nudge/kernel_version.py`). See `nudge/ANATOMY.md`.
         try:
             from ..nudge import run_checks as _run_nudge_checks
             _run_nudge_checks(agent)

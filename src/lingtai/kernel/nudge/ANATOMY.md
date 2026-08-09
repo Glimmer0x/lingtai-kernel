@@ -67,7 +67,10 @@ the ordinary Notification Store channel; it does not create a second transport.
   `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5` decimal GB) (`src/lingtai/kernel/nudge/folder_size.py:1-182`).
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
-  cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`).
+  cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`). Its remote
+  probe runs on a daemon worker thread and is consumed on a later probe, so
+  the 1s heartbeat tick never blocks on the network; the nudge surfaces up to
+  one probe (~60s) after the fetch completes.
 - `source_drift.py` — read-only runtime/source comparison in a separate
   integrity/diagnostic channel; it remains active for editable/source/dev
   runtimes (`src/lingtai/kernel/nudge/source_drift.py:21-111`).
@@ -81,7 +84,9 @@ the ordinary Notification Store channel; it does not create a second transport.
 
 ## Connections
 
-`base_agent/lifecycle.py:_heartbeat_loop` calls `run_checks` once per heartbeat;
+`base_agent/lifecycle.py:_heartbeat_loop` calls `run_checks` once per heartbeat
+(checks must never block on the network — long work goes to a background
+thread, see `kernel_version.py`);
 protected goal reminders are dispatched separately by
 `run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
 `NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", input={"channel": "nudge", ...},
