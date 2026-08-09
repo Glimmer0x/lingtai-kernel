@@ -39,10 +39,86 @@ def test_rules_renders_after_covenant_and_tools():
 
 
 def test_default_order_and_batches_cover_the_same_sections_once():
+    """_DEFAULT_ORDER is derived structurally from _BATCHES — they cannot drift."""
     order = list(SystemPromptManager._DEFAULT_ORDER)
     flat_batches = [section for batch in SystemPromptManager._BATCHES for section in batch]
-    assert set(flat_batches) == set(order)
-    assert len(flat_batches) == len(set(flat_batches)) == len(order)
+    assert order == flat_batches
+    assert len(flat_batches) == len(set(flat_batches))
+
+
+def test_set_order_reorders_within_batch():
+    """set_order() reorders sections inside their cache batch; batch membership is unchanged."""
+    mgr = SystemPromptManager()
+    mgr.write_section("rules", "Rule A", protected=True)
+    mgr.write_section("brief", "Brief B", protected=True)
+    mgr.write_section("skills", "Skill C", protected=True)
+    mgr.set_order(["skills", "rules", "brief"])
+    prompt = mgr.render()
+    assert prompt.index("## skills") < prompt.index("## rules") < prompt.index("## brief")
+    batches = mgr.render_batches()
+    for marker in ("Rule A", "Brief B", "Skill C"):
+        assert marker in batches[1]
+        assert marker not in batches[0]
+
+
+def test_set_order_does_not_move_sections_across_batches():
+    """Names from different batches stay in their own batches — cache breakpoints survive."""
+    mgr = SystemPromptManager()
+    mgr.write_section("principle", "Principle", protected=True)
+    mgr.write_section("pad", "Pad", protected=True)
+    mgr.set_order(["pad", "principle"])
+    batches = mgr.render_batches()
+    assert "Principle" in batches[0]
+    assert "Pad" in batches[1]
+
+
+def test_set_order_unknown_names_go_to_penultimate_batch():
+    """Names not in any batch land in the penultimate batch, like the unordered bucket."""
+    mgr = SystemPromptManager()
+    mgr.write_section("rules", "Rule A", protected=True)
+    mgr.write_section("custom", "Custom section", protected=True)
+    mgr.set_order(["custom", "rules"])
+    batches = mgr.render_batches()
+    assert "Custom section" in batches[0]
+    assert "Rule A" in batches[1]
+    assert "Custom section" not in batches[1]
+
+
+def test_set_order_omitted_sections_render_after_named_ones():
+    """Unlisted sections keep their batch and original relative order, after listed ones."""
+    mgr = SystemPromptManager()
+    mgr.write_section("rules", "Rules", protected=True)
+    mgr.write_section("brief", "Brief", protected=True)
+    mgr.write_section("skills", "Skills", protected=True)
+    mgr.set_order(["skills"])
+    prompt = mgr.render()
+    # skills listed first; rules/brief unlisted keep batch order (rules before brief).
+    assert prompt.index("## skills") < prompt.index("## rules") < prompt.index("## brief")
+
+
+def test_set_order_default_noop_is_byte_identical():
+    """Setting the default order must reproduce a fresh manager byte-for-byte."""
+    mgr1 = SystemPromptManager()
+    mgr1.write_section("rules", "Rule A", protected=True)
+    mgr1.write_section("pad", "Pad", protected=True)
+    mgr2 = SystemPromptManager()
+    mgr2.write_section("rules", "Rule A", protected=True)
+    mgr2.write_section("pad", "Pad", protected=True)
+    mgr2.set_order(list(SystemPromptManager._DEFAULT_ORDER))
+    assert mgr2.render() == mgr1.render()
+    assert mgr2.render_batches() == mgr1.render_batches()
+
+
+def test_set_batches_replaces_layout():
+    """set_batches() replaces the batch layout entirely, moving sections across batches."""
+    mgr = SystemPromptManager()
+    mgr.write_section("rules", "Rule A", protected=True)
+    mgr.write_section("tools", "Tools", protected=True)
+    mgr.set_batches([["rules"], ["tools"]])
+    batches = mgr.render_batches()
+    assert "Rule A" in batches[0]
+    assert "Tools" in batches[1]
+    assert "Rule A" not in batches[1]
 
 
 def test_meta_guidance_renders_between_procedures_and_comment():
