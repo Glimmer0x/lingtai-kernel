@@ -509,7 +509,7 @@ def test_second_tool_call_api_delay_is_previous_tool_ts_delta(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The api delay is rendered on the group divider line, not in tool rows.
-    assert "⚡ 3.4s" in rendered
+    assert "↻ 3.4s" in rendered
     # Tool rows no longer carry the api suffix.
     assert "3.4s api" not in rendered
 
@@ -550,10 +550,10 @@ def test_divider_renders_compact_per_call_usage_arrows(tmp_path):
 
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
     # The visible tail (last group) carries its own API delay + arrows + rate.
-    assert "⚡ 3.4s" in rendered
+    assert "↻ 3.4s" in rendered
     assert "\u21931.2k" in rendered    # ↓1.2k output tokens
     assert "\u2191512.3k" in rendered  # ↑512.3k cache miss
-    assert "⚡ 3.4s ↓1.2k ↑512.3k ◌ 259.8k | 55.0%" in rendered
+    assert "↻ 3.4s ↓1.2k ↑512.3k ◌ 259.8k | 55.0%" in rendered
     # Usage is private per-row state: projected for rendering but never
     # leaked into the public window rows.
     assert all("_usage" not in row for row in manager._task_card_event_window())
@@ -571,7 +571,7 @@ def test_divider_usage_degrades_when_event_lacks_usage(tmp_path):
     ])
     manager._poll_event_tail()
     rendered = [c for c in acct.calls if c[0] == "edit_message"][-1][3]
-    assert "⚡ 3.4s" in rendered
+    assert "↻ 3.4s" in rendered
     assert "\u2191" not in rendered
     assert "\u2193" not in rendered
 
@@ -618,11 +618,11 @@ def test_divider_context_fallbacks():
     cases = (
         (
             {"output": 200, "cache_miss": 2_400, "cache_rate": 0.99, "context": "junk"},
-            "⏰ 8.5s ↓200 ↑2.4k 99.0%",
+            "↻ 8.5s ↓200 ↑2.4k 99.0%",
         ),
         (
             {"output": 200, "cache_miss": 2_400, "context": 259_800},
-            "⏰ 8.5s ↓200 ↑2.4k ◌ 259.8k",
+            "↻ 8.5s ↓200 ↑2.4k ◌ 259.8k",
         ),
     )
     for usage, expected in cases:
@@ -1356,7 +1356,7 @@ def test_pure_tool_turn_renders_api_usage_from_llm_response_group(tmp_path):
     notification_block_injected carrier — e.g. context.molt) still gets divider
     usage arrows. The tool_call event carries api_call_id; the projection now
     preserves it as _api_call_id so apply_tool_usages matches the llm_response
-    per-call usage. Jason 2026-08-08: the molt row showed only ``API 8.0s``
+    per-call usage. Jason 2026-08-08: the molt row showed only ``↻ 8.0s``
     with no ↓↑ because the tool row dropped api_call_id."""
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)

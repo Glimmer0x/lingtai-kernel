@@ -463,7 +463,7 @@ class TaskCardEventProjection:
         api_delay_s: float | None,
         usage: dict[str, Any] | None,
     ) -> str:
-        """Compact divider line: `API x s` plus `↓out ↑miss ◌ ctx | cache%`.
+        """Compact divider line: `↻ x s` plus `↓out ↑miss ◌ ctx | cache%`.
 
         The down arrow denotes output tokens, the up arrow denotes cache miss
         (the two token flows that grow with each call); ``◌`` is the current
@@ -474,8 +474,7 @@ class TaskCardEventProjection:
         """
         parts: list[str] = []
         if api_delay_s is not None and api_delay_s > 0:
-            delay_emoji = "⚡" if api_delay_s < 5 else "⏰" if api_delay_s < 30 else "🐢"
-            parts.append(f"{delay_emoji} {api_delay_s:.1f}s")
+            parts.append(f"↻ {api_delay_s:.1f}s")
         if isinstance(usage, dict) and usage:
             out = usage.get("output")
             miss = usage.get("cache_miss")
