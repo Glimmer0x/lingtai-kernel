@@ -256,6 +256,11 @@ def _stop(agent, timeout: float = 5.0) -> None:
     ThreadPoolExecutor workers and external CLI process groups can otherwise
     keep this interpreter visible in `ps` after heartbeat/lock are gone, which
     makes refresh watchers race the duplicate-process guard.
+
+    The workdir lease release is unconditional: every teardown step after the
+    main-loop join runs inside a ``try`` whose ``finally`` releases the lease,
+    so a raising intermediate step (session close, manifest write, heartbeat
+    stop, …) can never wedge ``.agent.lock`` (issue #661).
     """
     agent._log("agent_stop")
     agent._cancel_soul_timer()
@@ -283,28 +288,34 @@ def _stop(agent, timeout: float = 5.0) -> None:
             pass
     if agent._thread:
         agent._thread.join(timeout=timeout)
-    _shutdown_daemon_runtime(agent, reason="agent_stop")
-    agent._session.close()
+    try:
+        _shutdown_daemon_runtime(agent, reason="agent_stop")
+        agent._session.close()
 
-    # Stop MailService if configured
-    if agent._mail_service is not None:
-        try:
-            agent._mail_service.stop()
-        except Exception:
-            pass
+        # Stop MailService if configured
+        if agent._mail_service is not None:
+            try:
+                agent._mail_service.stop()
+            except Exception:
+                pass
 
-    # Close the event journal if configured.
-    if agent._event_journal is not None:
-        try:
-            agent._event_journal.close()
-        except Exception:
-            pass
+        # Close the event journal if configured.
+        if agent._event_journal is not None:
+            try:
+                agent._event_journal.close()
+            except Exception:
+                pass
 
-    # Persist final state, stop heartbeat, release the workdir lease — order
-    # matters. See docstring above; heartbeat must remain fresh until this point.
-    agent._workdir.write_manifest(agent._build_manifest())
-    _stop_heartbeat(agent)
-    agent._workdir_lease.release()
+        # Persist final state, stop heartbeat, release the workdir lease — order
+        # matters. See docstring above; heartbeat must remain fresh until this point.
+        agent._workdir.write_manifest(agent._build_manifest())
+        _stop_heartbeat(agent)
+    finally:
+        # The workdir lease MUST be released even when an intermediate teardown
+        # step raises (session close, manifest write, heartbeat stop, …).
+        # Otherwise .agent.lock stays wedged and the agent cannot restart
+        # without manual intervention (issue #661).
+        agent._workdir_lease.release()
 
 
 def _shutdown_daemon_runtime(agent, *, reason: str) -> None:
