@@ -4255,9 +4255,10 @@ class DaemonManager:
                 except ValueError as exc:
                     return {"status": "error", "message": f"tasks[{i}].prompt: {exc}"}
 
-        # Per-batch limit overrides — capped at the manager's ceilings.
-        # Author-set ceilings (self._max_turns, self._timeout) are the upper
-        # bounds; the agent picks within them. None means "use ceiling".
+        # Per-batch limit overrides. max_turns is capped at the manager's
+        # ceiling (self._max_turns, also the schema maximum); timeout has no
+        # schema maximum, so self._timeout is only the default when omitted.
+        # None means "use the default/ceiling".
         if max_turns is not None:
             try:
                 mt = int(max_turns)
@@ -4284,7 +4285,10 @@ class DaemonManager:
             if to < 5:
                 return {"status": "error",
                         "message": f"timeout must be ≥ 5 seconds (got {to})"}
-            effective_timeout = min(to, self._timeout)
+            # Unlike max_turns, the schema advertises no ceiling for timeout
+            # (only minimum: 5) — self._timeout is the default when omitted,
+            # not a cap on an explicit value.
+            effective_timeout = to
         else:
             effective_timeout = self._timeout
 

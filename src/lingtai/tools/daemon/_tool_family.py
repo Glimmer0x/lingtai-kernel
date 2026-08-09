@@ -210,7 +210,7 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
             "timeout": {
                 "type": ["number", "null"],
                 "minimum": 5,
-                "description": "For 'emanate': max wall-clock seconds for the whole batch. Default: parent max (3600s). Watchdog kills any emanation still running when the timer fires. Null for the default.",
+                "description": "For 'emanate': max wall-clock seconds for the whole batch. Default when omitted: 3600s. Watchdog kills any emanation still running when the timer fires. Null for the default.",
             },
         },
         "required": ["tasks", "backend", "max_turns", "timeout"],
