@@ -314,7 +314,10 @@ exactly once with `done`, `failed`, or `incomplete`. The MCP server writes
 When `daemon_common` is loaded, a conversational final answer is not enough.
 Success requires a validated `finish(status="done")`; missing completion,
 invalid JSON, invalid status, run-id mismatch, `failed`, or `incomplete` must
-prevent terminal `done`.
+prevent terminal `done`. A missing-finish failure is a contract failure, not
+by itself proof the underlying task failed: the failure message tells the
+parent to inspect the run's trace/result before concluding, and the daemon
+context/manual carry the same guidance.
 
 The LingTai loop shares only the pure `LLMResponse` all-empty predicate
 (`text`, `tool_calls`, and `thoughts` all empty) with the main agent. An all-empty

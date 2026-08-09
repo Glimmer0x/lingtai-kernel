@@ -165,7 +165,11 @@ are the three that change state.
     daemon backends. Its `finish(status, summary?, reason?, artifacts?)` tool is
     the hard terminal-success contract: only `finish(status="done")` permits
     `done`; `failed`/`incomplete`, missing finish, or invalid completion prevents
-    silent success. Secret `env`/`headers` values are redacted in prompts.
+    silent success. A daemon that ends without calling `finish()` is reported
+    as a missing-finish failure; that is not necessarily proof the underlying
+    task failed — inspect the run's trace/result (`check`, `result_path`)
+    before treating the work as lost. Secret `env`/`headers` values are
+    redacted in prompts.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set
