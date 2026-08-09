@@ -527,3 +527,90 @@ def test_tc_wake_error_logs_empty_response_diagnostics(tmp_path):
     assert fields["response_model"] == "gpt-test"
     assert fields["finish_reason"] == "stop"
     assert fields["api_call_id"] == "api_tc"
+
+
+# ---------------------------------------------------------------------------
+# Issue #655: post-turn _save_chat_history / _run_inquiry must never kill the
+# run loop (they sit outside the AED try/except; an uncaught exception there
+# would propagate out of _run_loop and silently kill the daemon thread).
+# ---------------------------------------------------------------------------
+
+
+def _run_loop_with_post_turn_error(tmp_path, monkeypatch, *, save_error=None,
+                                   inquiry_error=None):
+    """Drive one full message turn through _run_loop with an optional
+    post-turn save/inquiry failure, then a second turn that succeeds and
+    sets _shutdown so the loop exits."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent.saves = 0
+    agent.handle_calls = 0
+
+    def fake_handle(_agent, _msg):
+        _agent.handle_calls += 1
+        if _agent.handle_calls == 1:
+            # Queue the second turn from inside the first _handle_message
+            # (a pre-queued MSG_REQUEST would be merged by
+            # _concat_queued_messages instead of becoming its own turn).
+            _agent.inbox.put(_make_message(MSG_REQUEST, "human", "second"))
+        else:
+            _agent._shutdown.set()
+
+    def fake_save(*a, **kw):
+        agent.saves += 1
+        if save_error is not None and agent.saves == 1:
+            raise save_error
+
+    def fake_inquiry(*a, **kw):
+        if inquiry_error is not None:
+            raise inquiry_error
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+    agent._save_chat_history = fake_save
+    if inquiry_error is not None:
+        agent._config.insights_interval = 1
+        agent._insight_turn_counter = 0
+        agent._run_inquiry = fake_inquiry
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
+
+    turn._run_loop(agent)
+    return agent
+
+
+def test_run_loop_save_error_logged_not_propagated(tmp_path, monkeypatch):
+    """An OSError raised by post-turn _save_chat_history is logged as
+    post_turn_error and must NOT propagate out of _run_loop (which would
+    silently kill the daemon run-loop thread)."""
+    agent = _run_loop_with_post_turn_error(
+        tmp_path, monkeypatch, save_error=OSError("disk full")
+    )
+
+    assert agent.handle_calls == 2  # second message still processed
+    assert agent.saves == 2  # save retried on the next turn
+    assert any(name == "post_turn_error" for name, _ in agent._logs)
+    error_log = next(
+        (fields for name, fields in agent._logs if name == "post_turn_error"),
+        None,
+    )
+    assert error_log is not None
+    assert error_log["exception"] == "OSError"
+    assert "disk full" in error_log["error"]
+
+
+def test_run_loop_inquiry_error_logged_not_propagated(tmp_path, monkeypatch):
+    """An exception raised by post-turn _run_inquiry (auto-insight) is logged
+    as post_turn_error and must NOT propagate out of _run_loop either."""
+    agent = _run_loop_with_post_turn_error(
+        tmp_path, monkeypatch, inquiry_error=RuntimeError("provider down")
+    )
+
+    assert agent.handle_calls == 2
+    assert any(name == "post_turn_error" for name, _ in agent._logs)
+    error_log = next(
+        (fields for name, fields in agent._logs if name == "post_turn_error"),
+        None,
+    )
+    assert error_log is not None
+    assert error_log["exception"] == "RuntimeError"
+    assert "provider down" in error_log["error"]

@@ -965,24 +965,41 @@ def _run_loop(agent) -> None:
                 except Exception as notif_err:
                     agent._log("idle_notification_check_error",
                                error=str(notif_err))
-            if skip_post_turn_save:
-                agent._log(
-                    "chat_history_save_skipped",
-                    reason="worker_still_running_interface_unsafe",
-                )
-            else:
-                agent._save_chat_history()
-
-            # Auto-insight: fire after N turns
-            if not skip_post_turn_save and agent._config.insights_interval > 0:
-                agent._insight_turn_counter += 1
-                if agent._insight_turn_counter >= agent._config.insights_interval:
-                    agent._insight_turn_counter = 0
-                    from ..i18n import t as _ti
-                    agent._run_inquiry(
-                        _ti(agent._config.language, "insight.auto_question"),
-                        source="auto",
+            # Issue #655: the post-turn section (chat-history save and
+            # auto-insight) sits outside the AED try/except above, so an
+            # exception here (e.g. OSError from a full disk during save) would
+            # propagate out of _run_loop and silently kill the daemon run-loop
+            # thread, leaving the agent unresponsive while status still shows
+            # ACTIVE/IDLE. Log and continue — the next turn retries the save.
+            try:
+                if skip_post_turn_save:
+                    agent._log(
+                        "chat_history_save_skipped",
+                        reason="worker_still_running_interface_unsafe",
                     )
+                else:
+                    agent._save_chat_history()
+
+                # Auto-insight: fire after N turns
+                if not skip_post_turn_save and agent._config.insights_interval > 0:
+                    agent._insight_turn_counter += 1
+                    if agent._insight_turn_counter >= agent._config.insights_interval:
+                        agent._insight_turn_counter = 0
+                        from ..i18n import t as _ti
+                        agent._run_inquiry(
+                            _ti(agent._config.language, "insight.auto_question"),
+                            source="auto",
+                        )
+            except Exception as e:  # noqa: BLE001 — post-turn must never kill the loop
+                agent._log(
+                    "post_turn_error",
+                    exception=type(e).__name__,
+                    error=str(e)[:300],
+                )
+                logger.warning(
+                    f"[{agent.agent_name}] post-turn error "
+                    f"({type(e).__name__}): {str(e)[:300]}",
+                )
 
         break
 
