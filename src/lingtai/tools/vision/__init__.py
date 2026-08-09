@@ -75,6 +75,14 @@ def _consent_guidance() -> str:
 _CODEX_POOL_ALIASES = {"codex-pool", "codex_pool"}
 _CODEX_FAMILY = {"codex"} | _CODEX_POOL_ALIASES
 
+# Claude Code CLI vision: all three spellings identify the claude backend
+# whose vision route is the operator-installed Claude Code CLI (``claude -p``).
+# LingTai does not proxy the CLI's auth, so these providers return explicit
+# guidance instead of constructing a service. ``claude-p`` is the explicit
+# vision-route alias alongside the LLM registry's two canonical adapter
+# spellings (``claude-code``/``claude_code``).
+_CLAUDE_CLI_FAMILY = {"claude-p", "claude-code", "claude_code"}
+
 
 def _same_codex_family(requested: str, active: str) -> bool:
     """Return whether both names are Codex-family spellings.
@@ -125,6 +133,8 @@ def _same_provider_identity(requested: str, active: str) -> bool:
         return True
     if {requested, active} <= {"glm", "zhipu"}:
         return True
+    if {requested, active} <= _CLAUDE_CLI_FAMILY:
+        return True
     return _same_codex_family(requested, active)
 
 
@@ -150,7 +160,7 @@ PROVIDERS = {
     "providers": [
         "gemini", "anthropic", "openai", "openrouter", "custom", "deepseek",
         "minimax", "mimo", "glm", "zhipu", "grok", "qwen", "kimi",
-        "codex", "codex-pool", "codex_pool", "claude-code", "claude_code",
+        "codex", "codex-pool", "codex_pool", "claude-p", "claude-code", "claude_code",
         "local",
     ],
     "default": None,
@@ -749,7 +759,21 @@ def _resolve_direct_service(
         else:
             manual_reason = f"No direct vision route is supported for provider {provider!r}; use vision(action='manual', input={{}}, reasoning='this provider has no supported direct vision route')."
     else:
-        if provider_key in _CODEX_FAMILY:
+        if provider_key in _CLAUDE_CLI_FAMILY:
+            # The claude backend uses the Claude Code CLI for vision. LingTai
+            # does not proxy the CLI's own authentication (claude.ai
+            # subscription, API key, configured provider), so there is no
+            # direct service to construct: the agent is told to run
+            # ``claude -p`` with the image path and read the vision manual
+            # for the exact steps.
+            manual_reason = (
+                "The claude backend uses the Claude CLI for vision: run "
+                "`claude -p \"Analyze this image: <path>\"` with the CLI's "
+                "own authentication, and read the vision manual for details: "
+                "vision(action='manual', input={}, reasoning='claude vision "
+                "uses the claude cli')."
+            )
+        elif provider_key in _CODEX_FAMILY:
             # Codex vision is a standalone Responses request. It may share
             # the active Codex family's model and endpoint, but never
             # inherits those from an unrelated main provider. The fixed/

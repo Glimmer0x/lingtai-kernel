@@ -57,6 +57,24 @@ one call. Any direct setup or request failure returns a sanitized vision tool
 result that reports the failure type and points here for explicit alternatives;
 it never exposes exception contents.
 
+## Claude backend: use the Claude CLI for vision
+
+When the active provider is a Claude-family backend (`claude-code`, `claude_code`,
+or the `claude-p` vision alias), the vision capability does not proxy Claude's
+own CLI authentication. The analyze call fails closed with explicit guidance
+instead of constructing a service:
+
+- Run the Claude Code CLI yourself in print mode with the image path:
+  `claude -p "Analyze this image: /path/to/image.png"`.
+- The CLI uses its own authentication (claude.ai subscription, API key, or a
+  configured provider) and returns a text analysis on stdout.
+- For exact image-input syntax and output formats, read the Claude Code CLI
+  reference: <https://code.claude.com/docs/en/cli-reference>. The official
+  docs' image pattern is "Analyze this image: /path/to/your/image.png".
+
+This manual never auto-invokes the CLI; running `claude -p` is an explicit
+operator/agent action with the CLI's own auth and cost model.
+
 ## Stay on the active preset
 
 Inspect the identity already shown in the prompt: the current provider, model,
