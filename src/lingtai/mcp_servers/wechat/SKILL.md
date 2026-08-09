@@ -63,7 +63,8 @@ ATTACHMENTS below), not a mutually exclusive choice.
 
 ## MEDIA / ATTACHMENTS
 
-- `send` with `media_path` (absolute path) attaches a file. Type is detected from
+- `send` with `media_path` attaches a file (absolute or relative to the agent
+  working directory; paths outside it are rejected). Type is detected from
   the extension: `.jpg`/`.png` → image, `.mp4` → video, `.wav`/`.mp3` → voice,
   anything else → file.
 - For charts, reports, and other artifacts the user should open intact, send them

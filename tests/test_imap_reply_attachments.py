@@ -51,12 +51,13 @@ def _manager(account: FakeAccount) -> IMAPMailManager:
 
 def test_reply_forwards_resolved_attachments_to_send_email():
     account = FakeAccount()
+    wd = Path("/tmp/imap-agent-workdir")
 
     result = _manager(account).handle({
         "action": "reply",
         "email_id": "me@example.com:INBOX:42",
         "message": "Here is the file.",
-        "attachments": ["relative.txt", "/abs/file.pdf"],
+        "attachments": ["relative.txt", str(wd / "abs-file.pdf")],
     })
 
     assert result["status"] == "delivered"
@@ -65,12 +66,27 @@ def test_reply_forwards_resolved_attachments_to_send_email():
     assert account.sent_kwargs["subject"] == "Re: Question"
     assert account.sent_kwargs["body"] == "Here is the file."
     assert account.sent_kwargs["attachments"] == [
-        "/tmp/imap-agent-workdir/relative.txt",
-        "/abs/file.pdf",
+        str((wd / "relative.txt").resolve()),
+        str((wd / "abs-file.pdf").resolve()),
     ]
     assert account.sent_kwargs["in_reply_to"] == "<orig@example.com>"
     assert account.sent_kwargs["references"] == "<parent@example.com> <orig@example.com>"
     assert account.stored_flags == [("INBOX", "42", ["\\Answered"])]
+
+
+def test_reply_rejects_absolute_attachment_outside_workdir():
+    account = FakeAccount()
+
+    result = _manager(account).handle({
+        "action": "reply",
+        "email_id": "me@example.com:INBOX:42",
+        "message": "Here is the file.",
+        "attachments": ["/etc/passwd"],
+    })
+
+    assert "error" in result
+    assert "outside working directory" in result["error"]
+    assert account.sent_kwargs is None
 
 
 def test_reply_keeps_attachments_none_when_absent():

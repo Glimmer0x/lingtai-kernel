@@ -41,6 +41,7 @@ from lingtai.mcp_servers.task_card import (
 )
 
 from .. import _skill
+from .._outbound_files import OutboundFileError, resolve_outbound_file
 from . import _family
 from . import updates as tg_updates
 from .account import TelegramRateLimitError
@@ -545,6 +546,8 @@ SCHEMA = {
             },
             "description": (
                 "Media attachment: {type: 'photo'|'document', path: '/path/to/file'}. "
+                "The path must be inside the agent working directory; relative "
+                "paths resolve against it. "
                 "For charts, HTML/SVG/PNG reports, CSVs, PDFs, and other generated artifacts that should arrive as an intact file, use type='document'. "
                 "Use type='photo' only for native inline photo previews; Telegram photo delivery can crop, compress, thumbnail, or otherwise display text-heavy charts poorly. "
                 "Do not paste local file paths in message text as a substitute for attaching the file."
@@ -3865,6 +3868,12 @@ class TelegramManager:
         if media:
             media_type = media.get("type")
             media_path = media.get("path", "")
+            try:
+                media_path = str(
+                    resolve_outbound_file(media_path, self._working_dir)
+                )
+            except OutboundFileError as e:
+                return {"error": str(e)}
             media_file = Path(media_path)
             if not media_file.is_file() or media_file.stat().st_size == 0:
                 return {

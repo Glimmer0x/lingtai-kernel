@@ -4,8 +4,11 @@ MCPClient: stdio subprocess servers (e.g., uvx minimax-coding-plan-mcp).
 HTTPMCPClient: remote HTTP/SSE servers (e.g., api.z.ai/api/mcp/...).
 
 Both provide the same basic synchronous call_tool() interface. A background
-daemon thread runs the async event loop; the public API is thread-safe. The
-stdio client additionally accepts an explicit stale-resource replay policy.
+daemon thread runs the async event loop; the public API is thread-safe. Both
+clients recover a dropped transport inside call_tool: they restart the session
+so a future call can succeed, and they return a non-blank error dict instead
+of raising. The stdio client additionally accepts an explicit stale-resource
+replay policy; the HTTP client never replays (see HTTPMCPClient.call_tool).
 
 Both are built on the official MCP Python SDK v2 first-class ``mcp.Client``
 in its default ``mode="auto"``: the SDK probes ``server/discover`` and falls
@@ -951,11 +954,11 @@ class HTTPMCPClient:
         """Connect to the remote MCP server.
 
         Raises:
-            RuntimeError: If this client was explicitly closed. Unlike the
-                stdio client there is no ``restart()`` here, so an HTTP client
-                is one-shot after ``close()``: reviving it would build a second
-                ``httpx2.AsyncClient`` that the early-returning ``close()``
-                could never shut down, leaking the connection pool.
+            RuntimeError: If this client was explicitly closed. ``restart()``
+                is the supported way back: it clears ``_closed`` first and
+                rebuilds the transport (including the owning
+                ``httpx2.AsyncClient``), so the subsequent ``start()`` is a
+                real reconnect rather than an early return.
         """
         if self._closed:
             raise RuntimeError("HTTP MCP client has been closed")
@@ -976,6 +979,31 @@ class HTTPMCPClient:
         if self._thread:
             self._thread.join(timeout=5)
 
+    def restart(self) -> None:
+        """Tear down a (possibly stale) session and reconnect from scratch.
+
+        ``start()`` early-returns when it believes it is connected and never
+        clears latched startup state, so a stale ``_ready``/``_error`` or a
+        ``_closed`` flag from a prior ``close()`` would make a fresh
+        ``start()`` lie (return immediately, or raise on the *old* error).
+        This resets all startup/session fields — including the SDK client and
+        its owning ``httpx2.AsyncClient`` — so the subsequent ``start()`` is
+        a real reconnect. Used by ``call_tool`` to recover from a dropped
+        HTTP/SSE stream (issue #740, the HTTP half of issue #104).
+        """
+        self.close()
+        self._ready.clear()
+        self._error = None
+        self._closed = False
+        self._session = None
+        self._loop = None
+        self._thread = None
+        self._client = None
+        self._http_client = None
+        self._transport_cm = None
+        self._session_cm = None
+        self.start()
+
     def is_connected(self) -> bool:
         return (
             self._session is not None
@@ -987,10 +1015,19 @@ class HTTPMCPClient:
     def call_tool(self, name: str, args: dict, timeout: float = 120) -> Any:
         """Call an MCP tool synchronously. Same interface as MCPClient.
 
-        There is deliberately no ``retry_policy`` here. Replaying an HTTP tool
-        call has the same unknowable remote commit point as stdio but none of
-        stdio's transport-restart signal, so this transport does not replay;
-        that non-retry policy is contractual, not an oversight.
+        Recovers a dropped HTTP/SSE stream (issue #740): on a stale transport
+        error the client restarts its connection so a *future* call can
+        succeed, and returns an ambiguous, non-retryable error dict for the
+        current one. The submitted call is never replayed — the remote commit
+        point is unknowable — matching the stdio client's default fail-closed
+        policy. There is deliberately no ``retry_policy`` parameter here; that
+        HTTP non-retry contract is stated policy, not an oversight.
+
+        Non-stale failures return a non-blank
+        ``{"status": "error", "message": ...}`` dict instead of raising, so a
+        message-less exception (e.g. anyio's ``ClosedResourceError``) can never
+        surface as a blank error again (issue #104). All outcomes, including
+        failures, are recorded in ``_activity_log``.
         """
         import asyncio
 
@@ -1001,19 +1038,74 @@ class HTTPMCPClient:
         if self._session is None or self._loop is None:
             raise RuntimeError("HTTP MCP client not connected")
 
-        async def _call():
-            # SDK v2 timeouts are float seconds, not timedelta.
-            result = await self._session.call_tool(
-                name=name,
-                arguments=args,
-                read_timeout_seconds=float(timeout),
-            )
-            self._last_result = preserve_tool_result(result)
-            return _decode_tool_result(result)
+        def _attempt() -> Any:
+            async def _call():
+                # SDK v2 timeouts are float seconds, not timedelta.
+                result = await self._session.call_tool(
+                    name=name,
+                    arguments=args,
+                    read_timeout_seconds=float(timeout),
+                )
+                self._last_result = preserve_tool_result(result)
+                return _decode_tool_result(result)
 
-        future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
-        result = future.result(timeout=timeout)
+            future = asyncio.run_coroutine_threadsafe(_call(), self._loop)
+            try:
+                return future.result(timeout=timeout)
+            except TimeoutError as exc:
+                # The coroutine crossed the submission boundary before this
+                # timeout. The server may therefore have committed the call
+                # even though this caller never received its response. Cancel
+                # local work if possible, but never advertise a blind retry.
+                future.cancel()
+                formatted = MCPClient._format_exception(exc)
+                logger.warning(
+                    "HTTP MCP tool %s timed out after submission (%s); remote "
+                    "outcome is ambiguous; not retrying",
+                    name,
+                    formatted,
+                )
+                return MCPClient._ambiguous_call_error(
+                    f"{formatted}: HTTP MCP call was submitted but completion "
+                    "timed out; remote outcome is ambiguous; call was not "
+                    "retried to avoid duplicate side effects"
+                )
 
+        try:
+            result = _attempt()
+        except Exception as exc:
+            formatted = MCPClient._format_exception(exc)
+            if not MCPClient._is_stale_resource_error(exc):
+                # Non-stale failure: surface the class name so the error is
+                # never blank (issue #104), but don't churn the connection.
+                result = {"status": "error", "message": formatted}
+            else:
+                # Recover the transport for a future independent call, but do
+                # not replay this call: the server may have committed it before
+                # the stale response path failed.
+                logger.warning(
+                    "HTTP MCP tool %s hit stale resource (%s); restarting "
+                    "transport without replay",
+                    name,
+                    formatted,
+                )
+                try:
+                    self.restart()
+                except Exception as restart_exc:
+                    result = MCPClient._ambiguous_call_error(
+                        f"{formatted}: HTTP MCP session closed; remote outcome "
+                        "is ambiguous; call was not retried to avoid duplicate "
+                        "side effects; transport restart failed: "
+                        f"{MCPClient._format_exception(restart_exc)}"
+                    )
+                else:
+                    result = MCPClient._ambiguous_call_error(
+                        f"{formatted}: HTTP MCP session closed; remote outcome "
+                        "is ambiguous; call was not retried to avoid duplicate "
+                        "side effects; transport restarted for a future call"
+                    )
+
+        # Log activity (failures included, so failed calls are debuggable).
         with self._activity_lock:
             self._activity_log.append({
                 "tool": name,
@@ -1071,6 +1163,11 @@ class HTTPMCPClient:
     def last_tool_result(self) -> dict[str, Any] | None:
         """Full typed result of the most recent ``call_tool``."""
         return self._last_result
+
+    def get_activity_log(self) -> list[dict[str, Any]]:
+        """Get recent MCP tool calls for debugging (failures included)."""
+        with self._activity_lock:
+            return list(self._activity_log)
 
     def _run_loop(self) -> None:
         import asyncio
