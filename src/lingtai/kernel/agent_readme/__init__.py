@@ -70,6 +70,9 @@ def render_readme(*, template: str | None = None) -> str:
 
 def ensure_agent_readme(
     layout_or_root: WorkdirLayout | Path | str,
+    *,
+    template: str | None = None,
+    _log: callable | None = None,
 ) -> Path | None:
     """Generate ``README.md`` in the agent directory if missing or stale.
 
@@ -78,6 +81,15 @@ def ensure_agent_readme(
     tmp + rename via ``_fsutil.atomic_write_text``) only when the file is
     missing, unreadable, unversioned, or carries a different version. A
     version match is a strict no-op.
+
+    Migration safety (P1-1): a pre-existing file with **no** ``template_version``
+    head is taken over, not clobbered silently \u2014 its content is preserved as
+    ``README.md.bak`` first and the takeover is emitted through ``_log`` when
+    provided, so an upgrade never loses a user-written README without a trace.
+
+    A packaged template that itself lost its version head raises (``ValueError``)
+    instead of silently degrading into a rewrite-every-mount loop; mount call
+    sites wrap fail-soft, so the failure is visible via their logging.
 
     Returns the written path, or None when the existing file is current.
     Raises on I/O failure; mount call sites wrap fail-soft.
@@ -88,16 +100,35 @@ def ensure_agent_readme(
         else workdir_layout(layout_or_root)
     )
     target = layout.readme
-    tpl = _read_template()
+    tpl = render_readme(template=template)
     current_version = template_version(tpl)
+    if current_version is None:
+        raise ValueError("agent_readme packaged template lost its template_version head")
 
     if target.is_file():
         try:
-            existing_head = target.read_text(encoding="utf-8")[:_HEAD_SCAN_BYTES]
-        except OSError:
+            with target.open(encoding="utf-8") as fh:
+                existing_head = fh.read(_HEAD_SCAN_BYTES)
+        except (OSError, UnicodeDecodeError):
             existing_head = ""
-        if current_version is not None and template_version(existing_head) == current_version:
+        existing_version = template_version(existing_head)
+        if existing_version == current_version:
             return None
+        if existing_version is None:
+            # Takeover of a user-authored, unversioned README: preserve a
+            # backup and log the event so the migration is never silent.
+            try:
+                backup = target.with_name("README.md.bak")
+                atomic_write_text(backup, target.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:
+                # Backup best-effort; the takeover itself proceeds so the
+                # agent root still gains the navigation entry.
+                pass
+            if _log is not None:
+                try:
+                    _log("agent_readme_takeover", backup=str(backup))
+                except Exception:
+                    pass
 
     atomic_write_text(target, tpl, encoding="utf-8")
     return target

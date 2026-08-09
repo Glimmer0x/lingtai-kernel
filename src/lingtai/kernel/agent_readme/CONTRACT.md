@@ -12,7 +12,7 @@
 
 ## 2. 所有权与生成
 
-- `README.md`：kernel-owned。**运行时生成**：模板位于 kernel repo `agent_readme/` 包；**molt/refresh 时检查 staleness**（文件缺失、模板版本变化 → 重新生成）。全英文；**不含 agent 名占位**（agent 名字不是 README 的责任）。
+- `README.md`：kernel-owned。**运行时生成**：模板位于 kernel repo `agent_readme/` 包；**refresh / molt / BaseAgent 构造时检查 staleness**（文件缺失、模板版本变化 → 重新生成；构造挂载保证 avatar 首用前即有 README）。全英文；**不含 agent 名占位**（agent 名字不是 README 的责任）。接管无版本头既有文件时先落 `README.md.bak` 并记事件，不静默覆盖。
 - `substrate.md`：kernel-owned。源是 `src/lingtai/prompts/substrate/substrate.md`；agent 文件夹里的副本由 kernel 既有 prompt-source 机制同步。
 
 ## 3. 边界

@@ -554,9 +554,12 @@ class BaseAgent:
         try:
             from ..agent_readme import ensure_agent_readme
 
-            ensure_agent_readme(self._working_dir)
+            ensure_agent_readme(self._working_dir, _log=self._log)
         except Exception:
-            pass
+            try:
+                self._log("agent_readme_ensure_failed", stage="construction")
+            except Exception:
+                pass
 
 
         # Auto-inject identity into system prompt from manifest

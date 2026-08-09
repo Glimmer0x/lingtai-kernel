@@ -754,7 +754,7 @@ def _perform_refresh(
     try:
         from ..agent_readme import ensure_agent_readme
 
-        ensure_agent_readme(agent._working_dir)
+        ensure_agent_readme(agent._working_dir, _log=agent._log)
     except Exception:
         agent._log("agent_readme_ensure_failed", stage="refresh")
     # Bound-method dispatch — _build_launch_cmd lives on BaseAgent (returns

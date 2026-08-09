@@ -531,9 +531,12 @@ def _context_molt(agent, args: dict) -> dict:
     try:
         from lingtai.kernel.agent_readme import ensure_agent_readme
 
-        ensure_agent_readme(agent._working_dir)
+        ensure_agent_readme(agent._working_dir, _log=agent._log)
     except Exception:
-        pass
+        try:
+            agent._log("agent_readme_ensure_failed", stage="molt")
+        except Exception:
+            pass
 
 
     # Post-molt reminder. ToolExecutor strips visible ``reasoning`` and
