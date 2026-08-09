@@ -117,6 +117,11 @@ exclude = [
 
 [tool.setuptools.package-data]
 "lingtai.kernel" = ["i18n/*.json"]
+# The agent-manual generator is its own subpackage, so its template and paired
+# architecture documents need their own entry (package-data globs do not
+# recurse into subpackages — same reason as telegram.task_card below). Without
+# this the wheel ships the renderer but silently drops the template it renders.
+"lingtai.kernel.agent_manual" = ["MANUAL.md.tpl", "ANATOMY.md", "CONTRACT.md"]
 # Consolidated tool packages: i18n catalogs, per-tool JSON policy/data files
 # (e.g. lingtai/tools/bash/bash_policy.json), and every tool manual tree. Without
 # these the wheel installs the tool code but silently drops its data assets.
