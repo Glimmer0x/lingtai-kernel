@@ -302,3 +302,26 @@ class TestMailAttachments:
         finally:
             listener.stop()
             stop.set()
+
+
+def test_send_writes_utf8_message_json(tmp_path):
+    """CJK subject/body survive send() as raw UTF-8 (ensure_ascii=False) and
+    no fixed ``message.json.tmp`` sibling is left behind."""
+    sender_dir = _setup_agent_dir(tmp_path / "sender")
+    receiver_dir = _setup_agent_dir(tmp_path / "receiver")
+    (receiver_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+    svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
+    result = svc.send(
+        str(receiver_dir),
+        {"subject": "测试主题", "message": "你好，世界"},
+    )
+    assert result is None
+
+    inbox = receiver_dir / "mailbox" / "inbox"
+    msg_dir = list(inbox.iterdir())[0]
+    raw = (msg_dir / "message.json").read_bytes()
+    text = raw.decode("utf-8")
+    assert "测试主题" in text
+    assert "你好，世界" in text
+    assert not (msg_dir / "message.json.tmp").exists()

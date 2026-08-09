@@ -322,31 +322,24 @@ def _persist_soul_voice(agent, *, voice: str, voice_prompt: str) -> str | None:
 
 
 def _atomic_write_init(init_path, data) -> str | None:
-    """Write ``data`` to ``init_path`` via temp-file-then-rename.
+    """Write ``data`` to ``init_path`` atomically (unique sibling temp
+    via ``_fsutil.atomic_write_text``).
 
     Used by both _persist_soul_config and _persist_soul_voice. Returns
     ``None`` on success or a short error string on failure.
     """
     import json
-    import os
 
-    tmp_path = init_path.with_suffix(init_path.suffix + ".tmp")
+    from lingtai.kernel._fsutil import atomic_write_text
+
     try:
-        with tmp_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp_path, init_path)
+        atomic_write_text(
+            init_path,
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            fsync=True,
+        )
         return None
     except Exception as e:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
         return f"failed to write init.json: {e!s}"[:200]
 
 

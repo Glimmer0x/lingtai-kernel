@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Callable, Iterator
 
+from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.agent_presence import (
     is_agent as _presence_is_agent,
     observe_alive as _presence_observe_alive,
@@ -173,15 +174,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         else:
             msg_dir.mkdir(parents=True, exist_ok=True)
 
-        # Atomic write: tmp → rename
-        tmp_path = msg_dir / "message.json.tmp"
+        # Atomic write: unique sibling temp → os.replace (via _fsutil).
         final_path = msg_dir / "message.json"
         try:
-            tmp_path.write_text(
-                json.dumps(message, indent=2, ensure_ascii=False, default=str),
-                encoding="utf-8",
+            atomic_write_json(
+                final_path, message, indent=2, ensure_ascii=False, default=str
             )
-            os.replace(str(tmp_path), str(final_path))
         except OSError as e:
             return f"Failed to write message: {e}"
 
@@ -410,7 +408,6 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             uuid_name = entry.name
             own_inbox_dir = self._inbox_dir / uuid_name
             own_msg_file = own_inbox_dir / "message.json"
-            own_tmp_file = own_inbox_dir / "message.json.tmp"
             claim_dir = sent_parent / f".{uuid_name}.claim-{uuid.uuid4()}"
             sent_dir = sent_parent / uuid_name
 
@@ -424,14 +421,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             # Removed on rollback.
             self._seen.add(uuid_name)
 
-            # Step 1: write the payload to own inbox (tmp -> rename).
+            # Step 1: write the payload to own inbox (unique sibling temp -> rename).
             try:
                 own_inbox_dir.mkdir(parents=True, exist_ok=True)
-                own_tmp_file.write_text(
-                    json.dumps(payload, indent=2, ensure_ascii=False, default=str),
-                    encoding="utf-8",
+                atomic_write_json(
+                    own_msg_file, payload, indent=2, ensure_ascii=False, default=str
                 )
-                os.replace(str(own_tmp_file), str(own_msg_file))
             except OSError:
                 logger.warning(
                     "failed to write claimed pseudo-agent message %s to own inbox",
@@ -535,15 +530,12 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         }
 
         inbox_dir = pseudo_dir / self._mailbox_rel / "inbox" / ack_id
-        tmp_file = inbox_dir / "message.json.tmp"
         final_file = inbox_dir / "message.json"
         try:
             inbox_dir.mkdir(parents=True, exist_ok=True)
-            tmp_file.write_text(
-                json.dumps(ack, indent=2, ensure_ascii=False, default=str),
-                encoding="utf-8",
+            atomic_write_json(
+                final_file, ack, indent=2, ensure_ascii=False, default=str
             )
-            os.replace(str(tmp_file), str(final_file))
         except OSError:
             logger.exception(
                 "failed to write runtime probe ack %s to %s",

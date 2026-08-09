@@ -49,7 +49,6 @@ class TestWorkdirLayout:
         layout = workdir_layout(tmp_path)
         assert layout.chat_history == tmp_path / "history" / "chat_history.jsonl"
         assert layout.resolved_manifest == tmp_path / "system" / "manifest.resolved.json"
-        assert layout.resolved_manifest_tmp == tmp_path / "system" / "manifest.resolved.json.tmp"
 
     def test_notification_file(self, tmp_path):
         layout = workdir_layout(tmp_path)
