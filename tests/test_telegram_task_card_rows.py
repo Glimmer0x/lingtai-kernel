@@ -339,7 +339,7 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
     metadata_lines = lines[footer_idx + 1:time_idx]
     assert metadata_lines == [
-        "ctx 63% · 171.2k/272.0k · cache 88% · miss 170.6k/1.0M · calls 13",
+        "ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
     assert len(metadata_lines) == 1
     assert len(metadata_lines[0]) <= 500
@@ -430,7 +430,7 @@ def test_metadata_ignores_unrecognized_lifecycle_value():
         "agent_lifecycle": "haunted",
         "session_cache_rate": 0.5,
     })
-    assert lines == ["cache 50%"]
+    assert lines == ["cache 50.0%"]
 
 
 def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
@@ -446,7 +446,7 @@ def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "active · ctx 63% · 171.2k/272.0k · cache 88% · miss 170.6k/1.0M · calls 13",
+        "active · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
     assert len(lines) == 1
     assert len(lines[0]) <= 500
@@ -466,7 +466,7 @@ def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
     # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
     # and ctx survives as line 2 instead of being dropped by the cap.
     assert lines == [
-        "agent · stuck · try /refresh · ctx 63% · 171.2k/272.0k · cache 88% · miss 170.6k/1.0M · calls 13",
+        "agent · stuck · try /refresh · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
     assert lines[0].startswith("agent · stuck · try /refresh ·")
     assert len(lines) == 1
@@ -485,7 +485,7 @@ def test_metadata_unchanged_when_no_agent_lifecycle_present():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "ctx 63% · 171.2k/272.0k · cache 88% · miss 170.6k/1.0M · calls 13",
+        "ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
 
 
@@ -648,7 +648,7 @@ def test_metadata_renders_current_model_first():
         "model": "deepseek-v4-flash",
         "session_cache_rate": 0.5,
     })
-    assert lines == ["deepseek-v4-flash · cache 50%"]
+    assert lines == ["deepseek-v4-flash · cache 50.0%"]
 
 
 def test_event_metadata_snapshot_adds_current_model(tmp_path):

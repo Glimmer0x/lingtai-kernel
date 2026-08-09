@@ -570,7 +570,7 @@ class TaskCardEventProjection:
             and not isinstance(cache_rate, bool)
             and 0 <= cache_rate <= 1
         ):
-            session_parts.append(f"cache {float(cache_rate):.0%}")
+            session_parts.append(f"cache {float(cache_rate):.1%}")
         miss = cls.format_count(metadata.get("cache_miss_tokens"))
         budget = cls.format_count(metadata.get("cache_miss_budget"))
         if miss is not None:

@@ -784,7 +784,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
     rendered = edits[-1][3]
     assert "• bash.run: event-log row" in rendered
     assert f" · {expected_stamp}" in rendered
-    assert "cache 88% · miss 170.6k/1.0M · calls 13" in rendered
+    assert "cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx 63% · 171.2k/272.0k" in rendered
     assert "calls 888" not in rendered
     assert "calls 999" not in rendered
