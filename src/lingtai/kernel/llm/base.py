@@ -517,6 +517,40 @@ class ChatSession(ABC):
         )
         self._interface._append("user", [TextBlock(text=notice)])
 
+    def _inject_overflow_notice_after_error(self, exc: Exception) -> None:
+        """Surface the trim on the terminal-failure path, mirroring the notice.
+
+        ``_run_with_overflow_recovery`` attaches ``_overflow_trim_stats`` to
+        the re-raised provider exception when retry rounds were exhausted (or
+        trimming stalled) after entries had already been deleted. Adapters
+        call this from their ``except`` block **after** the ``drop_trailing``
+        revert — the revert would otherwise strip the just-injected
+        user-role notice. No-op when the exception carries no stats, i.e.
+        nothing was trimmed to report.
+        """
+        stats = getattr(exc, "_overflow_trim_stats", None)
+        if not stats:
+            return
+        total_dropped, rounds = stats
+        if total_dropped > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
+
+    @staticmethod
+    def _attach_overflow_trim_stats(
+        exc: Exception, total_dropped: int, rounds: int,
+    ) -> None:
+        """Best-effort: record trim stats on a re-raised overflow error.
+
+        Provider exception objects normally accept attribute assignment;
+        tolerate anything that does not so recovery behavior is unchanged.
+        """
+        if total_dropped <= 0:
+            return
+        try:
+            exc._overflow_trim_stats = (total_dropped, rounds)
+        except Exception:
+            pass
+
     def _run_with_overflow_recovery(self, do_call):
         """Run an API call with context-overflow auto-recovery.
 
@@ -545,6 +579,10 @@ class ChatSession(ABC):
                         "(dropped %d entries total) — re-raising provider error.",
                         rounds, total_dropped,
                     )
+                    # Entries trimmed in earlier rounds are already deleted;
+                    # record the loss on the exception so adapters can surface
+                    # it after their error-revert step (issue #653).
+                    self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
                 dropped = self._trim_context_one_round()
                 if dropped == 0:
@@ -553,6 +591,7 @@ class ChatSession(ABC):
                         "(dropped %d entries across %d rounds) — re-raising.",
                         total_dropped, rounds,
                     )
+                    self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
                 total_dropped += dropped
                 rounds += 1

@@ -1907,9 +1907,13 @@ class OpenAIChatSession(ChatSession):
 
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
-        except Exception:
+        except Exception as exc:
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
+            # Terminal overflow failure may already have trimmed entries;
+            # surface the loss after the revert (the revert would strip a
+            # just-injected user-role notice).
+            self._inject_overflow_notice_after_error(exc)
             raise
 
         # 3b. If recovery fired (entries were dropped), inject the molt notice.
@@ -2152,9 +2156,12 @@ class OpenAIChatSession(ChatSession):
                             name=(tc.function.name if tc.function else None),
                             args_delta=(tc.function.arguments if tc.function else None),
                         )
-        except Exception:
+        except Exception as exc:
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
+            # Terminal overflow failure may already have trimmed entries;
+            # surface the loss after the revert (see issue #653).
+            self._inject_overflow_notice_after_error(exc)
             raise
 
         # 4. Finalize
