@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import tempfile
 import threading
 from datetime import datetime, timezone
 from importlib import resources
@@ -49,6 +51,12 @@ _CS_WINDOW_NOTE = (
 _CONVERSATION_CONTEXT_MESSAGES = 10
 _STRUCTURED_MESSAGE_TEXT_CAP = 500
 
+# Bounded FIFO window for the inbound replay guard (inbox_seen.json). Sized
+# well above a single Meta webhook retry horizon: Meta re-delivers the same
+# wamid with backoff, so a live retry never falls outside this window while it
+# could still be re-delivered. Bounds memory/disk for the persisted seen-set.
+SEEN_KEYS_MAX = 5000
+
 DESCRIPTION = "WhatsApp Cloud API client for LingTai. Official Meta API only; no WhatsApp Web bridge."
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
@@ -73,6 +81,15 @@ class WhatsAppManager:
         self.config_source = config_source
         self._last_verified_at = _utcnow()
         self._contacts_lock = threading.Lock()
+        # Inbound replay guard state (see _stable_key/_is_replay/_record_seen).
+        # Meta webhooks are at-least-once: on a slow or non-200 response the
+        # same payload (same wamid) is redelivered with backoff. Persisted to
+        # root/inbox_seen.json so the guard survives restarts; keys are
+        # namespaced by account alias, so one file covers all accounts.
+        self._seen_keys: dict[str, str] = {}
+        self._seen_order: list[str] = []
+        self._seen_lock = threading.Lock()
+        self._load_seen()
 
     def _account_alias(self, alias: str | None) -> str:
         if alias:
@@ -127,13 +144,19 @@ class WhatsAppManager:
             raise ValueError("message_id must be account:wa_id:wamid")
         return parts[0], parts[1], parts[2]
 
-    def _store_message(self, alias: str, folder: str, msg: dict[str, Any]) -> dict[str, Any]:
+    def _store_message(self, alias: str, folder: str, msg: dict[str, Any]) -> tuple[dict[str, Any], str]:
+        """Write ``msg`` to a fresh local inbox/sent directory.
+
+        Returns ``(stored_msg, local_id)`` where ``local_id`` is the local
+        directory name (the replay guard records it so a suppressed duplicate
+        can be traced to its original landing).
+        """
         d = self._account_dir(alias) / folder / str(uuid4())
         d.mkdir(parents=True, exist_ok=True)
         msg = dict(msg)
         msg.setdefault("stored_at", _utcnow())
         (d / "message.json").write_text(json.dumps(msg, ensure_ascii=False, indent=2), encoding="utf-8")
-        return msg
+        return msg, d.name
 
     def _iter_messages(self, alias: str, folder: str | None = None) -> list[dict[str, Any]]:
         base = self._account_dir(alias)
@@ -204,7 +227,7 @@ class WhatsAppManager:
         try:
             response = self._client(alias).post_message(payload)
             wamid = (((response.get("messages") or [{}])[0]).get("id") or f"local-{uuid4()}")
-            stored = self._store_message(alias, "sent", {"id": self._compound(alias, to, wamid), "wa_id": to, "message_id": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
+            stored, _ = self._store_message(alias, "sent", {"id": self._compound(alias, to, wamid), "wa_id": to, "message_id": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
             return {"status": "sent", "message_id": stored["id"], "response": response}
         except Exception as e:
             return {"status": "error", "error": str(e), "note": _CS_WINDOW_NOTE}
@@ -222,7 +245,7 @@ class WhatsAppManager:
         try:
             response = self._client(alias).post_message(payload)
             new_id = (((response.get("messages") or [{}])[0]).get("id") or f"local-{uuid4()}")
-            stored = self._store_message(alias, "sent", {"id": self._compound(alias, wa_id, new_id), "wa_id": wa_id, "message_id": new_id, "reply_to": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
+            stored, _ = self._store_message(alias, "sent", {"id": self._compound(alias, wa_id, new_id), "wa_id": wa_id, "message_id": new_id, "reply_to": wamid, "text": args.get("text"), "payload": payload, "response": response, "direction": "outgoing"})
             return {"status": "sent", "message_id": stored["id"], "response": response}
         except Exception as e:
             return {"status": "error", "error": str(e), "note": _CS_WINDOW_NOTE}
@@ -431,14 +454,117 @@ class WhatsAppManager:
         )
         return structured, latest_incoming
 
+    # ── Inbound replay / idempotency guard ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _stable_key(alias: str, ev: dict[str, Any]) -> str | None:
+        """Derive a stable, replay-resistant signature for an inbound event.
+
+        Meta assigns a globally stable wamid (``message_id``) to every message
+        and repeats it verbatim on redelivery, so it is the primary key. The
+        key is namespaced by account alias and sender so a collision across
+        accounts/senders cannot suppress a real message. Returns ``None`` when
+        the event carries no stable upstream id — the caller must land it
+        unconditionally rather than key on a local ``local-<uuid4>`` placeholder.
+        """
+        wamid = ev.get("message_id")
+        if wamid:
+            return f"{alias}|{ev.get('wa_id') or 'unknown'}|mid:{wamid}"
+        return None
+
+    def _is_replay(self, key: str) -> bool:
+        """True if this stable key was already landed (replay guard hit)."""
+        with self._seen_lock:
+            return key in self._seen_keys
+
+    def _record_seen(self, key: str, local_id: str) -> None:
+        """Persist that ``key`` was landed under ``local_id`` (atomic)."""
+        with self._seen_lock:
+            if key in self._seen_keys:
+                return
+            self._seen_keys[key] = local_id
+            self._seen_order.append(key)
+            # Evict oldest beyond the window to bound the state file.
+            while len(self._seen_order) > SEEN_KEYS_MAX:
+                evicted = self._seen_order.pop(0)
+                self._seen_keys.pop(evicted, None)
+        self._save_seen()
+
+    def _save_seen(self) -> None:
+        with self._seen_lock:
+            payload = {
+                "version": 1,
+                "order": list(self._seen_order),
+                "keys": dict(self._seen_keys),
+            }
+        self._atomic_write(
+            self.root / "inbox_seen.json",
+            json.dumps(payload, ensure_ascii=False),
+        )
+
+    def _load_seen(self) -> None:
+        """Load the persisted replay guard; corrupt/missing state degrades to empty."""
+        seen_file = self.root / "inbox_seen.json"
+        if not seen_file.is_file():
+            return
+        try:
+            seen = json.loads(seen_file.read_text(encoding="utf-8"))
+            self._seen_keys = dict(seen.get("keys", {}))
+            self._seen_order = [
+                k for k in seen.get("order", []) if k in self._seen_keys
+            ]
+        except (ValueError, AttributeError, OSError) as e:
+            # Corrupt index degrades to "no guard", never crashes boot.
+            log.warning("Failed to load inbox_seen.json (ignoring): %s", e)
+            self._seen_keys = {}
+            self._seen_order = []
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        """Write content to path atomically via tempfile + os.replace."""
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
     def ingest_webhook(self, alias: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         events = extract_events(payload)
         for ev in events:
             if ev.get("kind") == "message":
+                # Replay guard. Meta's webhook delivery is at-least-once: when
+                # the receiver is slow, down, or answers non-200, Meta re-sends
+                # the same notification — with the same wamid — with backoff.
+                # Without a guard each redelivery would land a duplicate inbox
+                # entry under a fresh local UUID and wake the agent again.
+                # Detect redeliveries by their stable upstream signature and
+                # skip the second landing entirely — no new inbox entry, no
+                # LICC wake. Record the key only after the inbox write has
+                # succeeded, so a crash mid-write cannot mark a message seen
+                # without landing it (mirrors the WeChat manager).
+                stable_key = self._stable_key(alias, ev)
+                if stable_key is not None and self._is_replay(stable_key):
+                    log.info("WhatsApp inbound replay suppressed: %s", stable_key)
+                    continue
                 wa_id = ev.get("wa_id") or "unknown"
                 wamid = ev.get("message_id") or f"local-{uuid4()}"
                 msg = {"id": self._compound(alias, wa_id, wamid), "wa_id": wa_id, "message_id": wamid, "text": ev.get("text"), "type": ev.get("type"), "direction": "incoming", "metadata": ev.get("metadata"), "timestamp": ev.get("timestamp"), "stored_at": _utcnow()}
-                self._store_message(alias, "inbox", msg)
+                if stable_key is not None:
+                    # Provenance: the stable signature this message was first
+                    # landed under, so a suppressed duplicate can be traced to
+                    # its original (same convention as the WeChat manager).
+                    msg["stable_key"] = stable_key
+                _, local_id = self._store_message(alias, "inbox", msg)
+                if stable_key is not None:
+                    self._record_seen(stable_key, local_id)
                 if self.on_inbound:
                     header = _NOTIFICATION_HEADER_TEMPLATE.format(channel="WhatsApp").rstrip("\n")
                     message_body = ev.get("text") or f"[{ev.get('type')}]"
