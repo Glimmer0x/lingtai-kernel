@@ -94,8 +94,11 @@ else a strict `wall_now - wall_seconds < threshold` freshness check on a present
 heartbeat. `observe_alive(store, wall_now, threshold)` is the mechanism-neutral
 Core use case: it observes manifest first, returns human-always-alive without
 observing heartbeat, and only then observes heartbeat for non-humans before
-delegating to pure `is_alive`. The default threshold is `2.0` seconds; callers
-pass their own (e.g. cpr uses `3.0`).
+delegating to pure `is_alive`. The default threshold is the kernel-fixed
+`HEARTBEAT_LIVENESS_SECONDS` (derived in `lingtai.kernel.config` from the
+heartbeat tick cadence, 5x the tick); callers may still pass their own explicit
+threshold when a deviation is genuinely needed — CPR deliberately uses
+the shared default so its relaunch poll and karma's CPR gate see one window.
 
 ## Adapters
 

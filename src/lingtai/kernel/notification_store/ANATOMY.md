@@ -74,7 +74,11 @@ Persistent protocol state is the existing `.notification/<channel>.json` plus
 in-process mutex, and a platform-selected mutation lock. Native adapters lock
 `.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
 (`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,
-`src/lingtai/adapters/windows/notification_store_lock.py:1-48`). Lock-file
+`src/lingtai/adapters/windows/notification_store_lock.py:1-48`). The refresh
+watcher's generated terminal publisher takes the same sidecar flock before
+merging its `refresh_failed_permanent` event into `system.json`
+(`src/lingtai/kernel/refresh_watcher/watcher_program.py`), with a bounded
+fail-open timeout so the alert is never dropped by a wedged holder. Lock-file
 existence is not authority; OS lock ownership serializes complete mutation
 transactions and releases on process death. Core retains delivered fingerprints
 and policy state on the agent, not in the adapter.

@@ -1344,6 +1344,44 @@ def _run_loop(agent) -> None:
                         agent._asleep.set()
                         break
 
+                    # Issue #713: an over-window error means the wire itself
+                    # is too long, and retroactive compaction is the only
+                    # mechanism that can shrink it before the replay.  If the
+                    # pass freed nothing, the rebuilt wire is the same size
+                    # (the retry prompt only adds tokens), so every remaining
+                    # AED attempt is mathematically guaranteed to fail with
+                    # the same provider error.  Abort the wake immediately
+                    # instead of burning the rest of the AED budget (which
+                    # can be configured as high as 99 attempts) on a doomed
+                    # retry storm.  A ``None`` result (no live chat / helper
+                    # failure) is not proof of zero progress, so only a
+                    # positively-observed empty pass aborts.
+                    if (
+                        over_window
+                        and _compact_stats is not None
+                        and _compact_stats.compacted_blocks == 0
+                    ):
+                        agent._log(
+                            "aed_zero_progress_abort",
+                            attempt=aed_attempts,
+                            max_attempts=agent._config.max_aed_attempts,
+                            error=err_desc,
+                            scanned_blocks=_compact_stats.scanned_blocks,
+                        )
+                        _report_api_error_to_task_card(
+                            agent,
+                            _original_provider_exc,
+                            attempt=aed_attempts,
+                            max_attempts=agent._config.max_aed_attempts,
+                            terminal=True,
+                        )
+                        agent._log(
+                            "aed_exhausted", attempts=aed_attempts, error=err_desc
+                        )
+                        sleep_state = AgentState.ASLEEP
+                        agent._asleep.set()
+                        break
+
                     # Rebuild session with current config, preserving history
                     if agent._session.chat is not None:
                         agent._session._rebuild_session(agent._session.chat.interface)
@@ -1389,24 +1427,41 @@ def _run_loop(agent) -> None:
                 except Exception as notif_err:
                     agent._log("idle_notification_check_error",
                                error=str(notif_err))
-            if skip_post_turn_save:
-                agent._log(
-                    "chat_history_save_skipped",
-                    reason="worker_still_running_interface_unsafe",
-                )
-            else:
-                agent._save_chat_history()
-
-            # Auto-insight: fire after N turns
-            if not skip_post_turn_save and agent._config.insights_interval > 0:
-                agent._insight_turn_counter += 1
-                if agent._insight_turn_counter >= agent._config.insights_interval:
-                    agent._insight_turn_counter = 0
-                    from ..i18n import t as _ti
-                    agent._run_inquiry(
-                        _ti(agent._config.language, "insight.auto_question"),
-                        source="auto",
+            # Issue #655: the post-turn section (chat-history save and
+            # auto-insight) sits outside the AED try/except above, so an
+            # exception here (e.g. OSError from a full disk during save) would
+            # propagate out of _run_loop and silently kill the daemon run-loop
+            # thread, leaving the agent unresponsive while status still shows
+            # ACTIVE/IDLE. Log and continue — the next turn retries the save.
+            try:
+                if skip_post_turn_save:
+                    agent._log(
+                        "chat_history_save_skipped",
+                        reason="worker_still_running_interface_unsafe",
                     )
+                else:
+                    agent._save_chat_history()
+
+                # Auto-insight: fire after N turns
+                if not skip_post_turn_save and agent._config.insights_interval > 0:
+                    agent._insight_turn_counter += 1
+                    if agent._insight_turn_counter >= agent._config.insights_interval:
+                        agent._insight_turn_counter = 0
+                        from ..i18n import t as _ti
+                        agent._run_inquiry(
+                            _ti(agent._config.language, "insight.auto_question"),
+                            source="auto",
+                        )
+            except Exception as e:  # noqa: BLE001 — post-turn must never kill the loop
+                agent._log(
+                    "post_turn_error",
+                    exception=type(e).__name__,
+                    error=str(e)[:300],
+                )
+                logger.warning(
+                    f"[{agent.agent_name}] post-turn error "
+                    f"({type(e).__name__}): {str(e)[:300]}",
+                )
 
         break
 

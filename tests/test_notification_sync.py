@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1345,6 +1346,7 @@ def test_sync_noninjecting_state_commits_observed_store_version(
 
     class _Agent:
         _sync_notifications = BaseAgent._sync_notifications
+        _sync_notifications_locked = BaseAgent._sync_notifications_locked
 
         def __init__(self):
             self._notification_store = store
@@ -2744,3 +2746,99 @@ def test_heal_pending_tool_calls_logs_pending_tail_diagnostics(tmp_path: Path) -
     assert fields["pending_tail_block_types"] == [["text"], ["text"], ["tool_call", "tool_call"]]
     assert "SECRET" not in str(fields)
     assert saves == ["heal"]
+
+
+def test_sync_notifications_serialized_across_runloop_and_heartbeat(tmp_path: Path) -> None:
+    """Regression for #659: two concurrent ``_sync_notifications`` calls
+    (the run-loop IDLE boundary and the heartbeat thread) must not both
+    pass the fingerprint check-then-act and double-inject a pair.
+
+    Pre-fix the second caller observes the still-uncommitted fingerprint,
+    injects a duplicate pair, and posts a second MSG_TC_WAKE.  Post-fix
+    the second caller blocks on ``_notification_sync_lock``, re-reads the
+    fingerprint after the first caller commits, and no-ops.
+    """
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.state import AgentState
+
+    chat = _make_chat_stub()
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir):
+            self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
+            self._notification_block_id = None
+            self._chat_stub = chat
+            self._logs = []
+            self.agent_name = "stub"
+            import queue
+            self.inbox = queue.Queue()
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source="main"):
+            pass
+
+        def _log(self, evt, **fields):
+            self._logs.append((evt, fields))
+
+        def _wake_nap(self, *_a, **_kw):
+            pass
+
+        def _set_state(self, *_a, **_kw):
+            pass
+
+        def _reset_uptime(self):
+            pass
+
+    agent = _Agent(tmp_path)
+    publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
+
+    release = threading.Event()
+    injected_threads: list[str] = []
+    orig_inject = agent._inject_notification_pair
+
+    def slow_inject(notifications):
+        injected_threads.append(threading.current_thread().name)
+        release.wait(timeout=10)
+        return orig_inject(notifications)
+
+    agent._inject_notification_pair = slow_inject
+
+    runloop = threading.Thread(
+        target=agent._sync_notifications, name="runloop"
+    )
+    heartbeat = threading.Thread(
+        target=agent._sync_notifications, name="heartbeat"
+    )
+    runloop.start()
+    deadline = time.monotonic() + 10
+    while not injected_threads and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert injected_threads, "first sync call never entered injection"
+    heartbeat.start()
+    time.sleep(0.5)  # pre-fix: the second caller passes the fp check here
+    release.set()
+    runloop.join(15)
+    heartbeat.join(15)
+    assert not runloop.is_alive() and not heartbeat.is_alive()
+
+    # Exactly one injection for the single fingerprint change: the losing
+    # caller must observe the committed fingerprint and no-op.
+    assert len(injected_threads) == 1, (
+        f"double injection: both callers passed the fp check "
+        f"({sorted(injected_threads)})"
+    )
+    # And only one synthesized pair on the wire + one wake message.
+    entries = agent._chat_stub.interface.entries
+    assert len(entries) == 2, "wire must carry exactly one (call, result) pair"
+    wake = 0
+    while not agent.inbox.empty():
+        agent.inbox.get_nowait()
+        wake += 1
+    assert wake == 1, "exactly one MSG_TC_WAKE per fingerprint change"

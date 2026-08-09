@@ -630,6 +630,14 @@ class BaseAgent:
         #   skeletonized in-place, not deleted).
         # See notifications.py and notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
+        # Serializes ``_sync_notifications()`` check-then-act between the
+        # run-loop IDLE boundary and the heartbeat thread (issue #659).
+        # The store's flock guards on-disk mutations only; it does NOT
+        # serialize this in-memory fingerprint check + wire append, so
+        # without this lock both callers can pass the fp check and
+        # double-inject notification pairs.  RLock so hook/synthesize
+        # paths that transitively re-enter sync cannot self-deadlock.
+        self._notification_sync_lock: threading.RLock = threading.RLock()
         # System-channel RMW serialization is owned by the injected
         # NotificationStorePort through compare_update_channel.
         # Last ACTIVE-state notification fingerprint that has already emitted
@@ -1288,6 +1296,22 @@ class BaseAgent:
     # ------------------------------------------------------------------
 
     def _sync_notifications(self) -> None:
+        """Sync `.notification/` state into the wire.
+
+        Serialized under ``_notification_sync_lock``: the run-loop IDLE
+        boundary (turn.py) and the heartbeat thread (lifecycle.py) call
+        this concurrently, and without the lock their check-then-act on
+        ``_notification_fp`` can both observe the same stale fingerprint
+        and inject duplicate notification pairs (issue #659).
+        """
+        lock = getattr(self, "_notification_sync_lock", None)
+        if lock is None:
+            # Partial test doubles bypass __init__; give them a real lock.
+            lock = self._notification_sync_lock = threading.RLock()
+        with lock:
+            self._sync_notifications_locked()
+
+    def _sync_notifications_locked(self) -> None:
         """Sync `.notification/` state into the wire.
 
         Computes the current fingerprint; if unchanged, no-op.  On change:

@@ -18,6 +18,7 @@ from lingtai.kernel.agent_session import (
     TOKEN_EVENT,
     AgentSession,
     RuntimeSession,
+    _iso_from_ts,
     _rebuild_via_full_scan,
     _rebuild_via_reverse_scan,
     _rebuild_via_sqlite,
@@ -328,3 +329,92 @@ def test_reverse_scan_defers_to_full_scan_when_boundary_beyond_bound(tmp_path):
     # Full scan still recovers the correct aggregate.
     full = _rebuild_via_full_scan(events_path, molt_count=1)
     assert full.api_calls == 50
+
+
+# ---------------------------------------------------------------------------
+# started_at format: ISO-8601 UTC "...Z" in every tier (issue #750)
+# ---------------------------------------------------------------------------
+
+
+BOUNDARY_TS = 1751704872.0  # 2025-07-05T09:21:12Z UTC
+
+
+def _expected_iso(ts: float) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+
+
+def test_reverse_scan_started_at_is_iso8601(tmp_path):
+    events = [
+        _molt_ev(BOUNDARY_TS, 1),
+        _token_ev(BOUNDARY_TS + 1.0, 1000, 200, 700),
+    ]
+    events_path = _write_events(tmp_path, events)
+
+    rev = _rebuild_via_reverse_scan(events_path, molt_count=1)
+
+    assert rev.started_at == _expected_iso(BOUNDARY_TS)
+    assert rev.started_at.endswith("Z")
+    assert rev.started_at != str(BOUNDARY_TS)
+
+
+def test_full_scan_started_at_is_iso8601(tmp_path):
+    events = [
+        _molt_ev(BOUNDARY_TS, 1),
+        _token_ev(BOUNDARY_TS + 1.0, 1000, 200, 700),
+    ]
+    events_path = _write_events(tmp_path, events)
+
+    full = _rebuild_via_full_scan(events_path, molt_count=1)
+
+    assert full.started_at == _expected_iso(BOUNDARY_TS)
+    assert full.started_at.endswith("Z")
+    assert full.started_at != str(BOUNDARY_TS)
+
+
+def test_started_at_format_consistent_across_tiers(tmp_path):
+    events = [
+        _token_ev(1.0, 500, 100, 300),
+        _molt_ev(2.0, 1),
+        _token_ev(3.0, 1000, 200, 700),
+        _molt_ev(BOUNDARY_TS, 2),
+        _token_ev(BOUNDARY_TS + 1.0, 1234, 200, 800),
+    ]
+    events_path = _write_events(tmp_path, events)
+    _build_sqlite(tmp_path, events)
+
+    t1 = rebuild_agent_session_from_events(tmp_path, molt_count=2)
+    assert t1.rebuild_tier == "sqlite"
+    t2 = _rebuild_via_reverse_scan(events_path, molt_count=2)
+    t3 = _rebuild_via_full_scan(events_path, molt_count=2)
+
+    expected = _expected_iso(BOUNDARY_TS)
+    assert t1.started_at == expected
+    assert t2.started_at == expected
+    assert t3.started_at == expected
+
+
+def test_started_at_none_when_no_boundary(tmp_path):
+    events = [
+        _token_ev(1.0, 500, 100, 300),
+        _token_ev(2.0, 500, 100, 300),
+    ]
+    events_path = _write_events(tmp_path, events)
+
+    rev = _rebuild_via_reverse_scan(events_path, molt_count=0)
+    full = _rebuild_via_full_scan(events_path, molt_count=0)
+
+    assert rev.started_at is None
+    assert full.started_at is None
+
+
+def test_iso_from_ts_handles_bad_input():
+    assert _iso_from_ts(None) is None
+    assert _iso_from_ts(0) is None
+    assert _iso_from_ts(0.0) is None
+    assert _iso_from_ts("garbage") is None
+    assert _iso_from_ts([]) is None
+    assert _iso_from_ts("1751704872.0") == _expected_iso(BOUNDARY_TS)

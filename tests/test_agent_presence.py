@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from lingtai.kernel import config
 from lingtai.kernel.agent_presence import (
     AgentPresenceStorePort,
     DEFAULT_LIVENESS_THRESHOLD_SECONDS,
@@ -123,14 +124,18 @@ def test_observe_alive_human_never_observes_heartbeat():
 def test_is_alive_non_human_strict_freshness():
     agent = ManifestObservation.valid({"admin": {"karma": True}})
     now = 1000.0
-    # Strictly fresher than the default 2.0s threshold → alive.
+    # Strictly fresher than the kernel liveness window → alive.
     fresh = HeartbeatObservation.present(now - 1.0)
     assert is_alive(fresh, agent, wall_now=now) is True
     # Exactly at the threshold is NOT strictly less-than → dead.
-    at_threshold = HeartbeatObservation.present(now - 2.0)
+    at_threshold = HeartbeatObservation.present(
+        now - DEFAULT_LIVENESS_THRESHOLD_SECONDS
+    )
     assert is_alive(at_threshold, agent, wall_now=now) is False
     # Older than threshold → dead.
-    stale = HeartbeatObservation.present(now - 5.0)
+    stale = HeartbeatObservation.present(
+        now - (DEFAULT_LIVENESS_THRESHOLD_SECONDS + 1.0)
+    )
     assert is_alive(stale, agent, wall_now=now) is False
 
 
@@ -148,8 +153,14 @@ def test_is_alive_custom_threshold():
     assert is_alive(hb, agent, wall_now=now, threshold=2.0) is False
 
 
-def test_default_threshold_is_two_seconds():
-    assert DEFAULT_LIVENESS_THRESHOLD_SECONDS == 2.0
+def test_default_threshold_derived_from_kernel_constant():
+    """The liveness window is the kernel-fixed contract, not a local 2.0."""
+    assert DEFAULT_LIVENESS_THRESHOLD_SECONDS == config.HEARTBEAT_LIVENESS_SECONDS
+
+
+def test_liveness_headroom_invariant():
+    """Guard against a future edit reintroducing a one-missed-tick window."""
+    assert config.HEARTBEAT_LIVENESS_SECONDS >= 3 * config.HEARTBEAT_TICK_SECONDS
 
 
 def test_is_alive_future_and_nonfinite_flow_through_raw_compare():

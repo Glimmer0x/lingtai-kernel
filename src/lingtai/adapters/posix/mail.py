@@ -148,7 +148,9 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         # --- handshake ------------------------------------------------
         # Observe the recipient's presence through a target-bound presence store
         # and apply Core policy (a malformed manifest still counts as an agent;
-        # a fresh non-human heartbeat under the 2s window counts as alive).
+        # a fresh non-human heartbeat under the kernel liveness window
+        # (HEARTBEAT_LIVENESS_SECONDS, derived from the tick cadence) counts
+        # as alive).
         recipient_presence = _presence_store_for(recipient_dir)
         if not _presence_is_agent(recipient_presence.observe_manifest()):
             return f"No agent at {address}"

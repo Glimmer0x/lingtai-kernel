@@ -14,7 +14,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import IDLE_SLEEP_TIMEOUT_SECONDS
+from ..config import HEARTBEAT_TICK_SECONDS, IDLE_SLEEP_TIMEOUT_SECONDS
 from ..refresh_watcher import RefreshWatcherRequest
 from ..snapshot import SourceRevisionPort
 
@@ -381,7 +381,7 @@ def _stop_heartbeat(agent) -> None:
 
 
 def _heartbeat_loop(agent) -> None:
-    """Beat every 1 second. AED if agent is STUCK.
+    """Beat every HEARTBEAT_TICK_SECONDS (kernel-fixed cadence). AED if agent is STUCK.
 
     Loop exit is governed solely by `agent._heartbeat_thread is None`, which
     `_stop_heartbeat` flips at the very end of `_stop`. The loop deliberately
@@ -390,271 +390,289 @@ def _heartbeat_loop(agent) -> None:
     signal across the entire teardown — preventing duplicate-launch races
     in the TUI. Signal-file detection IS gated on `_shutdown` below so we
     don't reprocess `.suspend`/`.refresh` mid-teardown.
+
+    The whole loop body is wrapped in a top-level exception guard (#660): a
+    transient I/O error in any unwrapped operation (heartbeat publish, signal
+    file detection, `_set_state`, GC, ...) is logged and the loop continues,
+    instead of silently killing the liveness thread.
     """
     from ..state import AgentState
 
     while agent._heartbeat_thread is not None:
-        _write_heartbeat_tick(agent)
+        # Top-level exception guard (issue #660): a transient I/O error (disk
+        # full, permission denied, NFS hiccup) in ANY unwrapped operation
+        # below must never silently kill the liveness thread. Log and
+        # continue; the trailing wait outside the try keeps the loop paced
+        # after a caught exception so it cannot busy-spin.
+        try:
+            _write_heartbeat_tick(agent)
 
-        # Once shutdown is signalled, keep beating the file (above) but stop
-        # consuming signal files — the run loop is exiting and reprocessing
-        # `.suspend`/`.refresh` here would emit spurious state-change events.
-        if agent._shutdown.is_set() or not getattr(agent, "_heartbeat_runtime_ready", True):
-            # _shutdown keeps beating; only final heartbeat stop wakes the wait.
-            agent._heartbeat_stop.wait(1.0)
-            continue
+            # Once shutdown is signalled, keep beating the file (above) but stop
+            # consuming signal files — the run loop is exiting and reprocessing
+            # `.suspend`/`.refresh` here would emit spurious state-change events.
+            if agent._shutdown.is_set() or not getattr(agent, "_heartbeat_runtime_ready", True):
+                # _shutdown keeps beating; only final heartbeat stop wakes the wait.
+                agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)
+                continue
 
-        # --- signal file detection ---
-        interrupt_file = agent._working_dir / ".interrupt"
-        if interrupt_file.is_file():
-            try:
-                interrupt_file.unlink()
-            except OSError:
-                pass
-            agent._cancel_event.set()
-            agent._log("interrupt_received", source="signal_file")
-
-        # .refresh = full refresh with relaunch (identical to system(action='refresh'))
-        refresh_file = agent._working_dir / ".refresh"
-        if refresh_file.is_file():
-            taken_file = agent._working_dir / ".refresh.taken"
-            try:
-                refresh_file.rename(taken_file)
-            except OSError:
-                pass
-            # Delegate to _perform_refresh which handles the full flow:
-            # save chat history, spawn watcher process, deferred relaunch.
-            _perform_refresh(agent)
-            # Signal shutdown so the heartbeat loop exits and the watcher
-            # can detect the lock release.  The _shutdown gate above
-            # prevents the heartbeat from reprocessing .refresh on the
-            # next tick.
-            agent._shutdown.set()
-
-        # .suspend = SUSPENDED (full process death, external only)
-        suspend_file = agent._working_dir / ".suspend"
-        if suspend_file.is_file():
-            try:
-                suspend_file.unlink()
-            except OSError:
-                pass
-            agent._cancel_event.set()
-            agent._set_state(AgentState.SUSPENDED, reason="suspend signal")
-            agent._shutdown.set()
-            agent._log("suspend_received", source="signal_file")
-
-        # .sleep = ASLEEP (sleep, listeners stay alive)
-        sleep_file = agent._working_dir / ".sleep"
-        if sleep_file.is_file():
-            try:
-                sleep_file.unlink()
-            except OSError:
-                pass
-            agent._cancel_event.set()
-            agent._set_state(AgentState.ASLEEP, reason="sleep signal")
-            agent._asleep.set()
-            agent._log("sleep_received", source="signal_file")
-
-        # .prompt = inject text input as [system] message
-        prompt_file = agent._working_dir / ".prompt"
-        if prompt_file.is_file():
-            try:
-                content = prompt_file.read_text(encoding="utf-8").strip()
-            except OSError:
-                content = ""
-            try:
-                prompt_file.unlink()
-            except OSError:
-                pass
-            if content:
-                agent.send(content, sender="system")
-                agent._log("prompt_received", source="signal_file")
-
-        # .clear = force a full molt (context wipe + recovery summary).
-        clear_file = agent._working_dir / ".clear"
-        if clear_file.is_file():
-            try:
-                source = clear_file.read_text(encoding="utf-8").strip() or "admin"
-            except OSError:
-                source = "admin"
-            try:
-                clear_file.unlink()
-            except OSError:
-                pass
-            try:
-                context_forget = agent._intrinsic_hook("context", "context_forget")
-                if context_forget is not None:
-                    context_forget(agent, source=source)
-                agent._log("clear_received", source=source)
-            except Exception as clear_err:
-                from ..logging import get_logger
-                get_logger().error(
-                    f"[{agent.agent_name}] .clear signal failed: {clear_err}",
-                )
-
-        # .inquiry = soul inquiry (from TUI /btw or auto-insight)
-        inquiry_file = agent._working_dir / ".inquiry"
-        taken_file = agent._working_dir / ".inquiry.taken"
-        if inquiry_file.is_file() and not taken_file.is_file():
-            try:
-                inquiry_file.rename(taken_file)
-            except OSError:
-                pass
-            else:
+            # --- signal file detection ---
+            interrupt_file = agent._working_dir / ".interrupt"
+            if interrupt_file.is_file():
                 try:
-                    content = taken_file.read_text(encoding="utf-8").strip()
+                    interrupt_file.unlink()
+                except OSError:
+                    pass
+                agent._cancel_event.set()
+                agent._log("interrupt_received", source="signal_file")
+
+            # .refresh = full refresh with relaunch (identical to system(action='refresh'))
+            refresh_file = agent._working_dir / ".refresh"
+            if refresh_file.is_file():
+                taken_file = agent._working_dir / ".refresh.taken"
+                try:
+                    refresh_file.rename(taken_file)
+                except OSError:
+                    pass
+                # Delegate to _perform_refresh which handles the full flow:
+                # save chat history, spawn watcher process, deferred relaunch.
+                _perform_refresh(agent)
+                # Signal shutdown so the heartbeat loop exits and the watcher
+                # can detect the lock release.  The _shutdown gate above
+                # prevents the heartbeat from reprocessing .refresh on the
+                # next tick.
+                agent._shutdown.set()
+
+            # .suspend = SUSPENDED (full process death, external only)
+            suspend_file = agent._working_dir / ".suspend"
+            if suspend_file.is_file():
+                try:
+                    suspend_file.unlink()
+                except OSError:
+                    pass
+                agent._cancel_event.set()
+                agent._set_state(AgentState.SUSPENDED, reason="suspend signal")
+                agent._shutdown.set()
+                agent._log("suspend_received", source="signal_file")
+
+            # .sleep = ASLEEP (sleep, listeners stay alive)
+            sleep_file = agent._working_dir / ".sleep"
+            if sleep_file.is_file():
+                try:
+                    sleep_file.unlink()
+                except OSError:
+                    pass
+                agent._cancel_event.set()
+                agent._set_state(AgentState.ASLEEP, reason="sleep signal")
+                agent._asleep.set()
+                agent._log("sleep_received", source="signal_file")
+
+            # .prompt = inject text input as [system] message
+            prompt_file = agent._working_dir / ".prompt"
+            if prompt_file.is_file():
+                try:
+                    content = prompt_file.read_text(encoding="utf-8").strip()
                 except OSError:
                     content = ""
+                try:
+                    prompt_file.unlink()
+                except OSError:
+                    pass
                 if content:
-                    lines = content.split("\n", 1)
-                    if len(lines) == 2 and lines[0] in ("human", "insight", "agent"):
-                        source, question = lines[0], lines[1].strip()
-                    else:
-                        source, question = "human", content.strip()
-                    if question:
-                        def _inquiry_done(q: str, s: str, tf) -> None:
-                            try:
-                                agent._run_inquiry(q, source=s)
-                            finally:
+                    agent.send(content, sender="system")
+                    agent._log("prompt_received", source="signal_file")
+
+            # .clear = force a full molt (context wipe + recovery summary).
+            clear_file = agent._working_dir / ".clear"
+            if clear_file.is_file():
+                try:
+                    source = clear_file.read_text(encoding="utf-8").strip() or "admin"
+                except OSError:
+                    source = "admin"
+                try:
+                    clear_file.unlink()
+                except OSError:
+                    pass
+                try:
+                    context_forget = agent._intrinsic_hook("context", "context_forget")
+                    if context_forget is not None:
+                        context_forget(agent, source=source)
+                    agent._log("clear_received", source=source)
+                except Exception as clear_err:
+                    from ..logging import get_logger
+                    get_logger().error(
+                        f"[{agent.agent_name}] .clear signal failed: {clear_err}",
+                    )
+
+            # .inquiry = soul inquiry (from TUI /btw or auto-insight)
+            inquiry_file = agent._working_dir / ".inquiry"
+            taken_file = agent._working_dir / ".inquiry.taken"
+            if inquiry_file.is_file() and not taken_file.is_file():
+                try:
+                    inquiry_file.rename(taken_file)
+                except OSError:
+                    pass
+                else:
+                    try:
+                        content = taken_file.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        content = ""
+                    if content:
+                        lines = content.split("\n", 1)
+                        if len(lines) == 2 and lines[0] in ("human", "insight", "agent"):
+                            source, question = lines[0], lines[1].strip()
+                        else:
+                            source, question = "human", content.strip()
+                        if question:
+                            def _inquiry_done(q: str, s: str, tf) -> None:
                                 try:
-                                    tf.unlink()
-                                except OSError:
-                                    pass
-                        threading.Thread(
-                            target=_inquiry_done,
-                            args=(question, source, taken_file),
-                            daemon=True,
-                        ).start()
+                                    agent._run_inquiry(q, source=s)
+                                finally:
+                                    try:
+                                        tf.unlink()
+                                    except OSError:
+                                        pass
+                            threading.Thread(
+                                target=_inquiry_done,
+                                args=(question, source, taken_file),
+                                daemon=True,
+                            ).start()
+                        else:
+                            try:
+                                taken_file.unlink()
+                            except OSError:
+                                pass
                     else:
                         try:
                             taken_file.unlink()
                         except OSError:
                             pass
-                else:
-                    try:
-                        taken_file.unlink()
-                    except OSError:
-                        pass
 
-        # .rules = network rules signal
-        _check_rules_file(agent)
+            # .rules = network rules signal
+            _check_rules_file(agent)
 
-        # --- Nudges ---
-        # Per-agent periodic checks that publish to `.notification/nudge.json`
-        # when something needs the agent's attention (e.g. a newer lingtai
-        # wheel is installed on disk than the version this process imported).
-        # Each check throttles itself; the dispatcher only guards against
-        # checks that *raise* -- latency inside a check is latency between
-        # heartbeat writes. Invariant: checks must never block on the network;
-        # long work is handed to a background thread (see
-        # `nudge/kernel_version.py`). See `nudge/ANATOMY.md`.
-        try:
-            from ..nudge import run_checks as _run_nudge_checks
-            _run_nudge_checks(agent)
-        except Exception as nudge_err:
-            from ..logging import get_logger
-            get_logger().warning(
-                f"[{agent.agent_name}] nudge dispatch failed: {nudge_err}"
-            )
-
-        # Protected goal reminders are ordinary system notifications, not
-        # declared Nudge kinds, and therefore have no Nudge-channel policy
-        # bypass. Keep their dispatch visibly separate from run_checks.
-        try:
-            from ..nudge import run_system_notifications as _run_system_notifications
-            _run_system_notifications(agent)
-        except Exception as system_notification_err:
-            from ..logging import get_logger
-            get_logger().warning(
-                f"[{agent.agent_name}] system notification dispatch failed: "
-                f"{system_notification_err}"
-            )
-
-        try:
-            _maybe_sleep_after_idle_timeout(agent)
-        except Exception as idle_sleep_err:
-            agent._log("idle_sleep_timeout_failed", error=str(idle_sleep_err))
-            print(
-                f"[{agent.agent_name}] idle sleep timeout failed: "
-                f"{idle_sleep_err}"
-            )
-
-        # --- Notification sync ---
-        # Poll the `.notification/` directory for changes.  The sync
-        # method is a no-op when the fingerprint is unchanged, so this
-        # call is cheap on the steady-state path.  On change it strips
-        # the prior wire block and reinjects per current state (IDLE
-        # pair / ACTIVE meta-stash / ASLEEP wake-then-pair).  See
-        # base_agent/__init__.py:_sync_notifications and
-        # the notification filesystem design rationale.
-        try:
-            agent._sync_notifications()
-            # Maintain retained legacy Telegram route-capture bookkeeping after
-            # notification sync. The current intrinsic ``task_card`` producer
-            # does not consume this context; consumers project its file artifact.
-            agent._setup_telegram_task_card()
-        except Exception as notif_err:
-            from ..logging import get_logger
-            get_logger().warning(
-                f"[{agent.agent_name}] notification sync failed: {notif_err}"
-            )
-
-        if agent._state == AgentState.STUCK:
-            now = agent._lifecycle_clock.monotonic_seconds()
-            if agent._aed_start is None:
-                agent._aed_start = now
-            if now - agent._aed_start > agent._config.aed_timeout:
-                agent._log("aed_timeout", seconds=now - agent._aed_start)
-                agent._set_state(AgentState.ASLEEP, reason="AED timeout")
-                agent._save_chat_history()
-                agent._asleep.set()
-        else:
-            agent._aed_start = None
-
-        # Issue #164 — ACTIVE-without-progress watchdog.
-        #
-        # Fires once per stuck episode (latched by ``_active_stuck_logged``)
-        # when the agent has been ACTIVE for longer than the configured
-        # threshold without any progress event (wake, llm_call, llm_response,
-        # tool_call, tool_result, notification_pair_injected, agent_state).
-        # The companion symptom — a ``notification_deferred_active`` storm —
-        # is included in the log fields so a single grep on
-        # ``active_without_progress`` exposes both halves of the failure.
-        #
-        # We deliberately do NOT auto-recover here: the failure modes seen
-        # in dev-2/dev-1/spiritualblisslingtaibot all benefited from human
-        # inspection before .clear/refresh. Auto-restart could mask a
-        # repeatable bug behind silent retries.
-        if agent._state == AgentState.ACTIVE and not agent._active_stuck_logged:
-            threshold = _active_stuck_threshold_s()
-            no_progress_for = agent._lifecycle_clock.wall_seconds() - agent._last_progress_at
-            if no_progress_for > threshold:
-                agent._log(
-                    "active_without_progress",
-                    no_progress_seconds=round(no_progress_for, 1),
-                    threshold_seconds=threshold,
-                    state_since=agent._state_changed_at,
-                    active_turn_kind=agent._active_turn_kind,
-                    active_turn_id=agent._active_turn_id,
-                    deferred_notifications=agent._deferred_notifications_count,
-                    deferred_oldest_at=agent._deferred_notifications_oldest_at,
+            # --- Nudges ---
+            # Per-agent periodic checks that publish to `.notification/nudge.json`
+            # when something needs the agent's attention (e.g. a newer lingtai
+            # wheel is installed on disk than the version this process imported).
+            # Each check throttles itself; the dispatcher only guards against
+            # checks that *raise* -- latency inside a check is latency between
+            # heartbeat writes. Invariant: checks must never block on the network;
+            # long work is handed to a background thread (see
+            # `nudge/kernel_version.py`). See `nudge/ANATOMY.md`.
+            try:
+                from ..nudge import run_checks as _run_nudge_checks
+                _run_nudge_checks(agent)
+            except Exception as nudge_err:
+                from ..logging import get_logger
+                get_logger().warning(
+                    f"[{agent.agent_name}] nudge dispatch failed: {nudge_err}"
                 )
-                agent._write_status_snapshot()
-                agent._active_stuck_logged = True
 
-        # Periodic snapshot (Time Machine) — off by default
-        if agent._config.snapshot_interval is not None:
-            now_mono = agent._lifecycle_clock.monotonic_seconds()
-            if now_mono - agent._last_snapshot >= agent._config.snapshot_interval:
-                agent._snapshot_port.snapshot()
-                agent._last_snapshot = now_mono
+            # Protected goal reminders are ordinary system notifications, not
+            # declared Nudge kinds, and therefore have no Nudge-channel policy
+            # bypass. Keep their dispatch visibly separate from run_checks.
+            try:
+                from ..nudge import run_system_notifications as _run_system_notifications
+                _run_system_notifications(agent)
+            except Exception as system_notification_err:
+                from ..logging import get_logger
+                get_logger().warning(
+                    f"[{agent.agent_name}] system notification dispatch failed: "
+                    f"{system_notification_err}"
+                )
 
-            # Periodic GC — every 24 hours
-            if now_mono - agent._last_gc >= 86400:
-                agent._snapshot_port.collect_garbage()
-                agent._last_gc = now_mono
+            try:
+                _maybe_sleep_after_idle_timeout(agent)
+            except Exception as idle_sleep_err:
+                agent._log("idle_sleep_timeout_failed", error=str(idle_sleep_err))
+                print(
+                    f"[{agent.agent_name}] idle sleep timeout failed: "
+                    f"{idle_sleep_err}"
+                )
 
-        agent._heartbeat_stop.wait(1.0)
+            # --- Notification sync ---
+            # Poll the `.notification/` directory for changes.  The sync
+            # method is a no-op when the fingerprint is unchanged, so this
+            # call is cheap on the steady-state path.  On change it strips
+            # the prior wire block and reinjects per current state (IDLE
+            # pair / ACTIVE meta-stash / ASLEEP wake-then-pair).  See
+            # base_agent/__init__.py:_sync_notifications and
+            # the notification filesystem design rationale.
+            try:
+                agent._sync_notifications()
+                # Maintain retained legacy Telegram route-capture bookkeeping after
+                # notification sync. The current intrinsic ``task_card`` producer
+                # does not consume this context; consumers project its file artifact.
+                agent._setup_telegram_task_card()
+            except Exception as notif_err:
+                from ..logging import get_logger
+                get_logger().warning(
+                    f"[{agent.agent_name}] notification sync failed: {notif_err}"
+                )
+
+            if agent._state == AgentState.STUCK:
+                now = agent._lifecycle_clock.monotonic_seconds()
+                if agent._aed_start is None:
+                    agent._aed_start = now
+                if now - agent._aed_start > agent._config.aed_timeout:
+                    agent._log("aed_timeout", seconds=now - agent._aed_start)
+                    agent._set_state(AgentState.ASLEEP, reason="AED timeout")
+                    agent._save_chat_history()
+                    agent._asleep.set()
+            else:
+                agent._aed_start = None
+
+            # Issue #164 — ACTIVE-without-progress watchdog.
+            #
+            # Fires once per stuck episode (latched by ``_active_stuck_logged``)
+            # when the agent has been ACTIVE for longer than the configured
+            # threshold without any progress event (wake, llm_call, llm_response,
+            # tool_call, tool_result, notification_pair_injected, agent_state).
+            # The companion symptom — a ``notification_deferred_active`` storm —
+            # is included in the log fields so a single grep on
+            # ``active_without_progress`` exposes both halves of the failure.
+            #
+            # We deliberately do NOT auto-recover here: the failure modes seen
+            # in dev-2/dev-1/spiritualblisslingtaibot all benefited from human
+            # inspection before .clear/refresh. Auto-restart could mask a
+            # repeatable bug behind silent retries.
+            if agent._state == AgentState.ACTIVE and not agent._active_stuck_logged:
+                threshold = _active_stuck_threshold_s()
+                no_progress_for = agent._lifecycle_clock.wall_seconds() - agent._last_progress_at
+                if no_progress_for > threshold:
+                    agent._log(
+                        "active_without_progress",
+                        no_progress_seconds=round(no_progress_for, 1),
+                        threshold_seconds=threshold,
+                        state_since=agent._state_changed_at,
+                        active_turn_kind=agent._active_turn_kind,
+                        active_turn_id=agent._active_turn_id,
+                        deferred_notifications=agent._deferred_notifications_count,
+                        deferred_oldest_at=agent._deferred_notifications_oldest_at,
+                    )
+                    agent._write_status_snapshot()
+                    agent._active_stuck_logged = True
+
+            # Periodic snapshot (Time Machine) — off by default
+            if agent._config.snapshot_interval is not None:
+                now_mono = agent._lifecycle_clock.monotonic_seconds()
+                if now_mono - agent._last_snapshot >= agent._config.snapshot_interval:
+                    agent._snapshot_port.snapshot()
+                    agent._last_snapshot = now_mono
+
+                # Periodic GC — every 24 hours
+                if now_mono - agent._last_gc >= 86400:
+                    agent._snapshot_port.collect_garbage()
+                    agent._last_gc = now_mono
+
+        except Exception as heartbeat_err:
+            from ..logging import get_logger
+            get_logger().exception(
+                f"[{agent.agent_name}] heartbeat loop caught exception, "
+                f"continuing: {heartbeat_err}"
+            )
+
+        agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)
 
 
 def _maybe_sleep_after_idle_timeout(agent, *, now_mono: float | None = None) -> None:
@@ -729,6 +747,29 @@ def _perform_refresh(
     ``_shutdown`` / ``_cancel_event`` ourselves so the watcher's second
     phase can complete.
     """
+    # Single-flight guard (lingtai#624): refresh is terminal for this
+    # process — the watcher relaunches a NEW `lingtai run <dir>` child and
+    # we set `_shutdown` so `.agent.lock` releases — so at most ONE refresh
+    # operation may ever run per process lifetime. Two near-concurrent
+    # refresh requests (heartbeat-detected `.refresh` racing a
+    # `system(action='refresh')` tool call, or the AED preset-fallback
+    # racing either) must coalesce into one watcher; otherwise sibling
+    # watchers each launch a `lingtai run <dir>` child that the other
+    # rejects with "another lingtai agent is already running", and both
+    # retry loops exhaust MAX_ATTEMPTS, failing recovery permanently.
+    guard = getattr(agent, "_refresh_singleflight_lock", None)
+    if guard is None:
+        guard = threading.Lock()
+        agent._refresh_singleflight_lock = guard
+    with guard:
+        if getattr(agent, "_refresh_started", False):
+            agent._log("refresh_skipped", reason="refresh_already_in_progress")
+            return
+        # Claim the single-flight slot before any side effect (chat-history
+        # save, handshake rename, watcher spawn). Released on every failure
+        # exit below so a failed refresh never wedges a live agent.
+        agent._refresh_started = True
+
     # When the worker interface is poisoned, the in-memory ChatInterface may
     # still be mutated by a stuck worker thread — saving it would serialize
     # unsafe state. Fail closed: skip the save and rebuild from disk.
@@ -765,6 +806,8 @@ def _perform_refresh(
     cmd = agent._build_launch_cmd()
     if cmd is None:
         agent._log("refresh_no_launch_cmd")
+        with guard:
+            agent._refresh_started = False
         return
 
     # A real launch command means this refresh will actually spawn a watcher.
@@ -774,6 +817,8 @@ def _perform_refresh(
     # Port must never orphan an agent mid-handshake or leave it silently
     # unable to relaunch.
     if agent._refresh_watcher is None:
+        with guard:
+            agent._refresh_started = False
         raise RuntimeError(
             "_perform_refresh requires a RefreshWatcherPort to spawn the "
             "relaunch watcher, but this agent was constructed without one "
@@ -817,6 +862,8 @@ def _perform_refresh(
         # agent with no relaunch. If .refresh still exists, leave it for
         # the heartbeat path or a later retry rather than consuming it.
         agent._log("refresh_ack_failed", handshake=handshake_source)
+        with guard:
+            agent._refresh_started = False
         return
 
     # If both files happen to exist (heartbeat renamed but a later
@@ -852,7 +899,14 @@ def _perform_refresh(
         address=address,
         identity_fields_json=identity_fields_json,
     )
-    agent._refresh_watcher.spawn_detached(request)
+    try:
+        agent._refresh_watcher.spawn_detached(request)
+    except BaseException:
+        # Spawn failed: the agent stays alive and must be able to retry
+        # refresh later — release the single-flight slot.
+        with guard:
+            agent._refresh_started = False
+        raise
     agent._log("refresh_deferred_relaunch",
                cmd=cmd[0], handshake=handshake_source)
     # Lock-clear signaling — direct callers (intrinsic system tool call,
