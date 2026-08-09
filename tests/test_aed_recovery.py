@@ -358,6 +358,246 @@ def test_transient_provider_error_counts_as_aed_after_retry_budget(tmp_path, mon
     assert agent._asleep.is_set()
 
 
+def test_aed_exhaust_sends_one_sanitized_notice_to_origin(tmp_path, monkeypatch):
+    """lingtai#672: when AED exhausts (deterministic provider failure), the
+    run loop sends exactly ONE sanitized, user-safe Telegram message to the
+    originating conversation through the existing telegram tool handler
+    before going ASLEEP. The notice must never embed the raw error text."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    sent: list[dict] = []
+
+    def fake_telegram(args: dict) -> dict:
+        sent.append(args)
+        return {"status": "sent", "message_id": "acct:123:1"}
+
+    agent._tool_handlers = {"telegram": fake_telegram}
+
+    class _FakeNotificationStore:
+        def snapshot(self, _allow):
+            return {
+                "mcp.telegram": {
+                    "data": {
+                        "previews": [
+                            {"message_ref": "acct:123:456"},
+                        ],
+                    },
+                },
+            }
+
+    agent._notification_store = _FakeNotificationStore()
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError("HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    # Exactly one sanitized send, targeting the origin chat, plain text.
+    assert len(sent) == 1
+    args = sent[0]
+    assert args["action"] == "send"
+    assert args["input"]["account"] == "acct"
+    assert args["input"]["chat_id"] == 123
+    assert args["input"]["rendering_mode"] == "plain_text"
+    # Sanitized: no raw provider error text, no secrets, no paths.
+    assert "429" not in args["input"]["text"]
+    assert "Too Many" not in args["input"]["text"]
+    assert "tmp_path" not in args["input"]["text"]
+    assert any(name == "aed_exhausted" for name, _ in agent._logs)
+    assert any(name == "aed_exhausted_notice" for name, _ in agent._logs)
+    # P1-2: the observable agent state is ASLEEP, not a terminal STUCK, and
+    # the sleep event is set.
+    assert agent._asleep.is_set()
+    assert agent._state == AgentState.ASLEEP
+    assert AgentState.ASLEEP in agent._states
+
+
+def test_aed_exhaust_notice_uses_origin_captured_at_dequeue(tmp_path, monkeypatch):
+    """P1-1: the AED notice consumes the origin captured when the turn was
+    dequeued, NOT a live re-read of the notification snapshot. If a later chat
+    replaces the snapshot during the failed turn, the notice still goes to the
+    original chat exactly once."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    sent: list[dict] = []
+
+    def fake_telegram(args: dict) -> dict:
+        sent.append(args)
+        return {"status": "sent", "message_id": "acct:111:1"}
+
+    agent._tool_handlers = {"telegram": fake_telegram}
+
+    # Snapshot state AT DEQUEUE: origin chat 111.
+    dequeue_snapshot = {
+        "mcp.telegram": {
+            "data": {"previews": [{"message_ref": "acct:111:456"}]},
+        },
+    }
+    # Snapshot state AT EXHAUSTION: a later chat (222) replaced it.
+    later_snapshot = {
+        "mcp.telegram": {
+            "data": {"previews": [{"message_ref": "acct:222:789"}]},
+        },
+    }
+    state = {"n": 0}
+
+    class _FakeNotificationStore:
+        def snapshot(self, _allow):
+            state["n"] += 1
+            # First read = dequeue-time capture; any later read = live snapshot.
+            return dequeue_snapshot if state["n"] == 1 else later_snapshot
+
+    agent._notification_store = _FakeNotificationStore()
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError("HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    # Exactly one notice to the ORIGINAL chat, never to the later one.
+    assert len(sent) == 1
+    assert sent[0]["input"]["account"] == "acct"
+    assert sent[0]["input"]["chat_id"] == 111
+
+
+def test_aed_exhaust_notice_rejects_malformed_route(tmp_path, monkeypatch):
+    """P1-1: ambiguous/malformed Telegram routes (empty account, missing
+    message-id, extra segment, synthetic updates bucket, non-numeric ids) are
+    rejected; no notice is sent to a fabricated chat and AED still exhausts."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    sent: list[dict] = []
+
+    def fake_telegram(args: dict) -> dict:
+        sent.append(args)
+        return {"status": "sent"}
+
+    agent._tool_handlers = {"telegram": fake_telegram}
+
+    malformed_refs = [
+        ":123:456",        # empty account
+        "acct:123",         # missing message-id
+        "acct:123:456:789", # extra segment
+        "acct:updates:456", # synthetic events bucket
+        "acct:abc:456",     # non-numeric chat id
+        "acct:123:xyz",     # non-numeric message id
+        "acct:123:-1",      # negative message id
+        "",                 # empty ref
+        12345,              # non-string
+    ]
+
+    # Run one iteration per malformed ref: use a fresh agent each time so the
+    # sleep event / shutdown state cannot leak across runs.
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    for ref in malformed_refs:
+        agent = _make_run_loop_agent(tmp_path)
+        agent._config.max_aed_attempts = 1
+        agent._tool_handlers = {"telegram": fake_telegram}
+        sent.clear()
+
+        class _PerRefStore:
+            def snapshot(self, _allow):
+                return {
+                    "mcp.telegram": {
+                        "data": {"previews": [{"message_ref": ref}]},
+                    },
+                }
+
+        agent._notification_store = _PerRefStore()
+
+        def fake_handle(_agent, _msg):
+            raise RuntimeError("HTTP 429 Too Many Requests")
+
+        monkeypatch.setattr(turn, "_handle_message", fake_handle)
+        turn._run_loop(agent)
+
+        assert not sent, f"malformed ref {ref!r} produced a send"
+        assert agent._asleep.is_set()
+        assert agent._state == AgentState.ASLEEP
+
+
+def test_aed_exhaust_notice_records_returned_error_as_failed(tmp_path, monkeypatch):
+    """P2-1: when the telegram handler RETURNS an error mapping (instead of
+    raising), the notice is recorded as failed — not falsely as sent — and the
+    ASLEEP transition still happens fail-open."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+
+    def fake_telegram(args: dict) -> dict:
+        return {"status": "error", "error": "send failed: token=sk-secret /tmp/private"}
+
+    agent._tool_handlers = {"telegram": fake_telegram}
+
+    class _FakeNotificationStore:
+        def snapshot(self, _allow):
+            return {
+                "mcp.telegram": {
+                    "data": {"previews": [{"message_ref": "acct:123:456"}]},
+                },
+            }
+
+    agent._notification_store = _FakeNotificationStore()
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError("HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert any(
+        name == "aed_exhausted_notice" and fields.get("status") == "failed"
+        for name, fields in agent._logs
+    )
+    assert not any(
+        name == "aed_exhausted_notice" and fields.get("status") == "sent"
+        for name, fields in agent._logs
+    )
+    assert agent._asleep.is_set()
+    assert agent._state == AgentState.ASLEEP
+
+
+def test_aed_exhaust_notice_fail_open_when_telegram_handler_missing(tmp_path, monkeypatch):
+    """lingtai#672: without a telegram tool handler (or origin route), the
+    AED-exhaust notice is skipped fail-open and the ASLEEP transition still
+    happens; the AED decision is never affected by the notice."""
+    agent = _make_run_loop_agent(tmp_path)
+    agent._config.max_aed_attempts = 1
+    agent._tool_handlers = {}  # no telegram
+
+    def fake_handle(_agent, _msg):
+        raise RuntimeError("HTTP 429 Too Many Requests")
+
+    monkeypatch.setattr(turn, "_handle_message", fake_handle)
+
+    import lingtai.tools.soul.flow as soul_flow
+    monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
+
+    turn._run_loop(agent)
+
+    assert any(name == "aed_exhausted" for name, _ in agent._logs)
+    assert not any(name == "aed_exhausted_notice" for name, _ in agent._logs)
+    assert agent._asleep.is_set()
+
+
 def test_structural_error_skips_transient_retry(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     agent._config.max_aed_attempts = 1

@@ -346,6 +346,7 @@ related_files:
   - tests/test_telegram_task_card_transport.py
   - tests/test_telegram_terra_repairs.py
   - tests/test_telegram_toolfamily_ltpv2.py
+  - tests/test_telegram_typing_ttl.py
   - tests/test_three_agent_email.py
   - tests/test_time_awareness_email.py
   - tests/test_time_awareness_mail.py
