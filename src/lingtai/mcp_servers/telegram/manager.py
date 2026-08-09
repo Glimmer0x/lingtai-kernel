@@ -256,9 +256,15 @@ def _mirror_identity_account(value: str) -> str | None:
     return parts[0]
 
 
-# Emoji reactions for different states (Bot API 7.0+)
-REACTION_SEEN = [{"type": "emoji", "emoji": "👀"}]      # Message received
-REACTION_DONE = [{"type": "emoji", "emoji": "✅"}]       # Response sent
+# Emoji reactions for different states (Bot API 7.0+). Three explicit
+# boundaries so a human can see how far an inbound message has travelled:
+#   👌 received  - transport/ingress received the update
+#   👀 seen       - successfully delivered into the agent inbox
+#   ✍️ replied    - a reply targeting that message was sent
+REACTION_RECEIVED = [{"type": "emoji", "emoji": "👌"}]   # Ingress received
+REACTION_SEEN = [{"type": "emoji", "emoji": "👀"}]        # Delivered to agent inbox
+REACTION_REPLIED = [{"type": "emoji", "emoji": "✍️"}]   # Reply sent
+REACTION_DONE = REACTION_REPLIED  # deprecated alias
 
 
 class TypingIndicatorManager:
@@ -537,7 +543,7 @@ DESCRIPTION = (
     "'contacts' to manage saved contacts. "
     "'accounts' to list configured bot accounts. "
     "Voice messages are automatically transcribed using Whisper (local) and delivered as text. "
-    "Rich feedback: automatic typing indicators, emoji reactions (👀 seen, ✅ done), "
+    "Rich feedback: automatic typing indicators, emoji reactions (📧 received, 👀 seen, ✔️ replied), "
     "and live-status messages for long-running tasks (placeholder + edit-in-place). "
     "Automatic Task Card progress is separate: when the current agent setting is "
     "`taskcard: True`, every tool call with an explicit `reasoning` argument may be "
@@ -890,12 +896,12 @@ class TelegramManager:
             if account:
                 _typing_manager.start_typing(account, chat_id)
 
-            # Issue #8: Add "seen" reaction (👀)
-            if account:
+            # Ingress boundary: the transport received this update (📧).
+            if account and isinstance(chat_id, int) and not isinstance(chat_id, bool):
                 try:
-                    account.set_message_reaction(chat_id, tg_message_id, REACTION_SEEN)
+                    account.set_message_reaction(chat_id, tg_message_id, REACTION_RECEIVED)
                 except Exception as e:
-                    log.debug("Failed to add 'seen' reaction: %s", e)
+                    log.debug("Failed to add 'received' reaction: %s", e)
 
             # Issue #6: Transcribe voice messages
             if payload.get("media") and payload["media"].get("type") in ("voice", "audio"):
@@ -1185,8 +1191,9 @@ class TelegramManager:
         if payload.get("voice_transcript"):
             subject = f"telegram voice message from {username} via {account_alias} (transcribed)"
 
+        delivered = False
         try:
-            self._on_inbound({
+            delivered = bool(self._on_inbound({
                 "from": username,
                 "subject": subject,
                 "body": preview if preview else "(no text — see media or callback)",
@@ -1221,10 +1228,21 @@ class TelegramManager:
                     **preview_metadata,
                 },
                 "wake": should_wake,
-            })
+            }))
         except Exception as e:
             log.error("on_inbound callback failed for telegram msg %s: %s",
                       payload.get("id"), e)
+        # Agent-open boundary: delivered into the agent inbox (👀).
+        if (
+            delivered
+            and account
+            and isinstance(chat_id, int) and not isinstance(chat_id, bool)
+            and tg_message_id
+        ):
+            try:
+                account.set_message_reaction(chat_id, tg_message_id, REACTION_SEEN)
+            except Exception as e:
+                log.debug("Failed to add 'seen' reaction: %s", e)
         # Note: typing indicator continues until _send() is called by the agent.
         # _send() stops typing when it sends the response.
 
@@ -3817,12 +3835,12 @@ class TelegramManager:
                 "separate durable `action='send'` or `action='reply'`."
             )
 
-        # Issue #8: Add "done" reaction (✅) to the original message if reply_to
+        # Reply boundary: a reply targeting the original message was sent (✔️).
         if reply_to:
             try:
-                acct.set_message_reaction(chat_id, reply_to, REACTION_DONE)
+                acct.set_message_reaction(chat_id, reply_to, REACTION_REPLIED)
             except Exception as e:
-                log.debug("Failed to add 'done' reaction: %s", e)
+                log.debug("Failed to add 'replied' reaction: %s", e)
 
         # Issue #8: Stop typing indicator now that response is sent
         _typing_manager.stop_typing(acct, chat_id)
