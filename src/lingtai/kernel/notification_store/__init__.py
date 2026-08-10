@@ -33,6 +33,21 @@ PureCoreMutator = Callable[[dict], tuple[dict | None, bool, object]]
 # The adapter passes a copy and commits the returned set under one lock.
 PureAckMutator = Callable[[set[str]], tuple[set[str], bool, object]]
 
+# Hook-manifest policy has the same pure shape, specialized to the persisted
+# manifest list. The adapter passes a copy and commits the returned list under
+# one lock (empty list clears the registry file).
+PureHookManifestMutator = Callable[
+    [list[dict]], tuple[list[dict], bool, object]
+]
+
+# Store-owned non-channel filenames under .notification/. These are registry
+# / acknowledgement files, never channels; Core validation rejects them as
+# hook channels so a registered hook can never publish over or clear them.
+# Adapters MUST keep this set in sync with their own skip lists.
+STORE_RESERVED_NON_CHANNEL_STEMS: frozenset[str] = frozenset(
+    {"hooks", "large_result_acks"}
+)
+
 # Expected version: UNCONDITIONAL, None for expected absence, or a
 # fingerprint tuple for one delivered version.
 
@@ -58,6 +73,13 @@ ExpectedVersion = tuple | None | _UnconditionalSentinel
 
 class UpdateAckRefsResult(NamedTuple):
     """Typed evidence from an atomic acknowledgement-set update."""
+
+    changed: bool
+    value: object
+
+
+class UpdateHookManifestsResult(NamedTuple):
+    """Typed evidence from an atomic hook-manifest-list update."""
 
     changed: bool
     value: object
@@ -113,7 +135,7 @@ def _conflict_result(
 
 
 class NotificationStorePort(ABC):
-    """Seven-family persistence boundary owned by notification Core."""
+    """Eight-family persistence boundary owned by notification Core."""
 
     @abstractmethod
     def snapshot(self, allow_channel: AllowPredicate) -> dict[str, object]:
@@ -193,5 +215,43 @@ class NotificationStorePort(ABC):
         transaction and carries the pure Core mutator's policy value back in
         typed changed/value evidence. Empty sets use the legacy best-effort
         clear behavior; read failures remain legacy best-effort empty reads.
+        """
+        ...
+
+    @abstractmethod
+    def load_hook_manifests(self) -> list[dict]:
+        """Return the persisted hook-manifest list.
+
+        An absent ``hooks.json`` yields an empty list; a corrupt (invalid
+        JSON) or unreadable registry raises, which the tool layer surfaces as
+        a structured ``hook_registry_load_failed`` error so "registry broken"
+        is never reported as "nothing registered". The file is
+        ``.notification/hooks.json`` — a single non-channel registry,
+        invisible to snapshot/fingerprint.
+        """
+        ...
+
+    @abstractmethod
+    def update_hook_manifests(
+        self, pure_core_manifest_mutator: PureHookManifestMutator
+    ) -> UpdateHookManifestsResult:
+        """Atomically read, mutate, and persist the hook-manifest list.
+
+        Mirrors the ack-refs transaction: the adapter owns serialization
+        across the complete read/mutate/write cycle under the same in-process
+        and cross-process Store locks. An empty returned list clears the
+        registry file (best-effort on unlink, like ack refs).
+        """
+        ...
+
+    @abstractmethod
+    def stat_hook_registry(self) -> tuple[int, int] | None:
+        """Return a cheap staleness fingerprint of the hook registry file.
+
+        Returns ``(st_mtime_ns, st_size)`` when the registry file exists,
+        ``None`` when absent. Core uses this to re-seed its in-memory hook
+        mirror when another process (sibling CLI, Telegram server, hook
+        installer) wrote ``hooks.json`` out-of-band, without re-reading the
+        file on every sync tick.
         """
         ...

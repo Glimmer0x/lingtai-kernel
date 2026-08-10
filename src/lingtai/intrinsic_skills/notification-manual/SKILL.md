@@ -7,9 +7,9 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.6.0
-tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge]
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 0.9.0
+tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
+last_changed_at: "2026-08-10T02:00:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -30,7 +30,7 @@ operation either — that is `context(action='summarize')`.
 
 ## Quick start
 
-The resident tool schema is the source of truth for the five actions, their
+The resident tool schema is the source of truth for the nine actions, their
 per-action `input` fields, and the `action` + `input` + `reasoning` envelope
 (arguments live inside `input`, never at the root). What it does not say:
 
@@ -62,6 +62,99 @@ missing installed file returns `status: degraded`, an empty
 naming an initializer or capability-install problem. It never falls back to a
 source checkout, and it touches neither notification nor producer state.
 
+## Hooks & whitelist
+
+External hooks deliver notifications through channels that are **not** on the
+static allowlist (which covers kernel intrinsics and `mcp.` bridge servers).
+Registering a hook is the whitelist gate: only registered hook channels pass
+through; everything else is ignored (and, when the kernel observes a blocked
+attempt, surfaced as a warn-and-flag system event so the agent can investigate).
+
+Hook channels are **per-agent**: registering a hook allowlists its channel for
+this agent's working directory only — a hook channel is not visible to other
+agents' workdirs. The registry (`.notification/hooks.json`) is re-read whenever
+its `(mtime, size)` stat changes, so an out-of-band write by another process (a
+sibling CLI, the Telegram server, or the hook installer itself) is picked up on
+the next sync without a restart.
+
+### Setup flow
+
+1. **Write the hook script** that polls a source (a file, a service, a remote
+   node) and, on an event, publishes `.notification/<channel>.json` with the
+   standard envelope (`header`, `icon`, `priority`, `published_at`, `data`,
+   optional `instructions`).
+2. **Register its manifest** with the notification tool:
+   `notification(action='add', input={...})`. `add` validates the manifest,
+   appends it to the disk registry (`.notification/hooks.json`), and
+   **allowlists the manifest's `channel`** — from then on the channel passes
+   the kernel's allow predicate.
+3. **Publish** `.notification/<channel>.json` from the hook process. The
+   notification now appears in `check` / the meta-block payload like any other
+   channel.
+4. **Read and dismiss** per the producer's `instructions` / the manifest's
+   `description`, using the narrowest correct dismiss action. Dismissing the
+   mirror does not touch the hook process; `drop` only revokes the
+   registration.
+
+### Manifest fields
+
+- `name` — unique hook identifier (required).
+- `channel` — the `.notification/<channel>.json` stem this hook owns
+  (required; must be unique across hooks). It must not be a built-in static
+  channel (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
+  nor a Store-reserved non-channel stem (`hooks`/`large_result_acks`); `add`
+  refuses those with a clear error.
+- `source` — what the hook polls (required, e.g. `G:`).
+- `description` — one-line purpose (required).
+- `how_to_modify` / `how_to_cancel` — how the agent updates or stops the hook
+  (required; cancellation is the owner's job — `drop` never kills a process).
+- `version` — manifest version (optional, defaults to `1.0.0`).
+- `instructions` — agent-facing handling guidance (optional).
+
+### drop / edit / list semantics
+
+- `list` — read-only; returns the registered manifests in registry order, or
+  `hook_registry_load_failed` when the registry is corrupt or unreadable.
+- `edit` — update a manifest's fields by `name`; changing `channel` moves the
+  allowlist entry (and is refused with `channel_in_use` if another hook owns
+  that channel). Moving `channel` onto a built-in static channel or a
+  Store-reserved stem (`hooks`/`large_result_acks`) is refused with
+  `invalid_manifest`. An `edit` providing no non-null fields is a `no_change`
+  no-op.
+- `drop` — remove the manifest **and revoke its channel** from the allowlist;
+  unknown names return `not_found`. `drop` is registration evidence only —
+  stopping the hook process follows the manifest's `how_to_cancel`.
+
+### Warn-and-flag
+
+When a channel that is neither statically allowlisted nor registered attempts
+notification, the kernel emits one `notification_hook` system event
+(`ref_id: blocked_channel:<channel>`) per workdir+channel — deduped until the
+channel registers (then a later re-block can warn again). The scan only flags
+stems that can become channels: kernel-private dotfiles (`.nudge_state.json`),
+non-`.json` entries, and syntactically invalid stems are skipped. If you see
+such an event, run `list` to inspect hooks and
+`add` to register the hook if the producer is legitimate.
+
+### Worked example: `comm_watcher`
+
+```text
+1. A watcher script polls a G: node (source) for changes.
+2. On a change it writes .notification/comm_watcher.json with the standard
+   envelope and instructions (e.g. "read the relayed message, then dismiss").
+3. The agent (or operator) registers it once:
+   notification(action='add', input={
+     'name': 'comm_watcher', 'channel': 'comm_watcher', 'source': 'G:',
+     'description': 'poll G: node and relay',
+     'how_to_modify': 'notification(action=edit, ...)',
+     'how_to_cancel': 'stop the watcher process',
+     'instructions': 'read the relayed message and dismiss the channel'})
+4. The channel is now allowlisted: notifications pass through to check, and
+   the agent reads/dismisses per the manifest's instructions.
+5. To decommission: notification(action='drop', input={'name': 'comm_watcher'})
+   revokes the channel, then stop the watcher process per how_to_cancel.
+```
+
 ## Nested reference catalog
 
 ```yaml
@@ -86,6 +179,7 @@ source checkout, and it touches neither notification nor producer state.
 | Need / keywords | Read |
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
+| External-hook registration; `.notification/hooks.json`; `add`/`drop`/`edit`/`list`; whitelist gate; warn-and-flag on blocked channels | this section (`Hooks & whitelist`) + `reference/channel-model/SKILL.md` (effective allowlist) |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |

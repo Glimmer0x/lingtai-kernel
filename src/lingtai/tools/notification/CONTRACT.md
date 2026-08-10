@@ -1,6 +1,6 @@
 ---
 name: notification-tool
-contract_version: 2
+contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
@@ -42,10 +42,19 @@ maintenance: |
 ## Purpose
 
 The mandatory `notification` tool is the sole agent-callable notification
-surface. It exposes four operational actions for reading or atomically clearing
-notification mirrors plus one strictly read-only `manual` action for progressive
-disclosure. It owns no producer state and introduces no Notification Store
-operation.
+surface. It exposes eight operational actions: four hook-registry actions
+(`add`/`drop`/`edit`/`list`) plus the four pre-existing actions for reading or
+atomically clearing notification mirrors (`check` and the three atomic dismiss
+actions), plus one strictly read-only `manual` action for progressive
+disclosure. It owns no producer state. The hook-registry actions mutate the
+Notification Store's family-8 hook-manifest registry
+(`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
+`.notification/hooks.json`);
+the read and dismiss actions introduce no Store operation.
+
+Hook channels are **per-agent**: the effective allowlist is the static set ∪ the
+`mcp.` prefix ∪ the agent's own registered hook channels, and a hook channel is
+allowed only for the agent whose workdir registered it — never process-global.
 
 ## Behavior
 
@@ -55,7 +64,7 @@ atomic dismiss action after handling a notification. They MUST NOT treat generic
 dismissal as mutation of producer canonical state, bypass protected channels, or
 route large-result compaction through this tool.
 
-Coding agents MUST preserve all four operational actions, Store semantics,
+Coding agents MUST preserve all eight operational actions, Store semantics,
 notification Core guards, producer state, and the absence of `system`
 notification/dismiss aliases. They MUST keep `manual` read-only, fixed to the
 installed per-agent path, and independent of check/dismiss delivery state.
@@ -69,7 +78,11 @@ Tool Protocol v2 family (`../CONTRACT.md`): its model-facing root is a closed
 object whose properties are exactly `action`, `input`, `reasoning`, and
 `summarize`, with `additionalProperties: false` and `action`, `input`, and
 `reasoning` required. The action domain, in order, is: `check`,
-`dismiss_channel`, `dismiss_event`, `dismiss_ref`, `manual`. Each action value
+`dismiss_channel`, `dismiss_event`, `dismiss_ref`, `add`, `drop`, `edit`,
+`list`, `manual`. Read/clear actions keep the pre-existing prefix stable;
+hook-registry management (`add`/`drop`/`edit`/`list`) is administrative and
+follows; `manual` closes the enum.
+Each action value
 is simultaneously the child's canonical name and its dispatch key; there is no
 mapping layer.
 
@@ -83,6 +96,12 @@ and Responses wires. Per-action inputs are:
   `event_id` and `ref_id` are absent from this branch.
 - `dismiss_event` — `event_id`, plus nullable `channel`, `force`, `reason`.
 - `dismiss_ref` — `ref_id`, plus nullable `channel`, `force`, `reason`.
+- `add` — `name`, `channel`, `source`, `description`, `how_to_modify`, and
+  `how_to_cancel` (all required), plus nullable `version` and `instructions`.
+- `drop` — `name` (required).
+- `edit` — `name` (required), plus nullable `version`, `source`, `description`,
+  `channel`, `how_to_modify`, `how_to_cancel`, and `instructions`.
+- `list` — strictly empty.
 - `manual` — strictly empty.
 
 Declared optional fields use the provider-compatible nullable representation.
@@ -107,7 +126,7 @@ Observable action contracts are:
   clear found the channel already empty) or `"no_matching_event"`
   (event_id/ref_id matched no pending event). The values are the Core constants
   `DISMISS_CAUSE_ALREADY_EMPTY`/`DISMISS_CAUSE_NO_MATCHING_EVENT`
-  (`src/lingtai/kernel/notifications.py:499-508`), stamped by the same branch
+  (`src/lingtai/kernel/notifications.py:911-920`), stamped by the same branch
   that decides each no-op — not recomputed in the tool layer. `cause` is absent
   on successful (`cleared: true`) dismissals, and stale-version refusals remain
   a `status: "error"` contract without `cause`.
@@ -118,6 +137,35 @@ Observable action contracts are:
   manual_path, error}`, where `error` is `notification manual missing —
   initializer may have failed or capability not installed correctly`. Other
   filesystem/decoding errors propagate.
+- `add` validates the manifest and appends it to the hook registry. Success
+  returns `{status: "ok", reason: "added", name}`; `duplicate_name` and
+  `channel_in_use` are `status: "error"` results that leave the registry
+  unchanged. A channel that is a built-in static channel
+  (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
+  or a Store-reserved non-channel stem (`hooks`/`large_result_acks`) is refused
+  with `reason: "invalid_manifest"` and a clear message.
+- `edit` updates the named hook's fields. Success returns
+  `{status: "ok", reason: "edited", name}`; unknown names return
+  `reason: "not_found"` and a channel move onto another hook's channel returns
+  `reason: "channel_in_use"`. A channel move onto a built-in static channel or
+  a Store-reserved non-channel stem is refused with `reason:
+  "invalid_manifest"` and a clear message, exactly as `add` refuses the same
+  channel. An empty `name` is refused with `reason: "invalid_manifest"` too,
+  exactly as `add` refuses an empty manifest name. An `edit` providing no
+  non-null fields returns
+  `{status: "ok", reason: "no_change", name}` without touching the registry.
+- `drop` removes the named hook and revokes its channel. Success returns
+  `{status: "ok", reason: "dropped", name}`; unknown names return
+  `reason: "not_found"`. An empty `name` is refused with
+  `reason: "invalid_manifest"`, exactly as `add` refuses an empty manifest
+  name. Dropping registration never kills the hook process —
+  cancellation is the owner's job, documented in the manifest's
+  `how_to_cancel`.
+- `list` returns `{status: "ok", hooks: [...]}` with the persisted manifests
+  in registry order, or an empty list when the registry is absent. When the
+  registry exists but is corrupt (invalid JSON) or unreadable, `list`, `add`,
+  `drop`, and `edit` all return a `hook_registry_load_failed` error result
+  instead of misreporting the registry or raising.
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
 - An invalid envelope — a non-object `input`, a non-boolean `summarize`, an
@@ -137,14 +185,25 @@ source checkout fallback, and no compatibility alias. No public `parameters`,
 
 `lingtai.tools.registry.INTRINSICS` is the composition wiring that installs the
 package as a mandatory tool. `handle()` is the driving dispatch adapter for the
-five actions; it composes schema and envelope dispatch onto the generic
+nine actions; it composes schema and envelope dispatch onto the generic
 `lingtai.tools.tool_family` infrastructure, which is optional infrastructure
 rather than a required base class (`../CONTRACT.md` "Implementation
 independence"). The turn-loop notification post-hook completes `check` with the
 single canonical model-visible payload. The three dismiss handlers adapt tool
 arguments into `lingtai.kernel.notifications.dismiss_channel(...,
 invoked_by="notification")`, where notification Core owns allowlists, guards,
-stale checks, protected channels, acknowledgement policy, and Store use.
+stale checks, protected channels, acknowledgement policy, and Store use. The
+four hook-registry handlers adapt tool arguments into Core's
+`add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which validate manifests,
+enforce name/channel uniqueness, and write `.notification/hooks.json` through
+Store family 8. Core keeps a per-workdir module-level mirror of registered hook
+channels (`_REGISTERED_HOOK_CHANNELS`, keyed by the agent's working directory),
+serialized under `_HOOK_REGISTRY_LOCK`; `sync_hook_registry` re-seeds it
+whenever `hooks.json`'s `(st_mtime_ns, st_size)` stat changes — including
+out-of-band writes from another process (sibling CLI, Telegram server, hook
+installer) — and marks a workdir seeded only after a successful load, logging a
+transient failure (`notification_hook_registry_error`, `phase=...`) for retry on
+the next sync.
 
 The `manual` action is the reserved family child built by
 `tool_family.manual.build_manual_child` over the shared
@@ -186,31 +245,40 @@ is not a second inbound adapter.
   model would be shown a control the kernel silently ignores. The notification
   tool owns no producer publication action.
 - `check` and `manual` are read-only. The three dismiss actions mutate
-  notification mirror state. The family MUST NOT present a posture weaker than
-  its strongest action: a read-only annotation for the whole family would hide
-  those mutations and is forbidden.
+  notification mirror state; `add`/`drop`/`edit` mutate the hook registry and
+  the registered-channel allowlist. The family MUST NOT present a posture
+  weaker than its strongest action: a read-only annotation for the whole
+  family would hide those mutations and is forbidden.
+- Hook channels are per-agent: `is_channel_allowed`/`validate_allowed_channel`
+  consult the mirror keyed by the agent's workdir, and every kernel call site
+  passes that workdir. Without a workdir (no agent context) hook channels are
+  NOT allowed — only the static set and the `mcp.*` prefix pass.
 - Envelope validation MUST precede action I/O. Cross-action input, unknown root
   fields, and unknown actions MUST be rejected with a stable typed failure and
   no notification read or write.
 - Schema descriptions are canonical English and language-independent. Action
   identifiers and properties have no localized aliases. All three owned
   glossaries require review when this enum changes; the LTP v2 envelope
-  restructures how arguments are carried but introduces no new localized
-  concept and no new action value.
-- `contract_version` is `2`: the LTP v2 migration moves every action argument
-  from flat root properties into a per-action `input` object and adds required
-  `reasoning`, which is a breaking Port-contract change for callers even though
-  the tool name, action values, and every result shape are preserved.
+  restructures how arguments are carried, and the hook-registry change adds
+  four new action values (`add`/`drop`/`edit`/`list`) to the enum.
+- `contract_version` is `3`: the hook-registry change adds four new action
+  values (`add`/`drop`/`edit`/`list`) to the closed action enum and a new
+  per-action `input` for each — a breaking Port-contract change for callers
+  even though the tool name, the five pre-existing action values, and every
+  pre-existing result shape are preserved. (Version `2` recorded the LTP v2
+  migration that moved every action argument from flat root properties into a
+  per-action `input` object and added required `reasoning`.)
 
 ## Contract tests
 
 `tests/test_notification_tool.py` proves mandatory registration and wiring, the
-ordered five-action schema, the closed LTP v2 root, each action's strict input
+ordered nine-action schema, the closed LTP v2 root, each action's strict input
 branch and its `allOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical
 description, absent aggregate actions, manual success/degraded envelopes and
 fixed path, no-double-wrap flattening, read-only state/log behavior, check
-placeholder shape, all atomic dismiss semantics, null-optional defaulting,
+placeholder shape, all atomic dismiss semantics, hook add/drop/edit/list
+lifecycle and whitelist gating, null-optional defaulting,
 cross-action rejection before I/O, `_tc_id` tolerance, the kernel summarize
 allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_system_dismiss.py` protects shared
 operational dismissal behavior. `tests/test_tools_package_data.py` verifies tool

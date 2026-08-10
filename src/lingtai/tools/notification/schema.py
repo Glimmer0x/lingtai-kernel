@@ -45,7 +45,19 @@ LARGE_RESULT_FORCE_NOTE = (
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three.
-ACTION_ORDER = ("check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual")
+# Read/clear actions keep the pre-existing prefix stable; hook-registry
+# management (add/drop/edit/list) is administrative and follows.
+ACTION_ORDER = (
+    "check",
+    "dismiss_channel",
+    "dismiss_event",
+    "dismiss_ref",
+    "add",
+    "drop",
+    "edit",
+    "list",
+    "manual",
+)
 
 _CHANNEL_DESCRIPTION = (
     "Notification channel to act on (e.g. soul, system, mcp.telegram). "
@@ -68,6 +80,94 @@ _REASON_DESCRIPTION = (
 )
 
 _CHECK_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+
+_HOOK_NAME_DESCRIPTION = (
+    "Unique hook name within this agent (e.g. 'comm_watcher'). Required for "
+    "add/drop/edit; used to match manifests in .notification/hooks.json."
+)
+
+_HOOK_CHANNEL_DESCRIPTION = (
+    "Channel the hook publishes into (e.g. 'mcp.comm_watcher'). Must match "
+    "the .notification/<channel>.json file the hook writes. Registering it "
+    "here allowlists it for this agent."
+)
+
+_HOOK_STRING_FIELD_DESCRIPTION = "Human-readable field on the hook manifest."
+
+_ADD_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": _HOOK_NAME_DESCRIPTION},
+        "channel": {"type": "string", "description": _HOOK_CHANNEL_DESCRIPTION},
+        "source": {
+            "type": "string",
+            "description": "Who/what produces the notifications (e.g. 'comm_watcher.py').",
+        },
+        "description": {
+            "type": "string",
+            "description": "What this hook watches and why (one or two sentences).",
+        },
+        "how_to_modify": {
+            "type": "string",
+            "description": "How to change the hook (config file, env var, command).",
+        },
+        "how_to_cancel": {
+            "type": "string",
+            "description": "How to stop the hook (pid/kill, unregister, config toggle).",
+        },
+        "version": {
+            "type": ["string", "null"],
+            "description": "Optional manifest version (default '1.0.0').",
+        },
+        "instructions": {
+            "type": ["string", "null"],
+            "description": "Optional agent-facing handling guidance for this hook's notifications.",
+        },
+    },
+    "required": [
+        "name",
+        "channel",
+        "source",
+        "description",
+        "how_to_modify",
+        "how_to_cancel",
+        "version",
+        "instructions",
+    ],
+    "additionalProperties": False,
+}
+
+_DROP_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": _HOOK_NAME_DESCRIPTION}
+    },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+
+_EDIT_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": _HOOK_NAME_DESCRIPTION},
+        "version": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+        "source": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+        "description": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+        "channel": {"type": ["string", "null"], "description": _HOOK_CHANNEL_DESCRIPTION},
+        "how_to_modify": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+        "how_to_cancel": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+        "instructions": {"type": ["string", "null"], "description": _HOOK_STRING_FIELD_DESCRIPTION},
+    },
+    "required": ["name", "version", "source", "description", "channel", "how_to_modify", "how_to_cancel", "instructions"],
+    "additionalProperties": False,
+}
+
+_LIST_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},
     "required": [],
@@ -135,6 +235,10 @@ _MANUAL_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "add": _ADD_INPUT_SCHEMA,
+    "drop": _DROP_INPUT_SCHEMA,
+    "edit": _EDIT_INPUT_SCHEMA,
+    "list": _LIST_INPUT_SCHEMA,
     "check": _CHECK_INPUT_SCHEMA,
     "dismiss_channel": _DISMISS_CHANNEL_INPUT_SCHEMA,
     "dismiss_event": _DISMISS_EVENT_INPUT_SCHEMA,
@@ -143,30 +247,50 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 ACTION_ENUM_DESCRIPTION = (
-    "check: read all notification channels. Returns a placeholder; the live "
-    "payload is stamped onto this same result under "
-    "`_meta.agent_meta.notifications.attention` and `_meta.agent_meta.guidance.transient`. "
-    "Replace-only — do not call voluntarily after handling; dismiss instead. "
-    "Prefer coalescing the dismiss with other tool work you already need this "
-    "turn when safe; dismiss alone only when there is no useful coalesced "
-    "work or safety requires it.\n\n"
-    "dismiss_channel: clear one notification channel whole "
-    "(input={'channel': '<name>', ...}). Use producer-specific verbs first "
-    "(for email, use email(read/dismiss)); guarded channels require "
-    "force=true only for stale mirrors. Does not accept event_id/ref_id — "
-    "use dismiss_event/dismiss_ref for those.\n\n"
-    "dismiss_event: remove a single system event by event_id from "
-    ".notification/system.json (channel defaults to 'system' when null).\n\n"
-    "dismiss_ref: remove system event(s) by ref_id from "
-    ".notification/system.json (channel defaults to 'system' when null).\n\n"
-    "manual: call notification(action='manual', input={}) to return the "
-    "installed notification-manual skill body. This action is strictly "
+    "check: read all notification channels. Returns a placeholder; the live " +
+    "payload is stamped onto this same result under " +
+    "`_meta.agent_meta.notifications.attention` and " +
+    "`_meta.agent_meta.guidance.transient`. Replace-only — do not call " +
+    "voluntarily after handling; dismiss instead. Prefer coalescing the " +
+    "dismiss with other tool work you already need this turn when safe; " +
+    "dismiss alone only when there is no useful coalesced work or safety " +
+    "requires it." +
+
+    "dismiss_channel: clear one notification channel whole (input={'channel': " +
+    "'<name>', ...}). Use producer-specific verbs first (for email, use " +
+    "email(read/dismiss)); guarded channels require force=true only for stale " +
+    "mirrors. Does not accept event_id/ref_id — use dismiss_event/dismiss_ref " +
+    "for those." +
+
+    "dismiss_event: remove a single system event by event_id from " +
+    ".notification/system.json (channel defaults to 'system' when null)." +
+
+    "dismiss_ref: remove system event(s) by ref_id from " +
+    ".notification/system.json (channel defaults to 'system' when null)." +
+
+    "add: register an external hook (input={'name', 'channel', 'source', " +
+    "'description', 'how_to_modify', 'how_to_cancel', ...}). Writes the hook " +
+    "manifest to .notification/hooks.json and allowlists its channel. Agent " +
+    "self-service: add your own hooks." +
+
+    "drop: unregister a hook by name (input={'name': ...}). Removes its " +
+    "manifest and revokes the channel from the effective allowlist. Never " +
+    "kills the hook process itself \\u2014 use the manifest's how_to_cancel." +
+
+    "edit: update one hook's fields by name (input={'name': ..., ...fields}). " +
+    "Channel edits re-validate uniqueness." +
+
+    "list: return the registered hook manifests (input={}). Shows what is " +
+    "whitelisted and how each hook is modified/cancelled." +
+
+    "manual: call notification(action='manual', input={}) to return the " +
+    "installed notification-manual skill body. This action is strictly " +
     "read-only and does not read or change notification state."
 ) + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE
 
 
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
 
 
 # NOTE: ``get_schema`` is deliberately NOT defined here. The model-facing

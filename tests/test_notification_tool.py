@@ -36,16 +36,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
 from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
     context as context_intrinsic,
 )
+from lingtai.kernel.notifications import (
+    clear_blocked_channel_warning,
+    dismiss_channel,
+    flag_unregistered_channel,
+    is_channel_allowed,
+    is_present_channel_flagable,
+    reset_hook_registry_for_tests,
+    submit,
+    sync_hook_registry,
+)
 from tests._notification_store_helpers import (
+    FakeNotificationStore,
     fingerprint_notifications,
+    load_hook_manifests_for_test,
     notification_store_for,
     publish_test_payload,
+    replace_hook_manifests_for_test,
     snapshot_notifications,
 )
 
@@ -109,13 +124,36 @@ def test_notification_wired_into_every_agent() -> None:
     assert callable(wired["notification"])
 
 
-_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "manual"]
+_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop", "edit", "list", "manual"]
 
 
 def test_notification_schema_exposes_atomic_actions() -> None:
-    """The five action values survive migration, now as the family enum."""
+    """All action values survive migration, now as the family enum."""
     schema = notif_intrinsic.get_schema("en")
     assert schema["properties"]["action"]["enum"] == _ACTIONS
+
+
+def test_notification_action_order_is_pinned() -> None:
+    """ACTION_ORDER is the single source and cannot silently drift.
+
+    Mirrors the peer-family pins (email/system/context migrations): the exact
+    tuple is restated so a reorder of the canonical list fails loudly. Read and
+    clear actions keep their pre-existing prefix; hook management (add/drop/
+    edit/list) follows in ACTION_ORDER; manual is last.
+    """
+    from lingtai.tools.notification import ACTION_ORDER
+
+    assert ACTION_ORDER == (
+        "check",
+        "dismiss_channel",
+        "dismiss_event",
+        "dismiss_ref",
+        "add",
+        "drop",
+        "edit",
+        "list",
+        "manual",
+    )
 
 
 def test_notification_root_is_the_closed_ltp_v2_envelope() -> None:
@@ -148,6 +186,28 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
     assert [b["title"] for b in branches] == [f"{a} input" for a in _ACTIONS]
 
     expected_props = {
+        "add": {
+            "name",
+            "channel",
+            "source",
+            "description",
+            "how_to_modify",
+            "how_to_cancel",
+            "version",
+            "instructions",
+        },
+        "drop": {"name"},
+        "edit": {
+            "name",
+            "version",
+            "source",
+            "description",
+            "channel",
+            "how_to_modify",
+            "how_to_cancel",
+            "instructions",
+        },
+        "list": set(),
         "check": set(),
         "dismiss_channel": {"channel", "force", "reason"},
         "dismiss_event": {"event_id", "channel", "force", "reason"},
@@ -222,7 +282,11 @@ def test_notification_schema_is_canonical_english() -> None:
     assert "notification(action='manual'" in adesc
     assert "read-only" in adesc.casefold()
     # Per-action prose now lives on each action's own input branch.
-    dismiss_channel_branch = base_schema["properties"]["input"]["oneOf"][1]
+    dismiss_channel_branch = next(
+        branch
+        for branch in base_schema["properties"]["input"]["oneOf"]
+        if branch["title"] == "dismiss_channel input"
+    )
     cdesc = dismiss_channel_branch["properties"]["channel"]["description"]
     assert cdesc and "channel" in cdesc.casefold()
 
@@ -980,6 +1044,1032 @@ def test_reserved_manual_collision_fails_loudly() -> None:
         pass
     else:  # pragma: no cover - the constructor must refuse
         raise AssertionError("duplicate reserved manual child must fail loudly")
+
+
+# ---------------------------------------------------------------------------
+# Hook registry lifecycle (add/drop/edit/list) + whitelist gate.
+# ---------------------------------------------------------------------------
+
+
+def _hook_manifest(
+    name: str = "comm_watcher",
+    channel: str = "comm_watcher",
+    **overrides: Any,
+) -> dict:
+    """Return a valid hook manifest with test defaults."""
+    manifest = {
+        "name": name,
+        "version": "1.0.0",
+        "channel": channel,
+        "source": "G:",
+        "description": "poll relay",
+        "how_to_modify": "notification(action='edit', input={'name': ...})",
+        "how_to_cancel": "notification(action='drop', input={'name': ...}) and stop the watcher",
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+class _WarnFlagAgent(_StubAgent):
+    """Stub agent with an ``_enqueue_system_notification`` recorder."""
+
+    def __init__(self, workdir: Path) -> None:
+        super().__init__(workdir)
+        self.system_notifications: list[dict[str, Any]] = []
+
+    def _enqueue_system_notification(self, **kwargs: Any) -> str:
+        self.system_notifications.append(kwargs)
+        return "evt_blocked"
+
+
+def _make_sync_agent(tmp_path: Path) -> Any:
+    """Real-sync stub: drives ``_sync_notifications``' D2 loop for real.
+
+    Mirrors the ``_Agent`` stub in ``test_notification_sync.py``: a BaseAgent
+    subclass whose state is set directly so ``_sync_notifications`` executes
+    its real code (hook-registry seeding, present-fp cache, derived-fp filter,
+    flag-unregistered scan) without a full runtime.
+    """
+    import queue
+    from types import SimpleNamespace
+
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.state import AgentState
+
+    class _Agent(BaseAgent):
+        def __init__(self, workdir: Path) -> None:
+            self._working_dir = workdir
+            self._notification_store = notification_store_for(workdir)
+            self._state = AgentState.IDLE
+            self._notification_fp = ()
+            self._notification_deferred_log_fp = ()
+            self._notification_block_id = None
+            self._chat_stub = SimpleNamespace(
+                interface=SimpleNamespace(entries=[])
+            )
+            self._logs: list[tuple[str, dict]] = []
+            self.agent_name = "sync-stub"
+            self.system_notifications: list[dict[str, Any]] = []
+            self.inbox = queue.Queue()
+
+        @property
+        def _chat(self):
+            return self._chat_stub
+
+        def _save_chat_history(self, *, ledger_source: str = "main") -> None:
+            pass
+
+        def _log(self, event_type: str, **fields: Any) -> None:
+            self._logs.append((event_type, fields))
+
+        def _enqueue_system_notification(self, **kwargs: Any) -> str:
+            self.system_notifications.append(kwargs)
+            return "evt_blocked"
+
+        def _wake_nap(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def _set_state(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def _reset_uptime(self) -> None:
+            pass
+
+    return _Agent(tmp_path)
+
+
+class TestHookLifecycle:
+    """Hook registry lifecycle through the notification family + whitelist gate."""
+
+    def test_add_shows_manifest_in_list(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "add", **_hook_manifest())
+        assert res["status"] == "ok", res
+        assert res["reason"] == "added"
+        assert load_hook_manifests_for_test(tmp_path) == [_hook_manifest()]
+
+    def test_add_duplicate_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(agent, "add", **_hook_manifest())
+        assert res["status"] == "error"
+        assert res["reason"] == "duplicate_name"
+        assert res["name"] == "comm_watcher"
+        assert len(load_hook_manifests_for_test(tmp_path)) == 1
+
+    def test_add_channel_in_use_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(
+            agent, "add", **_hook_manifest(name="second_hook", channel="comm_watcher")
+        )
+        assert res["status"] == "error"
+        assert res["reason"] == "channel_in_use"
+        assert res["channel"] == "comm_watcher"
+        assert res["name"] == "comm_watcher"
+        assert len(load_hook_manifests_for_test(tmp_path)) == 1
+
+    def test_edit_changes_fields(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        res = _call(
+            agent,
+            "edit",
+            name="comm_watcher",
+            description="updated relay",
+            channel="comm_watcher_v2",
+        )
+        assert res["status"] == "ok", res
+        assert res["reason"] == "edited"
+        manifests = load_hook_manifests_for_test(tmp_path)
+        assert manifests[0]["description"] == "updated relay"
+        assert manifests[0]["channel"] == "comm_watcher_v2"
+        assert manifests[0]["name"] == "comm_watcher"
+
+    def test_edit_channel_in_use_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        assert _call(
+            agent, "add", **_hook_manifest(name="second", channel="comm_watcher2")
+        )["status"] == "ok"
+        res = _call(agent, "edit", name="second", channel="comm_watcher")
+        assert res["status"] == "error"
+        assert res["reason"] == "channel_in_use"
+        assert res["channel"] == "comm_watcher"
+        # The first hook's manifest is untouched.
+        manifests = load_hook_manifests_for_test(tmp_path)
+        assert manifests[0]["channel"] == "comm_watcher"
+        assert manifests[1]["channel"] == "comm_watcher2"
+
+    def test_edit_unknown_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "edit", name="missing", description="x")
+        assert res["status"] == "error"
+        assert res["reason"] == "not_found"
+
+    def test_drop_removes_and_revokes_allowlist(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+        res = _call(agent, "drop", name="comm_watcher")
+        assert res["status"] == "ok", res
+        assert res["reason"] == "dropped"
+        assert load_hook_manifests_for_test(tmp_path) == []
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+
+    def test_drop_unknown_name_errors(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "drop", name="missing")
+        assert res["status"] == "error"
+        assert res["reason"] == "not_found"
+
+    def test_add_edit_drop_list_round_trip_dispatches_through_family(
+        self, tmp_path: Path
+    ) -> None:
+        """add → edit → drop → list round trip through the real dispatcher."""
+        agent = _StubAgent(tmp_path)
+
+        added = _call(agent, "add", **_hook_manifest())
+        assert added["status"] == "ok" and added["reason"] == "added"
+        listed = _call(agent, "list")
+        assert listed["status"] == "ok"
+        assert [m["name"] for m in listed["hooks"]] == ["comm_watcher"]
+
+        edited = _call(agent, "edit", name="comm_watcher", description="edited relay")
+        assert edited["status"] == "ok" and edited["reason"] == "edited"
+        listed = _call(agent, "list")
+        assert listed["hooks"][0]["description"] == "edited relay"
+
+        dropped = _call(agent, "drop", name="comm_watcher")
+        assert dropped["status"] == "ok" and dropped["reason"] == "dropped"
+        listed = _call(agent, "list")
+        assert listed["status"] == "ok" and listed["hooks"] == []
+        assert load_hook_manifests_for_test(tmp_path) == []
+
+    def test_registered_hook_channel_becomes_allowed_after_sync(
+        self, tmp_path: Path
+    ) -> None:
+        """Registering a hook allowlists its channel; unregistered stay blocked."""
+        agent = _StubAgent(tmp_path)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+
+        replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+        assert is_channel_allowed("some_other_hook", workdir=str(agent._working_dir)) is False
+
+    def test_unregistered_channels_stay_not_allowed(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+        # Kernel-side publishing refuses the unregistered channel entirely.
+        with pytest.raises(ValueError, match="not allowlisted"):
+            submit(agent, "comm_watcher", data={}, header="x")
+
+    def test_flag_unregistered_channel_warns_once_then_after_clear(
+        self, tmp_path: Path
+    ) -> None:
+        """Warn-and-flag dedupes per workdir+channel until cleared."""
+        agent = _WarnFlagAgent(tmp_path)
+
+        flag_unregistered_channel(agent, "comm_watcher")
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1
+        enqueued = agent.system_notifications[0]
+        assert enqueued["source"] == "notification_hook"
+        assert enqueued["ref_id"] == "blocked_channel:comm_watcher"
+        assert "not registered" in enqueued["body"]
+
+        clear_blocked_channel_warning(agent, "comm_watcher")
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 2
+
+        # An allowlisted channel never flags.
+        flag_unregistered_channel(agent, "system")
+        assert len(agent.system_notifications) == 2
+
+    def test_sync_hook_registry_seeds_from_fake_store(self, tmp_path: Path) -> None:
+        from types import SimpleNamespace
+
+        store = FakeNotificationStore()
+        agent = SimpleNamespace(
+            _working_dir=tmp_path / "fake-agent",
+            _notification_store=store,
+        )
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+    def test_reset_hook_registry_for_tests_isolation(self, tmp_path: Path) -> None:
+        agent = _StubAgent(tmp_path)
+        replace_hook_manifests_for_test(tmp_path, [_hook_manifest()])
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+        reset_hook_registry_for_tests()
+
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+        # Re-sync re-seeds from the still-persisted registry (mirror is lazy).
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+    def test_malformed_store_registry_syncs_to_empty(self, tmp_path: Path) -> None:
+        """A broken hooks.json seeds no channels instead of crashing the sync."""
+        agent = _StubAgent(tmp_path)
+        (tmp_path / ".notification").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".notification" / "hooks.json").write_text(
+            "{not-json", encoding="utf-8"
+        )
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is False
+
+    def test_sync_hook_registry_workdir_less_agent_skips_seeding(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F6: sync_hook_registry for a workdir-less agent must not crash
+        and must never write a None-keyed entry into the mirror books (the
+        r3-F5 early return) — hook channels are never allowlisted without a
+        real workdir."""
+        from types import SimpleNamespace
+
+        from lingtai.kernel.notifications import (
+            _HOOK_REGISTRY_SEEDED,
+            _HOOK_REGISTRY_STAT,
+            _REGISTERED_HOOK_CHANNELS,
+        )
+
+        agent = SimpleNamespace(
+            _working_dir=None,
+            _notification_store=notification_store_for(tmp_path),
+        )
+
+        sync_hook_registry(agent)  # must not crash
+
+        assert None not in _REGISTERED_HOOK_CHANNELS
+        assert None not in _HOOK_REGISTRY_SEEDED
+        assert None not in _HOOK_REGISTRY_STAT
+
+
+class TestHookRegistryFableFixes:
+    """Regression tests from fable r1 (PR review findings F1-F5)."""
+
+    def test_d2_never_flags_kernel_private_dotfiles(self) -> None:
+        """F1: .nudge_state.json and invalid stems are not flaggable channels."""
+        assert is_present_channel_flagable(".nudge_state.json") is False
+        # Store-owned registry files are excluded by the adapter fingerprint
+        # itself, so the D2 loop never sees them; the pure helper still treats
+        # valid stems as flaggable when present through another enumeration.
+        assert is_present_channel_flagable("hooks.json") is True
+        assert is_present_channel_flagable("large_result_acks.json") is True
+        assert is_present_channel_flagable("comm_watcher.json") is True
+        assert is_present_channel_flagable("not json") is False
+        assert is_present_channel_flagable("has..dots.json") is False
+
+    def test_add_rejects_store_reserved_channels(self, tmp_path: Path) -> None:
+        """F2: hooks / large_result_acks can never be hook channels."""
+        agent = _StubAgent(tmp_path)
+        for reserved in ("hooks", "large_result_acks"):
+            res = _call(agent, "add", **_hook_manifest(channel=reserved))
+            assert res["status"] == "error", res
+            assert res["reason"] == "invalid_manifest", res
+            assert "reserved" in res["message"], res
+
+    def test_add_rejects_builtin_channels(self, tmp_path: Path) -> None:
+        """F2/F12: built-in static allowlist channels are not hook channels."""
+        agent = _StubAgent(tmp_path)
+        res = _call(agent, "add", **_hook_manifest(channel="system"))
+        assert res["status"] == "error", res
+        assert "built-in" in res["message"], res
+
+    def test_edit_rejects_reserved_and_builtin_channels_as_invalid_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F3: edit refuses reserved/built-in channels with the same
+        ``invalid_manifest`` reason ``add`` uses — never the undocumented
+        ``invalid`` — so the agent sees one consistent refusal code."""
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        for refused, marker in (("hooks", "reserved"), ("system", "built-in")):
+            res = _call(agent, "edit", name="comm_watcher", channel=refused)
+            assert res["status"] == "error", res
+            assert res["reason"] == "invalid_manifest", res
+            assert marker in res["message"], res
+
+    def test_hooks_json_survives_force_dismiss_of_registered_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """F2 regression: a force dismiss can never delete the registry file."""
+        agent = _StubAgent(tmp_path)
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        assert load_hook_manifests_for_test(tmp_path) != []
+        # Force-dismiss the hook's own channel: must clear the channel file
+        # only, never hooks.json.
+        from lingtai.kernel.notifications import dismiss_channel
+
+        res = dismiss_channel(agent, "comm_watcher", invoked_by="test", force=True)
+        assert res["status"] == "ok", res
+        assert load_hook_manifests_for_test(tmp_path) != []
+        assert _call(agent, "list")["hooks"] != []
+
+    def test_two_agents_hook_allowlists_are_isolated(self, tmp_path: Path) -> None:
+        """F3: one agent's hook channel is not allowlisted for another."""
+        agent_a = _StubAgent(tmp_path / "agent-a")
+        agent_b = _StubAgent(tmp_path / "agent-b")
+        assert _call(agent_a, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent_a)
+        sync_hook_registry(agent_b)
+
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent_a._working_dir)
+        ) is True
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent_b._working_dir)
+        ) is False
+
+    def test_add_clears_warning_then_drop_reblocks(self, tmp_path: Path) -> None:
+        """F4: warn is cleared on register; drop re-enables a later warning.
+
+        Real sequence: an unregistered channel warns once; registering its hook
+        clears the dedupe book (and allowlists the channel); dropping the hook
+        blocks it again, so a later publish re-warns. The warned book is never
+        cleared manually — every transition goes through the production paths.
+        """
+        agent = _WarnFlagAgent(tmp_path)
+
+        # Blocked before registration: exactly one warn event.
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+        assert agent.system_notifications[0]["ref_id"] == "blocked_channel:comm_watcher"
+
+        # Registering the hook clears the warned book and allowlists the
+        # channel: re-flagging the now-registered channel emits nothing new.
+        assert _call(agent, "add", **_hook_manifest())["status"] == "ok"
+        sync_hook_registry(agent)
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+
+        # After drop the channel is blocked again; the cleared dedupe book
+        # means this re-block warns once more (count == 2). If add_hook had
+        # not cleared the marker, the re-flag would be deduped and count
+        # would stay 1.
+        assert _call(agent, "drop", name="comm_watcher")["status"] == "ok"
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 2, agent.system_notifications
+        assert agent.system_notifications[1]["ref_id"] == "blocked_channel:comm_watcher"
+
+    def test_d2_integration_present_file_blocked_and_flagged_once(
+        self, tmp_path: Path
+    ) -> None:
+        """F5: through the real D2 sync loop, a present-but-unregistered
+        channel file is not delivered and produces exactly one
+        notification_hook event; a kernel-private dotfile produces none.
+
+        Unlike the earlier copy-pasted scan, this drives
+        ``agent._sync_notifications()`` for real, so the present-fp cache,
+        the derived-fp filter, the hook-registry seeding, and the
+        ``_notification_present_fp`` guard all execute.
+        """
+        from lingtai.kernel.notifications import is_channel_allowed
+
+        agent = _make_sync_agent(tmp_path)
+        store = agent._notification_store
+
+        # Register a hook for a DIFFERENT channel so the mirror is seeded
+        # with relay_channel while comm_watcher stays unregistered.
+        assert (
+            _call(
+                agent,
+                "add",
+                **_hook_manifest(name="relay", channel="relay_channel"),
+            )["status"]
+            == "ok"
+        )
+        store.publish("comm_watcher", {"header": "blocked"})
+        (tmp_path / ".notification" / ".nudge_state.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+        agent._sync_notifications()
+
+        # Exactly one warn event, emitted through the real loop.
+        refs = [ev["ref_id"] for ev in agent.system_notifications]
+        assert refs == ["blocked_channel:comm_watcher"], refs
+
+        # No delivery: the blocked channel stays out of the allow-filtered
+        # view, the dotfile is never surfaced, and the committed fingerprint
+        # is untouched (nothing was injected into the wire).
+        workdir = str(agent._working_dir)
+        snapshot = store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
+        assert "comm_watcher" not in snapshot
+        assert ".nudge_state" not in snapshot
+        assert "relay_channel" not in snapshot
+        assert agent._notification_fp == ()
+        assert agent._chat_stub.interface.entries == []
+
+    def test_flag_unregistered_channel_dedupes_without_manual_clear(
+        self, tmp_path: Path
+    ) -> None:
+        """D2 dedupe: a repeated flag for the same unregistered channel warns
+        once; the warned book is never cleared manually."""
+        agent = _WarnFlagAgent(tmp_path)
+
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+
+        # Second scan/flag for the same channel emits nothing new.
+        flag_unregistered_channel(agent, "comm_watcher")
+        assert len(agent.system_notifications) == 1, agent.system_notifications
+        assert agent.system_notifications[0]["ref_id"] == "blocked_channel:comm_watcher"
+
+        # A different unregistered channel is its own dedupe key.
+        flag_unregistered_channel(agent, "other_watcher")
+        assert len(agent.system_notifications) == 2, agent.system_notifications
+
+    def test_sync_hook_registry_reseeds_on_stat_change(self, tmp_path: Path) -> None:
+        """F6: an out-of-band hooks.json rewrite (content + stat change)
+        re-seeds the mirror on the next sync."""
+        agent = _StubAgent(tmp_path)
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+        sync_hook_registry(agent)
+        assert is_channel_allowed("comm_watcher", workdir=str(agent._working_dir)) is True
+
+        # Out-of-band write: bypass the store and rewrite hooks.json directly
+        # (as a sibling CLI or hook installer would). mtime_ns/size change.
+        hooks_file = tmp_path / ".notification" / "hooks.json"
+        hooks_file.write_text(
+            json.dumps(
+                [
+                    _hook_manifest(),
+                    _hook_manifest(name="relay", channel="relay_channel"),
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        sync_hook_registry(agent)
+
+        assert is_channel_allowed(
+            "relay_channel", workdir=str(agent._working_dir)
+        ) is True
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is True
+
+    def test_sync_hook_registry_retry_after_transient_load_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F7: a transient load failure leaves the seeded marker unset and
+        does not crash; the next sync retries and seeds."""
+        from types import SimpleNamespace
+
+        store = FakeNotificationStore()
+        agent = SimpleNamespace(
+            _working_dir=tmp_path / "fake-agent",
+            _notification_store=store,
+        )
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+
+        real_load = store.load_hook_manifests
+        calls = {"n": 0}
+
+        def _flaky_load():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("transient registry read failure")
+            return real_load()
+
+        monkeypatch.setattr(store, "load_hook_manifests", _flaky_load)
+
+        sync_hook_registry(agent)  # must not crash
+
+        from lingtai.kernel.notifications import _HOOK_REGISTRY_SEEDED
+
+        assert str(agent._working_dir) not in _HOOK_REGISTRY_SEEDED
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is False
+
+        monkeypatch.setattr(store, "load_hook_manifests", real_load)
+        sync_hook_registry(agent)
+
+        assert str(agent._working_dir) in _HOOK_REGISTRY_SEEDED
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(agent._working_dir)
+        ) is True
+
+    def test_drop_and_edit_empty_name_refuse_as_invalid_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """R5-F2: drop/edit refuse an empty name with the same
+        ``invalid_manifest`` reason ``add`` uses — never the bespoke
+        ``invalid_name``/``invalid_edit`` reasons."""
+        agent = _StubAgent(tmp_path)
+        dropped = _call(agent, "drop", name="")
+        assert dropped["status"] == "error", dropped
+        assert dropped["reason"] == "invalid_manifest", dropped
+        edited = _call(agent, "edit", name="", description="x")
+        assert edited["status"] == "error", edited
+        assert edited["reason"] == "invalid_manifest", edited
+
+
+class TestHookRegistryCorruptVsAbsent:
+    """R10: a corrupt hooks.json must be distinguishable from an absent
+    registry, through the real POSIX adapter.
+
+    ``load_hook_manifests`` returns ``[]`` only for ``FileNotFoundError``;
+    invalid-JSON and unreadable registries propagate so ``list_hooks`` surfaces
+    the structured ``hook_registry_load_failed`` error (and
+    ``sync_hook_registry`` logs + leaves the mirror unseeded for retry)
+    instead of silently revoking every registered hook channel.
+    """
+
+    def test_list_hooks_corrupt_registry_returns_load_failed(
+        self, tmp_path: Path
+    ) -> None:
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import list_hooks
+
+        workdir = tmp_path / "agent-corrupt"
+        store = PosixNotificationStoreAdapter(workdir)
+        agent = SimpleNamespace(_notification_store=store)
+
+        # Write an invalid hooks.json through the real adapter's filesystem
+        # layout (as a corrupt sibling process would leave behind).
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        result = list_hooks(agent)
+
+        assert isinstance(result, dict)
+        assert result["status"] == "error"
+        assert result["reason"] == "hook_registry_load_failed"
+        assert "hooks.json" in result["message"]
+
+    def test_list_hooks_absent_registry_returns_empty_list(
+        self, tmp_path: Path
+    ) -> None:
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import list_hooks
+
+        workdir = tmp_path / "agent-absent"
+        store = PosixNotificationStoreAdapter(workdir)
+        agent = SimpleNamespace(_notification_store=store)
+
+        assert list_hooks(agent) == []
+
+    def test_sync_hook_registry_logs_and_keeps_mirror_unseeded_on_corrupt(
+        self, tmp_path: Path
+    ) -> None:
+        """A corrupt registry reaches sync_hook_registry's failure branch: it
+        must not crash, must log, and must not seed the mirror as if nothing
+        were registered (channels stay revoked and the next sync retries)."""
+        from types import SimpleNamespace
+
+        from lingtai.adapters.posix.notification_store import (
+            PosixNotificationStoreAdapter,
+        )
+        from lingtai.kernel.notifications import (
+            _HOOK_REGISTRY_SEEDED,
+            is_channel_allowed,
+            sync_hook_registry,
+        )
+
+        workdir = tmp_path / "agent-sync-corrupt"
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        agent = SimpleNamespace(
+            _working_dir=workdir,
+            _notification_store=PosixNotificationStoreAdapter(workdir),
+            _logs=[],
+        )
+        agent._log = lambda event_type, **fields: agent._logs.append(
+            (event_type, fields)
+        )
+
+        sync_hook_registry(agent)  # must not raise
+
+        assert str(workdir) not in _HOOK_REGISTRY_SEEDED
+        assert any(
+            event == "notification_hook_registry_error"
+            for event, _ in agent._logs
+        )
+        assert is_channel_allowed(
+            "comm_watcher", workdir=str(workdir)
+        ) is False
+
+    def test_all_four_actions_report_load_failed_on_corrupt_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F2: add/drop/edit must not mislabel a corrupt registry as an
+        input-validation error (``json.JSONDecodeError`` is a ``ValueError``
+        caught by the tool layer's validation handlers) and must return the
+        same ``hook_registry_load_failed`` result ``list`` does — through the
+        real PosixNotificationStoreAdapter."""
+        workdir = tmp_path / "agent-corrupt-all"
+        agent = _StubAgent(workdir)
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.write_text("{ not valid json", encoding="utf-8")
+
+        for action, kwargs in (
+            ("list", {}),
+            ("add", dict(_hook_manifest())),
+            ("drop", {"name": "comm_watcher"}),
+            ("edit", {"name": "comm_watcher", "description": "updated"}),
+        ):
+            res = _call(agent, action, **kwargs)
+            assert res["status"] == "error", (action, res)
+            assert res["reason"] == "hook_registry_load_failed", (action, res)
+            assert "hooks.json" in res["message"], (action, res)
+
+    def test_all_four_actions_report_load_failed_on_unreadable_registry(
+        self, tmp_path: Path
+    ) -> None:
+        """R4-F2: a genuinely unreadable registry (a directory at the
+        hooks.json path) must not escape as a raw OSError from add/drop/edit
+        — all four actions return the structured ``hook_registry_load_failed``
+        result instead of raising."""
+        workdir = tmp_path / "agent-unreadable-all"
+        agent = _StubAgent(workdir)
+        hooks_file = workdir / ".notification" / "hooks.json"
+        hooks_file.parent.mkdir(parents=True, exist_ok=True)
+        hooks_file.mkdir()  # directory at the registry path → IsADirectoryError
+
+        for action, kwargs in (
+            ("list", {}),
+            ("add", dict(_hook_manifest())),
+            ("drop", {"name": "comm_watcher"}),
+            ("edit", {"name": "comm_watcher", "description": "updated"}),
+        ):
+            res = _call(agent, action, **kwargs)
+            assert res["status"] == "error", (action, res)
+            assert res["reason"] == "hook_registry_load_failed", (action, res)
+
+
+class TestWorkdirAwareHookPredicates:
+    """R1/R5/R6/R7 regression: the six workdir-aware hook-predicate fixes
+    must stay pinned. Reverting any of them to a workdir-less predicate must
+    fail the suite (they closed r2's only BLOCKING finding — sleep refused
+    forever once a registered hook channel holds a live notification).
+    """
+
+    @staticmethod
+    def _make_sleep_sync_agent(tmp_path: Path) -> Any:
+        """BaseAgent subclass driving the REAL notification sync + sleep path.
+
+        Follows ``_make_sync_agent``: a BaseAgent subclass whose state is set
+        directly so ``_sync_notifications`` executes its real code (hook
+        registry seeding, allow-filtered fingerprint, commit) without a full
+        runtime. Adds the attributes ``karma._sleep`` needs (``_config``,
+        ``_asleep``, ``_cancel_event``, state recorder); notification
+        injection is stubbed exactly like ``_make_sync_agent``'s other runtime
+        surfaces.
+        """
+        import queue
+        import threading
+        from types import SimpleNamespace
+
+        from lingtai.kernel.base_agent import BaseAgent
+        from lingtai.kernel.state import AgentState
+
+        class _SleepSyncAgent(BaseAgent):
+            def __init__(self, workdir: Path) -> None:
+                self._working_dir = workdir
+                self._notification_store = notification_store_for(workdir)
+                self._state = AgentState.IDLE
+                self._notification_fp = ()
+                self._notification_deferred_log_fp = ()
+                self._notification_block_id = None
+                self._chat_stub = SimpleNamespace(
+                    interface=SimpleNamespace(entries=[])
+                )
+                self._logs: list[tuple[str, dict]] = []
+                self.agent_name = "sleep-sync-stub"
+                self.system_notifications: list[dict[str, Any]] = []
+                self.inbox = queue.Queue()
+                self._asleep = threading.Event()
+                self._cancel_event = threading.Event()
+                self._config = SimpleNamespace(language="en")
+                self._sleep_state: object = None
+                self._injected_sources: list[str] = []
+
+            @property
+            def _chat(self):
+                return self._chat_stub
+
+            def _save_chat_history(self, *, ledger_source: str = "main") -> None:
+                pass
+
+            def _log(self, event_type: str, **fields: Any) -> None:
+                self._logs.append((event_type, fields))
+
+            def _enqueue_system_notification(self, **kwargs: Any) -> str:
+                self.system_notifications.append(kwargs)
+                return "evt_blocked"
+
+            def _wake_nap(self, *_a: Any, **_kw: Any) -> None:
+                pass
+
+            def _set_state(self, state, **_kw: Any) -> None:
+                self._sleep_state = state
+
+            def _reset_uptime(self) -> None:
+                pass
+
+            def _inject_notification_pair(self, notifications: dict) -> bool:
+                self._injected_sources = list(notifications.keys())
+                return True
+
+        return _SleepSyncAgent(tmp_path)
+
+    def test_karma_sleep_allowed_with_live_registered_hook_channel(
+        self, tmp_path: Path
+    ) -> None:
+        """R1: with a live notification on a REGISTERED hook channel and
+        ``_notification_fp`` committed through the real sync path,
+        ``karma._sleep`` must NOT refuse the transition.
+
+        Reverting karma.py's predicate to workdir-less makes ``pending_fp``
+        exclude the hook channel while the committed fingerprint includes it
+        — the mismatch refuses sleep forever (r2's BLOCKING finding).
+        """
+        from lingtai.kernel.state import AgentState
+        from lingtai.tools.system.karma import _sleep as karma_sleep
+
+        agent = self._make_sleep_sync_agent(tmp_path)
+        replace_hook_manifests_for_test(agent, [_hook_manifest()])
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "comm_watcher",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        # Commit the workdir-aware fingerprint through the real sync path.
+        agent._sync_notifications()
+        assert agent._notification_fp, (
+            "sync must have committed a fingerprint for the hook channel"
+        )
+
+        result = karma_sleep(agent, {"reason": "turn complete"})
+
+        assert "refused" not in result.get("message", "").lower()
+        assert agent._sleep_state == AgentState.ASLEEP
+
+    def test_setup_telegram_task_card_predicates_agree_on_hook_channel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """R6: ``_setup_telegram_task_card`` must pass the SAME workdir-scoped
+        predicate to fingerprint and snapshot. With a registered hook channel
+        as the ONLY live channel, the fingerprint is non-empty and the
+        snapshot contains the channel; a workdir-less predicate would yield
+        an empty fingerprint/snapshot for the hook channel.
+        """
+        from types import SimpleNamespace
+
+        from lingtai.kernel.base_agent import BaseAgent
+
+        workdir = tmp_path / "agent-telegram"
+        agent = SimpleNamespace(
+            _working_dir=workdir,
+            _notification_store=notification_store_for(workdir),
+            _last_telegram_card_fingerprint=None,
+        )
+        replace_hook_manifests_for_test(
+            agent, [_hook_manifest(channel="hook_comm")]
+        )
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "hook_comm",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        seen: dict[str, object] = {}
+        store = agent._notification_store
+        real_fp = store.fingerprint
+        real_snapshot = store.snapshot
+
+        def _fp_spy(pred):
+            seen["fp"] = pred
+            result = real_fp(pred)
+            seen["fp_result"] = result
+            return result
+
+        def _snapshot_spy(pred):
+            seen["snapshot"] = pred
+            result = real_snapshot(pred)
+            seen["snapshot_result"] = result
+            return result
+
+        monkeypatch.setattr(store, "fingerprint", _fp_spy)
+        monkeypatch.setattr(store, "snapshot", _snapshot_spy)
+
+        BaseAgent._setup_telegram_task_card(agent)
+
+        fp_pred = seen["fp"]
+        snapshot_pred = seen["snapshot"]
+        assert fp_pred("hook_comm") is True
+        assert snapshot_pred("hook_comm") is True
+        assert fp_pred("unrelated_channel") is False
+        assert snapshot_pred("unrelated_channel") is False
+        assert seen["fp_result"], (
+            "fingerprint must be non-empty when a hook channel is the "
+            "only live channel"
+        )
+        assert "hook_comm" in seen["snapshot_result"]
+
+    @pytest.mark.parametrize(
+        "site_name",
+        [
+            "karma_sleep",
+            "soul_flow",
+            "nudge_current_entries",
+            "nudge_goal_check",
+            "worker_recovery",
+            "telegram_task_card",
+        ],
+    )
+    def test_workdir_bearing_predicate_passed_at_call_site(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        site_name: str,
+    ) -> None:
+        """R1/R5/R6/R7: each of the six call sites must consult the channel
+        allow predicate with the agent's workdir. A spy records the
+        ``workdir`` argument; a reverted workdir-less predicate records
+        ``None`` and fails this test."""
+        from types import SimpleNamespace
+
+        from lingtai.kernel import notifications as notif_mod
+        from lingtai.kernel.nudge import goal as nudge_goal
+        from lingtai.kernel.state import AgentState
+
+        workdir = tmp_path / "agent-a"
+
+        if site_name == "karma_sleep":
+            agent = self._make_sleep_sync_agent(workdir)
+        elif site_name == "soul_flow":
+            agent = SimpleNamespace(
+                _state=AgentState.IDLE,
+                _soul_timer=None,
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _notification_fp=(),
+                _logs=[],
+            )
+            agent._log = lambda event_type, **fields: agent._logs.append(
+                (event_type, fields)
+            )
+            agent._sync_notifications = lambda: None
+            agent._run_consultation_fire = lambda: None
+        elif site_name == "nudge_current_entries":
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+            )
+        elif site_name == "nudge_goal_check":
+            agent = SimpleNamespace(
+                _state=AgentState.IDLE,
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _goal_reminder_last_check_at=0.0,
+            )
+        elif site_name == "worker_recovery":
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+            )
+        else:  # telegram_task_card
+            agent = SimpleNamespace(
+                _working_dir=workdir,
+                _notification_store=notification_store_for(workdir),
+                _last_telegram_card_fingerprint=None,
+            )
+
+        replace_hook_manifests_for_test(
+            agent, [_hook_manifest(channel="hook_comm")]
+        )
+        sync_hook_registry(agent)
+        publish_test_payload(
+            agent,
+            "hook_comm",
+            {"header": "hook ping", "priority": "normal", "data": {}},
+        )
+
+        seen: list[object] = []
+        real_ica = notif_mod.is_channel_allowed
+        real_gap = notif_mod._get_allow_predicate
+
+        def _spy_ica(channel, *, workdir=None):
+            seen.append(workdir)
+            return real_ica(channel, workdir=workdir)
+
+        def _spy_gap(workdir=None):
+            seen.append(workdir)
+            return real_gap(workdir)
+
+        if site_name in ("karma_sleep", "soul_flow", "telegram_task_card"):
+            monkeypatch.setattr(notif_mod, "is_channel_allowed", _spy_ica)
+        elif site_name == "nudge_goal_check":
+            # goal.py binds _get_allow_predicate at module import time.
+            monkeypatch.setattr(nudge_goal, "_get_allow_predicate", _spy_gap)
+        else:
+            monkeypatch.setattr(notif_mod, "_get_allow_predicate", _spy_gap)
+
+        if site_name == "karma_sleep":
+            from lingtai.tools.system.karma import _sleep as karma_sleep
+
+            karma_sleep(agent, {"reason": "test"})
+        elif site_name == "soul_flow":
+            from lingtai.tools.soul.flow import _soul_whisper
+
+            _soul_whisper(agent)
+        elif site_name == "nudge_current_entries":
+            from lingtai.kernel.nudge import _current_entries
+
+            _current_entries(agent)
+        elif site_name == "nudge_goal_check":
+            from lingtai.kernel.nudge.goal import check as goal_check
+
+            goal_check(agent)
+        elif site_name == "worker_recovery":
+            from lingtai.kernel.base_agent.worker_recovery import (
+                _collect_notification_metadata,
+            )
+
+            _collect_notification_metadata(agent)
+        else:
+            from lingtai.kernel.base_agent import BaseAgent
+
+            BaseAgent._setup_telegram_task_card(agent)
+
+        assert seen, f"{site_name} did not consult the channel predicate"
+        assert all(w == str(workdir) for w in seen), (
+            f"{site_name} must pass workdir={str(workdir)!r}, "
+            f"got {seen!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

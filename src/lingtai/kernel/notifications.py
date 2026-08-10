@@ -24,7 +24,9 @@ The basename is the *tool* whose namespace owns the notification.
 
 from __future__ import annotations
 
+import json
 import re
+import threading
 from datetime import datetime, timezone
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -47,6 +49,36 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "tool_loop_guard",
 }
 _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST: tuple[str, ...] = ("mcp.",)
+
+# External-hook registered channels, mirrored from each agent's
+# `.notification/hooks.json` manifest registry. Keyed by the agent's working
+# directory (the string form of ``agent._working_dir``). The mirror is seeded
+# lazily per workdir by ``sync_hook_registry`` (called from the notification
+# sync path) and mutated atomically by the add/edit/drop tool handlers, so the
+# module-global allow predicate can consult it without threading per-agent
+# state through call sites.
+_REGISTERED_HOOK_CHANNELS: dict[str | None, set[str]] = {}
+
+# Serializes all four mirror books (channels, stat cache, seeded set,
+# blocked-channel warned set) so heartbeat-thread seeding and
+# tool-call-thread mutation cannot interleave and leave the mirror
+# reflecting an older committed registry.
+_HOOK_REGISTRY_LOCK = threading.Lock()
+
+# Workdirs already seeded from disk this process (avoids re-reading hooks.json
+# on every sync tick).
+_HOOK_REGISTRY_SEEDED: set[str | None] = set()
+
+# Cheap staleness fingerprint per workdir: ``(st_mtime_ns, st_size)`` of the
+# registry file at last seed, so an out-of-band write from another process
+# (sibling CLI, Telegram server, hook installer) re-seeds the mirror without
+# re-reading on every tick.
+_HOOK_REGISTRY_STAT: dict[str | None, tuple[int, int] | None] = {}
+
+# Blocked-attempt warnings already emitted per workdir+channel, so a
+# repeatedly-present unregistered channel does not spam system events. Cleared
+# when the channel becomes registered (then a later re-block can warn again).
+_BLOCKED_CHANNEL_WARNED: dict[str | None, set[str]] = {}
 
 # Channels that are valid notification surfaces but must not be cleared via
 # generic system.dismiss because they are source-of-truth files.
@@ -87,8 +119,13 @@ def _is_large_result_event(ev: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_allow_predicate() -> callable:
-    """Return a closure that answers ``is_channel_allowed`` for the store."""
+def _build_allow_predicate(workdir: str | None = None) -> callable:
+    """Return a closure that answers ``is_channel_allowed`` for the store.
+
+    ``workdir`` scopes registered hook channels to the owning agent; when
+    ``None`` (no agent context) hook channels are NOT allowed — only the
+    static set and the ``mcp.*`` prefix family pass.
+    """
 
     def _allow(channel: str) -> bool:
         try:
@@ -97,23 +134,32 @@ def _build_allow_predicate() -> callable:
             return False
         if channel in _NOTIFICATION_CHANNEL_ALLOWLIST:
             return True
-        return any(
+        if any(
             channel.startswith(prefix)
             for prefix in _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST
-        )
+        ):
+            return True
+        if workdir is None:
+            return False
+        # Registered external-hook channels are allowlisted through the
+        # module-level mirror for THIS agent's workdir only.
+        return channel in _REGISTERED_HOOK_CHANNELS.get(workdir, ())
 
     return _allow
 
 
-# Cached allow predicate — rebuilt if the allowlist changes at runtime.
-_allow_predicate: callable | None = None
+# Cached allow predicate per workdir — rebuilt if the allowlist changes.
+_allow_predicates: dict[str | None, callable] = {}
 
 
-def _get_allow_predicate() -> callable:
-    global _allow_predicate
-    if _allow_predicate is None:
-        _allow_predicate = _build_allow_predicate()
-    return _allow_predicate
+def _get_allow_predicate(workdir: str | None = None) -> callable:
+    if workdir not in _allow_predicates:
+        _allow_predicates[workdir] = _build_allow_predicate(workdir)
+    return _allow_predicates[workdir]
+
+
+def _invalidate_allow_predicates() -> None:
+    _allow_predicates.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -139,21 +185,30 @@ def validate_channel_name(channel: str) -> None:
         )
 
 
-def is_channel_allowed(channel: str) -> bool:
-    """Return whether ``channel`` is on the notification allowlist."""
+def is_channel_allowed(channel: str, *, workdir: str | None = None) -> bool:
+    """Return whether ``channel`` is on the notification allowlist.
+
+    Hook channels are scoped to the owning agent: pass the agent's working
+    directory as ``workdir`` to consult its registered-hook mirror. Without a
+    workdir (no agent context) hook channels are NOT allowed.
+    """
     try:
         validate_channel_name(channel)
     except ValueError:
         return False
     if channel in _NOTIFICATION_CHANNEL_ALLOWLIST:
         return True
-    return any(channel.startswith(prefix) for prefix in _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST)
+    if any(channel.startswith(prefix) for prefix in _NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST):
+        return True
+    if workdir is None:
+        return False
+    return channel in _REGISTERED_HOOK_CHANNELS.get(workdir, ())
 
 
-def validate_allowed_channel(channel: str) -> None:
+def validate_allowed_channel(channel: str, *, workdir: str | None = None) -> None:
     """Validate syntax and allowlist membership for a notification channel."""
     validate_channel_name(channel)
-    if not is_channel_allowed(channel):
+    if not is_channel_allowed(channel, workdir=workdir):
         allowed = sorted(_NOTIFICATION_CHANNEL_ALLOWLIST)
         prefixes = list(_NOTIFICATION_CHANNEL_PREFIX_ALLOWLIST)
         raise ValueError(
@@ -164,10 +219,367 @@ def validate_allowed_channel(channel: str) -> None:
 
 def register_notification_channel(channel: str) -> None:
     """Allow an in-process producer to register an exact notification channel."""
-    global _allow_predicate
     validate_channel_name(channel)
     _NOTIFICATION_CHANNEL_ALLOWLIST.add(channel)
-    _allow_predicate = None  # invalidate cache
+    _invalidate_allow_predicates()
+
+
+# ---------------------------------------------------------------------------
+# Hook registry — external-hook whitelist (family 8 of the Notification Store)
+# ---------------------------------------------------------------------------
+
+
+def _workdir_key(agent) -> str | None:
+    """Return the module-registry key for an agent (its working directory).
+
+    ``None`` when the agent has no working directory, so hook channels are
+    never allowlisted for agents without a real workdir.
+    """
+    workdir = getattr(agent, "_working_dir", None)
+    if workdir is None:
+        return None
+    return str(workdir)
+
+
+def sync_hook_registry(agent) -> None:
+    """Seed the module-level hook-channel mirror from ``.notification/hooks.json``.
+
+    Re-seeds whenever the registry file's ``(mtime_ns, size)`` changes, so an
+    out-of-band write from another process (sibling CLI, Telegram server, hook
+    installer) is picked up without re-reading the file on every tick. The
+    seeded marker is only set after a successful load; a transient store
+    failure is logged and retried on the next sync.
+    """
+    workdir = _workdir_key(agent)
+    if workdir is None:
+        # Workdir-less agents can never consult the mirror (both
+        # _build_allow_predicate and is_channel_allowed short-circuit on a
+        # None workdir), so seeding it would only write dead entries keyed by
+        # None. Skip seeding entirely.
+        return
+    store = getattr(agent, "_notification_store", None)
+    try:
+        current_stat = store.stat_hook_registry()
+    except Exception:
+        current_stat = None
+    with _HOOK_REGISTRY_LOCK:
+        if _HOOK_REGISTRY_STAT.get(workdir) == current_stat and workdir in _HOOK_REGISTRY_SEEDED:
+            return
+        try:
+            manifests = store.load_hook_manifests()
+        except Exception as exc:
+            _log_hook_registry_failure(agent, "load", exc)
+            return
+        channels = {
+            m.get("channel")
+            for m in manifests
+            if isinstance(m, dict) and isinstance(m.get("channel"), str)
+        }
+        channels = {c for c in channels if c}
+        _REGISTERED_HOOK_CHANNELS[workdir] = channels
+        _HOOK_REGISTRY_STAT[workdir] = current_stat
+        _HOOK_REGISTRY_SEEDED.add(workdir)
+        _invalidate_allow_predicates()
+
+
+def _log_hook_registry_failure(agent, phase: str, exc: Exception) -> None:
+    try:
+        agent._log(
+            "notification_hook_registry_error",
+            phase=phase,
+            error=str(exc)[:300],
+        )
+    except Exception:
+        pass
+
+
+def _update_hook_registry(agent, mutator) -> object:
+    """Run a pure manifest-list mutation under the store lock and re-mirror.
+
+    Returns the mutator's policy value. Any exception from the store propagates
+    to the caller; the mirror is refreshed only on success so a failed write
+    never leaves in-memory state ahead of disk.
+    """
+    store = agent._notification_store
+    result = store.update_hook_manifests(mutator)
+    workdir = _workdir_key(agent)
+    with _HOOK_REGISTRY_LOCK:
+        _HOOK_REGISTRY_SEEDED.discard(workdir)
+        _HOOK_REGISTRY_STAT.pop(workdir, None)
+    sync_hook_registry(agent)
+    return result.value
+
+
+def _manifest_channel(manifest: dict) -> str | None:
+    channel = manifest.get("channel")
+    return channel if isinstance(channel, str) and channel else None
+
+
+_REQUIRED_HOOK_FIELDS = (
+    "name",
+    "channel",
+    "source",
+    "description",
+    "how_to_modify",
+    "how_to_cancel",
+)
+
+
+def _validate_hook_manifest(manifest: dict) -> None:
+    """Validate a hook manifest's required fields and channel syntax."""
+    if not isinstance(manifest, dict):
+        raise ValueError("hook manifest must be a JSON object")
+    for field in _REQUIRED_HOOK_FIELDS:
+        value = manifest.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"hook manifest requires a non-empty string '{field}'")
+    channel = _manifest_channel(manifest)
+    validate_channel_name(channel)
+    if channel in _NOTIFICATION_CHANNEL_ALLOWLIST:
+        raise ValueError(
+            f"channel '{channel}' is a built-in notification channel; "
+            "pick a hook-owned name"
+        )
+    from .notification_store import STORE_RESERVED_NON_CHANNEL_STEMS
+
+    if channel in STORE_RESERVED_NON_CHANNEL_STEMS:
+        raise ValueError(
+            f"channel '{channel}' is reserved by the notification store"
+        )
+
+
+def _find_manifest(manifests: list[dict], name: str) -> int | None:
+    for idx, manifest in enumerate(manifests):
+        if isinstance(manifest, dict) and manifest.get("name") == name:
+            return idx
+    return None
+
+
+def add_hook(agent, manifest: dict) -> dict:
+    """Register a new external-hook manifest (notification add).
+
+    Validates the manifest, checks the channel is not already used by another
+    hook, appends it to the disk registry, and refreshes the module mirror.
+    Returns a result dict with status / reason / value.
+    """
+    _validate_hook_manifest(manifest)
+    name = manifest["name"]
+    channel = _manifest_channel(manifest)
+
+    def _mutator(current: list[dict]) -> tuple[list[dict], bool, object]:
+        if _find_manifest(current, name) is not None:
+            return current, False, {"reason": "duplicate_name", "name": name}
+        for existing in current:
+            if _manifest_channel(existing) == channel:
+                return current, False, {
+                    "reason": "channel_in_use",
+                    "channel": channel,
+                    "name": existing.get("name"),
+                }
+        return current + [dict(manifest)], True, {"reason": "added", "name": name}
+
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # A corrupt or unreadable registry must not be relabelled as an input
+        # error (JSONDecodeError is a ValueError, which the tool layer's
+        # validation catch would swallow) nor escape as a raw OSError —
+        # surface the same structured result ``list_hooks`` returns.
+        return _hook_registry_load_failed(exc)
+    if value.get("reason") == "added":
+        clear_blocked_channel_warning(agent, channel)
+        return {"status": "ok", **value}
+    return {"status": "error", **value}
+
+
+def edit_hook(agent, name: str, fields: dict) -> dict:
+    """Update a registered hook's fields (notification edit).
+
+    ``fields`` must be a subset of the editable manifest fields. Changing the
+    channel re-validates uniqueness. Returns result with status / reason / name.
+    """
+    if not name:
+        raise ValueError("edit_hook requires a hook name")
+    editable = {
+        "version",
+        "source",
+        "description",
+        "channel",
+        "how_to_modify",
+        "how_to_cancel",
+        "instructions",
+    }
+    unknown = set(fields) - editable
+    if unknown:
+        raise ValueError(f"not editable hook fields: {sorted(unknown)}")
+    provided = {k: v for k, v in fields.items() if v is not None}
+    if not provided:
+        return {"status": "ok", "reason": "no_change", "name": name}
+
+    def _mutator(current: list[dict]) -> tuple[list[dict], bool, object]:
+        idx = _find_manifest(current, name)
+        if idx is None:
+            return current, False, {"reason": "not_found", "name": name}
+        updated = dict(current[idx])
+        updated.update(provided)
+        # Validate the merged manifest (catches bad channel edits).
+        try:
+            _validate_hook_manifest(updated)
+        except ValueError as exc:
+            # Same reason add_hook uses for the identical refusal.
+            return current, False, {"reason": "invalid_manifest", "message": str(exc)}
+        new_channel = _manifest_channel(updated)
+        for idx2, existing in enumerate(current):
+            if idx2 == idx:
+                continue
+            if _manifest_channel(existing) == new_channel:
+                return current, False, {
+                    "reason": "channel_in_use",
+                    "channel": new_channel,
+                    "name": existing.get("name"),
+                }
+        next_manifests = list(current)
+        next_manifests[idx] = updated
+        return next_manifests, True, {"reason": "edited", "name": name}
+
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # Same structured result as ``list_hooks`` — never an input-validation
+        # error and never a raw raise (see add_hook).
+        return _hook_registry_load_failed(exc)
+    if value.get("reason") == "edited":
+        new_channel = provided.get("channel")
+        if new_channel is not None:
+            clear_blocked_channel_warning(agent, new_channel)
+        return {"status": "ok", **value}
+    return {"status": "error", **value}
+
+
+def drop_hook(agent, name: str) -> dict:
+    """Remove a registered hook and revoke its channel (notification drop).
+
+    Only removes the registration evidence; the hook process itself is the
+    owner's job (documented in ``how_to_cancel``).
+    """
+    if not name:
+        raise ValueError("drop_hook requires a hook name")
+
+    def _mutator(current: list[dict]) -> tuple[list[dict], bool, object]:
+        idx = _find_manifest(current, name)
+        if idx is None:
+            return current, False, {"reason": "not_found", "name": name}
+        next_manifests = list(current)
+        next_manifests.pop(idx)
+        return next_manifests, True, {"reason": "dropped", "name": name}
+
+    try:
+        value = _update_hook_registry(agent, _mutator)
+    except (json.JSONDecodeError, OSError) as exc:
+        # Same structured result as ``list_hooks`` — never an input-validation
+        # error and never a raw raise (see add_hook).
+        return _hook_registry_load_failed(exc)
+    if value.get("reason") == "dropped":
+        return {"status": "ok", **value}
+    return {"status": "error", **value}
+
+
+def _hook_registry_load_failed(exc: Exception) -> dict[str, object]:
+    """Structured error shared by list/add/drop/edit for a broken registry.
+
+    A corrupt (invalid-JSON) or unreadable ``hooks.json`` must never be
+    reported as "nothing registered" nor mislabelled as an input-validation
+    error (``json.JSONDecodeError`` is a ``ValueError``), nor escape as a raw
+    ``OSError``.
+    """
+    return {
+        "status": "error",
+        "reason": "hook_registry_load_failed",
+        "message": f"Could not load hooks.json: {str(exc)[:300]}",
+    }
+
+
+def list_hooks(agent) -> list[dict] | dict[str, object]:
+    """Return the registered hook manifests for this agent (notification list).
+
+    A store load failure is surfaced as a structured ``status: error`` result
+    (instead of an empty list) so a corrupt ``hooks.json`` is distinguishable
+    from "nothing registered" while the agent debugs it.
+    """
+    try:
+        return agent._notification_store.load_hook_manifests()
+    except Exception as exc:
+        return _hook_registry_load_failed(exc)
+
+
+def flag_unregistered_channel(agent, channel: str) -> None:
+    """Emit a warn-and-flag system event for a blocked unregistered channel.
+
+    D2 behavior: the channel's notification does NOT pass through, but the
+    attempt becomes observable so the agent can investigate and add the hook
+    if legitimate. Deduped per workdir+channel until the channel registers.
+    """
+    workdir = _workdir_key(agent)
+    if is_channel_allowed(channel, workdir=workdir):
+        return
+    with _HOOK_REGISTRY_LOCK:
+        warned = _BLOCKED_CHANNEL_WARNED.setdefault(workdir, set())
+        if channel in warned:
+            return
+        warned.add(channel)
+    try:
+        agent._enqueue_system_notification(
+            source="notification_hook",
+            ref_id=f"blocked_channel:{channel}",
+            body=(
+                f"Channel '{channel}' tried to notify you but is not registered. "
+                "Notifications from unregistered channels do not pass through. "
+                "Run notification(action='list') to inspect hooks, or "
+                "notification(action='add', ...) to register this hook if it "
+                "is legitimate."
+            ),
+            skip_if_ref_id_exists=True,
+        )
+    except Exception:
+        pass
+
+
+def is_present_channel_flagable(name: str) -> bool:
+    """Return whether a present ``.notification`` filename should be D2-flagged.
+
+    Skips kernel-private dotfiles (``.nudge_state.json``), non-``.json``
+    entries, and stems that fail channel-name validation, so the D2 scan never
+    emits an unresolvable "register this hook" event for files that cannot
+    become channels.
+    """
+    if not name.endswith(".json"):
+        return False
+    stem = name[: -len(".json")]
+    if stem.startswith("."):
+        return False
+    try:
+        validate_channel_name(stem)
+    except ValueError:
+        return False
+    return True
+
+
+def clear_blocked_channel_warning(agent, channel: str) -> None:
+    """Drop the warn-and-flag dedupe marker when a channel registers."""
+    with _HOOK_REGISTRY_LOCK:
+        warned = _BLOCKED_CHANNEL_WARNED.get(_workdir_key(agent))
+        if warned:
+            warned.discard(channel)
+
+
+def reset_hook_registry_for_tests() -> None:
+    """Clear module-level hook registry state (test isolation)."""
+    with _HOOK_REGISTRY_LOCK:
+        _REGISTERED_HOOK_CHANNELS.clear()
+        _HOOK_REGISTRY_SEEDED.clear()
+        _HOOK_REGISTRY_STAT.clear()
+        _BLOCKED_CHANNEL_WARNED.clear()
+        _invalidate_allow_predicates()
 
 
 def register_generic_dismiss_guard(channel: str, suggested_verb: str) -> None:
@@ -227,7 +639,7 @@ def submit(
         instructions: Optional agent-facing directive describing how to
             dismiss or act on this notification.
     """
-    validate_allowed_channel(tool_name)
+    validate_allowed_channel(tool_name, workdir=_workdir_key(agent))
 
     payload = {
         "header": header,
@@ -260,7 +672,7 @@ def clear(agent, tool_name: str) -> None:
     Errors other than FileNotFoundError are silently suppressed — this
     is the existing best-effort contract for producers.
     """
-    validate_allowed_channel(tool_name)
+    validate_allowed_channel(tool_name, workdir=_workdir_key(agent))
     store = agent._notification_store
     try:
         store.clear(tool_name)
@@ -279,7 +691,7 @@ def clear_with_result(agent, channel: str) -> bool:
     idempotent no-op. Other ``OSError`` subclasses propagate to the caller
     so agent-facing dismiss can surface honest failures.
     """
-    validate_allowed_channel(channel)
+    validate_allowed_channel(channel, workdir=_workdir_key(agent))
     store = agent._notification_store
     return store.clear(channel)
 
@@ -529,7 +941,7 @@ def dismiss_channel(
     is untouched.
     """
     try:
-        validate_allowed_channel(channel)
+        validate_allowed_channel(channel, workdir=_workdir_key(agent))
     except ValueError as e:
         try:
             agent._log(

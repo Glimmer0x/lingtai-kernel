@@ -1325,7 +1325,13 @@ class BaseAgent:
         the fingerprint stays at its prior value and the next heartbeat
         tick retries.
         """
-        from ..notifications import is_channel_allowed
+        from ..notifications import (
+            _workdir_key,
+            flag_unregistered_channel,
+            is_channel_allowed,
+            is_present_channel_flagable,
+            sync_hook_registry,
+        )
         from ..meta_block import skeletonize_notification_holder
         from .worker_recovery import (
             is_worker_interface_poisoned,
@@ -1352,10 +1358,35 @@ class BaseAgent:
 
         store = self._notification_store
 
-        def _allow(channel: str) -> bool:
-            return is_channel_allowed(channel)
+        # Seed the module-level hook-channel mirror from hooks.json so the
+        # allow predicate below sees registered external-hook channels.
+        sync_hook_registry(self)
 
-        fp = store.fingerprint(_allow)
+        def _allow(channel: str) -> bool:
+            return is_channel_allowed(channel, workdir=_workdir_key(self))
+
+        # One allow-all fingerprint pass; the allow-filtered view is derived
+        # from it so the steady-state sync does a single hash pass, not two.
+        present_fp = store.fingerprint(lambda ch: True)
+        fp = tuple(e for e in present_fp if _allow(e[0][: -len(".json")]))
+
+        # Warn-and-flag (D2): detect present-but-unregistered channel files.
+        # Iterates only when the allow-all view changed (cache), and skips
+        # kernel-private dotfiles (e.g. .nudge_state.json) and syntactically
+        # invalid stems so no unresolvable "register this hook" event is
+        # emitted. Best-effort; never blocks sync.
+        if present_fp != getattr(self, "_notification_present_fp", ()):
+            self._notification_present_fp = present_fp
+            for name, _, _ in present_fp:
+                if not is_present_channel_flagable(name):
+                    continue
+                stem = name[: -len(".json")]
+                if not is_channel_allowed(
+                    stem,
+                    workdir=_workdir_key(self),
+                ):
+                    flag_unregistered_channel(self, stem)
+
         if fp == self._notification_fp:
             return
 
@@ -2467,15 +2498,20 @@ class BaseAgent:
         and Telegram independently projects that artifact read-only while its
         automatic slot remains manager-owned.
         """
-        from ..notifications import is_channel_allowed
+        from ..notifications import _workdir_key, is_channel_allowed
 
         store = self._notification_store
-        fp = store.fingerprint(is_channel_allowed)
+        workdir = _workdir_key(self)
+        fp = store.fingerprint(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         last_fp = getattr(self, "_last_telegram_card_fingerprint", None)
         if fp == last_fp:
             return
 
-        notifications = store.snapshot(is_channel_allowed)
+        notifications = store.snapshot(
+            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        )
         telegram_data = notifications.get("mcp.telegram")
         if not telegram_data or not isinstance(telegram_data, dict):
             return
