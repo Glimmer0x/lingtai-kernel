@@ -14,6 +14,7 @@ related_files:
 - src/lingtai/adapters/posix/ANATOMY.md
 - src/lingtai/adapters/windows/ANATOMY.md
 - src/lingtai/auth/ANATOMY.md
+- src/lingtai/intrinsic_skills/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
 - src/lingtai/kernel/base_agent/ANATOMY.md
 - src/lingtai/kernel/base_agent/CONTRACT.md
@@ -22,6 +23,7 @@ related_files:
 - src/lingtai/kernel/refresh_watcher/ANATOMY.md
 - src/lingtai/llm/openai/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
@@ -29,6 +31,7 @@ related_files:
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/soul/ANATOMY.md
+- tests/ANATOMY.md
 maintenance: |
   This file is the one canonical environment-variable registry. Keep one row for
   each real environment name with its default, accepted values, scope,
@@ -56,6 +59,7 @@ reports, prompts, or this registry.
 | `LINGTAI_ACTIVE_STUCK_THRESHOLD_S` | `600` seconds | Numeric seconds; values below `30` clamp to `30` | ACTIVE no-progress watchdog | When the watchdog evaluates a turn | Invalid values fall back to `600` | `src/lingtai/kernel/base_agent/lifecycle.py` | Watchdog tuning can affect availability; it grants no capability |
 | `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` | `0.4` | Finite float strictly greater than `0` and less than `1` | Main-agent and daemon metadata snapshots | Every metadata snapshot through the shared renderer | Missing, blank, non-numeric, non-finite, zero, negative, or `>=1` values fall back to `0.4` | `src/lingtai/kernel/config.py`, `src/lingtai/kernel/meta_block.py` | Advisory metadata only; never authorizes access or exposes prompt text |
 | `LINGTAI_CACHE_MISS_BUDGET` | unset; `1_000_000` from `manifest.cache_miss_budget` | Positive integer; one agent/process | Soft since-last-molt cache-miss budget guard (restamps the `cache miss budget {N} reached, molt now` reminder and surfaces budget/remaining under `agent_meta.agent_state`) | Every cache-miss budget resolution (each meta snapshot) | Missing, non-int, bool, zero, or negative values fall back to the configured/default budget; the env never disables the guard below a positive int | `src/lingtai/kernel/meta_block.py` | Soft molt steering only; never blocks; not an authorization boundary. Governance delta: a budget that previously required a config-owner edit to schema-validated `manifest.cache_miss_budget` is now additionally agent-writable via `env_file`, with no upper bound and no validation feedback — an agent can set a huge value and silence its own molt nudge |
+| `LINGTAI_NOTIFICATION_MAX_CHARS` | `10000` | Positive integer; values above `10000` clamp to `10000` | Model-visible persistent notification envelope cap (`notification_persistent` block) | Every persistent notification payload build; no restart | Missing, blank, non-numeric, zero, or negative values fall back to `10000` | `src/lingtai/kernel/meta_block.py` | Context-size steering only; never grants access, and message ids are never dropped by the cap |
 | `LINGTAI_REFRESH_ENV_OVERWRITE` | unset and off | `1` enables one refresh overwrite | One refresh handoff | Boot or refresh setup; consumed and removed after use | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/agent.py` | Do not log inherited or env-file contents |
 | `LINGTAI_RUNTIME_PYTHON` | unset; caller uses `sys.executable` | Local executable path | Runtime self-check and host-tool routing | When the consumer is invoked; relaunch to change interpreter | Missing or invalid is a caller/configuration error | `src/lingtai/cli.py` and runtime checks | A path is not a credential or a trust decision |
 | `LINGTAI_RUNTIME_VENV` | unset | Local virtualenv directory path | Host-tool runtime hint | When a host tool is invoked; new process sees changes | Missing is tolerated when another interpreter is available | `src/lingtai/cli.py` | Do not infer package trust or freshness from an unrelated shell |
@@ -71,6 +75,7 @@ reports, prompts, or this registry.
 | `LINGTAI_SKIP_RUST_BUILD` | unset and off | `1` enables skipping the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values are treated as off | `setup.py` and wheel tests | Never ship a wheel claiming a sidecar that was not built |
 | `LINGTAI_REQUIRE_RUST_BUILD` | unset and off | `1` requires the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values fail the required-build path | `setup.py` and wheel tests | Build policy is not runtime authorization |
 | `LINGTAI_SOUL_FLOW_ENABLED` | disabled unless host enables it | `1`/`0` and documented component boolean forms | Optional soul-flow capability | Capability bootstrap; refresh or restart after change | Treated as disabled | `src/lingtai/tools/soul` | Not a command-execution or approval switch |
+| `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking (required by thinking-mode endpoints such as DeepSeek V4) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
 
 ## MCP and provider configuration
 
@@ -89,6 +94,8 @@ reports, prompts, or this registry.
 | `LINGTAI_CODEX_RESPONSES_TRACE_PATH` | unset; adapter default | Local path | Codex Responses-wire diagnostics | Session construction; restart session | Unwritable or invalid path fails closed or disables tracing | Codex adapter | Trace files can contain sensitive prompts; restrict permissions |
 | `LINGTAI_CLAUDE_MANAGED_ROOT` | Host-specific or unset | Local directory path | Claude launcher | Launch; relaunch after change | Invalid path fails closed | Claude adapter | Never widen the root from untrusted model text |
 | `LINGTAI_CLAUDE_INTERACTIVE_FIFO` | unset | Local FIFO or path | Claude interactive launch | Interactive launch; relaunch after change | Wrong type or permissions fail closed | Claude adapter | Protect the FIFO from other users and processes |
+| `LINGTAI_TASKCARD_POLL_INTERVAL` | `5.0` seconds | Positive numeric seconds (float) | Telegram automatic Task Card event-tail poll interval | Telegram manager load/start; restart after change | Non-numeric value fails manager load | `src/lingtai/mcp_servers/telegram/manager.py` | Display cadence only; no delivery or authorization effect |
+| `LINGTAI_WHATSAPP_SESSION_DIR` | `.wwebjs_auth` | Local directory path | WhatsApp LocalAuth session storage | WhatsApp bridge start; restart after change | Invalid path fails the bridge session | `src/lingtai/mcp_servers/whatsapp/` | Keep session credentials private; never log the directory contents |
 
 ## Daemon and test composition
 
@@ -110,6 +117,7 @@ surface is explicit; do not set test hooks in a production agent environment.
 | `LINGTAI_FAKE_CLI_REPORT` | unset | Test-only path or selector | Fake CLI report | Fake CLI invocation; rerun test after change | Invalid value fails the test | `tests/_fake_*` | Keep artifacts in a test temporary directory |
 | `LINGTAI_TEST_CONFIG` | unset | Test-only string or path | Test fixture setup | Fixture construction; rerun test after change | Invalid value fails fixture setup | `tests/` | No production behavior |
 | `LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD` | unset | Test-only local path | Fake Claude signal record | Fake launcher invocation; rerun test after change | Invalid value fails the test | `tests/` | Keep artifacts in a test temporary directory |
+| `LINGTAI_RUN_LIVE_KIMI_CODE` | unset and off | `1` enables the live Kimi Code integration test | Opt-in paid-call integration test | Test module import; rerun test after change | Values other than `1` disable the test | `tests/integration_test_kimi_code.py` | Test-only; requires explicit paid-call authorization |
 
 ## Reading and ownership notes
 

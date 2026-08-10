@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/local_commands/__init__.py
   - src/lingtai/mcp_servers/local_commands/core.py

@@ -270,7 +270,13 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
 # model-visible copy is compacted until it fits; message ids are never dropped
 # so delivery tracking still sees every message.  Payloads at or under the cap
 # are returned completely unchanged (no spill file, no marker).
+#
+# The cap is live-readable from ``LINGTAI_NOTIFICATION_MAX_CHARS`` (a positive
+# integer, clamped to the 10,000 ceiling so the context-size fix cannot be
+# disabled by accident); unset or invalid values fall back to this default.
 NOTIFICATION_PERSISTENT_MAX_CHARS = 10_000
+NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING = 10_000
+NOTIFICATION_PERSISTENT_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
 NOTIFICATION_PERSISTENT_OVERFLOW_KEY = "overflow"
 NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX = "notification-overflow-"
 # Heavy free-text fields compacted first, per lane family.  Structural fields
@@ -2846,10 +2852,9 @@ def _drop_notification_persistent_records(persistent: dict) -> dict:
 
     cursors = [0] * len(lanes)
     progressed = True
+    max_chars = _notification_persistent_max_chars()
     while progressed:
-        if _notification_persistent_envelope_chars(persistent) <= (
-            NOTIFICATION_PERSISTENT_MAX_CHARS
-        ):
+        if _notification_persistent_envelope_chars(persistent) <= max_chars:
             return persistent
         progressed = False
         for slot, (lane_payload, key) in enumerate(lanes):
@@ -2871,6 +2876,29 @@ def _drop_notification_persistent_records(persistent: dict) -> dict:
     return persistent
 
 
+def _notification_persistent_max_chars() -> int:
+    """Return the effective model-visible persistent notification cap.
+
+    Live-read ``LINGTAI_NOTIFICATION_MAX_CHARS`` at every payload build (no
+    restart needed, like the nudge env vars): a positive integer is used,
+    clamped to the 10,000 ceiling so the context-size fix cannot be silently
+    disabled; missing, blank, non-numeric, zero, or negative values fall back
+    to the default 10,000.  Kept as a function rather than a module constant so
+    an operator can tighten or relax the cap per-process without a code change.
+    """
+    raw = os.environ.get(NOTIFICATION_PERSISTENT_MAX_CHARS_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 0
+        # Env values are always str, so ``int(raw)`` never yields a ``bool``;
+        # the guard is kept for symmetry with the other env int parsers.
+        if not isinstance(value, bool) and value > 0:
+            return min(value, NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING)
+    return NOTIFICATION_PERSISTENT_MAX_CHARS
+
+
 def _cap_notification_persistent(agent, persistent: dict) -> dict:
     """Return *persistent* unchanged, or a compacted copy plus a spill file.
 
@@ -2880,7 +2908,8 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
     the spill path, the original size, and truncated content.
     """
     full_chars = _notification_persistent_envelope_chars(persistent)
-    if full_chars <= NOTIFICATION_PERSISTENT_MAX_CHARS:
+    max_chars = _notification_persistent_max_chars()
+    if full_chars <= max_chars:
         return persistent
 
     spill_path = _spill_notification_persistent(
@@ -2905,7 +2934,7 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
         )
         if (
             _notification_persistent_envelope_chars(compacted)
-            <= NOTIFICATION_PERSISTENT_MAX_CHARS
+            <= max_chars
         ):
             return compacted
     return _drop_notification_persistent_records(compacted)

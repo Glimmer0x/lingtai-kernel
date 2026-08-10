@@ -7,9 +7,9 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.9.0
+version: 0.9.1
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-10T02:00:00Z"
+last_changed_at: "2026-08-10T18:22:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -155,6 +155,32 @@ such an event, run `list` to inspect hooks and
    revokes the channel, then stop the watcher process per how_to_cancel.
 ```
 
+## Persistent block size cap
+
+The model-visible persistent notification envelope
+(`_meta.agent_meta.notifications.persistent`, the `notification_persistent`
+block) is re-serialized into provider context on every turn, so a busy hub
+agent with many unread emails plus several IM lanes could otherwise grow
+context fast and pay a large per-call cache miss. The kernel caps that block:
+
+- **At or under the cap** (default `10000` characters): the block is delivered
+  byte-identical, no spill file, no marker.
+- **Over the cap**: the FULL block is written atomically to
+  `<workdir>/logs/notification-overflow-<ts>.json`, and the model-visible copy
+  is compacted (heavy free-text fields 200 → 100 → 50 → 0, then id-only
+  message stubs) until it fits. The compacted block carries an `overflow`
+  marker `{path, full_chars, truncated}`. Message ids are never dropped, so
+  delivery tracking still sees every message and never re-delivers a
+  truncated one.
+
+The cap is **live-configurable** with the environment variable
+`LINGTAI_NOTIFICATION_MAX_CHARS` (positive integer; values above `10000` clamp
+back to `10000`; missing/blank/non-numeric/zero/negative values fall back to
+`10000`). It is read at every payload build, so setting it in the agent's
+`env_file` and refreshing applies it without editing `init.json`. This is a
+context-size steering knob only: it never grants access and never changes which
+messages are considered delivered.
+
 ## Nested reference catalog
 
 ```yaml
@@ -179,6 +205,7 @@ such an event, run `list` to inspect hooks and
 | Need / keywords | Read |
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
+| `notification_persistent` block size cap; `LINGTAI_NOTIFICATION_MAX_CHARS`; overflow spill file; compacted copy; message-id preservation | this section (`Persistent block size cap`) |
 | External-hook registration; `.notification/hooks.json`; `add`/`drop`/`edit`/`list`; whitelist gate; warn-and-flag on blocked channels | this section (`Hooks & whitelist`) + `reference/channel-model/SKILL.md` (effective allowlist) |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |
