@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import pytest
 
+from lingtai.tools.bash import _shell_dialect as dialect_mod
 from lingtai.tools.bash._shell_dialect import ShellKind, make_invocation_for_kind
 
 
-def test_posix_kind_preserves_historical_shell_true_form():
+def test_posix_kind_preserves_historical_shell_true_form(monkeypatch):
+    # The historical POSIX ``shell=True`` contract is the non-Darwin path;
+    # Darwin intentionally spawns ``[shell, "-lc", script]`` argv through the
+    # login shell (see test_macos_shell_adapter.py).  Pin the platform so the
+    # golden record below is deterministic on every host (macOS CI included).
+    monkeypatch.setattr(dialect_mod.platform, "system", lambda: "Linux")
     invocation = make_invocation_for_kind(ShellKind.POSIX, "echo hi")
     assert invocation.to_dict() == {
         "script": "echo hi", "executable": None, "argv": None,
