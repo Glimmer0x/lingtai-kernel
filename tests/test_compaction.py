@@ -155,6 +155,41 @@ class TestEstimateContextTokens:
         estimate = iface.estimate_context_tokens()
         assert estimate > 100  # 1000 chars / ~8 = ~125 tokens (Gemini) or ~4 = ~250 tokens (tiktoken)
 
+    def test_counts_tool_result_metadata_sidecar(self):
+        """Metadata sidecars must count toward the estimate (issue #1013).
+
+        Wire converters project ``ToolResultBlock.metadata`` into the
+        provider payload, so omitting it makes the estimate understate the
+        stateless-replay request size and can let /clear report a low
+        context usage while the next request overflows.
+        """
+
+        def _build(metadata: dict | None) -> ChatInterface:
+            iface = ChatInterface()
+            iface.add_system("You are a helpful assistant.")
+            iface.add_user_message("search")
+            iface.add_assistant_message(
+                [ToolCallBlock(id="call_1", name="search", args={"q": "x"})],
+            )
+            iface.add_tool_results(
+                [
+                    ToolResultBlock(
+                        id="call_1",
+                        name="search",
+                        content="small result",
+                        metadata=metadata or {},
+                    )
+                ]
+            )
+            return iface
+
+        plain = _build(None)
+        with_meta = _build({"agent_meta": {"guidance": "g" * 2000}})
+        assert plain.estimate_context_tokens() > 0
+        # The metadata-bearing history must estimate strictly larger than the
+        # identical history without the sidecar.
+        assert with_meta.estimate_context_tokens() > plain.estimate_context_tokens()
+
 
 # ---------------------------------------------------------------------------
 # Tests — Context-pressure metadata in BaseAgent._handle_request

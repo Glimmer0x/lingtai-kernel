@@ -9,6 +9,7 @@ from lingtai.kernel.llm_utils import (
     track_llm_usage,
     execute_tools_batch,
     send_with_timeout,
+    _send,
     _SubmitFn,
     _wait_for_worker_settle,
 )
@@ -231,3 +232,121 @@ def test_send_with_timeout_raises_worker_still_running_when_worker_never_settles
     finally:
         blocker.set()
         pool.shutdown(wait=True)
+
+
+# --- Worker-raised builtin TimeoutError disambiguation --------------------
+# On Python >= 3.11, socket.timeout / asyncio.TimeoutError / concurrent
+# futures TimeoutError are all the builtin TimeoutError. `except TimeoutError`
+# around future.result(timeout=...) therefore catches BOTH a wait-slice
+# expiry AND a worker that settled with its own TimeoutError. future.done()
+# is the discriminator; these tests pin that behavior.
+
+
+def test_wait_for_worker_settle_returns_when_worker_raised_timeout():
+    """A worker that settled with its own builtin TimeoutError (e.g. a raw
+    socket.timeout from the HTTP layer) is NOT a still-running worker: its
+    except-block already ran drop_trailing. Must return None instead of
+    raising WorkerStillRunningError."""
+    future = Future()
+    future.set_exception(TimeoutError("worker socket timeout"))
+
+    assert _wait_for_worker_settle(future, elapsed=10.0, agent_name="test") is None
+
+
+def test_send_surfaces_worker_timeout_immediately():
+    """A worker-raised builtin TimeoutError surfaces from _send promptly as
+    an ordinary TimeoutError, never as a WorkerStillRunningError (the old
+    misclassification busy-looped until retry_timeout, then poisoned the
+    ChatInterface for a worker that already finished)."""
+    import socket
+    import time as _time
+
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def worker():
+        _time.sleep(0.05)
+        raise socket.timeout("worker socket timeout")
+
+    def submit_fn():
+        return pool.submit(worker)
+
+    t0 = _time.monotonic()
+    try:
+        _send(submit_fn, pool, retry_timeout=30.0, agent_name="test")
+        raise AssertionError("expected TimeoutError from the worker")
+    except WorkerStillRunningError as exc:
+        raise AssertionError(f"worker TimeoutError misclassified: {exc}")
+    except TimeoutError:
+        pass  # plain worker TimeoutError - the correct classification
+    elapsed = _time.monotonic() - t0
+    pool.shutdown(wait=True)
+
+    # The worker raises at ~0.05s; surfacing must happen well before the 30s
+    # retry_timeout (a hot busy-loop would peg a core until then).
+    assert elapsed < 2.0, f"worker timeout not surfaced promptly: {elapsed:.2f}s"
+
+
+def test_send_worker_timeout_produces_no_warning_spam(caplog):
+    """A worker-raised TimeoutError must not trigger the 'LLM API not
+    responding' warning spam: the future is already done, so _send surfaces
+    it on the first iteration."""
+    import logging
+    import socket
+    import time as _time
+
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def worker():
+        _time.sleep(0.05)
+        raise socket.timeout("worker socket timeout")
+
+    def submit_fn():
+        return pool.submit(worker)
+
+    with caplog.at_level(logging.WARNING):
+        try:
+            _send(submit_fn, pool, retry_timeout=30.0, agent_name="test")
+        except TimeoutError:
+            pass
+    pool.shutdown(wait=True)
+
+    spam = [
+        r for r in caplog.records
+        if "LLM API not responding" in r.getMessage()
+    ]
+    assert len(spam) == 0, f"expected no 'not responding' warnings, got {len(spam)}"
+
+
+class _SettledRaceFuture(Future):
+    """Reproduces the wait-expiry race deterministically: the first
+    result(timeout=...) call raises TimeoutError as if the wait slice
+    expired, while the future is in fact already done. Models the instant
+    after future.result(timeout=wait) raises when the worker settles before
+    the watchdog re-checks future.done()."""
+
+    def __init__(self, value):
+        super().__init__()
+        self.set_result(value)
+        self._first_result_call = True
+
+    def result(self, timeout=None):
+        if self._first_result_call:
+            self._first_result_call = False
+            raise TimeoutError("simulated wait-slice expiry")
+        return super().result(timeout=timeout)
+
+
+def test_send_returns_value_when_future_settles_during_race():
+    """If the worker settles in the instant after the wait slice expires,
+    _send surfaces the settled value instead of logging a spurious warning
+    or waiting out retry_timeout."""
+    pool = ThreadPoolExecutor(max_workers=1)
+    value = FakeLLMResponse()
+
+    def submit_fn():
+        return _SettledRaceFuture(value)
+
+    result = _send(submit_fn, pool, retry_timeout=30.0, agent_name="test")
+    pool.shutdown(wait=True)
+
+    assert result is value

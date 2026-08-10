@@ -268,3 +268,94 @@ def test_kimi_code_missing_module_is_actionable(monkeypatch):
     assert result["status"] == "no_credentials"
     assert "kimi-code" in (result.get("error") or "")
     assert "no base_url" not in (result.get("error") or "")
+
+
+# ---------------------------------------------------------------------------
+# Schemeless / malformed base_url must never silently probe localhost
+# ---------------------------------------------------------------------------
+
+
+def test_schemeless_base_url_probed_as_https(monkeypatch):
+    """A bare hostname like `api.openai.com` is probed as https (port 443),
+    not resolved to localhost via getaddrinfo(None, ...)."""
+    from lingtai.kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 12
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="api.openai.com",
+            api_key_env=None,
+        )
+    assert captured == {"host": "api.openai.com", "port": 443}
+    assert result["status"] == "ok"
+    assert result["latency_ms"] == 12
+
+
+def test_schemeless_host_port_base_url_keeps_port(monkeypatch):
+    """`myhost:8080` is the urlparse scheme-swallowing case: the port must be
+    preserved and the host must not be dropped."""
+    from lingtai.kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 7
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="myhost:8080",
+            api_key_env=None,
+        )
+    assert captured == {"host": "myhost", "port": 8080}
+    assert result["status"] == "ok"
+
+
+@pytest.mark.parametrize("bad_url", ["https://", "http://host:notaport"])
+def test_invalid_base_url_reports_error_without_probing(bad_url):
+    """Hostless or non-numeric-port base URLs fail loud with an explicit
+    `invalid base_url` error — and never call the probe (no localhost
+    fallback, no escaping ValueError)."""
+    from lingtai.kernel import preset_connectivity
+    with patch.object(preset_connectivity, "_probe_host") as probe:
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url=bad_url,
+            api_key_env=None,
+        )
+    assert result["status"] == "unreachable"
+    assert "invalid base_url" in result["error"]
+    probe.assert_not_called()
+
+
+def test_http_scheme_still_defaults_to_port_80(monkeypatch):
+    """Explicit http:// URLs keep their port-80 default — normalization must
+    not disturb explicit-scheme handling."""
+    from lingtai.kernel import preset_connectivity
+    captured = {}
+    def fake_probe(host, port, timeout):
+        captured["host"] = host
+        captured["port"] = port
+        return 3
+    with patch.object(preset_connectivity, "_probe_host", side_effect=fake_probe):
+        result = preset_connectivity.check_connectivity(
+            provider=None,
+            base_url="http://myhost",
+            api_key_env=None,
+        )
+    assert captured == {"host": "myhost", "port": 80}
+    assert result["status"] == "ok"
+
+
+def test_urlparse_schemeless_assumptions():
+    """Canary for Python's urlparse semantics that this fix relies on: a bare
+    host:port string yields hostname=None, and the whole string would be
+    treated as a scheme. If a future Python changes this, the tests above
+    surface it visibly."""
+    from urllib.parse import urlparse
+    assert urlparse("api.openai.com").hostname is None
+    assert urlparse("myhost:8080").scheme == "myhost"
+    assert urlparse("myhost:8080").hostname is None

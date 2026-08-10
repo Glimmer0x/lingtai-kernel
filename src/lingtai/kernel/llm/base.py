@@ -17,6 +17,93 @@ from .interface import ChatInterface
 logger = get_logger()
 
 
+_PARTIAL_STREAM_MARKER = "_lingtai_partial_stream"
+_NO_AED_RETRY_MARKER = "_lingtai_no_aed_retry"
+
+
+def safe_exception_description(exc: BaseException) -> str:
+    """Render a third-party exception without letting its hooks escape."""
+    for render in (str, repr):
+        try:
+            text = render(exc)
+        except BaseException:
+            continue
+        if text:
+            return text
+    try:
+        name = type(exc).__name__
+    except BaseException:
+        name = "Exception"
+    return f"<unrenderable {name}>"
+
+
+class LLMReplayTerminalError(Exception):
+    """Trusted wrapper when a provider exception cannot carry replay metadata.
+
+    Provider exception attribute hooks are untrusted.  This exact kernel-owned
+    type stores only constant booleans and the original exception; its message
+    must be supplied by the adapter without rendering ``original``.
+    """
+
+    def __init__(
+        self,
+        original: Exception,
+        *,
+        partial_stream: bool,
+        no_aed_retry: bool,
+        message: str,
+    ):
+        self.original = original
+        self._lingtai_partial_stream = partial_stream is True
+        self._lingtai_no_aed_retry = no_aed_retry is True
+        super().__init__(message)
+
+
+def llm_replay_terminal_flags(exc: BaseException) -> tuple[bool, bool]:
+    """Read replay-safety flags only from the exact kernel-owned wrapper.
+
+    Provider exception classes control their attribute machinery, including a
+    subclass ``__dict__`` descriptor, so no provider-owned storage is trusted.
+    Exact type and exact ``True`` checks avoid subclass hooks and coercion.
+    """
+    if type(exc) is not LLMReplayTerminalError:
+        return False, False
+    return (
+        object.__getattribute__(exc, _PARTIAL_STREAM_MARKER) is True,
+        object.__getattribute__(exc, _NO_AED_RETRY_MARKER) is True,
+    )
+
+
+def mark_llm_replay_terminal(
+    exc: Exception,
+    *,
+    partial_stream: bool = False,
+    no_aed_retry: bool = False,
+    message: str = "Provider failure cannot be replayed safely",
+) -> Exception:
+    """Return the exact trusted wrapper carrying merged replay metadata.
+
+    Provider-owned storage is never read or mutated.  Re-marking an exact
+    kernel wrapper merges flags in place; every other exception is wrapped.
+    This makes the representation stable across adapter and BaseAgent reads.
+    """
+    current_partial, current_no_aed = llm_replay_terminal_flags(exc)
+    want_partial = current_partial or partial_stream is True
+    want_no_aed = current_no_aed or no_aed_retry is True
+
+    if type(exc) is LLMReplayTerminalError:
+        object.__setattr__(exc, _PARTIAL_STREAM_MARKER, want_partial)
+        object.__setattr__(exc, _NO_AED_RETRY_MARKER, want_no_aed)
+        return exc
+
+    return LLMReplayTerminalError(
+        exc,
+        partial_stream=want_partial,
+        no_aed_retry=want_no_aed,
+        message=message,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -517,6 +604,40 @@ class ChatSession(ABC):
         )
         self._interface._append("user", [TextBlock(text=notice)])
 
+    def _inject_overflow_notice_after_error(self, exc: Exception) -> None:
+        """Surface the trim on the terminal-failure path, mirroring the notice.
+
+        ``_run_with_overflow_recovery`` attaches ``_overflow_trim_stats`` to
+        the re-raised provider exception when retry rounds were exhausted (or
+        trimming stalled) after entries had already been deleted. Adapters
+        call this from their ``except`` block **after** the ``drop_trailing``
+        revert — the revert would otherwise strip the just-injected
+        user-role notice. No-op when the exception carries no stats, i.e.
+        nothing was trimmed to report.
+        """
+        stats = getattr(exc, "_overflow_trim_stats", None)
+        if not stats:
+            return
+        total_dropped, rounds = stats
+        if total_dropped > 0:
+            self._inject_overflow_notice(total_dropped=total_dropped, rounds=rounds)
+
+    @staticmethod
+    def _attach_overflow_trim_stats(
+        exc: Exception, total_dropped: int, rounds: int,
+    ) -> None:
+        """Best-effort: record trim stats on a re-raised overflow error.
+
+        Provider exception objects normally accept attribute assignment;
+        tolerate anything that does not so recovery behavior is unchanged.
+        """
+        if total_dropped <= 0:
+            return
+        try:
+            exc._overflow_trim_stats = (total_dropped, rounds)
+        except Exception:
+            pass
+
     def _run_with_overflow_recovery(self, do_call):
         """Run an API call with context-overflow auto-recovery.
 
@@ -545,6 +666,10 @@ class ChatSession(ABC):
                         "(dropped %d entries total) — re-raising provider error.",
                         rounds, total_dropped,
                     )
+                    # Entries trimmed in earlier rounds are already deleted;
+                    # record the loss on the exception so adapters can surface
+                    # it after their error-revert step (issue #653).
+                    self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
                 dropped = self._trim_context_one_round()
                 if dropped == 0:
@@ -553,6 +678,7 @@ class ChatSession(ABC):
                         "(dropped %d entries across %d rounds) — re-raising.",
                         total_dropped, rounds,
                     )
+                    self._attach_overflow_trim_stats(exc, total_dropped, rounds)
                     raise
                 total_dropped += dropped
                 rounds += 1

@@ -395,13 +395,17 @@ class AnthropicChatSession(ChatSession):
 
         try:
             raw, total_dropped, rounds = self._run_with_overflow_recovery(_do_call)
-        except Exception:
+        except Exception as exc:
             # Revert the interface on error - drop the last user entry,
             # but only when this call appended one.  ``message is None``
             # means the caller pre-staged the wire and we must not
             # corrupt it on failure.
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
+            # Terminal overflow failure may already have trimmed entries;
+            # surface the loss after the revert (the revert would strip a
+            # just-injected user-role notice) — issue #653.
+            self._inject_overflow_notice_after_error(exc)
             raise
 
         # If recovery fired (entries were dropped), inject the molt notice.
@@ -515,11 +519,14 @@ class AnthropicChatSession(ChatSession):
 
         try:
             raw_result, total_dropped, rounds = self._run_with_overflow_recovery(_do_stream)
-        except Exception:
+        except Exception as exc:
             # Revert the interface on error — drop the last user entry
             # only if this call appended one.
             if message is not None:
                 self._interface.drop_trailing(lambda e: e.role == "user")
+            # Terminal overflow failure may already have trimmed entries;
+            # surface the loss after the revert (see issue #653).
+            self._inject_overflow_notice_after_error(exc)
             raise
 
         # If recovery fired (entries were dropped), inject the molt notice.

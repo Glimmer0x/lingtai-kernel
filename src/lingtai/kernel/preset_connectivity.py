@@ -86,6 +86,30 @@ def _resolve_url(provider: str | None, base_url: str | None) -> str | None:
     return None
 
 
+def _parse_probe_target(url: str) -> tuple[str, int] | None:
+    """Parse a base_url into the (host, port) pair to TCP-probe.
+
+    Schemeless URLs (``api.openai.com``, ``myhost:8080``) are treated as
+    https. This matters because ``urlparse`` is hostile to them: it swallows
+    a bare ``host:port`` string as a bogus scheme and returns
+    ``hostname=None``, and ``socket.create_connection((None, ...))`` would
+    silently resolve to loopback — probing localhost instead of the
+    configured endpoint. Returns None when no hostname can be extracted
+    (e.g. ``https://`` or a non-numeric port) so the caller can fail loudly
+    rather than probing whatever ``getaddrinfo(None, ...)`` fancies.
+    """
+    if "://" not in url:
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return None
+    try:
+        port = parsed.port  # raises ValueError on e.g. "host:notaport"
+    except ValueError:
+        return None
+    return parsed.hostname, port or (443 if parsed.scheme == "https" else 80)
+
+
 def check_connectivity(
     provider: str | None,
     base_url: str | None,
@@ -100,6 +124,11 @@ def check_connectivity(
          "checked_at": "<ISO timestamp>",
          "latency_ms": int (only on ok),
          "error": str | None}
+
+    Schemeless base URLs (``api.openai.com``, ``myhost:8080``) are probed as
+    https (port 443). A base URL with no extractable hostname yields
+    ``"unreachable"`` with an ``invalid base_url`` error rather than a
+    silent localhost probe.
     """
     # Local CLI-login providers (e.g. claude-code) have no network
     # endpoint and no API key — they authenticate through a local CLI/login
@@ -145,9 +174,15 @@ def check_connectivity(
             "error": f"no base_url and no default URL for provider {provider!r}",
         }
 
-    parsed = urlparse(url)
-    host = parsed.hostname
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    target = _parse_probe_target(url)
+    if target is None:
+        return {
+            "status": "unreachable",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "latency_ms": None,
+            "error": f"invalid base_url {url!r}: cannot determine host to probe",
+        }
+    host, port = target
 
     try:
         latency_ms = _probe_host(host, port, _PROBE_TIMEOUT_S)
