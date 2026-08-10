@@ -38,6 +38,8 @@ This charter states the testing principles those workflows assume, once, so a
 coding agent writing or running kernel tests shares one standard.
 
 ## Why this exists
+Guarded by: [TS001](BEHAVIORS.md#behavior-ts001)
+
 
 Tests are the repository's conformance evidence. Anatomy says where code is,
 Contract says what it promises, and **tests prove the promise holds**. A test

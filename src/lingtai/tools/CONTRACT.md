@@ -46,6 +46,8 @@ maintenance: |
 # LingTai Tool Protocol (LTP)
 
 ## Purpose
+Guarded by: [LP001](BEHAVIORS.md#behavior-lp001)
+
 
 Define the **LingTai Tool Protocol (LTP)**: the future canonical public interface
 for LingTai-owned model-facing tools. LTP covers public addressing, ownership,

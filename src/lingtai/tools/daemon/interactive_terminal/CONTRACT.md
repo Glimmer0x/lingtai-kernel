@@ -24,6 +24,8 @@ maintenance: |
 # Interactive terminal Port Contract
 
 ## Scope
+Guarded by: [IT001](BEHAVIORS.md#behavior-it001)
+
 
 `InteractiveTerminalPort` is the narrow mechanism boundary for the retained,
 hidden interactive Claude route. It carries one immutable direct command,

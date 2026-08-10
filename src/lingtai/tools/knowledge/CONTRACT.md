@@ -23,6 +23,8 @@ injects a compact catalog into the system prompt. The implementation lives in
 `src/lingtai/tools/knowledge/`; the code is the source of truth.
 
 ## Routing Card
+Guarded by: [KN001](BEHAVIORS.md#behavior-kn001)
+
 
 **Use this when:**
 - You are editing the private durable knowledge capability.

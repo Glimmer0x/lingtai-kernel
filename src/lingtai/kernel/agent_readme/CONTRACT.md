@@ -1,9 +1,26 @@
+---
+name: agent-readme-contract
+tool: agent-readme
+contract_version: 1
+related_files:
+  - src/lingtai/kernel/agent_readme/BEHAVIORS.md
+  - src/lingtai/kernel/agent_readme/ANATOMY.md
+  - src/lingtai/kernel/agent_readme/_readme.py
+maintenance: |
+  The agent README folder role split (README.md vs substrate.md) and its
+  ownership/maintenance boundary. Every agent-observable behavior clause
+  MUST be guarded by a LABT in the sibling BEHAVIORS.md (tridirectional
+  loop); when this contract changes, update BEHAVIORS.md and ANATOMY.md
+  together.
+---
 # agent-readme CONTRACT
 
 > 固定 agent 文件夹 `README.md` 与 `substrate.md` 的角色分工、所有权与维护边界。
 > 替代 #1252 的 agent-manual CONTRACT v1（重生成器 + MANUAL.md）的语义。
 
 ## 1. 角色
+Guarded by: [AR001](BEHAVIORS.md#behavior-ar001)
+
 
 | 文件 | 位置 | 面向 | 角色 |
 |---|---|---|---|

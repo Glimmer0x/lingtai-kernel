@@ -25,6 +25,8 @@ maintenance: |
 # Pad capability contract
 
 ## Purpose and ownership
+Guarded by: [PD001](BEHAVIORS.md#behavior-pd001)
+
 
 `pad` is a mandatory, model-visible LTP v2 family for the durable pinned
 reference list associated with the agent's prompt sketchboard. Its public action

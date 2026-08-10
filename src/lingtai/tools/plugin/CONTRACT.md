@@ -35,6 +35,8 @@ pruning machinery lives in `src/lingtai/services/plugin_registry.py` (imported
 lazily). The code is the source of truth.
 
 ## The two-tier mount contract
+Guarded by: [PL001](BEHAVIORS.md#behavior-pl001)
+
 
 This is the load-bearing distinction in this package; everything else follows.
 

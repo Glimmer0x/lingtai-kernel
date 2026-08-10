@@ -36,6 +36,8 @@ maintenance: |
 # Migration Workspace
 
 ## Purpose
+Guarded by: [MG001](BEHAVIORS.md#behavior-mg001)
+
 
 This retained Port describes historical/test-only versioned migration machinery.
 It is not part of the current boot/refresh init reader: production reads use

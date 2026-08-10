@@ -24,6 +24,8 @@ maintenance: |
 # LingTai capability contract
 
 ## Purpose and ownership
+Guarded by: [LG001](BEHAVIORS.md#behavior-lg001)
+
 
 `lingtai` is the model-visible signpost for the agent's 灵台: durable character
 content in `system/lingtai.md`, rendered into the protected `character` prompt

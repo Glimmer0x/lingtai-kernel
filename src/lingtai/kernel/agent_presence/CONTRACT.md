@@ -38,6 +38,8 @@ maintenance: |
 # Agent Presence Store Contract
 
 ## Purpose
+Guarded by: [AP001](BEHAVIORS.md#behavior-ap001)
+
 
 The Agent Presence Store owns the kernel's presence and liveness boundary for a
 single agent working directory: whether the directory holds an agent, whether

@@ -77,6 +77,8 @@ independence" rule, avatar could hand-write an equivalent `handle()` without
 changing any promise in this file.
 
 ## Routing Card
+Guarded by: [AV001](BEHAVIORS.md#behavior-av001)
+
 
 **Use this when:**
 - You are editing avatar spawning (shallow 初生 / deep 二重身), the spawn ledger,

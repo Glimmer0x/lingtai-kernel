@@ -28,6 +28,8 @@ maintenance: |
 # Mail Transport
 
 ## Purpose
+Guarded by: [MT001](BEHAVIORS.md#behavior-mt001)
+
 
 Mail transport is Core's outbound boundary for fire-and-forget agent messaging.
 It separates the mail intrinsic's use of message delivery and inbox arrival from

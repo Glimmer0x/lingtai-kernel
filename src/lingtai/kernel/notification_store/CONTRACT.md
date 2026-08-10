@@ -37,6 +37,8 @@ maintenance: |
 # Notification Store Contract
 
 ## Purpose
+Guarded by: [NS001](BEHAVIORS.md#behavior-ns001)
+
 
 The Notification Store persists and observes current notification-channel
 mirrors without owning notification policy. Core owns channel validation,

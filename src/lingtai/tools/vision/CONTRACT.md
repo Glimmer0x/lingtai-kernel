@@ -23,6 +23,8 @@ and preserves a read-only `action="manual"` route. It never changes provider or
 automatically invokes MCP.
 
 ## Scope and registry
+Guarded by: [VN001](BEHAVIORS.md#behavior-vn001)
+
 
 `vision` is one action-separated family in the LingTai Tool Protocol v2 shape
 defined in `src/lingtai/tools/CONTRACT.md`, built on the generic

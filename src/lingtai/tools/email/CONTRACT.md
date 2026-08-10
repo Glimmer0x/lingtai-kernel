@@ -34,6 +34,8 @@ this one tool. The implementation lives in `src/lingtai/tools/email/`; the code 
 source of truth.
 
 ## Routing Card
+Guarded by: [EM001](BEHAVIORS.md#behavior-em001)
+
 
 **Use this when:**
 - You are editing the internal mailbox tool: send/check/read/reply/search/

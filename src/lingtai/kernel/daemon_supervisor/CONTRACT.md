@@ -26,6 +26,8 @@ maintenance: |
 # Detached daemon supervisor contract
 
 ## Core
+Guarded by: [DS001](BEHAVIORS.md#behavior-ds001)
+
 
 The Core owns immutable request, manifest, and control schemas plus pure
 validation. It does not import `DaemonManager`, concrete backend runners, or

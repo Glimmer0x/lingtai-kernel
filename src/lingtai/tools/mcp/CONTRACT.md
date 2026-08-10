@@ -27,6 +27,8 @@ lives in `src/lingtai/services/mcp_registry.py` (imported lazily). The code is t
 source of truth.
 
 ## Routing Card
+Guarded by: [MC001](BEHAVIORS.md#behavior-mc001)
+
 
 **Use this when:**
 - You are editing the mcp tool slice's action dispatch or the reconciliation that

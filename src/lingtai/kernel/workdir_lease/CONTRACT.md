@@ -36,6 +36,8 @@ maintenance: |
 # Workdir Lease
 
 ## Purpose
+Guarded by: [WL001](BEHAVIORS.md#behavior-wl001)
+
 
 Workdir lease is Core's outbound boundary for claiming exclusive use of an
 agent's working directory. It separates the safety invariant *"exactly one live

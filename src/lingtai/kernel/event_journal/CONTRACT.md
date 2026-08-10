@@ -31,6 +31,8 @@ maintenance: |
 # Structured Event Journal
 
 ## Purpose
+Guarded by: [EJ001](BEHAVIORS.md#behavior-ej001)
+
 
 The structured event journal is Core's outbound append-only boundary for durable
 agent events. It separates event production and lifecycle from the current POSIX
