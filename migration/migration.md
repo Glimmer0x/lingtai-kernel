@@ -1,7 +1,7 @@
 ---
 product: kernel
-release_version: "0.19.5"
-release_tag: "v0.19.5"
+release_version: "1.0.0"
+release_tag: "v1.0.0"
 migration: no-op
 refresh_required: true
 related_files:
@@ -17,11 +17,11 @@ maintenance: |
   per-release versions. Never append a second release history here or invent a
   version that disagrees with package metadata.
 ---
-# LingTai kernel 0.19.5 migration
+# LingTai kernel 1.0.0 migration
 
 ## Applies when
 
-The target kernel release is `0.19.5` / tag `v0.19.5` and that tag lies in the
+The target kernel release is `1.0.0` / tag `v1.0.0` and that tag lies in the
 open update interval `(current, target]`.
 
 ## Migration
