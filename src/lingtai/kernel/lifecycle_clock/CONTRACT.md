@@ -36,6 +36,8 @@ maintenance: |
 # Lifecycle Clock
 
 ## Purpose
+Guarded by: [LC001](BEHAVIORS.md#behavior-lc001)
+
 
 The lifecycle clock is Core's outbound boundary for reading the two time sources
 its agent-lifecycle policy depends on, without knowing the concrete time

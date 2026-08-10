@@ -35,6 +35,8 @@ migration; only the argument *shape* changed, from a flat root to
 `action` + one strict per-action `input`.
 
 ## Routing Card
+Guarded by: [SU001](BEHAVIORS.md#behavior-su001)
+
 
 **Use this when:**
 - You are editing the sync `inquiry` mirror session, the periodic `flow`

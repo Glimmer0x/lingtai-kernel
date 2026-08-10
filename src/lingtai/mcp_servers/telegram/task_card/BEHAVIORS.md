@@ -1,0 +1,46 @@
+---
+name: telegram-task-card-behavior-tests
+behavior_version: 1
+labt_version: 2
+contract: CONTRACT.md
+anatomy: ANATOMY.md
+related_files:
+  - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
+  - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
+  - src/lingtai/mcp_servers/telegram/task_card/resident.py
+  - src/lingtai/mcp_servers/telegram/task_card/SKILL.md
+maintenance: |
+  Created during the every-contract-needs-behaviors sweep. Keep this file
+  reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
+  telegram task-card projection behavior clause changes, update the guarding
+  LABT here in the same change.
+---
+# Telegram Task Card Projection Behavior Tests
+
+Self-contained agent behavior tasks guarding the observable behavior clauses of
+`src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md` (programmable body
+only when status is exactly active and nonempty; diff-only projection;
+no-op preservation). Pinned pytest commands must run from the repo root with
+the project's Python.
+
+## Behavior TT001 — the programmable frame is composed only for exact active with a nonempty body, and diff-only updates suppress transport churn
+
+- **id**: TT001
+- **title**: the programmable frame is composed only for exact active with a nonempty body, and diff-only updates suppress transport churn
+- **guards**: `telegram-task-card-projection` § Behavior
+- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>` with `taskcard/status` and `taskcard/taskcard.md`
+- **estimate**: ≈ 20 minutes
+
+### Steps
+1. From `<repo>`, run `python -m pytest tests/test_telegram_task_card_programmable.py -q` and capture the outcome.
+2. In `<scratch>`, set `taskcard/status` to exact `active` with a nonempty body and project the card; then set status to a missing/unreadable value and project again; record both compositions.
+3. Re-project with identical body bytes and confirm no transport update occurs (diff-only); set status to exact `inactive` twice and confirm the second projection delivers nothing further.
+
+### Expected evidence
+- [ ] Step 1: the programmable projection suite passes, pinning active projection, diff-only updates, exact-`inactive` frame exclusion, reactivation, and last-good preservation.
+- [ ] Step 2: the programmable frame is composed only for exact `active` with a nonempty body; missing/unreadable status or blank body is a no-op that preserves the last valid programmable frame.
+- [ ] Step 3: identical body bytes produce no transport update; exact `inactive` idempotently excludes only the programmable frame and never deletes the resident message, the local body, or pauses automatic updates.
+
+### Pass / Fail
+Pass when the suite passes and the active/diff-only observations hold. Fail on programmable composition for a non-active status, on a transport update for identical bytes, or on `inactive` clearing the resident message or body; record the evidence trail in the task report.

@@ -27,6 +27,8 @@ maintenance: |
 # Intrinsic Task Card
 
 ## Purpose
+Guarded by: [TK001](BEHAVIORS.md#behavior-tk001)
+
 
 Own the public model-facing `task_card` capability as a channel-neutral,
 producer-first intrinsic tool. The capability maintains one agent-local

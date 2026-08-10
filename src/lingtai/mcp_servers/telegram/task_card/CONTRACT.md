@@ -26,6 +26,8 @@ maintenance: |
 # Telegram Task Card Projection
 
 ## Purpose
+Guarded by: [TT001](BEHAVIORS.md#behavior-tt001)
+
 
 Own Telegram's provider adapter and read-only projection of the intrinsic
 declarative Task Card artifact. Provider-neutral resident state/delivery lives

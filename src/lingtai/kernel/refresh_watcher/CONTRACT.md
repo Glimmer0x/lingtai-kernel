@@ -44,6 +44,8 @@ maintenance: |
 # Refresh Watcher
 
 ## Purpose
+Guarded by: [RW001](BEHAVIORS.md#behavior-rw001)
+
 
 Refresh watcher is the Core boundary for handing a typed relaunch request to a
 detached watcher after `_perform_refresh` completes the `.refresh` /

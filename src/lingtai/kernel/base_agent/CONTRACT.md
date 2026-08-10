@@ -52,6 +52,8 @@ maintenance: |
 Stable entry: `lingtai.kernel.agent-runtime.v1`.
 
 ## Purpose
+Guarded by: [BA001](BEHAVIORS.md#behavior-ba001)
+
 
 Agent runtime is the composed lifecycle promise of one LingTai agent process:
 what it means for an agent to be constructed, launched, observably alive,

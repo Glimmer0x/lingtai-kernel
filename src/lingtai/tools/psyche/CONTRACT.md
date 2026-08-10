@@ -26,6 +26,8 @@ maintenance: |
 # Psyche tool contract
 
 ## Purpose
+Guarded by: [PY001](BEHAVIORS.md#behavior-py001)
+
 
 `psyche` is the single mandatory, model-visible LTP v2 family for the four
 durable domains that survive a molt. The name states the governing human

@@ -27,6 +27,8 @@ It is pure presentation: it never writes to `.library/`. The implementation live
 in `src/lingtai/tools/skills/__init__.py`; the code is the source of truth.
 
 ## Routing Card
+Guarded by: [SK001](BEHAVIORS.md#behavior-sk001)
+
 
 **Use this when:**
 - You are editing the catalog scanner, path resolution, prompt injection, or the

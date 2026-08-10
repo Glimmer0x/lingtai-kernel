@@ -38,6 +38,8 @@ maintenance: |
 # Snapshot + Source Revision
 
 ## Purpose
+Guarded by: [SN001](BEHAVIORS.md#behavior-sn001)
+
 
 This component owns Core's two outbound capabilities for whole-workdir snapshots
 and bounded read-only source revision inspection. It separates lifecycle and
