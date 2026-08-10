@@ -1538,6 +1538,13 @@ class _StatusError(Exception):
             self.body = body
 
 
+class _UnrenderableHostileError(RuntimeError):
+    """Hostile renderer: str() raises, exactly the P1 threat model."""
+
+    def __str__(self):
+        raise RuntimeError("provider __str__ failed")
+
+
 def test_rate_limit_classifier():
     assert turn._is_rate_limit_error(_StatusError(429)) is True
     assert turn._is_rate_limit_error(_StatusError(400)) is False
@@ -1545,6 +1552,8 @@ def test_rate_limit_classifier():
     assert turn._is_rate_limit_error(RuntimeError("usage_limit_reached")) is True
     assert turn._is_rate_limit_error(RuntimeError("rate limit exceeded")) is True
     assert turn._is_rate_limit_error(RuntimeError("boom")) is False
+    # P1 regression: hostile __str__ must not escape the classifier (render-safe).
+    assert turn._is_rate_limit_error(_UnrenderableHostileError()) is False
 
 
 def test_client_error_classifier():
@@ -1555,6 +1564,8 @@ def test_client_error_classifier():
     assert turn._is_client_error(RuntimeError("400 bad request")) is True
     assert turn._is_client_error(RuntimeError("messages_parameter_illegal")) is True
     assert turn._is_client_error(RuntimeError("boom")) is False
+    # P1 regression: hostile __str__ must not escape the classifier (render-safe).
+    assert turn._is_client_error(_UnrenderableHostileError()) is False
 
 
 def test_retry_after_extraction_shapes():
@@ -1573,6 +1584,8 @@ def test_retry_after_extraction_shapes():
     assert turn._rate_limit_retry_after_seconds(
         _StatusError(429, headers={"X-Other": "1"})
     ) is None
+    # P1 regression: hostile __str__ must not escape the regex fallback (render-safe).
+    assert turn._rate_limit_retry_after_seconds(_UnrenderableHostileError()) is None
 
 
 def test_retry_after_http_date_parsing():
@@ -1589,7 +1602,7 @@ def test_retry_after_http_date_parsing():
 def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     calls = {"n": 0}
-    sleeps: list[float] = []
+    waits: list[float] = []
 
     def fake_handle(_agent, _msg):
         calls["n"] += 1
@@ -1598,7 +1611,7 @@ def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
         _agent._shutdown.set()
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    monkeypatch.setattr(turn.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(agent._shutdown, "wait", lambda s: waits.append(s) or False)
 
     import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: None)
@@ -1610,7 +1623,7 @@ def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
     assert len(rate_logs) == 2
     assert all(f["retry_after_s"] == 3.0 for f in rate_logs)
     assert all(f["backoff_s"] == 3.0 for f in rate_logs)
-    assert sleeps == [3.0, 3.0]
+    assert waits == [3.0, 3.0]
     assert not any(name == "aed_attempt" for name, _ in agent._logs)
     # Rate-limit recovery must not compact history (quota is the problem,
     # not the wire) and must not consume the transient backoff budget.
@@ -1621,14 +1634,14 @@ def test_rate_limit_error_retries_honoring_retry_after(tmp_path, monkeypatch):
 def test_rate_limit_error_without_retry_after_uses_exponential_backoff(tmp_path, monkeypatch):
     agent = _make_run_loop_agent(tmp_path)
     calls = {"n": 0}
-    sleeps: list[float] = []
+    waits: list[float] = []
 
     def fake_handle(_agent, _msg):
         calls["n"] += 1
         raise _StatusError(429)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
-    monkeypatch.setattr(turn.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(agent._shutdown, "wait", lambda s: waits.append(s) or False)
 
     import lingtai.tools.soul.flow as soul_flow
     monkeypatch.setattr(soul_flow, "_cancel_soul_timer", lambda _a: _a._shutdown.set())
@@ -1640,7 +1653,7 @@ def test_rate_limit_error_without_retry_after_uses_exponential_backoff(tmp_path,
     assert len(rate_logs) == turn._RATE_LIMIT_RETRY_LIMIT
     assert [f["backoff_s"] for f in rate_logs] == [5.0, 10.0, 20.0]
     assert [f["retry_after_s"] for f in rate_logs] == [None, None, None]
-    assert sleeps == [5.0, 10.0, 20.0]
+    assert waits == [5.0, 10.0, 20.0]
     assert any(name == "aed_rate_limit_exhausted" for name, _ in agent._logs)
     assert agent._asleep.is_set()
     assert not any(name == "aed_history_compacted" for name, _ in agent._logs)

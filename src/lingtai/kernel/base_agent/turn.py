@@ -372,7 +372,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     status_code = _exception_status_code(exc)
     if status_code is not None:
         return status_code == 429
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _RATE_LIMIT_MSG_FRAGMENTS)
 
 
@@ -387,7 +387,7 @@ def _is_client_error(exc: Exception) -> bool:
     status_code = _exception_status_code(exc)
     if status_code is not None:
         return 400 <= status_code < 500 and status_code != 429
-    msg = (str(exc) or "").lower()
+    msg = safe_exception_description(exc).lower()
     return any(fragment in msg for fragment in _CLIENT_ERROR_MSG_FRAGMENTS)
 
 
@@ -441,17 +441,17 @@ def _rate_limit_retry_after_seconds(exc: Exception) -> float | None:
                     parsed = None
                 if parsed is not None:
                     return parsed
-        body = getattr(exc, "body", None)
-        if isinstance(body, dict):
-            for key in ("retry_after", "retry-after", "Retry-After", "resets_in_seconds"):
-                parsed = _parse_retry_after(body.get(key))
-                if parsed is not None:
-                    return parsed
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        for key in ("retry_after", "retry-after", "Retry-After", "resets_in_seconds"):
+            parsed = _parse_retry_after(body.get(key))
+            if parsed is not None:
+                return parsed
     import re
 
     for key in ("resets_in_seconds", "retry_after", "retry-after"):
         match = re.search(
-            rf"{re.escape(key)}[\"'=:\s]+(\d+)", str(exc) or "", re.IGNORECASE
+            rf"{re.escape(key)}[\"'=:\s]+(\d+)", safe_exception_description(exc), re.IGNORECASE
         )
         if match:
             return float(match.group(1))
@@ -1134,7 +1134,11 @@ def _run_loop(agent) -> None:
                                 max_attempts=_RATE_LIMIT_RETRY_LIMIT,
                                 terminal=False,
                             )
-                            time.sleep(backoff_s)
+                            # Wait on the shutdown event instead of sleeping so a
+                            # stop/refresh can break the backoff immediately;
+                            # break out when the event fires (shutdown).
+                            if agent._shutdown.wait(backoff_s):
+                                break
                             msg = _prepare_aed_retry_message(agent, err_desc)
                             continue
 
