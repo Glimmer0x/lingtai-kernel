@@ -113,23 +113,22 @@ mechanism on `OpenAIAdapter` / `OpenAIChatSession` / `OpenAIResponsesSession`:
   input items after the first `function_call` for assistant turns that lack one.
   On by default (env `LINGTAI_INJECT_REASONING_FALLBACK` to disable); an
   explicit constructor/provider-config value wins over the env.
-- `reasoning_effort_vocab` (`str`, default `openai`) — selects the Chat
-  Completions projection of the Responses reasoning semantics. `openai`
-  projects the Responses vocabulary onto OpenAI v1's official set
-  (`minimal|low|medium|high`): explicit `minimal`/`low`/`medium`/`high` pass
-  through, `xhigh`/`max` clamp to `high`, `none` omits the field, and the
-  omitted/`default` sentinel omits it too (v1 has no `xhigh`, so omission lets
-  the upstream v1 default apply). `seven_tier` passes the kernel
-  `THINKING_LEVELS` through unchanged and projects the omitted/`default`
-  sentinel to explicit `xhigh`, matching the Responses wire (DeepSeek).
+- `reasoning_effort_vocab` (`str`, default `openai`) — selects the retained
+  Chat Completions compatibility projection. `openai` passes official
+  `minimal|low|medium|high`, clamps `xhigh`/`max` to `high`, and omits `none`
+  plus omitted/`default`; `seven_tier` passes kernel `THINKING_LEVELS` through
+  unchanged and maps omitted/`default` to explicit `xhigh`.
+- `reasoning_policy` (`Callable | None`) — neutral provider-policy hook that
+  returns exact request kwargs plus one frozen application for observation;
+  when present, it bypasses `reasoning_effort_vocab`.
 - `prompt_cache_namespace` (`str | None`) — fixed provider namespace for the
-  auto-derived `prompt_cache_key` (e.g. `deepseek` →
-  `lingtai-deepseek:{model}:v1`) instead of the base_url host.
+  auto-derived `prompt_cache_key` instead of the base_url host.
 
 The `deepseek` provider factory in `_register.py` now builds `OpenAIAdapter`
-directly with these three options set (plus `base_url=https://api.deepseek.com`);
-the dedicated DeepSeek adapter module is gone. `create_custom_adapter` forwards
-the three options to `OpenAIAdapter` when present.
+directly with `inject_reasoning_fallback=True`, the `deepseek` prompt-cache
+namespace, and its provider-local reasoning policy; the dedicated DeepSeek
+adapter is gone. `create_custom_adapter` forwards only generic compatibility
+options to `OpenAIAdapter` when present.
 
 ### One-shot generation (`OpenAIAdapter.generate`, `adapter.py:2404`)
 
@@ -469,8 +468,8 @@ CLI backend, …) never sees this field and is behaviorally unchanged.
 
 **Default-on for every OpenAI-compatible path.** Both `OpenAIChatSession` and `OpenAIResponsesSession` accept an optional `prompt_cache_key` and, when set, add it to the request kwargs on all send paths (Chat Completions `send` / `send_stream`; Responses `send` / `send_stream`; Codex `send_stream`). A bare directly-constructed session leaves it `None` (opt-in) — the *adapter* supplies the namespaced default:
 
-- `OpenAIAdapter._default_prompt_cache_key(model)` derives the namespace from identity: official OpenAI (no `base_url`) → `lingtai-openai:{model}:v1`; any custom/compatible `base_url` → `lingtai-openai-compat:{host}:{model}:v1` (host from `_base_url_namespace`, hash fallback). Distinct endpoints/models never share a cache slot.
-- Provider subclasses with a fixed identity override it: DeepSeek → `lingtai-deepseek:{model}:v1`, Zhipu/GLM → `lingtai-zhipu:{model}:v1`, MiMo → `lingtai-mimo:{model}:v1`. **Codex is special:** on the normal/root path `_default_prompt_cache_key` returns the SAME 8-char (agent-path, molt-count) hash as the `session_id`/`thread_id` cache-affinity headers (underscore keys, matching the Codex backend literally — a hyphenated spelling loses cache affinity; all three byte-identical); it falls back to `lingtai-codex:{model}:v1` only on the bare/no-anchor path. The compat probe (`reports/prompt-cache-key-openai-compat-probe-*.json`) confirmed DeepSeek/Zhipu/MiMo Chat Completions accept the field.
+- `OpenAIAdapter._default_prompt_cache_key(model)` uses an explicit constructor namespace first (`_register.py:_deepseek` supplies `prompt_cache_namespace="deepseek"` → `lingtai-deepseek:{model}:v1` without a subclass); otherwise official OpenAI (no `base_url`) → `lingtai-openai:{model}:v1` and any custom/compatible `base_url` → `lingtai-openai-compat:{host}:{model}:v1` (host from `_base_url_namespace`, hash fallback). Distinct endpoints/models never share a cache slot.
+- Provider subclasses with a fixed identity override it: Zhipu/GLM → `lingtai-zhipu:{model}:v1`, MiMo → `lingtai-mimo:{model}:v1`. **Codex is special:** on the normal/root path `_default_prompt_cache_key` returns the SAME 8-char (agent-path, molt-count) hash as the `session_id`/`thread_id` cache-affinity headers (underscore keys, matching the Codex backend literally — a hyphenated spelling loses cache affinity; all three byte-identical); it falls back to `lingtai-codex:{model}:v1` only on the bare/no-anchor path. The compat probe (`reports/prompt-cache-key-openai-compat-probe-*.json`) confirmed DeepSeek/Zhipu/MiMo Chat Completions accept the field.
 - `_resolve_prompt_cache_key(model)` applies the adapter's policy from the constructor kwarg `prompt_cache_key`: `None` (default) → auto-derive; an explicit string → override for every session; `False` → disable (never sent). Both `_create_completions_session` and `_create_responses_session` (and the Codex variant) pass `_resolve_prompt_cache_key(model)` into the session.
 
 `prompt_cache_retention` is deliberately never sent — Codex rejects it (`Unsupported parameter`) and the whole OpenAI-compatible surface is kept uniform — and no Anthropic-style `cache_control` is emitted (Codex rejects `Unknown parameter`). MiniMax is Anthropic-compatible in this repo and is unaffected.
@@ -522,7 +521,7 @@ When a Codex session has a stable LingTai session/thread identity, `CodexRespons
 - **`_CodexAccountContext.binding` / `_CodexAccountContext.binding_generation`** — the ephemeral account binding for the current product context epoch plus its monotonic ownership generation. It survives ordinary session/transport resets and is cleared only by an approved summarize/reconstruction boundary, a changed molt count, a new adapter after refresh/restart, or structural usage-limit failover. Every bind/clear transition advances the generation; a late `token_expired` failure may mutate only the exact generation/token/account/auth identity that issued its request, while a newer same-account credential can be adopted without clearing it. The adapter holds `context.lock` through the session apply closure and retry `responses.create`, making generation/identity validation plus context binding, REST client/header, WS credential, WS-epoch publication, and the retry wire's read of the shared client key one transaction. `_refresh_codex_bound_quota` updates only the safe `quota_left` field without changing generation; absent/unavailable reads remove the field rather than writing zero.
 - **Codex Responses trace** — opt-in diagnostics write JSONL metadata to `logs/codex_responses_trace.jsonl` when `LINGTAI_CODEX_RESPONSES_TRACE=1` (override path with `LINGTAI_CODEX_RESPONSES_TRACE_PATH`). Default off; stores event/item shapes, lengths/hashes, usage, and accumulator counts, not raw content.
 - **`OpenAIAdapter._client`** — shared `openai.OpenAI` instance. `_client_kwargs` stored for session `reset()`. Constructor passes `default_headers=merge_lingtai_identity_headers(...)` (`adapter.py:2189`), so OpenAI-compatible HTTP requests carry non-secret LingTai identity/version headers unless a caller/provider header overrides them case-insensitively.
-- **`OpenAIAdapter._session_class`** — class var, subclasses override (e.g. DeepSeek and MiMo inject `reasoning_content` round-trip fallbacks).
+- **`OpenAIAdapter._session_class`** — class var, provider-specific subclasses may override (for example, MiMo injects a `reasoning_content` round-trip fallback).
 - **`CodexResponsesSession` delayed-summarize / hard-boundary forced rebuild** — `_last_provider_input_tokens` holds the previous real provider request's reported input tokens; `_summarize_delay_context()` divides it by `context_window()` for provider-input-based usage (the same ruler the reconstruction event uses). At usage `>= 1.0` the runtime forces a fresh full replay (`_reset_ws_epoch("summarize_delayed")`) **exactly once per continuous `>= 1.0` episode**: `_hb_rebuild_fired` latches the one-shot and `_hb_rebuild_awaiting_verify` stays set until the first post-rebuild provider response is observed. Both automatic entry points — the pre-request boundary check `_maybe_force_rebuild_at_boundary()` and the immediate `on_history_summarized()` release — go through the shared `_fire_boundary_forced_rebuild()`, so they cannot double-fire. `_observe_provider_usage_for_boundary()` (run after each successful send) re-arms the latch when usage drops strictly below `1.0` and clears the pending-verify flag on the first post-rebuild response (a failed forced request records no usage, so verification stays pending). `context_overflow_status()` returns `{"usage": …}` only when the rebuild fired, verification completed, and current usage is strictly `> 1.0` — the seam `meta_block.build_context_overflow_warning` reads (through the gate proxy's `__getattr__`) to keep the fixed `100% context Forced Rebuild Failed to Bring Usage Below 100%. … (xxx %) Molt IMMEDIATELY!!` line on every `agent_meta.agent_state.context.molt`. Explicit `request_history_rebuild()` is independent and never touches these flags. Transient runtime state — a fresh/restored session starts un-fired.
 
 ## Notes
@@ -588,7 +587,7 @@ In-flight official/stateful Responses and Codex sessions keep no-op prompt/tool 
 
 - `_session_class` (`adapter.py:2134`) — override to inject provider-specific session behavior on the CC path.
 - `_adapter_extra_body()` (`adapter.py:2395`) — override to add `extra_body` JSON fields (e.g. OpenRouter `reasoning: {include: true}`).
-- `_default_prompt_cache_key(model)` (`adapter.py:2196`) — override to give a provider a clean cache namespace (DeepSeek/Zhipu/MiMo/Codex do).
+- `_default_prompt_cache_key(model)` (`adapter.py:2196`) — override to give a provider a clean cache namespace (Zhipu/MiMo/Codex do).
 
 ### `send(None)` contract — continue from wire
 

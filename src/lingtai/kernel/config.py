@@ -19,6 +19,15 @@ THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # ``llm_supports_thinking`` so validators share the complete rule.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 
+# Providers that own their reasoning-effort contract in their own module: the
+# accepted vocabulary is per model and per wire, and so is what an OMITTED
+# value means. This is a coarse SCOPE name only — the kernel deliberately holds
+# no level vocabulary, model list, alias table, or default for these routes,
+# and cannot import them (see tests/test_kernel_isolation.py). The exact
+# validation is applied by the lingtai-layer ingress (``lingtai/init_schema.py``
+# and ``lingtai/agent.py``) against the provider's own module.
+THINKING_OWNED_PROVIDERS = ("deepseek",)
+
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort.
@@ -27,10 +36,12 @@ def llm_supports_thinking(llm: dict) -> bool:
     wire is OpenAI Responses (``api_compat == "openai"`` and
     ``wire_api == "responses"``) is accepted, regardless of provider. The
     Codex family remains accepted through ``THINKING_PROVIDERS`` (it owns its
-    own wire/backend), as does any provider explicitly listed there.
+    own wire/backend), as does any provider explicitly listed there. Providers
+    in ``THINKING_OWNED_PROVIDERS`` own their effort contract on both wires, so
+    they are in scope regardless of the wire.
     """
     provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS:
+    if provider in THINKING_PROVIDERS or provider in THINKING_OWNED_PROVIDERS:
         return True
     return (
         str(llm.get("api_compat") or "").lower() == "openai"

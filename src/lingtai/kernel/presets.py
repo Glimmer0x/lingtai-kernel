@@ -39,7 +39,12 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    THINKING_LEVELS,
+    THINKING_OWNED_PROVIDERS,
+    THINKING_PROVIDERS,
+    llm_supports_thinking,
+)
 
 log = logging.getLogger(__name__)
 
@@ -362,11 +367,18 @@ def load_preset(
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking is currently "
                 "supported only for the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
+                f"({', '.join(THINKING_PROVIDERS)}), "
+                f"{', '.join(THINKING_OWNED_PROVIDERS)}, or custom "
                 "OpenAI-compatible Responses"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        # A provider that owns its own effort contract is validated against the
+        # exact selected model and wire by the lingtai-layer preset loader
+        # (``lingtai.agent.load_preset``); the kernel must not second-guess it
+        # with a cross-provider level tuple it does not own.
+        if str(llm.get("provider") or "").lower() not in THINKING_OWNED_PROVIDERS and (
+            not isinstance(thinking, str) or thinking not in THINKING_LEVELS
+        ):
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"

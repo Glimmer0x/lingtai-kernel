@@ -29,9 +29,9 @@ Three things are made executable (see ``regimes.py``):
   ``wire_api`` is schema-valid only for ``openai`` and ``custom`` +
   ``api_compat=openai``; the alias non-``auto`` rows are rejected.
 
-* **Behavior regimes** — the concrete ``ChatSession`` classes with distinct
-  common-input wire behavior (including the DeepSeek / MiMo / Zhipu subclasses
-  that override ``_build_messages``, Codex's own REST machinery, and a
+* **Behavior regimes** — the concrete ``ChatSession`` configurations with
+  distinct common-input wire behavior (including DeepSeek's configured shared
+  ``OpenAIChatSession``, the MiMo / Zhipu subclasses, Codex's own REST machinery, and a
   ``_GatedSession``-wrapped session) are each driven through both inputs; the
   tests assert the exact provider wire AND the returned ``LLMResponse`` +
   concrete ``UsageMetadata``.

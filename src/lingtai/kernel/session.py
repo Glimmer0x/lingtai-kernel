@@ -64,6 +64,38 @@ def _elapsed_ms(start: float) -> int:
     return max(0, int((time.monotonic() - start) * 1000))
 
 
+#: Allowlisted ``llm_call`` reasoning-observation fields. Bounded plain strings
+#: only — never payloads, prompts, credentials, or arbitrary provider scalars.
+_REASONING_OBSERVATION_KEYS = (
+    "provider",
+    "wire",
+    "effort_requested",
+    "effort_normalized",
+    "effort_emitted",
+    "effort_provenance",
+)
+
+
+def _reasoning_observation_fields(chat: object) -> dict[str, str]:
+    """Return the reasoning observation for an ``llm_call``, if there is one.
+
+    Read from the one decision the adapter resolved when the session was
+    constructed, so an alias can never be reported as if the requested and
+    emitted values were identical, and an omitted level stays distinguishable
+    from explicitly disabled reasoning. A session on a route that applies no
+    reasoning control contributes no fields at all.
+    """
+    applied = getattr(chat, "reasoning_application", None)
+    if applied is None:
+        return {}
+    fields = applied.observation_fields()
+    return {
+        key: str(fields[key])
+        for key in _REASONING_OBSERVATION_KEYS
+        if key in fields
+    }
+
+
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_account_id_sha8",
     "codex_auth_path_sha8",
@@ -397,6 +429,7 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        llm_call_fields.update(_reasoning_observation_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

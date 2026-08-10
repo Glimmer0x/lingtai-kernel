@@ -14,7 +14,7 @@ Invariants asserted here:
   * The Responses API (non-Codex) sends a stable ``prompt_cache_key`` by default.
   * Official OpenAI (no base_url) and custom-base_url paths get distinct,
     deterministic namespaces.
-  * DeepSeek / Zhipu / MiMo subclasses get provider-scoped keys.
+  * The DeepSeek shared-adapter factory and Zhipu / MiMo subclasses get provider-scoped keys.
   * ``prompt_cache_retention`` is never sent (Codex rejects it; we keep the
     whole OpenAI-compatible surface uniform).
   * No Anthropic-style ``cache_control`` leaks into the request.

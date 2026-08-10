@@ -56,6 +56,6 @@ No additional state beyond what `OpenAIAdapter` provides.
 ## Notes
 
 - **50 LOC total** — one of the thinnest adapters.
-- **Same pattern as DeepSeek**: subclass `OpenAIAdapter`, override `__init__` for base URL, optionally override `_adapter_extra_body`.
-- **Reasoning exclusion**: Unlike DeepSeek (which needs `reasoning_content` round-trip), OpenRouter explicitly opts **out** of reasoning text. The OpenAI response parser already reads both `reasoning_content` and `reasoning` field names if present.
+- **Shared transport, different construction**: OpenRouter remains a thin `OpenAIAdapter` subclass that overrides `__init__` for its base URL and may override `_adapter_extra_body`; DeepSeek now installs provider-local policy and namespace parameters on the shared adapter without a subclass.
+- **Reasoning exclusion**: Unlike the DeepSeek shared-adapter route (which enables `reasoning_content` round-trip), OpenRouter explicitly opts **out** of reasoning text. The OpenAI response parser already reads both `reasoning_content` and `reasoning` field names if present.
 - Git history: 2 commits.

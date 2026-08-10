@@ -30,6 +30,9 @@ related_files:
   - src/lingtai/llm/kimi_code/__init__.py
   - src/lingtai/llm/zhipu/__init__.py
   - src/lingtai/llm/zhipu/adapter.py
+  - src/lingtai/llm/deepseek/__init__.py
+  - src/lingtai/llm/deepseek/policy.py
+  - tests/test_deepseek_reasoning_effort.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -53,6 +56,7 @@ LLM adapter layer — multi-provider support with adapter registry, base classes
 | `claude_code/` | — | `claude-code` provider: drives the local `claude` CLI on a Claude subscription, preserving canonical LingTai history while resuming a successful CLI session for incremental prompts (`adapter.py:ClaudeCodeAdapter`). `claude_code/__init__.py` carries the provider's rationale — it is the Claude analogue of the Codex provider, calling the CLI binary rather than the Anthropic API with a key. |
 | `kimi_code/` | — | `kimi-code` provider: drives the local `kimi` CLI as a LingTai brain. Deliberately distinct from both the generic HTTP `kimi` provider and the `kimicode` daemon backend — the adapter owns canonical history, requires LingTai JSON actions back from the CLI, and uses the CLI's opaque resume identity for provider cache affinity (`kimi_code/__init__.py:1-6`). |
 | `zhipu/` | — | Zhipu (GLM) provider: a thin OpenAI-compat wrapper whose sole deviation is a `_build_messages` session override merging consecutive same-role messages, because GLM rejects them with error 1214. The workaround is provider-local by design and must not migrate into the generic OpenAI adapter (`zhipu/adapter.py:1-8`). |
+| `deepseek/` | — | `deepseek` provider policy — **no adapter subclass**. DeepSeek runs on the shared `OpenAIAdapter`; only `policy.py` is DeepSeek-specific: the per-model, per-wire canonical effort levels, the documented compatibility aliases, what an omitted level means, and the exact wire payload (Chat `thinking.type` + flat `reasoning_effort`, Responses `reasoning.effort`). `_register.py:_deepseek` installs `apply_reasoning` as the adapter's `reasoning_policy`; configuration ingress (`lingtai/init_schema.py`, `lingtai/agent.py`) validates against the same module. |
 | `api_gate.py` | 112 | `APICallGate` — RPM rate limiter with deque timestamps, `ThreadPoolExecutor`, daemon gate thread |
 | `base.py` | 150 | `LLMAdapter` ABC (4 abstract methods), `_GatedSession` proxy |
 | `interface_converters.py` | 335 | Bidirectional converters: `to_*` / `from_*` for Anthropic, OpenAI, OpenAI Responses API, Gemini |
