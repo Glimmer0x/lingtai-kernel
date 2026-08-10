@@ -45,7 +45,14 @@ from ._async_process import (
 # action-separated family surface, re-exported here under the canonical
 # duck-typed names (the same single-surface shape ``web`` has). There is no
 # second, flat, pre-migration pair to drift against.
-from ._tool_family import ShellFamilyDispatcher, get_description, get_schema
+from ._tool_family import (
+    TIMEOUT_MAX_ENV,
+    ShellFamilyDispatcher,
+    _DEFAULT_TIMEOUT_SECONDS,
+    get_description,
+    get_schema,
+    resolve_timeout_max_seconds,
+)
 
 # Output hygiene (ANSI/CSI stripping, C0/C1 control escaping, startup-noise
 # stripping, explicit truncation) applied at the tool boundary before results
@@ -249,15 +256,19 @@ def _timeout_error(command: str, timeout: float, no_output: bool = False) -> dic
     foreground command (or a bare trailing ``&``).  Backward compatible: callers
     that do not pass ``no_output`` (and timeouts that did capture output) keep
     the exact historical message.
+
+    Jason 2026-08-10 tool-timeout redesign: the steering guidance is now
+    appended on *every* timeout result, not only the no-output case, so the
+    model always sees the async boundary instead of repeatedly raising a sync
+    timeout.
     """
     msg = f"Command timed out after {timeout}s"
     hint = _broad_scan_hint(command)
     if hint:
         msg = f"{msg}. {hint}"
-    if no_output:
-        # ``hint`` (when present) already ends with a period, so a plain space
-        # keeps a clean sentence boundary in both shapes.
-        msg = f"{msg}{' ' if hint else '. '}{_BACKGROUND_GUIDANCE}"
+    # ``hint`` (when present) already ends with a period, so a plain space
+    # keeps a clean sentence boundary in both shapes.
+    msg = f"{msg}{' ' if hint else '. '}{_BACKGROUND_GUIDANCE}"
     return {"status": "error", "message": msg}
 
 
@@ -737,7 +748,25 @@ class ShellManager:
             if err:
                 return err
             return self._run_async(command, cwd, reminder, invocation)
-        return self._run_sync(command, cwd, args.get("timeout", 30), invocation)
+        # Jason 2026-08-10 tool-timeout redesign: the default stays 30s; a
+        # sync call may set ``timeout`` at most to the hard ceiling
+        # (``LINGTAI_TOOL_TIMEOUT_MAX_SECONDS``, default 120).  Above the
+        # ceiling the call is refused and steered to ``async=true`` rather
+        # than silently clamped, so the model learns the async boundary
+        # instead of receiving a shorter timeout than it asked for.
+        timeout = args.get("timeout", _DEFAULT_TIMEOUT_SECONDS)
+        cap = resolve_timeout_max_seconds()
+        if timeout > cap:
+            return {
+                "status": "error",
+                "message": (
+                    f"timeout {timeout:g}s exceeds the hard ceiling "
+                    f"{cap:g}s ({TIMEOUT_MAX_ENV}); for work that may need "
+                    "longer, launch it with async=true and poll the job "
+                    "instead of raising the sync timeout."
+                ),
+            }
+        return self._run_sync(command, cwd, timeout, invocation)
 
     def _run_sync(self, command: str, cwd: str, timeout: float, invocation: ShellInvocation) -> dict:
         """Run the selected invocation; timeout/capture/result policy stays here."""

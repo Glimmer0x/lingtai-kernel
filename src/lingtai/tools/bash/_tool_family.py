@@ -25,6 +25,8 @@ Host/presentation adaptation, applied in the opposite direction: here the
 """
 from __future__ import annotations
 
+import math
+import os
 from typing import Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
@@ -33,6 +35,34 @@ from ._shell_dialect import ShellKind
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
+
+# Hard ceiling for the sync ``run`` ``timeout`` parameter (Jason 2026-08-10
+# tool-timeout redesign).  The default timeout stays 30s; a tool call may set
+# ``timeout`` at most to this cap; work that needs more must be launched with
+# ``async=true``.  The cap is an environment variable (not an arbitrary
+# per-config value), so it is enforced uniformly and can be tuned without
+# touching the schema.
+TIMEOUT_MAX_ENV = "LINGTAI_TOOL_TIMEOUT_MAX_SECONDS"
+_DEFAULT_TIMEOUT_MAX_SECONDS = 120.0
+
+
+def resolve_timeout_max_seconds(environ: Mapping[str, str] | None = None) -> float:
+    """Resolve the hard sync-timeout ceiling from the environment.
+
+    Reads ``LINGTAI_TOOL_TIMEOUT_MAX_SECONDS``; missing, empty, non-numeric,
+    non-positive, or non-finite values fall back to ``120.0``.  Reads at each
+    ``run`` call (no restart required), mirroring the Nudge policy controls.
+    """
+    raw = (os.environ if environ is None else environ).get(TIMEOUT_MAX_ENV)
+    if raw is None or not raw.strip():
+        return _DEFAULT_TIMEOUT_MAX_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT_MAX_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        return _DEFAULT_TIMEOUT_MAX_SECONDS
+    return value
 
 RUN_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -45,7 +75,10 @@ RUN_INPUT_SCHEMA: dict[str, Any] = {
             "type": ["number", "null"],
             "description": (
                 "Timeout in seconds, or null for the default 30. Only for sync "
-                "execution."
+                "execution. Hard ceiling: "
+                f"{TIMEOUT_MAX_ENV} (default {_DEFAULT_TIMEOUT_MAX_SECONDS:g}); "
+                "a value above the ceiling is refused \u2014 use async=true "
+                "instead for work that may need longer."
             ),
             "default": _DEFAULT_TIMEOUT_SECONDS,
         },

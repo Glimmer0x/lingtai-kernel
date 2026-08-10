@@ -105,6 +105,11 @@ so `ShellManager` applies its own unchanged runtime defaults (`timeout` 30,
 `working_dir` = the agent sandbox, `async` false, `reminder` 1800). Only
 `command` is genuinely required and non-nullable. A falsy-but-present value
 (`timeout: 0`, `async: false`, `working_dir: ""`) is passed through verbatim.
+The sync `timeout` has a hard ceiling, `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`
+(default 120, read from the environment at each `run` call): a value above the
+ceiling is refused with a message steering the caller to `async=true` (Jason
+2026-08-10 tool-timeout redesign; see the canonical environment-variable
+registry `ENVIRONMENT_VARIABLES.md`).
 
 `reasoning` is Host InvocationContext/audit metadata and `summarize` is the
 root, cross-cutting result post-processing control; neither is ever forwarded

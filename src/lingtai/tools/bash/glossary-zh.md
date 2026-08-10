@@ -21,7 +21,7 @@ maintenance: |
 - `reasoning`：必选。简述调用本工具的缘由（记入日记）。属 Host 元数据，不会进入 action 入参。
 - `summarize`：可选，默认 false。根层跨切面的结果后处理开关，非 action 入参。为 true 时，该 tool 照常执行，原始结果会完整保存到持久日志（可按 tool_call_id 取回），但在结果进入你的上下文之前，会被一段由你的 `reasoning` 字段驱动的 LLM 生成摘要替换——所以请在 `reasoning` 中明确说明要保留什么。仅当预期输出很大（>10k 字符）且你不需要精确原文时才设为 true。需要精确的行/文件/diff/stderr 原文时请保持 false。摘要非权威；若原始结果超过 500,000 字符则不生成摘要，你会收到一条指向已保存原始结果的拒绝信息。
 - `input.command`（仅 run）：要执行的 shell 命令
-- `input.timeout`（仅 run）：超时秒数，传 null 即用默认 30；仅同步执行时生效
+- `input.timeout`（仅 run）：超时秒数，传 null 即用默认 30；仅同步执行时生效。硬上限 `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS`（默认 120）：超过上限会被拒绝并引导使用 async=true
 - `input.working_dir`（仅 run）：命令的工作目录，传 null 或空字符串即使用 agent 工作目录。必须位于 agent 工作目录沙箱内；沙箱外路径会被拒绝。若要操作外部仓库/路径，请将 working_dir 保持为 agent 目录，并在 command 中显式 cd，例如 cd /absolute/path && ...
 - `input.async`（仅 run）：后台运行命令并立即返回 job_id，传 null 即用默认 false
 - `input.reminder`（仅 run）：兜底异步唤醒延迟秒数，传 null 即用默认 1800。仅在异步 run 中使用并校验。初始期限仅作崩溃兜底；有界的持久 return-handoff 会阻止第二个 manager 在首个 manager 尚未完成成功返回转换时提前发布旧期限。只有在守卫仍有效时原子写入 `returned_at + reminder`（或精确完成/失败已在有效守卫内落盘）才返回成功；过期后恢复的 owner 会携 `job_id/pid` 返回“仍可 poll”的显式错误，且保留崩溃兜底。若最终到期时任务仍非终态，则发布 system 通知提醒 poll。取消期间的持久 suppressing 状态同样有界，超时后可恢复提醒。精确完成会抑制这条过时的“仍可能运行”提醒，改由 shell completion 通知唤醒。

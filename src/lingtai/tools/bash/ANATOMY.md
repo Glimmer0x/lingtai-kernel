@@ -82,7 +82,7 @@ Per-action `input` (run-only fields exist only in `run`; `job_id` only in `poll`
 | Action   | `input` field  | Type    | Description |
 |----------|----------------|---------|-------------|
 | `run`    | `command`      | string  | Shell command to execute (the one genuinely required, non-nullable field) |
-| `run`    | `timeout`      | number\|null | Timeout in seconds; `null` → default 30, sync only |
+| `run`    | `timeout`      | number\|null | Timeout in seconds; `null` → default 30, sync only. Hard ceiling `LINGTAI_TOOL_TIMEOUT_MAX_SECONDS` (default 120): values above it are refused with an `async=true` steering message |
 | `run`    | `working_dir`  | string\|null | Working directory; `null`/`""` → the agent working dir, and it must stay inside that sandbox |
 | `run`    | `async`        | boolean\|null | `true` runs in background and returns `job_id` immediately; `null` → false |
 | `run`    | `reminder`     | number\|null | Last-resort async wake delay; `null` → default 1800. Consumed/validated only for async `run` |
