@@ -431,3 +431,201 @@ def test_http_call_tool_signature_and_success_path_are_unchanged(monkeypatch):
     result = client.call_tool("read", {})
 
     assert result == {"status": "success", "text": "http-ok"}
+
+
+# ---------------------------------------------------------------------------
+# HTTPMCPClient: issue-740 stale recovery for a dropped HTTP/SSE stream
+# ---------------------------------------------------------------------------
+
+
+def test_http_restart_resets_startup_state_so_start_cannot_lie(monkeypatch):
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    client._ready.set()
+    client._error = "old startup error"
+    client._closed = True
+    client._session = object()
+    client._client = object()
+    client._http_client = object()
+    client._transport_cm = object()
+    client._session_cm = object()
+
+    closed = {"n": 0}
+    started = {"n": 0}
+
+    monkeypatch.setattr(
+        client, "close", lambda: closed.__setitem__("n", closed["n"] + 1)
+    )
+    monkeypatch.setattr(
+        client, "start", lambda: started.__setitem__("n", started["n"] + 1)
+    )
+
+    client.restart()
+
+    assert closed["n"] == 1
+    assert started["n"] == 1
+    assert not client._ready.is_set()
+    assert client._error is None
+    assert client._closed is False
+    assert client._session is None
+    assert client._client is None
+    assert client._http_client is None
+    assert client._transport_cm is None
+    assert client._session_cm is None
+
+
+def test_http_call_tool_restarts_transport_without_replay_on_stale_error(
+    monkeypatch,
+):
+    """A dropped stream triggers one transport restart; the call is not
+    replayed because the remote commit point is unknowable (HTTP non-retry)."""
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+    attempts = {"n": 0}
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        attempts["n"] += 1
+        return _FakeFuture(exc=ClosedResourceError())
+
+    def fake_restart():
+        restarts["n"] += 1
+        _install_fake_loop(client)
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(client, "restart", fake_restart)
+
+    result = client.call_tool("web_search", {"query": "x"})
+
+    assert attempts["n"] == 1
+    assert restarts["n"] == 1
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "ClosedResourceError" in result["message"]
+    assert "restarted for a future call" in result["message"]
+
+
+def test_http_call_tool_non_stale_error_returns_formatted_dict_not_raise(
+    monkeypatch,
+):
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ValueError("boom"))
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("web_search", {"query": "x"})
+
+    assert result == {"status": "error", "message": "ValueError: boom"}
+    assert restarts["n"] == 0
+
+
+def test_http_call_tool_empty_message_error_surfaces_class_name(monkeypatch):
+    """The #104 blank-error regression guard, now for the HTTP client."""
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+
+    class WeirdEmptyError(Exception):
+        pass
+
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=WeirdEmptyError())
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("web_search", {"query": "x"})
+
+    assert result == {"status": "error", "message": "WeirdEmptyError"}
+    assert restarts["n"] == 0
+
+
+def test_http_call_tool_timeout_after_submission_is_ambiguous(monkeypatch):
+    """A Future timeout can hide a committed remote side effect; no replay."""
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+    future = _FakeFuture(exc=TimeoutError("response deadline"))
+    restarts = {"n": 0}
+
+    def fake_run(coro, loop):
+        coro.close()
+        return future
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(
+        client,
+        "restart",
+        lambda: restarts.__setitem__("n", restarts["n"] + 1),
+    )
+
+    result = client.call_tool("web_search", {"query": "x"})
+
+    assert future.cancelled is True
+    assert restarts["n"] == 0
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "timed out" in result["message"]
+    assert "not retried" in result["message"]
+
+
+def test_http_call_tool_restart_failure_is_ambiguous_and_mentions_restart(
+    monkeypatch,
+):
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ClosedResourceError())
+
+    def failed_restart():
+        raise RuntimeError("cannot reconnect")
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+    monkeypatch.setattr(client, "restart", failed_restart)
+
+    result = client.call_tool("web_search", {"query": "x"})
+
+    assert result["status"] == "error"
+    assert result["outcome"] == "ambiguous"
+    assert result["retryable"] is False
+    assert "restart failed" in result["message"]
+    assert "RuntimeError: cannot reconnect" in result["message"]
+
+
+def test_http_call_tool_failure_recorded_in_activity_log(monkeypatch):
+    """Failed HTTP calls are observable via get_activity_log()."""
+    client = HTTPMCPClient(url="https://invalid.example.test/mcp")
+    _install_fake_loop(client)
+
+    def fake_run(coro, loop):
+        coro.close()
+        return _FakeFuture(exc=ValueError("boom"))
+
+    monkeypatch.setattr("asyncio.run_coroutine_threadsafe", fake_run)
+
+    client.call_tool("web_search", {"query": "x"})
+
+    log = client.get_activity_log()
+    assert len(log) == 1
+    assert log[0]["tool"] == "web_search"
+    assert log[0]["result"]["status"] == "error"
+    assert log[0]["result"]["message"] == "ValueError: boom"

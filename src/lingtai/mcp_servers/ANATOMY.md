@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/mcp_catalog.json
   - src/lingtai/mcp_servers/__init__.py
   - src/lingtai/mcp_servers/_identity.py
+  - src/lingtai/mcp_servers/_outbound_files.py
   - src/lingtai/mcp_servers/_results.py
   - src/lingtai/mcp_servers/local_commands/ANATOMY.md
   - src/lingtai/mcp_servers/local_commands/core.py

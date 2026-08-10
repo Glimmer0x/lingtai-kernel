@@ -170,6 +170,7 @@ related_files:
   - tests/test_how_to_change_name.py
   - tests/test_how_to_change_name_e2e.py
   - tests/test_i18n.py
+  - tests/test_imap_account_metadata.py
   - tests/test_imap_empty_args.py
   - tests/test_imap_outlook_oauth.py
   - tests/test_imap_read_attachment_sanitization.py
@@ -225,6 +226,7 @@ related_files:
   - tests/test_mcp_server_scaffold.py
   - tests/test_mcp_skill_manuals.py
   - tests/test_mcp_structured_result.py
+  - tests/test_mcp_server_credential_logging.py
   - tests/test_mcp_v2_adapter_metadata.py
   - tests/test_messaging_notification_format.py
   - tests/test_meta_block.py
@@ -243,6 +245,7 @@ related_files:
   - tests/test_openai_overflow_recovery.py
   - tests/test_openai_prompt_cache_key.py
   - tests/test_openai_responses_streaming.py
+  - tests/test_outbound_file_containment.py
   - tests/test_output_hygiene.py
   - tests/test_override_intrinsic.py
   - tests/test_pad.py
