@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from types import SimpleNamespace
 
 import lingtai.kernel.meta_block as meta_block
 
 MAX = meta_block.NOTIFICATION_PERSISTENT_MAX_CHARS
+ENV = meta_block.NOTIFICATION_PERSISTENT_MAX_CHARS_ENV
 
 
 def _cap_agent(tmp_path):
@@ -294,3 +296,52 @@ def test_two_overflows_in_one_second_keep_both_spill_files(tmp_path):
     }
     assert len(paths) == 2
     assert len(_spill_files(tmp_path)) == 2
+
+
+def test_env_cap_resolver_default_and_ceiling(monkeypatch):
+    """Unset env returns the default; values above the 10k ceiling clamp."""
+    monkeypatch.delenv(ENV, raising=False)
+    assert meta_block._notification_persistent_max_chars() == MAX
+
+    monkeypatch.setenv(ENV, "5000")
+    assert meta_block._notification_persistent_max_chars() == 5000
+
+    # The 10k ceiling cannot be raised via env — clamp back to default.
+    monkeypatch.setenv(ENV, "20000")
+    assert meta_block._notification_persistent_max_chars() == MAX
+
+
+def test_env_cap_resolver_invalid_values_fall_back(monkeypatch):
+    """Missing, non-numeric, zero, and negative values fall back to default."""
+    for raw in ("", "abc", "0", "-5", "12.5"):
+        if raw == "":
+            monkeypatch.delenv(ENV, raising=False)
+        else:
+            monkeypatch.setenv(ENV, raw)
+        assert meta_block._notification_persistent_max_chars() == MAX, raw
+
+
+def test_env_cap_tightened_by_operator(monkeypatch, tmp_path):
+    """A payload under the default cap spills once the operator lowers it."""
+    agent = _cap_agent(tmp_path)
+    emails = [_email(i, message="E" * 200) for i in range(1, 16)]
+
+    # Under the default 10k cap the same payload fits with zero changes.
+    default_payload = meta_block.build_notification_persistent_payload(
+        agent, _email_payload(emails)
+    )
+    assert "overflow" not in default_payload["notification_persistent"]
+    assert _envelope_chars(default_payload) <= MAX
+
+    # Lowering the cap via env makes the identical payload spill and compact.
+    monkeypatch.setenv(ENV, "500")
+    payload = meta_block.build_notification_persistent_payload(
+        agent, _email_payload(emails)
+    )
+
+    persistent = payload["notification_persistent"]
+    assert persistent["overflow"]["truncated"] is True
+    # Structural fields stay intact; every id still survives the tighter cap.
+    expected_ids = [f"email-{i}" for i in range(1, 16)]
+    assert [e["id"] for e in persistent["email"]["emails"]] == expected_ids
+    assert persistent["email"]["email_ids"] == expected_ids
