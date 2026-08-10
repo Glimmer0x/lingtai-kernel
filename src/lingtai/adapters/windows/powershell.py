@@ -400,6 +400,19 @@ def _commands(script: str) -> tuple[str, ...]:
                     # & (Get-Command ...) / . (Get-Command ...): dynamic target.
                     result.append(_UNSUPPORTED)
                     break
+                # F1: eval-command call form ``IEX(...)`` / ``iex(...)`` /
+                # ``Invoke-Expression(...)`` -- the eval head glued directly to
+                # a group is dynamic invocation even when a member chain
+                # follows (``IEX(New-Object).DownloadString``), so fail closed
+                # instead of emitting the head as a literal command.
+                head_start = i
+                while head_start > 0 and (
+                    text[head_start - 1].isalnum() or text[head_start - 1] == "_"
+                ):
+                    head_start -= 1
+                if text[head_start:i].casefold() in _EVAL_COMMANDS:
+                    result.append(_UNSUPPORTED)
+                    break
                 if i > 0 and text[i - 1] == "@":
                     # @(...) array literal: values are data unless they name
                     # a command (e.g. @(Get-Process)).
