@@ -1293,6 +1293,124 @@ def test_build_emanation_prompt_includes_selected_skills(tmp_path):
     assert prompt.index("- name: review-skill") < prompt.index("Your task:")
 
 
+def test_task_plugin_context_renders_catalog_and_flattens_skills_mcp(tmp_path):
+    """Daemon task plugin paths render a plugin section plus flattened skills/mcp."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    plugin_root = agent._working_dir / "plugin"
+    plugin_dir = plugin_root / "demo-plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "demo-plugin", "version": "1.0.0", "description": "Demo plugin for daemon injection."}',
+        encoding="utf-8",
+    )
+    skill_dir = plugin_dir / "skills" / "demo-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n" + "name: demo-skill\n" + "description: Plugin skill for daemon runs.\n" + "---\n",
+        encoding="utf-8",
+    )
+    (plugin_dir / "mcp.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json", '
+        '"mcpServers": {"demo-mcp": {"type": "stdio", "command": "python3", '
+        '"args": ["-m", "demo"]}}}',
+        encoding="utf-8",
+    )
+
+    catalog, skill_rows, mcp_regs = mgr._task_plugin_context(
+        {"task": "x", "tools": [], "plugin": ["plugin/demo-plugin"]}
+    )
+
+    assert catalog is not None
+    assert "plugins:" in catalog
+    assert "- name: demo-plugin" in catalog
+    assert "Demo plugin for daemon injection." in catalog
+    assert "skills (1):" in catalog
+    assert "- demo-skill" in catalog
+    assert "mcp (1):" in catalog
+    assert "- demo-mcp (mounted)" in catalog
+    assert [r["name"] for r in skill_rows] == ["demo-skill"]
+    assert len(mcp_regs) == 1
+    assert mcp_regs[0]["name"] == "demo-mcp"
+    assert mcp_regs[0]["transport"] == "stdio"
+    assert mcp_regs[0]["command"] == "python3"
+
+
+def test_task_plugin_context_rejects_bad_plugin_path(tmp_path):
+    """A missing plugin path resolves to nothing without failing the whole task."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    catalog, skill_rows, mcp_regs = mgr._task_plugin_context(
+        {"task": "x", "tools": [], "plugin": ["plugin/missing-plugin"]}
+    )
+
+    assert catalog is None
+    assert skill_rows == []
+    assert mcp_regs == []
+
+
+def test_combine_oneshot_context_includes_plugin_section(tmp_path):
+    """The oneshot context combiner renders a dedicated plugin section."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    combined = mgr._combine_oneshot_context(
+        None, None, None, "plugins:\n  - name: demo-plugin\n"
+    )
+
+    assert combined is not None
+    assert "## Parent-selected plugins" in combined
+    assert "demo-plugin" in combined
+
+
+def test_handle_emanate_writes_plugin_section_to_prompt_before_detach(tmp_path, monkeypatch):
+    """A daemon task with a plugin path renders the plugin section into the
+    durable .prompt that the detached child reads (regression for the
+    overwritten oneshot context)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    plugin_dir = agent._working_dir / "plugin" / "demo-plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "demo-plugin", "version": "1.0.0", "description": "Demo plugin for daemon injection."}',
+        encoding="utf-8",
+    )
+    captured = []
+
+    def fake_spawn(run_dir, **kwargs):
+        captured.append((run_dir, kwargs))
+        run_dir.mark_done("ok")
+
+    monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [
+            {"task": "system task one", "tools": [], "plugin": ["plugin/demo-plugin"]},
+        ],
+    })
+
+    assert result["status"] == "dispatched"
+    prompts = [row[0].prompt_path.read_text(encoding="utf-8") for row in captured]
+    assert len(prompts) == 1
+    assert "## Parent-selected plugins" in prompts[0]
+    assert "demo-plugin" in prompts[0]
+    assert "system task one" in prompts[0]
+
+
+def test_task_plugin_context_rejects_non_list(tmp_path):
+    """A non-list plugin field fails before scheduling."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    try:
+        mgr._task_plugin_context({"task": "x", "tools": [], "plugin": "plugin/demo"})
+    except ValueError as e:
+        assert "plugin must be an array" in str(e)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("non-list plugin should fail")
+
+
 def test_build_emanation_prompt_includes_selected_mcp_context(tmp_path):
     """Selected MCP registrations are rendered into the daemon prompt before the task."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
@@ -2057,6 +2175,8 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
         {"task": "task B", "tools": ["file"]},
     ]})
     assert result["status"] == "dispatched"
+    # Two tasks is a fleet, and this agent keeps no watch, so the handoff also
+    # carries the Task Card nudge (see tests/test_task_card_proactivity.py).
     assert result["handoff"] == (
         "While waiting, go idle or call system(action='sleep'); the terminal result "
         "will arrive and wake you as a notification; read daemon-manual and "
@@ -2064,6 +2184,8 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
         "is available for the current turn, use it to report progress; call "
         "`telegram(action='manual')` and follow its `Programmable Task Card` "
         "section for details."
+        " You dispatched 2 daemon(s) with no active task_card watch — consider "
+        "starting one (task_card action='start') so a human can follow progress."
     )
     assert result["count"] == 2
     ids = result["ids"]
@@ -4367,6 +4489,90 @@ def test_run_emanation_no_preset_preserves_parent_provider_defaults(
             "max_rpm": 9,
             "default_headers": {"x-test": "1"},
             "codex_base_urls": ["https://a.example", "https://b.example"],
+        }
+    }
+
+
+def test_run_emanation_detached_child_merges_public_provider_defaults(
+    tmp_path, monkeypatch
+):
+    """Detached-child reconstruction must merge the public ``provider_defaults`` map.
+
+    The parent serializes the effective provider bucket into the manifest under
+    the public ``provider_defaults`` key; the private ``_provider_defaults``
+    alias never crosses the process boundary. The child's ``_run_emanation``
+    receives ``preset_llm`` carrying that public map and must merge the nested
+    ``provider_defaults[provider]`` bucket — otherwise fields like
+    ``wire_api: responses`` are dropped, the wire degrades to ``auto``, and a
+    Responses provider is misrouted to Chat Completions.
+    """
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent.service.provider = "custom"
+    agent.service.model = "glm-5.1"
+    agent.service._base_url = "https://proxy.example/v1"
+    agent.service._context_window = 200000
+    agent.service._key_resolver = lambda provider: "token"
+    agent.service._api_key = "sk-effective"
+    agent.service.api_key = "sk-effective"
+    agent.service._provider_defaults = {
+        "custom": {
+            "api_compat": "openai",
+            "wire_api": "responses",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
+        }
+    }
+
+    captured = {}
+    import lingtai.llm.service as service_mod
+    monkeypatch.setattr(service_mod, "LLMService", _capturing_fake_service(captured))
+
+    mgr = agent.get_capability("daemon")
+    cancel = threading.Event()
+    em_id = "em-detached-defaults"
+    schemas, dispatch = mgr._build_tool_surface(["file"])
+    run_dir = _make_run_dir(agent, em_id=em_id)
+    mgr._emanations[em_id] = {
+        "followup_buffer": "",
+        "followup_lock": threading.Lock(),
+        "run_dir": run_dir,
+    }
+
+    # Exactly what a detached child receives: a manifest ``llm``/``preset_llm``
+    # block whose provider bucket lives under the PUBLIC ``provider_defaults``
+    # key (no ``_provider_defaults`` alias survives serialization).
+    child_preset_llm = {
+        "provider": "custom",
+        "model": "glm-5.1",
+        "api_key": "sk-effective",
+        "base_url": "https://proxy.example/v1",
+        "context_window": 200000,
+        "provider_defaults": {
+            "custom": {
+                "api_compat": "openai",
+                "wire_api": "responses",
+                "max_rpm": 9,
+                "default_headers": {"x-test": "1"},
+            }
+        },
+    }
+
+    result = mgr._run_emanation(
+        em_id, run_dir, schemas, dispatch, "x", cancel, preset_llm=child_preset_llm
+    )
+
+    assert result == "daemon done"
+    # The nested wire_api=responses bucket survives the child reconstruction and
+    # reaches LLMService (merged over the top-level manifest-derived keys, e.g.
+    # base_url), so the adapter selects OpenAIResponsesSession instead of
+    # degrading to auto/Chat Completions.
+    assert captured["init"]["provider_defaults"] == {
+        "custom": {
+            "api_compat": "openai",
+            "base_url": "https://proxy.example/v1",
+            "wire_api": "responses",
+            "max_rpm": 9,
+            "default_headers": {"x-test": "1"},
         }
     }
 
