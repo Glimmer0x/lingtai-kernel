@@ -95,6 +95,8 @@ constructs a migration workspace, or performs a second notification path.
 
 ## Contract rules
 
+Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.md#behavior-k002), [K007](kernel/BEHAVIORS.md#behavior-k007)
+
 1. `src/lingtai/init.jsonc` is the sole kernel semantic source. New writers must
    use its canonical/normal shape; compatibility is read-only.
 2. Boot and refresh must call the same `read_init` path and use the same parser,

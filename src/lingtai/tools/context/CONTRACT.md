@@ -3,6 +3,7 @@ name: context-contract
 tool: context
 contract_version: 5
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
@@ -31,6 +32,8 @@ maintenance: |
 # Context capability contract
 
 ## Purpose and public ownership
+
+Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 
 `context` owns the agent's context lifecycle. Its exact public actions are:
 
@@ -99,6 +102,8 @@ applying summaries or requesting provider replay.
 
 ## Passive lifecycle scenarios
 
+Guarded by: [L004](BEHAVIORS.md#behavior-l004)
+
 Refresh and molt are passive scenarios invoking the same internal
 `Agent._reconstruct_context` contract:
 
@@ -115,6 +120,8 @@ journal and keep sets, snapshots/archives, sheds/replays selected history,
 updates `molt_count`, writes its summary, and publishes the post-molt reminder.
 
 ## Molt safety invariants
+
+Guarded by: [L003](BEHAVIORS.md#behavior-l003), [K004](../../kernel/BEHAVIORS.md#behavior-k004)
 
 Agent-initiated molt requires a nonempty retrospective and a valid
 `knowledge/session-journal/<entry>/KNOWLEDGE.md` with session-journal

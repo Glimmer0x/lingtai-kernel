@@ -87,6 +87,8 @@ browser transport from search.
 
 ## Provider ownership and routing
 
+Guarded by: [W001](BEHAVIORS.md#behavior-w001), [W002](BEHAVIORS.md#behavior-w002)
+
 Built-in Search admits exactly four engines: canonical first-party OpenAI
 Responses Web Search, canonical first-party Anthropic server-side Web Search,
 canonical first-party Gemini Google Search grounding, and DuckDuckGo. MiniMax
@@ -210,6 +212,8 @@ failure the Web use-case policy must observe to drive the DuckDuckGo fallback
 above.
 
 ## Contract rules
+
+Guarded by: [W002](BEHAVIORS.md#behavior-w002)
 
 - The public name is `web`; no browser or web_search registry, schema, prompt,
   check-caps, catalog, or installed manual entry exists.

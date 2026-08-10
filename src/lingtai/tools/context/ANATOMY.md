@@ -1,5 +1,6 @@
 ---
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/intrinsic_skills/context-manual/SKILL.md
   - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
   - src/lingtai/tools/ANATOMY.md

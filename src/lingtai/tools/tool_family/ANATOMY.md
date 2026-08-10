@@ -1,5 +1,6 @@
 ---
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md

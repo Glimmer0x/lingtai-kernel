@@ -3,6 +3,7 @@ name: tool-family
 contract_version: 2
 root_contract: CONTRACT.md
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
@@ -364,6 +365,8 @@ Every other built-in family remains fully independent of this package until
 its own scoped migration.
 
 ## Contract rules
+
+Guarded by: [T006](BEHAVIORS.md#behavior-t006)
 
 - A `ToolFamily`'s child registry MUST be validated at construction: duplicate
   child names and more than one child named the reserved `manual` MUST raise

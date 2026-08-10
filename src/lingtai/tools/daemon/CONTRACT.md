@@ -10,6 +10,7 @@ status: active
 contract_version: 8
 last_changed_at: "2026-08-09"
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
@@ -148,6 +149,8 @@ third-party MCP protocols, or broad daemon scheduling/timeout behavior except
 where those changes affect the invariants here.
 
 ## Tool Surface
+
+Guarded by: [D001](BEHAVIORS.md#behavior-d001), [D002](BEHAVIORS.md#behavior-d002), [D003](BEHAVIORS.md#behavior-d003), [D004](BEHAVIORS.md#behavior-d004), [D005](BEHAVIORS.md#behavior-d005)
 
 `daemon` is migrated to the LingTai Tool Protocol v2 action-separated envelope
 (`../CONTRACT.md`, `../tool_family/CONTRACT.md`) using the generic
@@ -538,6 +541,8 @@ run-local `logs/events.jsonl` / `daemon_tool_result` recovery locator. The closu
 is inert unless a tool explicitly requests `summary=true`.
 
 ## Backend Support Matrix
+
+Guarded by: [D006](BEHAVIORS.md#behavior-d006), [D007](BEHAVIORS.md#behavior-d007)
 
 Current source-backed status:
 

@@ -1,12 +1,22 @@
 ---
 name: component-behavior-test-convention
 behavior_version: 2
-labt_version: 1
+labt_version: 2
 related_files:
   - CONTRACT.md
   - ANATOMY.md
   - dev-guide-skill/SKILL.md
   - tests/CONTRACT.md
+  - src/lingtai/kernel/BEHAVIORS.md
+  - src/lingtai/tools/system/BEHAVIORS.md
+  - src/lingtai/tools/context/BEHAVIORS.md
+  - src/lingtai/tools/daemon/BEHAVIORS.md
+  - src/lingtai/tools/bash/BEHAVIORS.md
+  - src/lingtai/tools/telegram/BEHAVIORS.md
+  - src/lingtai/tools/tool_family/BEHAVIORS.md
+  - src/lingtai/tools/file/BEHAVIORS.md
+  - src/lingtai/tools/feishu/BEHAVIORS.md
+  - src/lingtai/tools/web_search/BEHAVIORS.md
 maintenance: |
   This file is the normative root of the distributed behavior-test definition
   system: it owns the LingTai Agent Behavior Task (LABT) specification, its
@@ -43,7 +53,7 @@ It is the third leg of the **tridirectional linkage**:
 | `BEHAVIORS.md` | How do we verify the promise with an agent? | Self-contained agent tasks (LABT) |
 | `ANATOMY.md` | Where is the code? | Code navigation |
 
-## LingTai Agent Behavior Task (LABT) — version 1
+## LingTai Agent Behavior Task (LABT) — version 2
 
 A **LABT** is the unit of behavior verification in this repository: a single
 markdown section, fully self-contained, that an agent or daemon can execute
@@ -62,11 +72,11 @@ pytest are for traceability and review — never required for execution.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Stable anchor, `B###`; section heading becomes `#behavior-b###` |
+| `id` | yes | Stable anchor. Default scheme is `B###`; section heading becomes `#behavior-b###`. Per-family files MAY use a family prefix (e.g. `D###` daemon, `L###` lifecycle, `T###` tool-family, `C###` comms, `K###` kernel, `S###` shell) — prefix IDs are globally unique, collision-free across files, and readably self-describing in cross-refs; anchor becomes `#behavior-<prefix>###` (e.g. `#behavior-d003`). A validation test MUST NOT hardcode one scheme; it must accept the per-family scheme a child file declares. |
 | `title` | yes | One-sentence behavior promise |
-| `guards` | yes | Contract clause guarded (bidirectional ref) |
+| `guards` | yes | Contract clause guarded (bidirectional ref). Format: `<contract-frontmatter-name> § <clause heading>`; the `name:` MUST match the target contract's frontmatter exactly |
 | `supersedes` | no | pytest file(s) this LABT replaces/complements (traceability) |
-| `runner` | yes | Which agent/daemon shape can execute (e.g. any LingTai agent with `system`) |
+| `runner` | yes | Which agent/daemon shape can execute (e.g. any LingTai agent with `system`) — an agent shape, NOT a pytest command |
 | `prerequisites` | yes | Exact setup required (agents, dirs, files, permissions) |
 | `steps` | yes | Ordered concrete actions the executor performs |
 | `expected_evidence` | yes | Observable outcomes checklist (state/file/receipt/notification) |
@@ -140,8 +150,8 @@ in the same change. This is a review gate, not optional polish.
 ---
 name: <component>-behavior-tests      # e.g. system-behavior-tests
 behavior_version: 1                   # child-file format revision
-labt_version: 1                       # MUST match this root's labt_version
-contract: CONTRACT.md                 # the contract this guards (relative)
+labt_version: 2                       # MUST match this root's labt_version
+contract: CONTRACT.md                 # the contract(s) this guards (relative); may be a list
 anatomy: ANATOMY.md                   # the anatomy this pairs with (relative)
 related_files:                        # real repo-relative paths
   - src/lingtai/tools/system/karma.py
