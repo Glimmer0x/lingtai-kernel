@@ -25,12 +25,17 @@ maintenance: |
 ## Purpose
 
 **BEHAVIORS.md is the distributed agent-observable behavior definition system.**
-A `BEHAVIORS.md` sits beside a `CONTRACT.md` (and its paired `ANATOMY.md`) to
-record **LingTai Agent Behavior Tasks**: self-contained agent-executable
-behavioral tests in markdown. Each LABT is a scenario an agent runs against the
-real product to prove the contract's *important behavior clauses* do not drift.
+It is the **sibling of `CONTRACT.md`** (not a governed child): a
+`BEHAVIORS.md` sits beside a `CONTRACT.md` in the same directory and records
+**LingTai Agent Behavior Tasks** — self-contained agent-executable behavioral
+tests in markdown. Each LABT is a scenario an agent runs against the real
+product to prove the contract's *important behavior clauses* do not drift.
+The contract/behaviors pair has the stronger connection: every important
+behavior clause lives in the contract and is verified by a LABT here. The
+paired `ANATOMY.md` is the third node of the tridirectional loop: all three
+files are interconnected if applicable.
 
-It is the third leg of the **three-way linkage**:
+It is the third leg of the **tridirectional linkage**:
 
 | Document | Answers | Role |
 |---|---|---|
