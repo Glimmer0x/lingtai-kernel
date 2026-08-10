@@ -81,6 +81,6 @@ comparison rules, composition roots, and exclusions are normative in the paired
 [`CONTRACT.md`](CONTRACT.md). There is no second concrete clock mechanism and no
 dedicated anatomy for the one-file portable system adapter — its structure is
 owned by this governed pair and the source-root composition map. The excluded
-clocks (heartbeat `Event.wait(1.0)` cadence, notification/event identity, Agent
+clocks (heartbeat `Event.wait(HEARTBEAT_TICK_SECONDS)` cadence, notification/event identity, Agent
 CPR, refresh-watcher subprocess, retention/nudge/Task Card/`time_veil`/display,
 and LLM/session/tool clocks) are deliberately not routed through this Port.

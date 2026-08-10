@@ -5,6 +5,7 @@ import time
 
 from lingtai.kernel.agent_presence import (
     AgentPresenceStorePort,
+    DEFAULT_LIVENESS_THRESHOLD_SECONDS,
     is_agent as _presence_is_agent,
     observe_alive as _presence_observe_alive,
 )
@@ -30,8 +31,14 @@ def _is_agent(target) -> bool:
     return _presence_is_agent(_presence_for(target).observe_manifest())
 
 
-def _is_alive(target, threshold: float = 2.0) -> bool:
-    """Foreign-address liveness check via the presence store + Core policy."""
+def _is_alive(target, threshold: float = DEFAULT_LIVENESS_THRESHOLD_SECONDS) -> bool:
+    """Foreign-address liveness check via the presence store + Core policy.
+
+    The default threshold is the kernel-fixed liveness window
+    (``DEFAULT_LIVENESS_THRESHOLD_SECONDS`` in ``lingtai.kernel.agent_presence``,
+    derived from the heartbeat tick cadence), so karma gates and the CPR
+    relaunch poll share one window instead of the historical 2.0/3.0 split.
+    """
     return _presence_observe_alive(
         _presence_for(target),
         wall_now=time.time(),

@@ -117,7 +117,7 @@ The Port owns exactly two readings and nothing else. Do **not** add a third
 operation or a wait/sleep/deadline/scheduler/timer method, and do **not** route
 these through it:
 
-- the heartbeat cadence primitive `agent._heartbeat_stop.wait(1.0)` (it stays a
+- the heartbeat cadence primitive `agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)` (it stays a
   dedicated interruptible `threading.Event`);
 - notification / system-event identity clocks (the synthetic `call_id` /
   `event_id`);

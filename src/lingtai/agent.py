@@ -1110,12 +1110,18 @@ class Agent(BaseAgent):
 
         self._log("cpr_launched", target=str(target), pid=proc.pid, log=str(log_path))
 
+        # Poll with the kernel-fixed liveness window (shared default), NOT a
+        # local 3.0: karma's CPR gate and this relaunch poll must use the same
+        # threshold, so a heartbeat fresh enough to satisfy the poll is by
+        # construction newer than the gate check and must have been written by
+        # the relaunched process. (The 10s deadline still exceeds the liveness
+        # window; if HEARTBEAT_LIVENESS_SECONDS is ever raised past ~5s, derive
+        # this deadline too, e.g. max(10.0, 2 * HEARTBEAT_LIVENESS_SECONDS).)
         deadline = time.time() + 10.0
         while time.time() < deadline:
             if _presence_observe_alive(
                 target_presence,
                 wall_now=time.time(),
-                threshold=3.0,
             ):
                 self._log("cpr_alive", target=str(target), pid=proc.pid)
                 return True

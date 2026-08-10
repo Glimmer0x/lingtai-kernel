@@ -348,3 +348,32 @@ class TestHeartbeatNeverBlocksOnNetwork:
         assert len(samples) >= 3
         stale = [(wall, ts) for wall, ts in samples if wall - ts >= 2.0]
         assert not stale, f"heartbeat went stale during the slow fetch (#730): {stale[:3]}"
+
+
+class TestHeartbeatTickConstant:
+
+    def test_heartbeat_loop_uses_kernel_tick_constant(self, monkeypatch):
+        """The loop waits HEARTBEAT_TICK_SECONDS, not a local 1.0 literal."""
+        from types import SimpleNamespace
+
+        from lingtai.kernel import config
+        from lingtai.kernel.base_agent import lifecycle
+
+        waits: list[float] = []
+
+        class _FakeStop:
+            def wait(self, timeout: float) -> None:
+                waits.append(timeout)
+                # End the loop after one beat so the test terminates.
+                _FakeAgent._heartbeat_thread = None
+
+        class _FakeAgent:
+            _heartbeat_thread = object()
+            _shutdown = SimpleNamespace(is_set=lambda: True)
+            _heartbeat_stop = _FakeStop()
+
+        monkeypatch.setattr(lifecycle, "_write_heartbeat_tick", lambda agent: None)
+        lifecycle._heartbeat_loop(_FakeAgent())
+
+        assert waits == [config.HEARTBEAT_TICK_SECONDS]
+

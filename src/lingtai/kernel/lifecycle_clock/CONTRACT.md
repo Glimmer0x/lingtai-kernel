@@ -73,7 +73,7 @@ the manifest-persist → heartbeat-withdraw → workdir-lease-release teardown o
 Agents MUST NOT add a
 third clock operation, a wait/sleep/deadline/scheduler/timer method, `Path`,
 datetime, timezone, or filesystem/POSIX vocabulary to this Port; MUST NOT route
-`Event.wait(1.0)` heartbeat cadence, notification/event identity clocks, Agent
+`Event.wait(HEARTBEAT_TICK_SECONDS)` heartbeat cadence, notification/event identity clocks, Agent
 CPR clocks, the refresh-watcher subprocess clocks, retention/nudge/Task
 Card/display/`time_veil` clocks, or LLM/session/tool clocks through it; and MUST
 NOT construct the concrete adapter inside Core.
@@ -137,7 +137,7 @@ to prove substitutability. Core never imports the adapter package.
    by lifecycle-clock test evidence. Preserve the strict liveness comparison,
    ASLEEP heartbeat continuity, and the manifest → heartbeat-withdraw →
    lease-release teardown order.
-6. Both heartbeat-loop branches keep calling `agent._heartbeat_stop.wait(1.0)` on
+6. Both heartbeat-loop branches keep calling `agent._heartbeat_stop.wait(HEARTBEAT_TICK_SECONDS)` on
    the dedicated stop `Event`; the Port gains no wait/sleep/deadline method and the
    Event is not turned into a generic timer.
 7. Excluded clocks stay on their existing mechanisms even in migrated files: the
@@ -163,7 +163,7 @@ the existing boundary operators. Exact daily GC boundary evidence belongs to
 belongs to the Agent Presence Contract and `tests/test_agent_presence.py`. Wall
 jumps do not alter monotonic elapsed behavior and monotonic movement does not alter
 wall-age behavior. Direct mechanical evidence covers the two-operation Port shape
-and `Event.wait(1.0)`; remaining exclusions are maintenance/source-review
+and `Event.wait(HEARTBEAT_TICK_SECONDS)`; remaining exclusions are maintenance/source-review
 constraints, not a claim that one lifecycle test directly locks every exclusion.
 `tests/test_architecture_documents.py` enforces the governed twin, heading order,
 canonical maintenance, adapter-outside-Core rule, the exact two-operation Port

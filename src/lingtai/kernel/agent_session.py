@@ -293,7 +293,7 @@ def _rebuild_via_sqlite(
     row = agg[0] if agg else {}
     return AgentSession(
         molt_count=molt_count,
-        started_at=_iso_from_ts(boundary_ts) if boundary_ts else None,
+        started_at=_iso_from_ts(boundary_ts),
         boundary_source=boundary_source,
         boundary_offset=boundary_offset,
         api_calls=int(row.get("n") or 0),
@@ -362,7 +362,7 @@ def _rebuild_via_reverse_scan(
 
     return AgentSession(
         molt_count=molt_count,
-        started_at=str(boundary_ts) if boundary_ts is not None else None,
+        started_at=_iso_from_ts(boundary_ts),
         boundary_source=boundary_source,
         boundary_offset=None,
         api_calls=api_calls,
@@ -417,7 +417,7 @@ def _rebuild_via_full_scan(events_file: Path, molt_count: int) -> AgentSession:
 
     return AgentSession(
         molt_count=molt_count,
-        started_at=str(boundary_ts) if boundary_ts is not None else None,
+        started_at=_iso_from_ts(boundary_ts),
         boundary_source=boundary_source,
         boundary_offset=None,
         api_calls=api_calls,
@@ -458,7 +458,16 @@ def _read_tail_lines(path: Path, max_bytes: int) -> tuple[list[str], bool]:
     return lines, hit_start
 
 
-def _iso_from_ts(ts: float) -> str | None:
+def _iso_from_ts(ts: Any) -> str | None:
+    """Convert a wall-clock epoch (float, int, or numeric string) to ISO-8601 UTC.
+
+    Returns ``None`` for falsy, missing, or unusable input so callers can pass
+    raw JSONL ``ts`` values (``Any``) straight through without pre-checks.
+    """
+    try:
+        ts = float(ts or 0.0)
+    except (TypeError, ValueError):
+        return None
     if not ts:
         return None
     try:
