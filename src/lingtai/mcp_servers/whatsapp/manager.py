@@ -548,7 +548,9 @@ class WhatsAppManager:
     def _read(self, args: dict[str, Any]) -> dict[str, Any]:
         wa_id = args.get("wa_id") or args.get("to")
         if wa_id:
-            msgs = self._iter_messages(wa_id, limit=int(args.get("limit") or 50))
+            # Normalize so the documented bare-digits wa_id (the same form the
+            # caller just used for send) finds the JID-keyed store directory.
+            msgs = self._iter_messages(normalize_wa_id(wa_id), limit=int(args.get("limit") or 50))
             return {"messages": [{"id": m.get("id"), "fromMe": m.get("direction") == "sent", "body": m.get("body"), "type": m.get("type"), "timestamp": m.get("timestamp")} for m in msgs]}
         limit = int(args.get("limit") or 20)
         return self.bridge.request("read", {"limit": limit})

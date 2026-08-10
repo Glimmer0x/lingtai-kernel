@@ -622,3 +622,48 @@ def test_reasoning_and_summarize_never_reach_a_child_handler():
     assert "reasoning" not in captured
     assert "summarize" not in captured
     assert captured == {"action": "status"}
+
+
+# ---------------------------------------------------------------------------
+# 10. P1 regression: malformed config fails loud; bare-digits read normalizes.
+# ---------------------------------------------------------------------------
+
+
+def test_build_manager_fails_loud_on_malformed_config(tmp_path, monkeypatch):
+    """A set-but-malformed LINGTAI_WHATSAPP_CONFIG must not fall back to defaults.
+
+    json.JSONDecodeError subclasses ValueError, so the old ``except ValueError``
+    swallowed a bad file and misreported it as "not set" (which also leaves
+    allowed_users empty = any sender can wake the agent).
+    """
+    from lingtai.mcp_servers.whatsapp.server import build_manager
+
+    bad = tmp_path / "bad-config.json"
+    bad.write_text("{invalid json", encoding="utf-8")
+    monkeypatch.setenv("LINGTAI_WHATSAPP_CONFIG", str(bad))
+    with pytest.raises(ValueError):
+        build_manager()
+
+
+def test_build_manager_uses_defaults_when_env_unset(monkeypatch):
+    """Personal mode still boots without a config file."""
+    from lingtai.mcp_servers.whatsapp.server import build_manager
+
+    monkeypatch.delenv("LINGTAI_WHATSAPP_CONFIG", raising=False)
+    manager = build_manager()
+    assert manager is not None
+    assert manager.config == {}
+
+
+def test_read_bare_digits_wa_id_finds_jid_stored_history(tmp_path):
+    """The documented bare-digits wa_id must resolve to the JID-keyed store."""
+    manager = _real_manager(tmp_path)
+    manager._store_message(
+        "15551234567@c.us",
+        "sent",
+        {"id": "wamid.A", "body": "hello", "type": "text", "timestamp": 1.0, "fromMe": True},
+    )
+    result = manager._read({"wa_id": "15551234567"})
+    assert result["messages"], "bare-digits wa_id must find JID-keyed history"
+    assert result["messages"][0]["id"] == "wamid.A"
+    assert result["messages"][0]["body"] == "hello"

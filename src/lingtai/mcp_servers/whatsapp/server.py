@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,12 @@ def build_manager(config: dict[str, Any] | None = None) -> WhatsAppManager:
         try:
             config = load_config()[0] or {}
         except ValueError:
+            if os.environ.get("LINGTAI_WHATSAPP_CONFIG"):
+                # The env var is set but the config file is missing/malformed:
+                # fail loud instead of silently falling back to open defaults
+                # (JSONDecodeError subclasses ValueError, so a bad file would
+                # otherwise be misreported as "not set").
+                raise
             # Personal mode is usable with defaults: no config file is not an
             # error, unlike an unreadable/invalid one (which still propagates).
             log.info("LINGTAI_WHATSAPP_CONFIG not set; using personal-mode defaults")
