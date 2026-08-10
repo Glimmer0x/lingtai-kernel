@@ -1,5 +1,6 @@
 ---
 related_files:
+  - ENVIRONMENT_VARIABLES.md
   - ANATOMY.md
   - CONTRACT.md
   - AGENTS.md

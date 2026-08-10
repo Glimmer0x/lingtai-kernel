@@ -14,6 +14,7 @@ related_files:
 - src/lingtai/adapters/posix/ANATOMY.md
 - src/lingtai/adapters/windows/ANATOMY.md
 - src/lingtai/auth/ANATOMY.md
+- src/lingtai/intrinsic_skills/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
 - src/lingtai/kernel/base_agent/ANATOMY.md
 - src/lingtai/kernel/base_agent/CONTRACT.md
@@ -22,6 +23,7 @@ related_files:
 - src/lingtai/kernel/refresh_watcher/ANATOMY.md
 - src/lingtai/llm/openai/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
+- src/lingtai/mcp_servers/local_commands/ANATOMY.md
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
@@ -29,6 +31,7 @@ related_files:
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/soul/ANATOMY.md
+- tests/ANATOMY.md
 maintenance: |
   This file is the one canonical environment-variable registry. Keep one row for
   each real environment name with its default, accepted values, scope,
@@ -72,6 +75,7 @@ reports, prompts, or this registry.
 | `LINGTAI_SKIP_RUST_BUILD` | unset and off | `1` enables skipping the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values are treated as off | `setup.py` and wheel tests | Never ship a wheel claiming a sidecar that was not built |
 | `LINGTAI_REQUIRE_RUST_BUILD` | unset and off | `1` requires the Rust sidecar build | Developer and package build | Build invocation; rerun build after change | Invalid values fail the required-build path | `setup.py` and wheel tests | Build policy is not runtime authorization |
 | `LINGTAI_SOUL_FLOW_ENABLED` | disabled unless host enables it | `1`/`0` and documented component boolean forms | Optional soul-flow capability | Capability bootstrap; refresh or restart after change | Treated as disabled | `src/lingtai/tools/soul` | Not a command-execution or approval switch |
+| `LINGTAI_INJECT_REASONING_FALLBACK` | `on` | `1`/`0`, `true`/`false`, `on`/`off` (component boolean forms); explicit provider config param wins | Inject a per-turn-unique reasoning stub on assistant tool-call turns that lack preserved thinking (required by thinking-mode endpoints such as DeepSeek V4) | Adapter session construction; restart session after change | Invalid values fall back to `on` | `src/lingtai/llm/openai/adapter.py` | Reasoning stub only; not a capability or authorization switch |
 
 ## MCP and provider configuration
 
@@ -90,6 +94,8 @@ reports, prompts, or this registry.
 | `LINGTAI_CODEX_RESPONSES_TRACE_PATH` | unset; adapter default | Local path | Codex Responses-wire diagnostics | Session construction; restart session | Unwritable or invalid path fails closed or disables tracing | Codex adapter | Trace files can contain sensitive prompts; restrict permissions |
 | `LINGTAI_CLAUDE_MANAGED_ROOT` | Host-specific or unset | Local directory path | Claude launcher | Launch; relaunch after change | Invalid path fails closed | Claude adapter | Never widen the root from untrusted model text |
 | `LINGTAI_CLAUDE_INTERACTIVE_FIFO` | unset | Local FIFO or path | Claude interactive launch | Interactive launch; relaunch after change | Wrong type or permissions fail closed | Claude adapter | Protect the FIFO from other users and processes |
+| `LINGTAI_TASKCARD_POLL_INTERVAL` | `5.0` seconds | Positive numeric seconds (float) | Telegram automatic Task Card event-tail poll interval | Telegram manager load/start; restart after change | Non-numeric value fails manager load | `src/lingtai/mcp_servers/telegram/manager.py` | Display cadence only; no delivery or authorization effect |
+| `LINGTAI_WHATSAPP_SESSION_DIR` | `.wwebjs_auth` | Local directory path | WhatsApp LocalAuth session storage | WhatsApp bridge start; restart after change | Invalid path fails the bridge session | `src/lingtai/mcp_servers/whatsapp/` | Keep session credentials private; never log the directory contents |
 
 ## Daemon and test composition
 
@@ -111,6 +117,7 @@ surface is explicit; do not set test hooks in a production agent environment.
 | `LINGTAI_FAKE_CLI_REPORT` | unset | Test-only path or selector | Fake CLI report | Fake CLI invocation; rerun test after change | Invalid value fails the test | `tests/_fake_*` | Keep artifacts in a test temporary directory |
 | `LINGTAI_TEST_CONFIG` | unset | Test-only string or path | Test fixture setup | Fixture construction; rerun test after change | Invalid value fails fixture setup | `tests/` | No production behavior |
 | `LINGTAI_TEST_FAKE_CLAUDE_SIGNAL_RECORD` | unset | Test-only local path | Fake Claude signal record | Fake launcher invocation; rerun test after change | Invalid value fails the test | `tests/` | Keep artifacts in a test temporary directory |
+| `LINGTAI_RUN_LIVE_KIMI_CODE` | unset and off | `1` enables the live Kimi Code integration test | Opt-in paid-call integration test | Test module import; rerun test after change | Values other than `1` disable the test | `tests/integration_test_kimi_code.py` | Test-only; requires explicit paid-call authorization |
 
 ## Reading and ownership notes
 
