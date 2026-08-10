@@ -415,26 +415,47 @@ def test_load_preset_rejects_invalid_thinking(tmp_path, value):
         load_preset(str(f))
 
 
-@pytest.mark.parametrize("value", ["high", "default", None])
-def test_load_preset_rejects_thinking_for_non_codex_provider(tmp_path, value):
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_load_preset_accepts_thinking_for_anthropic(tmp_path, value):
+    """The Anthropic adapter maps thinking to a budget, so the level is real."""
     p = {
-        "name": "bad",
+        "name": "anthropic-thinking",
         "description": _DESC,
         "manifest": {
             "llm": {"provider": "anthropic", "model": "claude", "thinking": value},
             "capabilities": {},
         },
     }
-    f = tmp_path / "bad-provider.json"
+    f = tmp_path / "anthropic-thinking.json"
     f.write_text(json.dumps(p))
 
-    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex"):
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == value
+
+
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_load_preset_rejects_invalid_thinking_for_anthropic(tmp_path, value):
+    p = {
+        "name": "bad-anthropic-thinking",
+        "description": _DESC,
+        "manifest": {
+            "llm": {"provider": "anthropic", "model": "claude", "thinking": value},
+            "capabilities": {},
+        },
+    }
+    f = tmp_path / "bad-anthropic-thinking.json"
+    f.write_text(json.dumps(p))
+
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
         load_preset(str(f))
 
 
 @pytest.mark.parametrize(
     "llm",
     [
+        # Custom OpenAI-compatible on either wire — Responses sends
+        # reasoning.effort, Chat Completions sends reasoning_effort.
         {"provider": "custom", "model": "m", "api_compat": "openai"},
         {
             "provider": "custom",
@@ -442,16 +463,41 @@ def test_load_preset_rejects_thinking_for_non_codex_provider(tmp_path, value):
             "api_compat": "openai",
             "wire_api": "chat_completions",
         },
+        # Built-in OpenAI-wire providers, with api_compat left implicit.
+        {"provider": "openai", "model": "m", "wire_api": "responses"},
+        {"provider": "openai", "model": "m"},
+        {"provider": "deepseek", "model": "deepseek-reasoner"},
+    ],
+)
+def test_load_preset_accepts_thinking_for_openai_compatible(tmp_path, llm):
+    llm["thinking"] = "high"
+    p = {
+        "name": "openai-compatible",
+        "description": _DESC,
+        "manifest": {"llm": llm, "capabilities": {}},
+    }
+    f = tmp_path / "openai-compatible.json"
+    f.write_text(json.dumps(p))
+
+    loaded = load_preset(str(f))
+
+    assert loaded["manifest"]["llm"]["thinking"] == "high"
+
+
+@pytest.mark.parametrize(
+    "llm",
+    [
+        {"provider": "gemini", "model": "m"},
+        {"provider": "minimax", "model": "m"},
         {
             "provider": "custom",
             "model": "m",
-            "api_compat": "anthropic",
+            "api_compat": "gemini",
             "wire_api": "auto",
         },
-        {"provider": "openai", "model": "m", "wire_api": "responses"},
     ],
 )
-def test_load_preset_rejects_thinking_outside_custom_responses_scope(tmp_path, llm):
+def test_load_preset_rejects_thinking_outside_thinking_capable_scope(tmp_path, llm):
     llm["thinking"] = "high"
     p = {
         "name": "bad-scope",
@@ -461,7 +507,7 @@ def test_load_preset_rejects_thinking_outside_custom_responses_scope(tmp_path, l
     f = tmp_path / "bad-scope.json"
     f.write_text(json.dumps(p))
 
-    with pytest.raises(ValueError, match="custom OpenAI-compatible Responses"):
+    with pytest.raises(ValueError, match="thinking-capable providers"):
         load_preset(str(f))
 
 

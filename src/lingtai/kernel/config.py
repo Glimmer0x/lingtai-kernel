@@ -14,28 +14,39 @@ from dataclasses import dataclass
 THINKING_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # Codex-family providers that accept manifest.llm.thinking. ``codex-pool``
-# reuses the Codex adapter (both dash/underscore spellings). Custom
-# OpenAI-compatible Responses is the other supported scope; use
-# ``llm_supports_thinking`` so validators share the complete rule.
+# reuses the Codex adapter (both dash/underscore spellings). This list stays
+# Codex-only; the complete acceptance rule (Anthropic and every
+# OpenAI-compatible block too) lives in ``llm_supports_thinking`` so validators
+# share it.
 THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
+
+# Non-Codex providers whose adapter is thinking-capable on its own, even when
+# the manifest omits ``api_compat``: the Anthropic adapter maps thinking to an
+# extended-thinking budget, and the openai/deepseek factories always pin an
+# OpenAI-compatible adapter, so their blocks carry an implicit
+# ``api_compat="openai"``.
+THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek")
 
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort.
 
-    Responses-API compatible models are allowed by default: any block whose
-    wire is OpenAI Responses (``api_compat == "openai"`` and
-    ``wire_api == "responses"``) is accepted, regardless of provider. The
-    Codex family remains accepted through ``THINKING_PROVIDERS`` (it owns its
-    own wire/backend), as does any provider explicitly listed there.
+    Every thinking-capable wire is accepted:
+
+    * the Codex family (``THINKING_PROVIDERS``) — it owns its own wire/backend;
+    * ``THINKING_NATIVE_PROVIDERS`` — ``anthropic`` (thinking budget) plus the
+      OpenAI-wire natives whose ``api_compat`` may be left implicit;
+    * any OpenAI-compatible block (``api_compat == "openai"``) regardless of
+      ``wire_api`` — Responses sends ``reasoning.effort`` and Chat Completions
+      sends ``reasoning_effort``, so both wires carry the effort.
+
+    Everything else (Gemini, MiniMax, a custom Gemini/Anthropic-compat block)
+    is rejected so a knob the wire would silently drop fails loudly.
     """
     provider = str(llm.get("provider") or "").lower()
-    if provider in THINKING_PROVIDERS:
+    if provider in THINKING_PROVIDERS or provider in THINKING_NATIVE_PROVIDERS:
         return True
-    return (
-        str(llm.get("api_compat") or "").lower() == "openai"
-        and str(llm.get("wire_api") or "").lower() == "responses"
-    )
+    return str(llm.get("api_compat") or "").lower() == "openai"
 
 # Molt context-pressure thresholds are kernel-fixed runtime constants — NOT
 # agent-configurable. An agent must not be able to raise its own molt

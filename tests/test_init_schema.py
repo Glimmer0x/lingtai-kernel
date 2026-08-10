@@ -454,38 +454,67 @@ def test_llm_thinking_invalid_values(value):
         validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["high", "default", None])
-def test_llm_thinking_rejected_for_non_codex_provider(value):
+@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_llm_thinking_valid_for_anthropic(value):
+    # The Anthropic adapter maps thinking to an extended-thinking budget.
     data = _valid_init()
     data["manifest"]["llm"]["provider"] = "anthropic"
     data["manifest"]["llm"]["thinking"] = value
-    with pytest.raises(ValueError, match=r"manifest\.llm\.thinking.*Codex"):
+    validate_init(data)
+
+
+@pytest.mark.parametrize("value", ["default", "ultra", 1, None])
+def test_llm_thinking_invalid_for_anthropic(value):
+    data = _valid_init()
+    data["manifest"]["llm"]["provider"] = "anthropic"
+    data["manifest"]["llm"]["thinking"] = value
+    with pytest.raises(ValueError, match="manifest.llm.thinking"):
         validate_init(data)
 
 
 @pytest.mark.parametrize(
     "llm_patch",
     [
+        # Custom OpenAI-compatible on either wire — Responses sends
+        # reasoning.effort, Chat Completions sends reasoning_effort.
         {"provider": "custom", "api_compat": "openai"},
         {
             "provider": "custom",
             "api_compat": "openai",
             "wire_api": "chat_completions",
         },
-        {
-            "provider": "custom",
-            "api_compat": "anthropic",
-            "wire_api": "auto",
-        },
+        # Built-in OpenAI-wire providers, with api_compat left implicit.
         {"provider": "openai", "wire_api": "responses"},
+        {"provider": "openai"},
+        {"provider": "deepseek"},
     ],
 )
-def test_llm_thinking_rejected_outside_custom_responses_scope(llm_patch):
+def test_llm_thinking_accepted_for_openai_compatible(llm_patch):
     data = _valid_init()
     data["manifest"]["llm"].update(llm_patch)
     data["manifest"]["llm"]["thinking"] = "high"
 
-    with pytest.raises(ValueError, match="custom OpenAI-compatible Responses"):
+    validate_init(data)
+
+
+@pytest.mark.parametrize(
+    "llm_patch",
+    [
+        {"provider": "gemini"},
+        {"provider": "minimax"},
+        {
+            "provider": "custom",
+            "api_compat": "gemini",
+            "wire_api": "auto",
+        },
+    ],
+)
+def test_llm_thinking_rejected_outside_thinking_capable_scope(llm_patch):
+    data = _valid_init()
+    data["manifest"]["llm"].update(llm_patch)
+    data["manifest"]["llm"]["thinking"] = "high"
+
+    with pytest.raises(ValueError, match="thinking-capable providers"):
         validate_init(data)
 
 

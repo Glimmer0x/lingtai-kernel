@@ -142,11 +142,12 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    producer, including `nudge/init_config.py`, individually re-implements
    truncation, externalization, or kind validation.
 8. `manifest.llm.thinking` accepts explicit
-   `none|minimal|low|medium|high|xhigh` only for Codex-family providers or for
-   `provider="custom"`, `api_compat="openai"`, `wire_api="responses"`.
-   Custom omission keeps the existing `high` runtime default; Codex omission
-   keeps its existing adapter-owned `xhigh` default. Invalid values or scopes
-   fail validation rather than being normalized silently.
+   `none|minimal|low|medium|high|xhigh|max` only for thinking-capable
+   providers: the Codex family, `anthropic`, `openai`, `deepseek`, and any
+   block with `api_compat="openai"` (either `wire_api`). Non-Codex omission
+   keeps the existing `high` runtime default; Codex omission keeps its
+   existing adapter-owned `xhigh` default. Invalid values or scopes fail
+   validation rather than being normalized silently.
 
 ## Contract tests
 

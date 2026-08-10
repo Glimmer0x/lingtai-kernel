@@ -83,7 +83,7 @@ Anthropic Claude adapter — Messages API with prompt caching, tool use, and ext
 
 - **Extraction**: `adapter.py:153-156` — `block.type == "thinking"` → `ThinkingBlock(text=..., provider_data={"anthropic": {"signature": ...}})`.
 - **Signature round-trip**: Thinking blocks stored in interface include `signature` field (required by Anthropic for replay in history). See `adapter.py:259-266`.
-- **Budget resolution**: `_resolve_thinking_budget()` at `adapter.py:676` — `"high"` → 16384, `"low"`/`"medium"` → 2048. Budget sets `max_tokens = max(budget*2, budget+8192)`.
+- **Budget resolution**: `_resolve_thinking_budget()` maps every kernel `THINKING_LEVELS` tier through `AnthropicAdapter._THINKING_BUDGETS` — `"minimal"` → 1024, `"low"` → 2048, `"medium"` → 8192, `"high"` → 16384, `"xhigh"` → 32768, `"max"` → 65536. Thinking is off (`None`) for explicit `"none"`, for the omitted-value sentinel `"default"`/empty, and for any unknown tier. Budget sets `max_tokens = max(budget*2, budget+8192)`.
 
 ### Prompt caching
 
