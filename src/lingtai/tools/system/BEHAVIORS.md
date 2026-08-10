@@ -1,7 +1,7 @@
 ---
 name: system-behavior-tests
 behavior_version: 2
-labt_version: 1
+labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:

@@ -126,6 +126,8 @@ catches every one of them.
 
 ### read (`_read.py`) — read-only
 
+Guarded by: [F001](BEHAVIORS.md#behavior-f001)
+
 Returns `{content, total_lines, lines_shown}`. `content` is `cat -n`-style:
 each kept line is `"{lineno}\t{line}"`, preserving the file's own newline style
 (`splitlines(keepends=True)`).

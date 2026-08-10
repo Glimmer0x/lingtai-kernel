@@ -49,6 +49,8 @@ operation.
 
 ## Behavior
 
+Guarded by: [K005](../../kernel/BEHAVIORS.md#behavior-k005), [K006](../../kernel/BEHAVIORS.md#behavior-k006)
+
 LingTai agents MUST use `manual` only to retrieve installed guidance, `check` to
 request current notification state, and the narrowest producer-specific or
 atomic dismiss action after handling a notification. They MUST NOT treat generic

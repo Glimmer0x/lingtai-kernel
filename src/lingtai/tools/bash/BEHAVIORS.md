@@ -1,9 +1,9 @@
 ---
-name: shell-behavior-tests
+name: bash-behavior-tests
 behavior_version: 1
-labt_version: 1
-contract: ../bash/CONTRACT.md
-anatomy: ../bash/ANATOMY.md
+labt_version: 2
+contract: CONTRACT.md
+anatomy: ANATOMY.md
 related_files:
   - src/lingtai/tools/bash/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
@@ -23,13 +23,14 @@ related_files:
   - src/lingtai/tools/daemon/BEHAVIORS.md
 maintenance: |
   Written by the shell/sandbox CONVERT_BEHAVIOR migration (2026-08). The
-  canonical shell implementation lives in src/lingtai/tools/bash/ (the public
-  tool is `shell`; see bash-contract), so this file's contract/anatomy links
-  point at ../bash/. Keep in sync with every contract this file guards:
-  bash-contract, the LTP v2 family convention (src/lingtai/tools/CONTRACT.md
-  + tool_family), the context/psyche contracts, the email contract, and the
-  base-agent runtime contract. When any of those changes in a way that affects
-  agent-observable behavior, update the matching LABT here in the same change.
+  canonical shell implementation lives in this directory (src/lingtai/tools/bash/;
+  the public tool is `shell`; see bash-contract), so this file's contract/anatomy
+  links are local (CONTRACT.md, ANATOMY.md). Keep in sync with every contract
+  this file guards: bash-contract, the LTP v2 family convention
+  (src/lingtai/tools/CONTRACT.md + tool_family), the context/psyche contracts,
+  the email contract, and the base-agent runtime contract (agent-runtime). When
+  any of those changes in a way that affects agent-observable behavior, update
+  the matching LABT here in the same change.
 ---
 # Shell / Sandbox Behavior Tests
 
@@ -49,10 +50,12 @@ executable verbatim by an agent with the listed tools.
 to historical run dirs), so it is NOT duplicated here.
 
 Pinned pytest commands below must run from the repo root `<repo>` with the
-project venv interpreter that resolves `lingtai` from `<repo>/src` (an
-editable install), e.g. `C:\Users\zhuang\.lingtai-tui\runtime\venv\Scripts\python.exe`
-on the original host. Substitute your own venv `python`; the expected pass
-counts are pinned and platform notes are given per LABT.
+project's Python: any interpreter that resolves `lingtai` from `<repo>/src`
+(an editable install) and has pytest installed. Prefer the project's configured
+python, e.g. `python -m pytest ...` from an activated project environment, or
+the interpreter named by the `LINGTAI_RUNTIME_PYTHON` environment variable if
+your environment provides it. Do not hardcode a machine-specific venv path; the
+expected pass counts are pinned and platform notes are given per LABT.
 
 ## Behavior S001 — shell run stays inside the agent sandbox
 
@@ -81,7 +84,7 @@ counts are pinned and platform notes are given per LABT.
    "working_dir": "<outside>"}, reasoning="check")` where `<outside>` is any
    absolute directory NOT under `<agent>` (e.g. the parent of `<agent>`, `/tmp`
    on POSIX, or `C:\Windows` on Windows).
-6. (Pinned check) From `<repo>`, run
+6. (POSIX-only pinned check — skip on native Windows) From `<repo>`, run
    `python -m pytest tests/test_shell_sandbox_containment.py -q`.
 
 ### Expected evidence
@@ -95,18 +98,18 @@ counts are pinned and platform notes are given per LABT.
       `under agent working directory` (outside path refused).
 - [ ] Steps 4–5 ran no command: no `stdout`/`stderr` payload, and nothing was
       created or modified outside `<agent>`.
-- [ ] Step 6: on POSIX hosts the summary is `5 passed`; on native Windows the
-      two `@posix_paths` end-to-end tests are skipped and the un-marked
-      POSIX-path unit assertions fail by design (the file proves the Windows
-      separator path via monkeypatch on POSIX CI and is not in the Windows CI
-      set) — run it on POSIX, or rely on steps 1–5 as the cross-platform
-      evidence.
+- [ ] Step 6 (POSIX only): summary reads `5 passed`. This step is not part of
+      the LABT on native Windows — the two `@posix_paths` end-to-end tests are
+      skipped there and the un-marked POSIX-path unit assertions fail by design
+      (the file proves the Windows separator path via monkeypatch on POSIX CI
+      and is not in the Windows CI set); on Windows, steps 1–5 are the
+      cross-platform evidence and the pinned check is omitted.
 
 ### Pass / Fail
 Pass when nested `working_dir` runs succeed, every out-of-bounds path is
-refused with an error containing `under agent working directory`, and no
-command escaped the sandbox. Fail if any outside or sibling-prefix path
-executes, or if the error message shape changes.
+refused with an error containing `under agent working directory`, no command
+escaped the sandbox, and (on POSIX) the pinned suite passes. Fail if any
+outside or sibling-prefix path executes, or if the error message shape changes.
 
 ## Behavior S002 — shell exposes the strict LTP v2 family envelope
 
@@ -116,8 +119,9 @@ executes, or if the error message shape changes.
   any dispatch
 - **guards**: `bash-contract` § Tool surface (closed LTP v2 root,
   `ACTION_REQUIRED` / `INVALID_ARGUMENT` rejections)
-  ([CONTRACT.md](../bash/CONTRACT.md#tool-surface)); tools contract § LTP v2
-  family convention ([CONTRACT.md](../CONTRACT.md))
+  ([CONTRACT.md](../bash/CONTRACT.md#tool-surface)); `lingtai-tool-protocol`
+  § Envelope (closed LTP v2 root)
+  ([CONTRACT.md](../CONTRACT.md#envelope))
 - **runner**: any LingTai agent with the `shell` tool
 - **prerequisites**: none beyond your working dir
 - **estimate**: 2 min
@@ -160,9 +164,7 @@ cross-action input key dispatches, or if the closed root gains a field.
 - **title**: a plain user-text turn (`send(str)`) is serialized into the
   provider wire for every conforming production session regime, and `send`
   returns a real `LLMResponse` with concrete `UsageMetadata`
-- **guards**: `llm-conversation-input` characterization suite § `send(str)`
-  input shape
-  ([__init__.py](../../../../tests/contracts/llm_conversation_input/__init__.py));
+- **guards**: `agent-runtime` § Behavior
   kernel `ChatSession` ABC § `send` ([base.py](../../kernel/llm/base.py))
 - **supersedes**: `tests/contracts/llm_conversation_input/test_send_str.py`
 - **runner**: any LingTai agent with shell access to a checkout of `<repo>`
@@ -212,8 +214,8 @@ conforming regime drops or rewrites the user text, returns no concrete
 - **guards**: `context-contract` § Full reconstruction ordering
   ([CONTRACT.md](../context/CONTRACT.md#full-reconstruction-ordering)) and §
   LTP v2 port ([CONTRACT.md](../context/CONTRACT.md#ltp-v2-port));
-  `psyche-contract` § Behavior / Root reuse is not action compatibility
-  ([CONTRACT.md](../psyche/CONTRACT.md#behavior))
+  `psyche-tool-contract` § Root reuse is not action compatibility
+  ([CONTRACT.md](../psyche/CONTRACT.md#root-reuse-is-not-action-compatibility))
 - **supersedes**: `tests/test_context_ownership_redesign.py`
 - **runner**: any LingTai agent with the `file`, `context`, and `psyche` tools
 - **prerequisites**: your working dir `<agent>`; the `system/` dir may need
@@ -273,7 +275,7 @@ sources.
 - **title**: identical tool errors keep flowing as ordinary tool-result
   payloads; there is no repeated-error hard-stop continuation and no
   `repeated_tool_error` notification
-- **guards**: `base-agent-contract` § Behavior (main turn loop)
+- **guards**: `agent-runtime` § Behavior (main turn loop)
   ([CONTRACT.md](../../kernel/base_agent/CONTRACT.md#behavior)); incident
   regression 2026-06-12 (mimo-1) documented in the superseded test
 - **supersedes**: `tests/test_repeated_tool_error_continue.py`

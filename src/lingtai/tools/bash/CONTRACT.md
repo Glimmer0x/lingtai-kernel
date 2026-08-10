@@ -75,6 +75,8 @@ does not stream output incrementally (async jobs are polled, not streamed).
 
 ## Tool surface
 
+Guarded by: [S002](BEHAVIORS.md#behavior-s002)
+
 `shell` is a migrated LingTai Tool Protocol v2 family (see
 `src/lingtai/tools/CONTRACT.md`). Its public/model-facing root is exactly
 `action`, `input`, `reasoning`, and `summarize`; `action`, `input`, and
@@ -326,6 +328,8 @@ with neither dialect nor invocation remains readable evidence but is explicitly
 unrecoverable on a non-POSIX host rather than being reinterpreted as PowerShell.
 
 ## Cross-platform invariants
+
+Guarded by: [S001](BEHAVIORS.md#behavior-s001)
 
 POSIX and PowerShell 7 are the production dialect adapters. Platform-specific
 process and lock mechanisms stay outside the retained Bash-local Ports; adapters

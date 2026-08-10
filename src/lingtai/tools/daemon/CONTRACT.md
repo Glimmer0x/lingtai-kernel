@@ -150,6 +150,8 @@ where those changes affect the invariants here.
 
 ## Tool Surface
 
+Guarded by: [D001](BEHAVIORS.md#behavior-d001), [D002](BEHAVIORS.md#behavior-d002), [D003](BEHAVIORS.md#behavior-d003), [D004](BEHAVIORS.md#behavior-d004), [D005](BEHAVIORS.md#behavior-d005)
+
 `daemon` is migrated to the LingTai Tool Protocol v2 action-separated envelope
 (`../CONTRACT.md`, `../tool_family/CONTRACT.md`) using the generic
 `tool_family` infrastructure. The public root is exactly `action`, `input`,
@@ -539,6 +541,8 @@ run-local `logs/events.jsonl` / `daemon_tool_result` recovery locator. The closu
 is inert unless a tool explicitly requests `summary=true`.
 
 ## Backend Support Matrix
+
+Guarded by: [D006](BEHAVIORS.md#behavior-d006), [D007](BEHAVIORS.md#behavior-d007)
 
 Current source-backed status:
 

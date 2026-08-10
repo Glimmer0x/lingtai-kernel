@@ -366,6 +366,8 @@ its own scoped migration.
 
 ## Contract rules
 
+Guarded by: [T006](BEHAVIORS.md#behavior-t006)
+
 - A `ToolFamily`'s child registry MUST be validated at construction: duplicate
   child names and more than one child named the reserved `manual` MUST raise
   `ToolFamilyError`, not register silently or resolve by precedence.

@@ -1,7 +1,7 @@
 ---
 name: tool-family-behavior-tests
 behavior_version: 1
-labt_version: 1
+labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
@@ -331,7 +331,7 @@ no `.rules` file and no ledger record.
   empty input, and the canonical `content[0].text` /
   `structuredContent.manual_path` result — returned verbatim by dispatch, with
   any family-specific flat shape adapted only in that family's Host layer
-- **guards**: `tool-family-contract` § Contract rules — `build_manual_child`
+- **guards**: `tool-family` § Contract rules — `build_manual_child`
   ([CONTRACT.md](CONTRACT.md#contract-rules))
 - **supersedes**: `tests/test_tool_family_manual_contract.py`
 - **runner**: any LingTai agent with the `file` and `avatar` tools
@@ -378,7 +378,7 @@ second time, or a manual call performs any target I/O.
 - **title**: `psyche` routes `pad | lingtai | knowledge | skills | manual` to
   five distinct installed manuals, performs no mutation or catalog scan, and
   rejects every retired action and every `input` key
-- **guards**: `psyche-contract` § Port (action inventory) / § Behavior
+- **guards**: `psyche-tool-contract` § Port (action inventory) / § Behavior
   ([CONTRACT.md](../psyche/CONTRACT.md#port))
 - **supersedes**: `tests/test_psyche_family.py` (inventory, routing,
   read-only, and retired-root tests)
