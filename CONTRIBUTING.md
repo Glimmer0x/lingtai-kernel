@@ -22,6 +22,7 @@ Thank you for helping improve the LingTai Python runtime. GitHub discovers this 
   repository’s dev guide skill
 - Distributed code navigation system: [`ANATOMY.md`](ANATOMY.md)
 - Distributed interface and Behavior Contract system: [`CONTRACT.md`](CONTRACT.md)
+- Distributed agent-observable behavior tests (LABT): [`BEHAVIORS.md`](BEHAVIORS.md)
 - Claude Code / coding-agent guidance:
   [`docs/references/claude-code-guide.md`](docs/references/claude-code-guide.md)
 - Source-root anatomy: [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md)
@@ -46,7 +47,10 @@ cd .worktrees/<slug>
 
 Before changing code or architecture documents, read the repository-local
 kernel development skill, then the nearest `ANATOMY.md` to navigate the layer and the paired `CONTRACT.md` (when
-governed) to learn its interface and Behavior promises. The development skill owns the change workflow; the root documents own the
+governed) to learn its interface and Behavior promises. When the component
+has agent-observable behavior, read its paired `BEHAVIORS.md` and follow the
+Contract ⇄ Behaviors ⇄ Anatomy tridirectional linkage: changing one requires
+re-checking the other two. The development skill owns the change workflow; the root documents own the
 structural and interface rules. Follow those routes instead of copying their
 checklists here.
 

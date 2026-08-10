@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/preset.py

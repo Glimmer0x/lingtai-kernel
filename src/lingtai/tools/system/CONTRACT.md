@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
@@ -162,6 +163,15 @@ of the pre-migration *schema*:
 The karma gate (`_check_karma_gate`) requires `admin.karma=True` for the
 five control verbs and `admin.karma AND admin.nirvana` for `nirvana`; it also
 rejects a missing address, a self-target, and a non-agent target.
+
+**Behavioral tests**: the agent-observable promises of this clause are guarded
+by [`BEHAVIORS.md`](BEHAVIORS.md) — authorization gate
+([B001](BEHAVIORS.md#behavior-b001)), signal-file effects
+([B002](BEHAVIORS.md#behavior-b002), [B003](BEHAVIORS.md#behavior-b003)),
+refusal paths ([B004](BEHAVIORS.md#behavior-b004),
+[B005](BEHAVIORS.md#behavior-b005)), and nirvana privilege
+([B006](BEHAVIORS.md#behavior-b006)). Change any of these behaviors, update the
+matching behavior entry and this clause together.
 
 ## State & storage
 

@@ -101,6 +101,36 @@ relationship does not satisfy the root rule, stop and report the root-defined
 mismatch fields and suggested action; do not normalize or auto-fix it without
 authorization.
 
+### Tridirectional linkage: Contract ⇄ Behaviors ⇄ Anatomy
+
+Root [`BEHAVIORS.md`](../BEHAVIORS.md) defines the **LingTai Agent Behavior
+Task (LABT)** system: self-contained agent-executable scenarios that prove the
+contract's important behavior clauses do not drift. `BEHAVIORS.md` is the
+**sibling of `CONTRACT.md`** (stronger connection: every important behavior
+clause is verified by a LABT); the paired `ANATOMY.md` is the third node, and
+all three files are interconnected if applicable. A governed component MAY own
+a `BEHAVIORS.md` beside its `CONTRACT.md`/`ANATOMY.md` when it has
+agent-observable behavior worth verifying (see the audit: candidates are the
+`CONVERT_BEHAVIOR` pytest files). The three documents cross-link instead of
+duplicating:
+
+- **contract → behaviors**: every important behavior clause in a `CONTRACT.md`
+  MUST reference the guarding LABT(s) with a relative
+  `[B###](BEHAVIORS.md#behavior-b###)` link.
+- **behaviors → contract**: every LABT MUST annotate the clause it guards
+  (`guards: <contract-name> § <clause>`) with a link back.
+- **behaviors ↔ anatomy**: the paired `ANATOMY.md` lists `BEHAVIORS.md` in
+  `related_files` and names the LABT ids in entries for implementing code.
+
+**Change one, check the other two.** When any of the three changes in a way
+that could affect agent-observable behavior, update or at least re-check the
+other two in the same change. This is a review gate, not optional polish; the
+root `BEHAVIORS.md` carries the full LABT format and templates.
+
+When migrating a `CONVERT_BEHAVIOR` pytest to a LABT, record the original
+pytest as `supersedes` in the behavior entry so the trace stays complete; the
+pytest may be kept for bottom asserts or removed per judgment.
+
 ### Keep Maintenance guidance aligned
 
 When you create or update a child component `CONTRACT.md`, keep its
