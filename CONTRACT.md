@@ -3,6 +3,7 @@ name: component-contract-convention
 contract_version: 4
 related_files:
   - ANATOMY.md
+  - BEHAVIORS.md
   - ENVIRONMENT_VARIABLES.md
   - GLOSSARY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
