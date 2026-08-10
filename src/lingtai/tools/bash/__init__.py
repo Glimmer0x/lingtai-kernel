@@ -15,6 +15,7 @@ import math
 import os
 import re
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -214,6 +215,20 @@ _BROAD_SCAN_HINT = (
     "for a genuinely large tree."
 )
 
+# Steering guidance appended to a timeout error when the command produced no
+# output before it was killed (OpenClaw exec-runner.ts ``no-output-timeout`` /
+# overall-timeout copy, adapted to our ``async`` parameter name; Hermes
+# foreground-hint guidance).  The point is to steer the model away from both
+# failure modes that this class of timeout represents: a foreground command that
+# should have been launched with ``async=true``, and shell backgrounding with a
+# trailing ``&``, which detaches the child from any supervision/collectable
+# output stream.
+_BACKGROUND_GUIDANCE = (
+    "Long-running or no-output work should be launched with async=true "
+    "(or as a daemon) rather than as a foreground command; do not rely on "
+    "shell backgrounding with a trailing &."
+)
+
 
 def _broad_scan_hint(command: str) -> str | None:
     """Return a broad-scan recipe hint if the command resembles a recursive walk.
@@ -224,11 +239,26 @@ def _broad_scan_hint(command: str) -> str | None:
     return _BROAD_SCAN_HINT if _BROAD_SCAN_RE.search(command) else None
 
 
-def _timeout_error(command: str, timeout: float) -> dict:
-    """Build the historical timeout result shape; shared by every sync path."""
+def _timeout_error(command: str, timeout: float, no_output: bool = False) -> dict:
+    """Build the historical timeout result shape; shared by every sync path.
+
+    ``no_output`` is the OpenClaw ``no-output-timeout`` signal: the command was
+    killed by the timeout before it produced any output.  In that case the
+    message appends the background-discipline steering guidance so the model
+    learns to launch long/no-output work with ``async=true`` instead of a
+    foreground command (or a bare trailing ``&``).  Backward compatible: callers
+    that do not pass ``no_output`` (and timeouts that did capture output) keep
+    the exact historical message.
+    """
     msg = f"Command timed out after {timeout}s"
     hint = _broad_scan_hint(command)
-    return {"status": "error", "message": f"{msg}. {hint}" if hint else msg}
+    if hint:
+        msg = f"{msg}. {hint}"
+    if no_output:
+        # ``hint`` (when present) already ends with a period, so a plain space
+        # keeps a clean sentence boundary in both shapes.
+        msg = f"{msg}{' ' if hint else '. '}{_BACKGROUND_GUIDANCE}"
+    return {"status": "error", "message": msg}
 
 
 # =============================================================================
@@ -621,7 +651,14 @@ class ShellManager:
                     "cmd.exe policy validation does not support this syntax; "
                     "refusing to run it"
                     if cmd
-                    else "PowerShell policy validation does not support this syntax; refusing to run it"
+                    else (
+                        "PowerShell policy validation does not support this syntax; refusing "
+                        "to run it. The parser could not statically extract all commands "
+                        "(likely variable-based invocation, here-strings, or complex "
+                        "expressions). Options: (1) simplify the script to use only literal "
+                        "command names, (2) run with yolo=true to bypass policy, or "
+                        "(3) split into multiple simpler commands."
+                    )
                 ),
             }
         if not all(self._policy._check_single(cmd, case_insensitive=case_insensitive) for cmd in commands):
@@ -733,6 +770,21 @@ class ShellManager:
                 # Keep the historical safety net: an unexpected contained-path
                 # failure is reported, never raised to the tool caller.
                 return {"status": "error", "message": f"Command failed: {e}"}
+        if os.name == "posix":
+            # POSIX (macOS/Linux): own process group with graceful-then-KILL
+            # tree kill on timeout.  macOS has no cgroups/Job Objects and no
+            # ``/usr/bin/timeout``; the process group is the only reliable
+            # tree primitive there, and this supervisor enforces ``timeout``
+            # in-process instead of shelling out.
+            try:
+                return self._run_sync_posix_grouped(
+                    command, cwd, timeout, invocation, process_args, process_kwargs,
+                )
+            except Exception as e:
+                # Same safety net as the contained path: an unexpected
+                # grouped-path failure is reported, never raised to the tool
+                # caller.
+                return {"status": "error", "message": f"Command failed: {e}"}
         try:
             process_args, process_kwargs = invocation.process_args()
             if invocation.encoding is not None:
@@ -759,8 +811,14 @@ class ShellManager:
                 "status": "ok", "exit_code": result.returncode,
                 "stdout": stdout, "stderr": stderr,
             }, command=command)
-        except subprocess.TimeoutExpired:
-            return _timeout_error(command, timeout)
+        except subprocess.TimeoutExpired as exc:
+            # ``no-output`` timeout (OpenClaw exec-runner.ts semantics): the
+            # command was killed before it produced any output, so steer the
+            # model toward async=true / a daemon instead of a silent foreground
+            # run (or a trailing-& shell background).
+            return _timeout_error(
+                command, timeout, no_output=not (exc.stdout or exc.stderr)
+            )
         except Exception as e:
             return {"status": "error", "message": f"Command failed: {e}"}
 
@@ -839,14 +897,16 @@ class ShellManager:
                     process_args, capture_output=True, text=True,
                     timeout=timeout, cwd=cwd, **process_kwargs,
                 )
-            except subprocess.TimeoutExpired:
-                return _timeout_error(command, timeout)
+            except subprocess.TimeoutExpired as exc:
+                return _timeout_error(
+                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                )
             return self._sync_result_from(result.stdout, result.stderr, result.returncode, command)
         try:
             try:
                 stdout, stderr = process.communicate(input=input_data, timeout=timeout)
                 returncode = process.returncode
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 win32_job.terminate_owned_tree(job, process.pid)
                 # Bounded drain: a grandchild that survived the kill and still
                 # holds the pipe write ends must not block this supervisor on
@@ -854,13 +914,94 @@ class ShellManager:
                 # process is never ``wait()``-ed on this double-timeout path;
                 # the bounded drain plus handle close is the documented bound.
                 win32_job.drain_pipes(process, win32_job.IO_DRAIN_TIMEOUT_SECONDS)
-                return _timeout_error(command, timeout)
+                return _timeout_error(
+                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                )
         finally:
             # Closing the last job handle fires KILL_ON_JOB_CLOSE, terminating
             # any surviving descendant — this is the containment contract of
             # the sync path (see module/CONTRACT docs).
             win32_job.close_handle(job)
         return self._sync_result_from(stdout, stderr, returncode, command)
+
+    def _run_sync_posix_grouped(
+        self, command: str, cwd: str, timeout: float,
+        invocation: ShellInvocation, process_args: object, process_kwargs: dict,
+    ) -> dict:
+        """POSIX sync run: own process group plus graceful-then-KILL tree kill.
+
+        macOS has no cgroups/Job Objects and no ``/usr/bin/timeout``; the only
+        reliable tree primitive is the process group (Hermes killpg pattern).
+        Every POSIX sync command is therefore spawned with
+        ``start_new_session=True`` (the child becomes its own PGID leader),
+        ``timeout`` is enforced by this supervisor, and on expiry the whole
+        group gets SIGTERM and then SIGKILL after a short grace period.
+        ``subprocess.run``'s timeout path kills only the direct child and
+        leaks grandchildren; this path never relies on an external ``timeout``
+        binary.  This mirrors the Windows Job Object containment
+        (``_run_sync_contained``) on the POSIX side.
+        """
+        spawn_kwargs = {
+            **process_kwargs,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "cwd": cwd,
+            "start_new_session": True,
+        }
+        # stdin bootstrap integration (same contract as the contained path):
+        # ``input`` is a ``subprocess.run``-only kwarg, so pop it and feed
+        # ``communicate(input=...)``; the ASCII bootstrap otherwise never sees
+        # EOF and every command would time out and be group-killed.
+        input_data = spawn_kwargs.pop("input", None)
+        if input_data is not None:
+            spawn_kwargs["stdin"] = subprocess.PIPE
+        else:
+            # Never inherit the parent stdin: a sync run must not read from or
+            # pin the supervisor's input handle.
+            spawn_kwargs["stdin"] = subprocess.DEVNULL
+        process = subprocess.Popen(process_args, **spawn_kwargs)
+        try:
+            try:
+                stdout, stderr = process.communicate(input=input_data, timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                pgid = process.pid
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    pass
+                # Grace period for the direct child and its descendants to
+                # exit on SIGTERM before the forced kill (0.5s, matching the
+                # async POSIX adapter's graceful-then-KILL window).
+                deadline = time.monotonic() + 0.5
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(pgid, 0)
+                    except (ProcessLookupError, OSError):
+                        break
+                    time.sleep(0.05)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+                try:
+                    process.wait(timeout=_IO_DRAIN_TIMEOUT_SECONDS)
+                except subprocess.TimeoutExpired:
+                    pass
+                # Same no-output steering as the contained paths: a kill-before-
+                # output timeout appends the background-discipline guidance
+                # (#1201), so the grouped POSIX path stays message-compatible.
+                return _timeout_error(
+                    command, timeout, no_output=not (exc.stdout or exc.stderr)
+                )
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+        stdout = sanitize_output(stdout, self._max_output)
+        stderr = sanitize_output(stderr, self._max_output)
+        return self._sync_result_from(stdout, stderr, process.returncode, command)
 
     @staticmethod
     def _terminal(status: object) -> bool:
