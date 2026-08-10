@@ -1,6 +1,7 @@
 ---
 name: system-behavior-tests
-behavior_version: 1
+behavior_version: 2
+labt_version: 1
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
@@ -17,122 +18,162 @@ maintenance: |
   Written by the karma-lifecycle audit (2026-08). Keep in sync with
   CONTRACT.md clauses this file guards and ANATOMY.md entries for karma.py /
   name.py / preset.py; when CONTRACT.md or ANATOMY.md changes in a way that
-  affects agent-observable lifecycle behavior, update the matching behavior
-  here in the same change.
+  affects agent-observable lifecycle behavior, update the matching LABT here
+  in the same change.
 ---
 # System Behavior Tests — karma lifecycle control
 
-These are agent-executable behavioral tests for the `system` tool's
-karma-gated lifecycle verbs. They prove the *observable* promises of
-`src/lingtai/tools/system/CONTRACT.md`: authorization gates, signal files,
-state transitions, and self-action rejection. Low-level mechanics stay in
-pytest; these scenarios run against a real agent pair.
+LABT v1. These are self-contained agent-executable behavioral tests for the
+`system` tool's karma-gated lifecycle verbs. They prove the *observable*
+promises of `src/lingtai/tools/system/CONTRACT.md`: authorization gates, signal
+files, state transitions, and self-action rejection. Low-level mechanics stay
+in pytest; each LABT below is self-contained and executable verbatim by an
+agent with a `system` tool.
 
 ## Behavior B001 — interrupt requires admin.karma
 
+- **id**: B001
+- **title**: interrupt is refused without admin.karma
 - **guards**: `system-contract` § Karma-gated control of other agents
   ([CONTRACT.md](CONTRACT.md#karma-gated-control-of-other-agents))
 - **supersedes**: `tests/test_karma.py::test_interrupt_requires_karma_admin`
-- **runner**: agent with `system` tool; a second agent dir exists
-- **preconditions**: sender agent has `admin` block WITHOUT `karma` (e.g. `admin: {}`)
+- **runner**: an agent whose `admin` block does NOT include `karma` (e.g. `admin: {}`)
+- **prerequisites**: a second agent working dir exists (a dir containing
+  `.agent.json` and a fresh `.agent.heartbeat`)
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="interrupt", input={"address": "<target-agent-dir>", "reason": "test"})`.
-2. Observe the result.
+### Steps
+1. From your working dir, call `system(action="interrupt", input={"address": "<target-agent-dir>", "reason": "test"})`.
+2. Read the result returned by the tool.
+3. List the files in `<target-agent-dir>` and look for `.interrupt`.
 
 ### Expected evidence
-- [ ] The result contains an error (action refused) — `"error" in result`.
-- [ ] No `.interrupt` signal file is written into the target agent's dir.
+- [ ] The result contains an error (action refused).
+- [ ] No `.interrupt` file exists in `<target-agent-dir>`.
 
-### Pass / fail
-Pass when both evidence items hold. The receiver must never observe a
-permission leak: an unprivileged caller cannot affect another agent.
+### Pass / Fail
+Pass when both evidence items hold. Fail if the action succeeds or any
+signal file was written. An unprivileged caller must never affect another
+agent.
 
 ## Behavior B002 — interrupt with admin.karma writes the signal file
 
+- **id**: B002
+- **title**: interrupt with admin.karma writes `.interrupt` into the target
 - **guards**: `system-contract` § Karma-gated control of other agents
   ([CONTRACT.md](CONTRACT.md#karma-gated-control-of-other-agents))
 - **supersedes**: `tests/test_karma.py::test_interrupt_with_karma_admin`
-- **runner**: agent with `system` tool; a second agent dir exists with
-  `.agent.json` and a fresh `.agent.heartbeat`
-- **preconditions**: sender has `admin: {"karma": true}`; target dir is alive
-  (heartbeat file present and recent)
+- **runner**: an agent with `admin: {"karma": true}`
+- **prerequisites**: a second agent working dir exists with `.agent.json` and
+  a fresh `.agent.heartbeat` (so the target is considered alive)
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="interrupt", input={"address": "<target-agent-dir>", "reason": "test"})`.
-2. Observe the result and the target dir.
+### Steps
+1. From your working dir, call `system(action="interrupt", input={"address": "<target-agent-dir>", "reason": "test"})`.
+2. Read the result.
+3. List the files in `<target-agent-dir>`.
 
 ### Expected evidence
 - [ ] The result status is `interrupted`.
-- [ ] A `.interrupt` signal file exists in the target agent's working dir.
+- [ ] A `.interrupt` file exists in `<target-agent-dir>`.
+
+### Pass / Fail
+Pass when the receipt says `interrupted` AND the signal file exists. Fail if
+the signal file is missing or the receipt is an error.
 
 ## Behavior B003 — lull writes the sleep signal and reports asleep
 
+- **id**: B003
+- **title**: lull with admin.karma puts the target to sleep
 - **guards**: `system-contract` § Karma-gated control of other agents
   ([CONTRACT.md](CONTRACT.md#karma-gated-control-of-other-agents))
 - **supersedes**: `tests/test_karma.py::test_lull_writes_signal_file`
-- **runner**: agent with `system` tool; a second agent dir exists with
-  `.agent.json` and a fresh `.agent.heartbeat`
-- **preconditions**: sender has `admin: {"karma": true}`; target dir is alive
+- **runner**: an agent with `admin: {"karma": true}`
+- **prerequisites**: a second agent working dir exists with `.agent.json` and
+  a fresh `.agent.heartbeat` (target alive)
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="lull", input={"address": "<target-agent-dir>", "reason": "test"})`.
-2. Observe the result and the target dir.
+### Steps
+1. From your working dir, call `system(action="lull", input={"address": "<target-agent-dir>", "reason": "test"})`.
+2. Read the result.
+3. List the files in `<target-agent-dir>`.
 
 ### Expected evidence
 - [ ] The result status is `asleep`.
-- [ ] A `.sleep` signal file exists in the target agent's working dir.
+- [ ] A `.sleep` file exists in `<target-agent-dir>`.
 
-## Behavior B004 — lull refuses an asleep target
+### Pass / Fail
+Pass when the receipt says `asleep` AND the `.sleep` signal file exists.
 
+## Behavior B004 — lull refuses a target that is not alive
+
+- **id**: B004
+- **title**: lull refuses an asleep/non-alive target
 - **guards**: `system-contract` § Karma-gated control of other agents
   ([CONTRACT.md](CONTRACT.md#karma-gated-control-of-other-agents))
 - **supersedes**: `tests/test_karma.py::test_lull_rejects_asleep_target`
-- **runner**: agent with `system` tool; a second agent dir with
-  `.agent.json` carrying a non-null `admin` (so the not-running rejection path
-  is exercised rather than the always-alive human shortcut)
-- **preconditions**: sender has `admin: {"karma": true}`; target has no
-  heartbeat or is not alive
+- **runner**: an agent with `admin: {"karma": true}`
+- **prerequisites**: a second agent working dir exists whose `.agent.json`
+  carries a non-null `admin` (so the not-running rejection path is exercised
+  rather than the always-alive human shortcut); the target has no fresh
+  heartbeat
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="lull", input={"address": "<target-agent-dir>", "reason": "test"})`.
-2. Observe the result.
+### Steps
+1. From your working dir, call `system(action="lull", input={"address": "<target-agent-dir>", "reason": "test"})`.
+2. Read the result.
 
 ### Expected evidence
-- [ ] The result contains an error (action refused because the target is not
-      alive/asleep already).
+- [ ] The result contains an error (refused because the target is not alive).
+
+### Pass / Fail
+Pass when the action is refused with an error. Fail if lull reports success
+against a dead target.
 
 ## Behavior B005 — self-action is rejected
 
+- **id**: B005
+- **title**: an agent cannot karma-act on itself
 - **guards**: `system-contract` § Karma-gated control of other agents
   ([CONTRACT.md](CONTRACT.md#karma-gated-control-of-other-agents))
 - **supersedes**: `tests/test_karma.py::test_interrupt_self_rejected`
-- **runner**: agent with `system` tool
-- **preconditions**: sender has `admin: {"karma": true}`; the address passed
-  is the sender's own working dir
+- **runner**: an agent with `admin: {"karma": true}`
+- **prerequisites**: none beyond your own working dir
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="interrupt", input={"address": "<own-working-dir>", "reason": "test"})`.
-2. Observe the result.
+### Steps
+1. From your working dir, call `system(action="interrupt", input={"address": "<your-own-working-dir>", "reason": "test"})`.
+2. Read the result.
+3. List your own working dir.
 
 ### Expected evidence
-- [ ] The result contains an error (an agent cannot karma-act on itself).
-- [ ] No `.interrupt` signal file is created in the sender's own dir.
+- [ ] The result contains an error (self-action refused).
+- [ ] No `.interrupt` file exists in your own working dir.
+
+### Pass / Fail
+Pass when self-interrupt is refused and no signal file is created. Fail if
+an agent can interrupt itself.
 
 ## Behavior B006 — nirvana requires nirvana privilege
 
+- **id**: B006
+- **title**: nirvana needs admin.karma AND admin.nirvana
 - **guards**: `system-contract` § Nirvana
   ([CONTRACT.md](CONTRACT.md#nirvana))
 - **supersedes**: `tests/test_karma.py::test_nirvana_requires_nirvana_admin`
-- **runner**: agent with `system` tool; a second agent dir exists
-- **preconditions**: sender has `admin: {"karma": true}` but NOT
-  `admin.nirvana`; target dir is alive
+- **runner**: an agent with `admin: {"karma": true}` but NOT `admin.nirvana`
+- **prerequisites**: a second agent working dir exists and is alive
+- **estimate**: 1 min
 
-### Scenario
-1. As the sender, call `system(action="nirvana", input={"address": "<target-agent-dir>", "reason": "test"})`.
-2. Observe the result.
+### Steps
+1. From your working dir, call `system(action="nirvana", input={"address": "<target-agent-dir>", "reason": "test"})`.
+2. Read the result.
+3. Check whether `<target-agent-dir>` still exists.
 
 ### Expected evidence
-- [ ] The result contains an error (nirvana is refused without
-      `admin.karma AND admin.nirvana`).
-- [ ] The target agent dir is NOT destroyed.
+- [ ] The result contains an error (nirvana refused without nirvana admin).
+- [ ] The target agent dir still exists (not destroyed).
+
+### Pass / Fail
+Pass when nirvana is refused AND the target is untouched. Fail if nirvana
+succeeds with only karma privilege.
