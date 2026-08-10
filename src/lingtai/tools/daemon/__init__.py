@@ -4795,7 +4795,7 @@ class DaemonManager:
                     )
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    None, task_skill_catalog, task_mcp_catalog
+                    None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog
                 )
                 task_context = self._append_daemon_common_context(task_context)
                 # Detached ownership starts task MCP only in the supervisor.

@@ -224,6 +224,17 @@ rejects the obsolete field before run-dir creation or scheduling. External CLI
 backend tasks reject `prompt` before run-dir creation; CLI behavior remains
 task-as-CLI-prompt.
 
+Optional `tasks[].plugin` is an array of Agent Plugin path strings for this
+one daemon run. Each path resolves against the parent agent's working
+`plugin/` directory; the LingTai backend renders a `## Parent-selected plugins`
+oneshot-context section into the durable `.prompt` the detached child reads,
+merges each plugin's validated `skills/` rows into the task skill catalog, and
+mounts each plugin's validated `mcp.json` servers as task-scoped MCP clients.
+A missing or unreadable plugin path resolves to nothing without failing the
+task; a non-list value fails preflight before run-dir creation. External CLI
+backends receive the plugin's skills and MCP registrations through the normal
+skill/mcp oneshot context and mount no plugin-native surface.
+
 LingTai-backend daemon LLM construction uses one effective context window:
 an explicit daemon preset's canonical `manifest.llm.context_limit` wins,
 otherwise an implicit/no-preset daemon inherits the parent service's valid
@@ -255,7 +266,7 @@ continues on full history and never falls back to a different wire).
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
+| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (CLI ask returns immediately; `{status: "sent", id, async: true, ...}`) | `{status: "error", id, message}` — unknown/absent id, backend `ask` unsupported, or busy |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, events: [...]}` | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
@@ -798,6 +809,7 @@ Re-check this contract when touching:
 | CLI-backend `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |
 | Token rows are written to both the daemon and parent ledgers, tagged | `src/lingtai/tools/daemon/run_dir.py` | `tests/test_daemon_run_dir.py::test_append_tokens_writes_daemon_ledger`, `::test_append_tokens_writes_parent_ledger_tagged` |
 | `context_token_limit` is validated, reaches Codex and native `mimo`, and is inert for every other provider and every external CLI backend | `src/lingtai/tools/daemon/__init__.py` | `tests/test_codex_standalone_compaction.py`, `tests/test_mimo_responses_compaction.py` |
+| `tasks[].plugin` renders the `## Parent-selected plugins` section into the durable `.prompt` the detached child reads; plugin skills and mcp.json servers are merged/mounted; missing plugin paths resolve to nothing; non-list fails preflight | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_task_plugin_context_renders_catalog_and_flattens_skills_mcp`, `::test_task_plugin_context_rejects_bad_plugin_path`, `::test_task_plugin_context_rejects_non_list`, `::test_handle_emanate_writes_plugin_section_to_prompt_before_detach` |
 | LingTai daemon tool results carry daemon-local `_meta.agent_meta`, omit parent notifications/guidance, and carry the exact warning only while current usage is >=90% | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_agent_meta_is_local_and_warning_tracks_current_usage` |
 | LingTai task-scoped MCP calls remove server-undeclared `_reasoning`, retain ordinary unknown business fields, and preserve strict LTP-v2 restoration | `src/lingtai/services/mcp.py`, `src/lingtai/tools/daemon/__init__.py` | `tests/test_mcp_v2_adapter_metadata.py::test_task_daemon_adapts_host_private_arguments_at_mcp_boundary` |
 | `_DaemonMetaState.snapshot` carries `agent_state.context.system_prompt` only while this daemon's own local rendered prompt is strictly above the effective `LINGTAI_SYSTEM_PROMPT_PRESSURE_RATIO` threshold (default 40%) of its own resolved window, never the parent's | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/kernel/meta_block.py` | `tests/test_daemon.py::test_daemon_meta_state_system_prompt_warning_is_local_not_parent` |

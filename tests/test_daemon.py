@@ -1364,6 +1364,40 @@ def test_combine_oneshot_context_includes_plugin_section(tmp_path):
     assert "demo-plugin" in combined
 
 
+def test_handle_emanate_writes_plugin_section_to_prompt_before_detach(tmp_path, monkeypatch):
+    """A daemon task with a plugin path renders the plugin section into the
+    durable .prompt that the detached child reads (regression for the
+    overwritten oneshot context)."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    plugin_dir = agent._working_dir / "plugin" / "demo-plugin"
+    plugin_dir.mkdir(parents=True)
+    (plugin_dir / "plugin.json").write_text(
+        '{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name": "demo-plugin", "version": "1.0.0", "description": "Demo plugin for daemon injection."}',
+        encoding="utf-8",
+    )
+    captured = []
+
+    def fake_spawn(run_dir, **kwargs):
+        captured.append((run_dir, kwargs))
+        run_dir.mark_done("ok")
+
+    monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [
+            {"task": "system task one", "tools": [], "plugin": ["plugin/demo-plugin"]},
+        ],
+    })
+
+    assert result["status"] == "dispatched"
+    prompts = [row[0].prompt_path.read_text(encoding="utf-8") for row in captured]
+    assert len(prompts) == 1
+    assert "## Parent-selected plugins" in prompts[0]
+    assert "demo-plugin" in prompts[0]
+    assert "system task one" in prompts[0]
+
+
 def test_task_plugin_context_rejects_non_list(tmp_path):
     """A non-list plugin field fails before scheduling."""
     agent = _make_agent(tmp_path, ["daemon"])
