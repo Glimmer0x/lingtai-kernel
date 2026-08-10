@@ -1198,7 +1198,22 @@ def _scrub_responses_schema(node: Any, is_root: bool = False) -> Any:
         # Coerce typeless property schemas: a node describing a value (has a
         # description) but lacking any kind key. Skip bare containers like an
         # empty {} or {"required": [...]} that aren't value descriptors.
-        if "description" in out and not any(k in out for k in _SCHEMA_KIND_KEYS):
+        #
+        # Guard on the description being a plain string, not merely present:
+        # a properties map may legitimately contain a property literally named
+        # ``description`` (e.g. notification add/edit hook fields), where the
+        # value is a nested schema dict rather than a prose string. Without
+        # this guard the scrub would inject ``type: "string"`` into the
+        # properties map as a new property key, producing an invalid schema
+        # node (``properties.type`` must itself be an object or boolean) that
+        # the Codex backend rejects with
+        # ``Invalid schema for function '<name>': 'string' is not of type
+        # 'object', 'boolean'``.
+        if (
+            "description" in out
+            and isinstance(out["description"], str)
+            and not any(k in out for k in _SCHEMA_KIND_KEYS)
+        ):
             out["type"] = "string"
         # A typed object with no `properties` is rejected; give it an empty map.
         if out.get("type") == "object" and "properties" not in out:
