@@ -404,10 +404,14 @@ def _commands(script: str) -> tuple[str, ...]:
                 # ``Invoke-Expression(...)`` -- the eval head glued directly to
                 # a group is dynamic invocation even when a member chain
                 # follows (``IEX(New-Object).DownloadString``), so fail closed
-                # instead of emitting the head as a literal command.
+                # instead of emitting the head as a literal command. The
+                # backward name scan accepts ``-`` so canonical ``Verb-Noun``
+                # eval cmdlets (``Invoke-Expression``) are recovered whole,
+                # not truncated to ``Expression``.
                 head_start = i
                 while head_start > 0 and (
-                    text[head_start - 1].isalnum() or text[head_start - 1] == "_"
+                    text[head_start - 1].isalnum()
+                    or text[head_start - 1] in ("_", "-")
                 ):
                     head_start -= 1
                 if text[head_start:i].casefold() in _EVAL_COMMANDS:

