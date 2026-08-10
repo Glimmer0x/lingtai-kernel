@@ -7,6 +7,13 @@ related_files:
   - ANATOMY.md
   - dev-guide-skill/SKILL.md
   - tests/CONTRACT.md
+  - src/lingtai/kernel/BEHAVIORS.md
+  - src/lingtai/tools/system/BEHAVIORS.md
+  - src/lingtai/tools/context/BEHAVIORS.md
+  - src/lingtai/tools/daemon/BEHAVIORS.md
+  - src/lingtai/tools/shell/BEHAVIORS.md
+  - src/lingtai/tools/telegram/BEHAVIORS.md
+  - src/lingtai/tools/tool_family/BEHAVIORS.md
 maintenance: |
   This file is the normative root of the distributed behavior-test definition
   system: it owns the LingTai Agent Behavior Task (LABT) specification, its

@@ -10,6 +10,7 @@ status: active
 contract_version: 8
 last_changed_at: "2026-08-09"
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py

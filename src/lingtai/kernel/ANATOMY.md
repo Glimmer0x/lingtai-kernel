@@ -1,5 +1,6 @@
 ---
 related_files:
+  - BEHAVIORS.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - ANATOMY.md
   - MANIFEST.in
