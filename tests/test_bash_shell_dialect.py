@@ -182,13 +182,40 @@ def test_timeout_error_no_output_appends_background_guidance():
 
 
 def test_timeout_error_with_output_keeps_historical_message():
+    # Jason 2026-08-10 tool-timeout redesign: the async steering guidance is
+    # now appended to *every* timeout result (not only no-output), so the
+    # exact historical bare message no longer exists; the prefix is preserved
+    # and the guidance is always present.
     assert _timeout_error("echo x", 5.0) == {
         "status": "error",
-        "message": "Command timed out after 5.0s",
+        "message": (
+            "Command timed out after 5.0s. Long-running or no-output work should "
+            "be launched with async=true (or as a daemon) rather than as a "
+            "foreground command; do not rely on shell backgrounding with a "
+            "trailing &."
+        ),
     }
     assert _timeout_error("echo x", 5.0, no_output=False) == {
         "status": "error",
-        "message": "Command timed out after 5.0s",
+        "message": (
+            "Command timed out after 5.0s. Long-running or no-output work should "
+            "be launched with async=true (or as a daemon) rather than as a "
+            "foreground command; do not rely on shell backgrounding with a "
+            "trailing &."
+        ),
+    }
+
+
+def test_timeout_error_no_output_still_appends_guidance():
+    result = _timeout_error("sleep 5", 5.0, no_output=True)
+    assert result == {
+        "status": "error",
+        "message": (
+            "Command timed out after 5.0s. Long-running or no-output work should "
+            "be launched with async=true (or as a daemon) rather than as a "
+            "foreground command; do not rely on shell backgrounding with a "
+            "trailing &."
+        ),
     }
 
 
@@ -200,7 +227,10 @@ def test_sync_timeout_with_no_output_returns_background_guidance(tmp_path):
     assert _BACKGROUND_GUIDANCE in result["message"]
 
 
-def test_sync_timeout_with_captured_output_omits_guidance(tmp_path):
+def test_sync_timeout_with_captured_output_includes_guidance(tmp_path):
+    # Jason 2026-08-10 tool-timeout redesign: the async steering guidance is
+    # now appended to every timeout result, including one that captured output
+    # before the kill.
     mgr = manager(tmp_path)
     command = (
         f"{sys.executable} -u -c \"print('started'); import time; time.sleep(5)\""
@@ -208,4 +238,74 @@ def test_sync_timeout_with_captured_output_omits_guidance(tmp_path):
     result = mgr.handle({"command": command, "timeout": 1.0})
     assert result["status"] == "error"
     assert result["message"].startswith("Command timed out after 1.0s")
-    assert "trailing &" not in result["message"]
+    assert "trailing &" in result["message"]
+
+
+# ---------------------------------------------------------------------------
+# Jason 2026-08-10 tool-timeout redesign: hard ceiling for the sync ``run``
+# ``timeout`` parameter (``LINGTAI_TOOL_TIMEOUT_MAX_SECONDS``, default 120).
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_timeout_max_defaults_to_120():
+    from lingtai.tools.bash._tool_family import (
+        TIMEOUT_MAX_ENV,
+        resolve_timeout_max_seconds,
+    )
+
+    assert resolve_timeout_max_seconds({}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: ""}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "abc"}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "0"}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "-5"}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "nan"}) == 120.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "inf"}) == 120.0
+
+
+def test_resolve_timeout_max_reads_env_override():
+    from lingtai.tools.bash._tool_family import (
+        TIMEOUT_MAX_ENV,
+        resolve_timeout_max_seconds,
+    )
+
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: "300"}) == 300.0
+    assert resolve_timeout_max_seconds({TIMEOUT_MAX_ENV: " 45.5 "}) == 45.5
+
+
+def test_sync_run_refuses_timeout_above_cap(tmp_path, monkeypatch):
+    from lingtai.tools.bash._tool_family import TIMEOUT_MAX_ENV
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "120")
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": 300})
+    assert result == {
+        "status": "error",
+        "message": (
+            "timeout 300s exceeds the hard ceiling 120s "
+            f"({TIMEOUT_MAX_ENV}); for work that may need longer, launch it "
+            "with async=true and poll the job instead of raising the sync "
+            "timeout."
+        ),
+    }
+
+
+def test_sync_run_accepts_timeout_at_cap(tmp_path, monkeypatch):
+    from lingtai.tools.bash._tool_family import TIMEOUT_MAX_ENV
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "120")
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": 120})
+    assert result["status"] == "ok"
+    assert result["exit_code"] == 0
+
+
+def test_sync_run_cap_follows_env_override(tmp_path, monkeypatch):
+    from lingtai.tools.bash._tool_family import TIMEOUT_MAX_ENV
+
+    monkeypatch.setenv(TIMEOUT_MAX_ENV, "30")
+    mgr = manager(tmp_path)
+    result = mgr.handle({"command": "echo hi", "timeout": 31})
+    assert result["status"] == "error"
+    assert "exceeds the hard ceiling 30s" in result["message"]
+    ok = mgr.handle({"command": "echo hi", "timeout": 30})
+    assert ok["status"] == "ok"

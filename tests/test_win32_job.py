@@ -400,7 +400,9 @@ def test_sync_timeout_kills_whole_tree_and_drains_boundedly(monkeypatch, tmp_pat
     result = manager._run_sync(
         "sleep 100", str(tmp_path), 5.0, ShellInvocation(script="sleep 100")
     )
-    assert result == {"status": "error", "message": "Command timed out after 5.0s"}
+    assert result["status"] == "error"
+    assert result["message"].startswith("Command timed out after 5.0s")
+    assert "async=true" in result["message"]
     assert events[0][0] == "spawn"
     assert events[1] == ("terminate", 99, 4242)
     # The supervisor waits for the killed tree to actually exit before the
