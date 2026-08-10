@@ -173,6 +173,8 @@ class TelegramAccount:
         set_taskcard_enabled: Callable[[bool], None] | None = None,
         taskcard_normal_rows: Callable[[], int] | None = None,
         set_taskcard_normal_rows: Callable[[int], None] | None = None,
+        taskcard_locale: Callable[[], str] | None = None,
+        set_taskcard_locale: Callable[[str], None] | None = None,
         local_command_core: LocalCommandCore | None = None,
     ) -> None:
         self.alias = alias
@@ -187,6 +189,8 @@ class TelegramAccount:
         self._set_taskcard_enabled = set_taskcard_enabled
         self._taskcard_normal_rows = taskcard_normal_rows or (lambda: 1)
         self._set_taskcard_normal_rows = set_taskcard_normal_rows
+        self._taskcard_locale = taskcard_locale or (lambda: "en")
+        self._set_taskcard_locale = set_taskcard_locale
         self._local_commands = local_command_core or LocalCommandCore()
         # If commands is None, fall back to DEFAULT_COMMANDS at registration
         # time. An explicit empty list means "register no commands" and is
@@ -473,9 +477,10 @@ class TelegramAccount:
         ``/taskcard`` with no arguments opens the interactive settings menu
         (inline keyboard, mirroring /kanban's design). ``/taskcard on|off``
         toggles delivery and ``/taskcard N`` sets the rolling API-call-group
-        window (1-10), both as before.
+        window (1-10), both as before. ``/taskcard lang zh|en`` switches the
+        projection language (default en).
         """
-        usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
+        usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10) | /taskcard lang zh|en"
         if text.strip() in ("/taskcard", f"/taskcard@{self.alias}"):
             self._cmd_taskcard_menu(chat_id)
             return
@@ -486,6 +491,8 @@ class TelegramAccount:
                 set_enabled=self._set_taskcard_enabled,
                 normal_rows=self._taskcard_normal_rows,
                 set_normal_rows=self._set_taskcard_normal_rows,
+                locale=self._taskcard_locale,
+                set_locale=self._set_taskcard_locale,
             ),
         )
         if result.status == "usage":
@@ -504,6 +511,7 @@ class TelegramAccount:
 
         enabled = bool(result.enabled)
         normal_rows = result.normal_rows
+        locale = result.locale if isinstance(result.locale, str) else self._taskcard_locale()
         if enabled:
             description = (
                 "automatic and programmable Task Cards may be sent for this agent."
@@ -515,19 +523,21 @@ class TelegramAccount:
             )
         self.send_message(
             chat_id,
-            f"📋 taskcard: {enabled} · normal rows: {normal_rows} — {description}\n"
-            "Usage: /taskcard on | /taskcard off | /taskcard N (1-10)",
+            f"📋 taskcard: {enabled} · normal rows: {normal_rows} · lang: {locale} — {description}\n"
+            "Usage: /taskcard on | /taskcard off | /taskcard N (1-10) | /taskcard lang zh|en",
         )
 
     def _cmd_taskcard_menu(self, chat_id: int, message_id: int | None = None) -> None:
         """Show the interactive Task Card settings menu (kanban-style)."""
         enabled = self._taskcard_enabled()
         normal_rows = self._taskcard_normal_rows()
+        locale = self._taskcard_locale()
         state_emoji = "🟢" if enabled else "⚪"
         menu_text = (
             f"📋 *Task Card — settings*\n\n"
             f"{state_emoji} Delivery: {'on' if enabled else 'off'}\n"
-            f"👁️ Rows: {normal_rows} (latest API-call groups)\n\n"
+            f"👁️ Rows: {normal_rows} (latest API-call groups)\n"
+            f"🌐 Lang: {locale}\n\n"
             "Tap to change:"
         )
         keyboard = inline_keyboard_options(
@@ -536,6 +546,8 @@ class TelegramAccount:
                 {"text": "Rows ▶️ +", "data": "tc:rows_inc"},
                 {"text": "📶 Delivery on", "data": "tc:on"},
                 {"text": "🚫 Delivery off", "data": "tc:off"},
+                {"text": "🌐 Lang zh", "data": "tc:lang_zh"},
+                {"text": "🌐 Lang en", "data": "tc:lang_en"},
                 {"text": "✖️ Close", "data": "tc:close"},
             ],
             columns=2,
@@ -563,6 +575,12 @@ class TelegramAccount:
             self._set_taskcard_enabled(True)
         elif action == "off":
             self._set_taskcard_enabled(False)
+        elif action == "lang_zh":
+            if self._set_taskcard_locale is not None:
+                self._set_taskcard_locale("zh")
+        elif action == "lang_en":
+            if self._set_taskcard_locale is not None:
+                self._set_taskcard_locale("en")
         elif action in ("close", "back"):
             if message_id is not None:
                 try:
@@ -1029,6 +1047,26 @@ class TelegramAccount:
         self._note_chat_message_id(chat_id, result.get("message_id"))
         return result
 
+    def send_rich_message(
+        self,
+        chat_id: int,
+        rich_message: dict[str, Any],
+        reply_markup: dict | None = None,
+        reply_to_message_id: int | None = None,
+    ) -> dict:
+        """Send a native Telegram ``InputRichMessage``."""
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "rich_message": rich_message,
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        if reply_to_message_id:
+            payload["reply_parameters"] = {"message_id": reply_to_message_id}
+        result = self._request("sendRichMessage", json=payload)
+        self._note_chat_message_id(chat_id, result.get("message_id"))
+        return result
+
     def send_photo(
         self,
         chat_id: int,
@@ -1085,7 +1123,7 @@ class TelegramAccount:
         self,
         chat_id: int,
         message_id: int,
-        text: str,
+        text: str | None,
         reply_markup: dict | None = None,
         is_caption: bool = False,
         parse_mode: str | None = None,
@@ -1093,6 +1131,7 @@ class TelegramAccount:
         caption_entities: list[dict[str, Any]] | None = None,
         link_preview_options: dict[str, Any] | None = None,
         disable_web_page_preview: bool | None = None,
+        rich_message: dict[str, Any] | None = None,
     ) -> dict:
         """Edit a sent message's text or caption."""
         if is_caption:
@@ -1108,8 +1147,12 @@ class TelegramAccount:
             return self._request("editMessageCaption", json=payload)
         else:
             payload = {
-                "chat_id": chat_id, "message_id": message_id, "text": text,
+                "chat_id": chat_id, "message_id": message_id,
             }
+            if text is not None:
+                payload["text"] = text
+            if rich_message is not None:
+                payload["rich_message"] = rich_message
             if reply_markup:
                 payload["reply_markup"] = reply_markup
             if parse_mode:

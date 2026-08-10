@@ -158,13 +158,14 @@ _TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 _TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
 
 
-def _task_card_footer(normal_rows: int) -> str:
+def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
     """Build the fixed footer with the live normal-row setting appended.
 
     ``normal_rows`` is trusted to already be validated to ``1-10`` by the
     caller (``TelegramManager._taskcard_normal_rows``); this only formats it.
+    ``locale`` selects the projection language (en default, zh opt-in).
     """
-    return TaskCardEventProjection.footer(normal_rows)
+    return TaskCardEventProjection.footer(normal_rows, locale)
 
 
 def _format_task_card_current_time(now: datetime) -> str:
@@ -492,16 +493,16 @@ SCHEMA = {
                 "accounts", "manual",
             ],
             "description": (
-                "send: send message to a chat (chat_id, text, rendering_mode; optional media, reply_markup, placeholder, chat_action, entities). "
+                "send: send message to a chat (chat_id, rendering_mode, and text or structured_message; optional media, reply_markup, placeholder, chat_action, entities). "
                 "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
                 "check: list recent conversations with unread counts (optional account). "
                 "read: read messages from a chat (chat_id; optional limit). "
-                "reply: reply to a specific message (message_id from read results, text, rendering_mode; optional entities). "
+                "reply: reply to a specific message (message_id from read results, rendering_mode, and text or structured_message; optional entities). "
                 "search: search messages (query; optional account, chat_id). "
                 "delete: delete a bot message (message_id). "
-                "edit: edit a bot message (message_id, text, rendering_mode; optional reply_markup, entities). "
+                "edit: edit a bot message (message_id, rendering_mode, and text or structured_message; optional reply_markup, entities). "
                 "contacts: list saved contacts. "
                 "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
@@ -801,6 +802,17 @@ class TelegramManager:
         if type(value) is not int or not 1 <= value <= 10:
             return _TASK_CARD_DEFAULT_NORMAL_ROWS
         return value
+
+    def _taskcard_locale(self) -> str:
+        """Read the current Task Card projection language at projection time.
+
+        Falls back to English when the service double does not expose the
+        durable getter (compat for narrow tests/third-party doubles).
+        """
+        getter = getattr(self._service, "taskcard_locale", None)
+        if not callable(getter):
+            return "en"
+        return TaskCardEventProjection.normalize_locale(getter())
 
     @staticmethod
     def _parse_compound_id(compound_id: str) -> tuple[str, int, int]:
@@ -3021,12 +3033,17 @@ class TelegramManager:
 
         The volatile ``Last Updated:`` line is excluded — it changes on every
         render and must not force a Telegram edit when the actual content
-        (events, footer, metadata) is unchanged.
+        (events, footer, metadata) is unchanged. Every supported locale prefix
+        is excluded so the dedupe stays correct after ``/taskcard lang`` flips.
         """
+        prefixes = tuple(
+            TaskCardEventProjection.time_prefix(locale)
+            for locale in sorted(TaskCardEventProjection.SUPPORTED_LOCALES)
+        )
         stable = "\n".join(
             line
             for line in automatic.splitlines()
-            if not line.startswith(_TASK_CARD_TIME_PREFIX)
+            if not line.startswith(prefixes)
         )
         return hashlib.sha256(stable.encode("utf-8", "replace")).hexdigest()
 
@@ -3049,6 +3066,7 @@ class TelegramManager:
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
+            locale=self._taskcard_locale(),
         )
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
@@ -3165,7 +3183,7 @@ class TelegramManager:
         (the automatic event tail and the intrinsic-artifact projector).
 
         Sub-actions:
-          - create:  Project the resident 📋 ACTIVITIES for the current batch —
+          - create:  Project the resident 📋 活动 for the current batch —
                      update-first, editing the persisted resident in place (same
                      id) and sending/deleting only as fail-open recovery.
           - update:  Edit the same card to show the current batch.
@@ -3210,6 +3228,7 @@ class TelegramManager:
             self._task_card_event_groups_snapshot(),
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
+            locale=self._taskcard_locale(),
         )
         return self._resident.ensure(
             account, chat_id, automatic, error="Failed to ensure task card resident",
@@ -3642,21 +3661,23 @@ class TelegramManager:
         return TaskCardEventProjection.format_count(value)
 
     @classmethod
-    def _format_task_card_metadata(cls, metadata: object) -> list[str]:
+    def _format_task_card_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
         """Render at most two compact session lines within a 150-char budget."""
-        return TaskCardEventProjection.format_metadata(metadata)
+        return TaskCardEventProjection.format_metadata(metadata, locale)
 
     @classmethod
     def _format_rows_task_card_text(
         cls, rows: list, *, metadata: dict | None = None,
         normal_rows: int = _TASK_CARD_DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
+        locale: str = "en",
     ) -> str:
         return TaskCardEventProjection.format_rows_task_card_text(
             rows,
             metadata=metadata,
             normal_rows=normal_rows,
             now=now,
+            locale=locale,
         )
 
     @staticmethod
@@ -3669,7 +3690,7 @@ class TelegramManager:
         return TaskCardEventProjection.machine_identifier(value, limit=limit)
 
     @classmethod
-    def _format_api_error_line(cls, row: dict) -> str:
+    def _format_api_error_line(cls, row: dict, locale: str = "en") -> str:
         """Render a sanitized LLM/provider API-error row.
 
         Shows only bounded machine identifiers supplied by the kernel (exception
@@ -3677,7 +3698,7 @@ class TelegramManager:
         lifecycle state. Opaque external identifiers and raw exception text are
         deliberately absent, so there is no free-form field to leak.
         """
-        return TaskCardEventProjection.format_api_error_line(row)
+        return TaskCardEventProjection.format_api_error_line(row, locale)
 
     @staticmethod
     def _format_elapsed(value: object) -> str:
@@ -3695,7 +3716,7 @@ class TelegramManager:
     # ------------------------------------------------------------------
 
     _PARSE_MODES = {"HTML", "MarkdownV2", "Markdown"}
-    _RENDERING_MODES = _PARSE_MODES | {"plain_text", "entities"}
+    _RENDERING_MODES = _PARSE_MODES | {"plain_text", "entities", "rich"}
 
     @staticmethod
     def _normalize_chat_action(value: Any) -> Any:
@@ -3731,7 +3752,7 @@ class TelegramManager:
         if mode not in cls._RENDERING_MODES:
             return (
                 "rendering_mode must be one of: plain_text, HTML, MarkdownV2, "
-                "Markdown, entities"
+                "Markdown, entities, rich"
             )
         if mode == "entities" and not has_entities:
             return "rendering_mode='entities' requires entities or caption_entities"
@@ -3782,6 +3803,49 @@ class TelegramManager:
             opts["parse_mode"] = mode
         return opts, None
 
+    @classmethod
+    def _native_rich_message(
+        cls,
+        args: dict,
+        *,
+        text: str,
+        media: Any,
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        """Validate and build native rich content at the model/API boundary."""
+        structured = args.get("structured_message")
+        mode = cls._rendering_mode(args)
+        if mode != "rich":
+            if structured is not None:
+                return None, None, "structured_message requires rendering_mode='rich'"
+            return None, None, None
+        if structured is None:
+            return None, None, "rendering_mode='rich' requires structured_message"
+
+        conflicts = []
+        if text:
+            conflicts.append("text")
+        if media:
+            conflicts.append("media")
+        for field in (
+            "entities", "caption_entities", "link_preview_options",
+            "disable_web_page_preview",
+        ):
+            if args.get(field) is not None:
+                conflicts.append(field)
+        if conflicts:
+            return None, None, (
+                "rendering_mode='rich' cannot be combined with "
+                + ", ".join(conflicts)
+            )
+
+        from .render import render_structured_message
+
+        try:
+            rich_message, preview = render_structured_message(structured)
+            return rich_message, preview, None
+        except ValueError as exc:
+            return None, None, str(exc)
+
     def _send(self, args: dict) -> dict:
         account = self._resolve_account(args)
         chat_id = args.get("chat_id")
@@ -3793,6 +3857,13 @@ class TelegramManager:
         # media so text-only sends do not try to upload/open an empty path.
         if media and isinstance(media, dict) and not (media.get("path") or "").strip():
             media = None
+        rich_message, rich_preview, rich_error = self._native_rich_message(
+            args, text=text, media=media,
+        )
+        if rich_error:
+            return {"error": rich_error}
+        if rich_preview is not None:
+            text = rich_preview
         reply_markup = args.get("reply_markup")
         chat_action = self._normalize_chat_action(args.get("chat_action"))
         placeholder = bool(args.get("placeholder", False))
@@ -3896,6 +3967,11 @@ class TelegramManager:
                 )
             else:
                 return {"error": f"Unknown media type: {media_type}"}
+        elif rich_message is not None:
+            result = acct.send_rich_message(
+                chat_id, rich_message, reply_markup=reply_markup,
+                reply_to_message_id=reply_to,
+            )
         else:
             result = acct.send_message(
                 chat_id, text, reply_markup=reply_markup,
@@ -3926,6 +4002,8 @@ class TelegramManager:
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
             "disable_web_page_preview": args.get("disable_web_page_preview"),
+            "structured_message": args.get("structured_message"),
+            "rich_message": rich_message,
             "sent_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "status": "placeholder" if placeholder else "sent",
         }
@@ -4067,10 +4145,11 @@ class TelegramManager:
     def _reply(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
+        structured_message = args.get("structured_message")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        if not text and structured_message is None:
+            return {"error": "text or structured_message is required"}
 
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
         result = self._send({
@@ -4084,6 +4163,7 @@ class TelegramManager:
             "caption_entities": args.get("caption_entities"),
             "link_preview_options": args.get("link_preview_options"),
             "disable_web_page_preview": args.get("disable_web_page_preview"),
+            "structured_message": structured_message,
             # We need to pass reply_to_message_id through
             "_reply_to_message_id": tg_msg_id,
         })
@@ -4152,10 +4232,11 @@ class TelegramManager:
     def _edit(self, args: dict) -> dict:
         compound_id = args.get("message_id", "")
         text = args.get("text", "")
+        structured_message = args.get("structured_message")
         if not compound_id:
             return {"error": "message_id is required"}
-        if not text:
-            return {"error": "text is required"}
+        if not text and structured_message is None:
+            return {"error": "text or structured_message is required"}
         account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
         reply_markup = args.get("reply_markup")
         acct = self._service.get_account(account)
@@ -4175,6 +4256,15 @@ class TelegramManager:
                     except (json.JSONDecodeError, OSError):
                         continue
 
+        if is_caption and self._rendering_mode(args) == "rich":
+            return {"error": "rendering_mode='rich' cannot edit a media caption"}
+
+        rich_message, _rich_preview, rich_error = self._native_rich_message(
+            args, text=text, media=None,
+        )
+        if rich_error:
+            return {"error": rich_error}
+
         if is_caption:
             edit_options, rendering_error = self._caption_options(args)
         else:
@@ -4182,11 +4272,17 @@ class TelegramManager:
         if rendering_error:
             return {"error": rendering_error}
 
-        acct.edit_message(
-            chat_id=chat_id, message_id=tg_msg_id, text=text,
-            reply_markup=reply_markup, is_caption=is_caption,
+        edit_args: dict[str, Any] = {
+            "chat_id": chat_id,
+            "message_id": tg_msg_id,
+            "text": None if rich_message is not None else text,
+            "reply_markup": reply_markup,
+            "is_caption": is_caption,
             **edit_options,
-        )
+        }
+        if rich_message is not None:
+            edit_args["rich_message"] = rich_message
+        acct.edit_message(**edit_args)
         return {"status": "edited", "message_id": compound_id}
 
     def _contacts(self, args: dict) -> dict:
