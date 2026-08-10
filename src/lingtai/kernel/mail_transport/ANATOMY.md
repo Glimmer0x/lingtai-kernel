@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/mail_transport/BEHAVIORS.md
   - src/lingtai/kernel/mail_transport/CONTRACT.md
   - src/lingtai/kernel/mail_transport/__init__.py
   - src/lingtai/kernel/ANATOMY.md

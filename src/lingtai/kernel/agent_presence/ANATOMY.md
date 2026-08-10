@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/agent_presence/BEHAVIORS.md
   - src/lingtai/kernel/agent_presence/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/agent_presence/__init__.py

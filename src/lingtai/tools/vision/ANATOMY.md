@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/vision/BEHAVIORS.md
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/vision/glossary-en.md

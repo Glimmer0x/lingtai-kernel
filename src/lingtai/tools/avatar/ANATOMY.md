@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/CONTRACT.md

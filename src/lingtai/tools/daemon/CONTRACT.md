@@ -10,8 +10,8 @@ status: active
 contract_version: 9
 last_changed_at: "2026-08-10"
 related_files:
-  - BEHAVIORS.md
   - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
   - src/lingtai/tools/daemon/system_prompt.py
@@ -39,7 +39,6 @@ related_files:
   - src/lingtai/mcp_servers/daemon_common/server.py
   - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/llm/mimo/ANATOMY.md
-  - tests/test_daemon_contract_doc.py
   - tests/test_task_card_proactivity.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon.py

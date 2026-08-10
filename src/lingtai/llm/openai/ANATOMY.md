@@ -13,7 +13,6 @@ related_files:
   - src/lingtai/llm/openai/defaults.py
   - src/lingtai/auth/codex_pool.py
   - tests/test_codex_quota.py
-  - tests/test_codex_pool_quota_exclusion.py
   - src/lingtai/llm/mimo/adapter.py
   - src/lingtai/llm/mimo/ANATOMY.md
   - src/lingtai/llm/service.py

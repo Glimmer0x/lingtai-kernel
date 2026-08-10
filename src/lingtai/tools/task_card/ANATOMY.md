@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/tools/task_card/BEHAVIORS.md
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/task_card/manual/SKILL.md

@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/event_journal/BEHAVIORS.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/event_journal/__init__.py

@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/browser/BEHAVIORS.md
   - src/lingtai/tools/browser/CONTRACT.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py

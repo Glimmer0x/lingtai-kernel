@@ -6,6 +6,7 @@ related_files:
   - AGENTS.md
   - dev-guide-skill/SKILL.md
   - pyproject.toml
+  - tests/BEHAVIORS.md
   - tests/CONTRACT.md
   - tests/__init__.py
   - tests/_agent_dir_helpers.py
@@ -49,9 +50,11 @@ related_files:
   - tests/test_agent_meta_guidance.py
   - tests/test_agent_presence.py
   - tests/test_agent_preset_manifest.py
+  - tests/test_agent_readme.py
   - tests/test_agent_session.py
   - tests/test_agent_session_wiring.py
   - tests/test_anatomy_drift_checker.py
+  - tests/test_anthropic_thinking_budget.py
   - tests/test_api_gate.py
   - tests/test_apriori_summary_executor.py
   - tests/test_apriori_summary_schema.py
@@ -85,7 +88,6 @@ related_files:
   - tests/test_codex_endpoint_pool.py
   - tests/test_codex_native_multiaccount.py
   - tests/test_codex_pool.py
-  - tests/test_codex_pool_quota_exclusion.py
   - tests/test_codex_prompt_cache_key.py
   - tests/test_codex_quota.py
   - tests/test_codex_raw_reasoning_replay.py
@@ -94,6 +96,7 @@ related_files:
   - tests/test_codex_ws_session.py
   - tests/test_codex_ws_tool_result_freeze.py
   - tests/test_compaction.py
+  - tests/test_config_resolve_jsonc.py
   - tests/test_context.py
   - tests/test_context_ownership_redesign.py
   - tests/test_context_pressure_reminder.py
@@ -110,18 +113,17 @@ related_files:
   - tests/test_daemon_claude_usage.py
   - tests/test_daemon_cli_143_attribution.py
   - tests/test_daemon_cli_watchdog_scope.py
-  - tests/test_daemon_codex_submanual.py
   - tests/test_daemon_codex_usage.py
-  - tests/test_daemon_contract_doc.py
+  - tests/test_daemon_common_finish_mcp.py
   - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_cursor_submanual.py
   - tests/test_daemon_detached_supervisor.py
+  - tests/test_daemon_email_mcp.py
   - tests/test_daemon_empty_parity.py
   - tests/test_daemon_kimicode_submanual.py
   - tests/test_daemon_lingtai_submanual.py
   - tests/test_daemon_manifest.py
   - tests/test_daemon_mimocode_jsonl.py
-  - tests/test_daemon_mimocode_submanual.py
   - tests/test_daemon_missing_finish_guidance.py
   - tests/test_daemon_oh_my_pi_submanual.py
   - tests/test_daemon_opencode_backend.py
@@ -163,7 +165,9 @@ related_files:
   - tests/test_file_io_sidecar.py
   - tests/test_file_tool_family.py
   - tests/test_filesystem_mail.py
+  - tests/test_folder_size_nudge.py
   - tests/test_fsutil.py
+  - tests/test_gated_session_proxy.py
   - tests/test_git_init.py
   - tests/test_goal_notification.py
   - tests/test_handshake.py
@@ -188,12 +192,13 @@ related_files:
   - tests/test_intrinsics_comm.py
   - tests/test_karma.py
   - tests/test_kernel_isolation.py
+  - tests/test_kernel_logging.py
   - tests/test_kernel_migrate.py
-  - tests/test_kernel_package_move.py
   - tests/test_kernel_update_contract.py
   - tests/test_kernel_version_nudge.py
   - tests/test_kimi_code_adapter.py
   - tests/test_knowledge.py
+  - tests/test_labt_validation.py
   - tests/test_large_result_no_notification.py
   - tests/test_large_result_rescan.py
   - tests/test_layers_avatar.py
@@ -210,8 +215,10 @@ related_files:
   - tests/test_llm_adapters_manual.py
   - tests/test_llm_identity_headers.py
   - tests/test_llm_service.py
+  - tests/test_llm_service_adapter_cache.py
   - tests/test_llm_utils.py
   - tests/test_local_command_core.py
+  - tests/test_logging_setup.py
   - tests/test_loop_guard.py
   - tests/test_macos_shell_adapter.py
   - tests/test_mail_transport.py
@@ -237,6 +244,8 @@ related_files:
   - tests/test_molt_notification_persistence.py
   - tests/test_molt_task_persistence.py
   - tests/test_network.py
+  - tests/test_notification_persistent_cap.py
+  - tests/test_notification_schema_wire_scrub.py
   - tests/test_notification_store.py
   - tests/test_notification_sync.py
   - tests/test_notification_tool.py
@@ -257,11 +266,11 @@ related_files:
   - tests/test_portable_adapter_encoding.py
   - tests/test_post_molt_notification.py
   - tests/test_powershell_decode_windows_output.py
+  - tests/test_powershell_extractor_policy.py
   - tests/test_preset_auto_fallback.py
   - tests/test_preset_connectivity.py
   - tests/test_preset_context_guard.py
   - tests/test_preset_materialization.py
-  - tests/test_preset_runtime_model_docs.py
   - tests/test_preset_swap_e2e.py
   - tests/test_presets.py
   - tests/test_process_identity.py
@@ -318,7 +327,7 @@ related_files:
   - tests/test_system_summarize.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_event_projection_shared.py
-  - tests/test_task_card_handoff_guidance.py
+  - tests/test_task_card_locale.py
   - tests/test_task_card_proactivity.py
   - tests/test_task_card_resident_shared.py
   - tests/test_taskcard_resident_meta.py
@@ -332,6 +341,7 @@ related_files:
   - tests/test_telegram_lossless_envelope.py
   - tests/test_telegram_notification_read_state.py
   - tests/test_telegram_rate_limit.py
+  - tests/test_telegram_reaction_states.py
   - tests/test_telegram_rich_formatting.py
   - tests/test_telegram_send_media_contract.py
   - tests/test_telegram_slash_commands.py
@@ -343,6 +353,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_result_hook.py
   - tests/test_telegram_task_card_rows.py
+  - tests/test_telegram_task_card_runtime_drift.py
   - tests/test_telegram_task_card_singleton.py
   - tests/test_telegram_task_card_state.py
   - tests/test_telegram_task_card_timestamp.py
@@ -351,13 +362,13 @@ related_files:
   - tests/test_telegram_terra_repairs.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_typing_ttl.py
+  - tests/test_telegram_unread_count.py
   - tests/test_three_agent_email.py
   - tests/test_time_awareness_email.py
   - tests/test_time_awareness_mail.py
   - tests/test_time_awareness_status.py
   - tests/test_time_veil.py
   - tests/test_timely_transient_serialization.py
-  - tests/test_token_counter.py
   - tests/test_token_ledger.py
   - tests/test_tool_dispatch.py
   - tests/test_tool_executor.py
@@ -374,7 +385,6 @@ related_files:
   - tests/test_tool_family_soul_migration.py
   - tests/test_tool_family_system_migration.py
   - tests/test_tool_family_vision_migration.py
-  - tests/test_tool_family_web_migration_parity.py
   - tests/test_tool_family_wire_parity.py
   - tests/test_tool_glossary.py
   - tests/test_tool_meta_comment_overflow.py
@@ -390,14 +400,12 @@ related_files:
   - tests/test_turn_boundary_housekeeping.py
   - tests/test_two_axis_meta_contract.py
   - tests/test_unified_web_capability.py
-  - tests/test_utf8_read_text.py
   - tests/test_utf8_write_text.py
   - tests/test_validate_skill.py
   - tests/test_venv_resolve.py
   - tests/test_vision_capability.py
   - tests/test_vision_services.py
   - tests/test_web_canonical_provider_routing.py
-  - tests/test_web_ltp_v2_summarize_executor.py
   - tests/test_web_output_spill.py
   - tests/test_web_search_capability.py
   - tests/test_wechat_config_resolution.py
@@ -405,7 +413,9 @@ related_files:
   - tests/test_wechat_media_validation.py
   - tests/test_wechat_media_warning_integration.py
   - tests/test_wechat_notification_metadata.py
+  - tests/test_wechat_reply_read_state.py
   - tests/test_wechat_toolfamily_ltpv2.py
+  - tests/test_whatsapp_inbound_replay.py
   - tests/test_whatsapp_notification_metadata.py
   - tests/test_whatsapp_personal_bridge.py
   - tests/test_whatsapp_toolfamily_ltpv2.py

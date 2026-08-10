@@ -1,7 +1,7 @@
 ---
 related_files:
-  - BEHAVIORS.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py

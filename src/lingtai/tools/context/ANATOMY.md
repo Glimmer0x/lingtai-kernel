@@ -1,10 +1,10 @@
 ---
 related_files:
-  - BEHAVIORS.md
   - src/lingtai/intrinsic_skills/context-manual/SKILL.md
   - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/pad/ANATOMY.md

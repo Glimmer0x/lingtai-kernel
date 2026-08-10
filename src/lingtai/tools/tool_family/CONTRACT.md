@@ -3,8 +3,8 @@ name: tool-family
 contract_version: 2
 root_contract: CONTRACT.md
 related_files:
-  - BEHAVIORS.md
   - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/tool_family/BEHAVIORS.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/CONTRACT.md

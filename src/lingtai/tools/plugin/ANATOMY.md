@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/plugin/BEHAVIORS.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/tools/plugin/manual/SKILL.md

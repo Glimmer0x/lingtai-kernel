@@ -1,6 +1,7 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/BEHAVIORS.md
   - src/lingtai/__init__.py
   - src/lingtai/__main__.py
   - src/lingtai/agent.py

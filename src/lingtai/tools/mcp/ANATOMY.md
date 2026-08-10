@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/mcp/BEHAVIORS.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
