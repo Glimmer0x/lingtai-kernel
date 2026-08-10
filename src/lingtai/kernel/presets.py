@@ -39,7 +39,12 @@ import logging
 from pathlib import Path
 from typing import Callable
 
-from .config import THINKING_LEVELS, THINKING_PROVIDERS, llm_supports_thinking
+from .config import (
+    THINKING_LEVELS,
+    THINKING_NATIVE_PROVIDERS,
+    THINKING_PROVIDERS,
+    llm_supports_thinking,
+)
 
 log = logging.getLogger(__name__)
 
@@ -360,10 +365,11 @@ def load_preset(
     if "thinking" in llm:
         if not llm_supports_thinking(llm):
             raise ValueError(
-                f"preset {name!r} ({p}): manifest.llm.thinking is currently "
-                "supported only for the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
-                "OpenAI-compatible Responses"
+                f"preset {name!r} ({p}): manifest.llm.thinking is supported "
+                "only for thinking-capable providers — the Codex providers "
+                f"({', '.join(THINKING_PROVIDERS)}), "
+                f"{', '.join(THINKING_NATIVE_PROVIDERS)}, or any "
+                "OpenAI-compatible block (api_compat=openai)"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

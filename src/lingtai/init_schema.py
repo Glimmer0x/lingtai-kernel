@@ -5,6 +5,7 @@ import logging
 
 from lingtai.kernel.config import (
     THINKING_LEVELS,
+    THINKING_NATIVE_PROVIDERS,
     THINKING_PROVIDERS,
     llm_supports_thinking,
 )
@@ -485,10 +486,11 @@ def validate_init(data: dict) -> list[str]:
     if "thinking" in llm:
         if not llm_supports_thinking(llm):
             raise ValueError(
-                "manifest.llm.thinking is currently supported only for "
-                "the Codex providers "
-                f"({', '.join(THINKING_PROVIDERS)}) or custom "
-                "OpenAI-compatible Responses"
+                "manifest.llm.thinking is supported only for "
+                "thinking-capable providers — the Codex providers "
+                f"({', '.join(THINKING_PROVIDERS)}), "
+                f"{', '.join(THINKING_NATIVE_PROVIDERS)}, or any "
+                "OpenAI-compatible block (api_compat=openai)"
             )
         thinking = llm["thinking"]
         if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:

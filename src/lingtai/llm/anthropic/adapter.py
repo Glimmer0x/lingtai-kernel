@@ -677,24 +677,31 @@ class AnthropicAdapter(LLMAdapter):
         self._client = anthropic.Anthropic(**kwargs)
         self._setup_gate(max_rpm)
 
+    # Extended-thinking budget per kernel THINKING_LEVELS tier. Every level a
+    # manifest can select is mapped, so a user-chosen effort never silently
+    # disables thinking; explicit ``"none"`` is the one level that means off.
+    _THINKING_BUDGETS = {
+        "none": None,
+        "minimal": 1024,
+        "low": 2048,
+        "medium": 8192,
+        "high": 16384,
+        "xhigh": 32768,
+        "max": 65536,
+    }
+
     @staticmethod
     def _resolve_thinking_budget(thinking: str) -> int | None:
-        """Resolve thinking tier to budget tokens using config."""
-        if thinking == "default" or thinking is None:
-            return None
+        """Resolve a kernel thinking tier to Anthropic budget tokens.
 
-        if thinking == "high":
-            tier = "high"
-        elif thinking == "low":
-            tier = "low"
-        else:
+        Returns ``None`` (extended thinking off) for the omitted-value
+        sentinel ``"default"``, for ``None``/empty, for explicit ``"none"``,
+        and for any unknown tier; every other ``THINKING_LEVELS`` value maps to
+        its budget in ``_THINKING_BUDGETS``.
+        """
+        if not thinking or thinking == "default":
             return None
-
-        if tier == "high":
-            return 16384
-        elif tier in ("low", "medium"):
-            return 2048
-        return None
+        return AnthropicAdapter._THINKING_BUDGETS.get(thinking)
 
     # -- LLMAdapter interface --------------------------------------------------
 
