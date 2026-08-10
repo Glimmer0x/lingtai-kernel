@@ -14,10 +14,11 @@ maintenance: |
   ANATOMY.md reciprocal: contract clauses that state agent-observable behavior
   MUST link to the LABT(s) that guard them, LABTs MUST annotate the contract
   clause they guard, and anatomy MUST link code to both when applicable.
-  Change architecture rules, schemas, templates, and validation together.
-  Bump behavior_version for a breaking convention change; bump labt_version
-  when the LABT specification itself changes (fields, self-containment rules,
-  version semantics).
+  The three documents form one tridirectional loop; changing any one requires
+  re-checking the other two. Change architecture rules, schemas, templates, and
+  validation together. Bump behavior_version for a breaking convention change;
+  bump labt_version when the LABT specification itself changes (fields,
+  self-containment rules, version semantics).
 ---
 # Behavior Test Convention (BEHAVIORS.md)
 
@@ -104,22 +105,29 @@ When a CONVERT_BEHAVIOR pytest is migrated, the LABT records the original
 pytest file as `supersedes` so the trace stays complete; the pytest may be kept
 (bottom asserts) or removed, per the change's judgment.
 
-## Bidirectional reference rules
+## Tridirectional linkage rules
 
-1. **contract → behaviors.** Every *important behavior clause* in a `CONTRACT.md`
-   MUST reference the guarding LABT(s) with a link of the form
-   `[B012](BEHAVIORS.md#behavior-b012)` (relative to the same directory).
-   A behavior clause is a clause stating agent-observable behavior: states,
-   receipts, side effects, authorization gates, communication outcomes.
-2. **behaviors → contract.** Every LABT MUST annotate which contract clause it
-   guards, with `guards: <contract-frontmatter-name> § <clause heading>`
-   and a relative link back to that clause.
-3. **anatomy → both (if applicable).** Every `ANATOMY.md` whose component owns
-   behavior MUST link its `BEHAVIORS.md` in `related_files` and, in the entry
-   for the code that implements a behavior, name the LABT ids.
-4. **Change one, check the other two.** When any of the three changes in a way
-   that could affect agent-observable behavior, the other two must be checked
-   and updated if applicable. This is a review gate, not optional polish.
+Contract ⇄ Behaviors ⇄ Anatomy form one tridirectional loop: every edge carries
+a stable id reference, and changing any node requires re-checking the other two.
+
+```text
+      CONTRACT.md
+      /          \
+ [B###]            [B###]
+    /                \
+BEHAVIORS.md <----> ANATOMY.md
+      (related_files + LABT ids)
+```
+
+| Edge | Reference form | Where it lives |
+|---|---|---|
+| contract → behaviors | `[B012](BEHAVIORS.md#behavior-b012)` on every important behavior clause (states, receipts, side effects, auth gates, communication outcomes) | CONTRACT.md |
+| behaviors → contract | `guards: <contract-name> § <clause>` + relative link back | each LABT entry |
+| behaviors ↔ anatomy | `related_files` lists BEHAVIORS.md; anatomy entries name the LABT ids they implement | ANATOMY.md + BEHAVIORS.md |
+
+**Change one, check the other two.** A change affecting agent-observable
+behavior in any of the three MUST update or at least re-verify the other two
+in the same change. This is a review gate, not optional polish.
 
 ## BEHAVIORS.md frontmatter schema
 
