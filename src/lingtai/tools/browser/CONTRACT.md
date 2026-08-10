@@ -31,6 +31,7 @@ capability. It is retained as a technology-neutral child, not a separate
 model-facing browser tool.
 
 ## Behavior
+Guarded by: [BR001](BEHAVIORS.md#behavior-br001)
 
 `BrowserEngine.handle` accepts browse arguments and returns the existing
 structured success or typed failure payload, including provenance, source hash,
@@ -82,3 +83,4 @@ this same live engine without causing a second public registration.
 Keep this internal Contract paired with its Anatomy and linked from the parent
 web Contract as an implementation boundary. Do not expose `browser` as a
 capability name or install its retained manual bundle.
+
