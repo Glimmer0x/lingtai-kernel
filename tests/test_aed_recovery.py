@@ -1139,7 +1139,9 @@ def test_aed_exhaust_sends_one_sanitized_notice_to_origin(tmp_path, monkeypatch)
     agent._notification_store = _FakeNotificationStore()
 
     def fake_handle(_agent, _msg):
-        raise RuntimeError("HTTP 429 Too Many Requests")
+        # Deterministic non-429 provider failure so the generic AED exhausted
+        # branch is exercised (429 has its own rate-limit branch, #1299).
+        raise _StatusError(500)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
@@ -1207,7 +1209,7 @@ def test_aed_exhaust_notice_uses_origin_captured_at_dequeue(tmp_path, monkeypatc
     agent._notification_store = _FakeNotificationStore()
 
     def fake_handle(_agent, _msg):
-        raise RuntimeError("HTTP 429 Too Many Requests")
+        raise _StatusError(500)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
@@ -1271,7 +1273,8 @@ def test_aed_exhaust_notice_rejects_malformed_route(tmp_path, monkeypatch):
         agent._notification_store = _PerRefStore()
 
         def fake_handle(_agent, _msg):
-            raise RuntimeError("HTTP 429 Too Many Requests")
+            # Deterministic non-429 provider failure (429 has its own branch).
+            raise _StatusError(500)
 
         monkeypatch.setattr(turn, "_handle_message", fake_handle)
         turn._run_loop(agent)
@@ -1304,7 +1307,7 @@ def test_aed_exhaust_notice_records_returned_error_as_failed(tmp_path, monkeypat
     agent._notification_store = _FakeNotificationStore()
 
     def fake_handle(_agent, _msg):
-        raise RuntimeError("HTTP 429 Too Many Requests")
+        raise _StatusError(500)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 
@@ -1334,7 +1337,7 @@ def test_aed_exhaust_notice_fail_open_when_telegram_handler_missing(tmp_path, mo
     agent._tool_handlers = {}  # no telegram
 
     def fake_handle(_agent, _msg):
-        raise RuntimeError("HTTP 429 Too Many Requests")
+        raise _StatusError(500)
 
     monkeypatch.setattr(turn, "_handle_message", fake_handle)
 

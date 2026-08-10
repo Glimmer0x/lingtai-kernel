@@ -1150,6 +1150,16 @@ def _run_loop(agent) -> None:
                             attempts=rate_limit_attempts,
                             error=err_desc[:300],
                         )
+                        # lingtai#672: like the generic AED exhausted exit, send
+                        # ONE sanitized, user-visible failure notice to the
+                        # originating conversation through the existing telegram
+                        # tool handler before going ASLEEP, and publish the
+                        # observable ASLEEP state explicitly. Fail-open.
+                        agent._set_state(
+                            AgentState.ASLEEP,
+                            reason=f"rate-limit exhausted after {rate_limit_attempts} attempts",
+                        )
+                        _notify_aed_exhaustion_origin(agent, turn_origin)
                         sleep_state = AgentState.ASLEEP
                         agent._asleep.set()
                         break
