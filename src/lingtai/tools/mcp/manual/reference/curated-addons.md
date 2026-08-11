@@ -36,6 +36,14 @@ LingTai's first-party email and chat integrations. They now ship inside the `lin
 
 4. **Run `system(action="refresh")`.** The `mcp` capability decompresses the catalog record into `mcp_registry.jsonl`, the loader spawns the subprocess, and the omnibus tool (`imap`, `telegram`, etc.) appears in your tool surface.
 
+## MCP child processes run in their own runtime
+
+Each current curated addon shown in this file is launched as a separate **stdio Python subprocess** with its own interpreter and environment. The live interpreter, `args`, and `env` come from the **active activation spec** — `init.json`'s `mcp.<name>` entry, or `mcp/servers.json` for the legacy direct route — not from the registry record. The registry record gates registration and may document a command template, but it is not the spec the gated loader consumes. Do not assume an MCP child shares the main agent's Python, site-packages, `PYTHONPATH`, or environment:
+
+- **The main agent's runtime is not automatically the MCP child's runtime.** Refreshing the agent onto a different source tree (for example an agent-scoped `PYTHONPATH` override or an editable checkout) changes the main process imports, but a curated stdio child still resolves `lingtai` (and its own modules) from the interpreter named by its activation `command`. If the child needs the new code too, set `PYTHONPATH` (or the equivalent import override) explicitly in that entry's `env`, or install the new package version into the child's venv.
+- **Behavior that lives in an MCP child is only as new as that child's code.** Rendering, projection, and channel-side logic inside `lingtai.mcp_servers.*` (for example Telegram Task Card footer projection) executes in the child. After a code change to those modules, verify the child's interpreter and import resolution before reporting that a change is live: run a one-shot probe with the exact configured `command` and `env` that prints `sys.executable`, `lingtai.__file__`, and the selected `lingtai.mcp_servers.<name>.__file__`. (Process inspection such as `lsof` is at best a platform-specific corroboration, not proof of the loaded Python module.)
+- **The child venv is a normal package environment.** Site-packages for that interpreter is authoritative unless the activation `env` overrides the import path. Diagnosing "change not visible" in an MCP addon should start with the child's activation `command`/`env` tuple, not the main agent's runtime. HTTP MCP entries have no local subprocess or interpreter at all; the stdio/subprocess guidance above applies only to stdio entries.
+
 ## Module names
 
 | Registry name | Historical distribution | Module name        |

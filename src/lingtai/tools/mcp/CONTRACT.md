@@ -5,6 +5,7 @@ contract_version: 1
 related_files:
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/mcp/manual/SKILL.md
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
