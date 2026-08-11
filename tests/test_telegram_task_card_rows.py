@@ -664,3 +664,97 @@ def test_event_metadata_snapshot_adds_current_model(tmp_path):
     assert snapshot["model"] == "deepseek-v4-flash"
     assert "device_short_name" in snapshot
     assert "working_dir" in snapshot
+
+
+def test_metadata_renders_absolute_path_not_shortened():
+    lines = TelegramManager._format_task_card_metadata({
+        "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "device_short_name": "MacStudio",
+    })
+    assert len(lines) == 1
+    assert "device · MacStudio | path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1" in lines[0]
+    assert "dev-2/.lingtai/mimo-1" not in lines[0].replace("dev-2/.lingtai/mimo-1", "")
+
+
+def test_metadata_renders_daemon_status_and_stats():
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {
+            "active": 3,
+            "failed": 1,
+            "done": 2,
+            "cancelled": 0,
+            "timeout": 0,
+            "input_tokens": 1_234_567,
+            "output_tokens": 340_000,
+            "cached_tokens": 1_049_382,
+            "calls": 12,
+        },
+    })
+    assert lines == [
+        "daemons · active 3 · failed 1 · done 2",
+        "daemon stats · in 1.2M · out 340.0k · cache 85.0% · calls 12",
+    ]
+
+
+def test_metadata_omits_daemon_lines_when_no_daemons():
+    lines = TelegramManager._format_task_card_metadata({
+        "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "daemons": {"active": 0, "failed": 0, "done": 0, "cancelled": 0, "timeout": 0},
+    })
+    assert len(lines) == 1
+    assert "daemons" not in lines[0]
+    assert "daemon stats" not in lines[0]
+
+
+def test_metadata_daemon_stats_require_positive_counts():
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {
+            "active": 1,
+            "failed": 0,
+            "done": 0,
+            "cancelled": 0,
+            "timeout": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "calls": 0,
+        },
+    })
+    assert lines == ["daemons · active 1"]
+
+
+def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+
+    daemons = tmp_path / "daemons"
+    (daemons / "em-1").mkdir(parents=True)
+    (daemons / "em-2").mkdir()
+    (daemons / "em-3").mkdir()
+    (daemons / "em-4").mkdir()
+    now = datetime.now(timezone.utc)
+    recent = (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for name, state in [
+        ("em-1", {"state": "running", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
+        ("em-2", {"state": "done", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
+        ("em-3", {"state": "failed", "finished_at": recent, "cli_tokens": {"input": 3000, "output": 100, "cached": 0, "calls": 1}}),
+        ("em-4", {"state": "done", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
+    ]:
+        (daemons / name / "daemon.json").write_text(_json.dumps(state), encoding="utf-8")
+
+    mgr, _ = _integration_manager(tmp_path)
+    snap = mgr._task_card_daemon_snapshot()
+    assert snap["active"] == 1
+    assert snap["done"] == 1
+    assert snap["failed"] == 1
+    # em-4 outside the 10-minute window is excluded entirely.
+    assert snap["input_tokens"] == 1000 + 2000 + 3000
+    assert snap["output_tokens"] == 500 + 700 + 100
+    assert snap["cached_tokens"] == 800 + 1500 + 0
+    assert snap["calls"] == 3 + 4 + 1
+
+
+def test_daemon_snapshot_returns_none_when_no_daemons(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    assert mgr._task_card_daemon_snapshot() is None
