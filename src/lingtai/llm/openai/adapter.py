@@ -1821,6 +1821,16 @@ class OpenAIChatSession(ChatSession):
         """The canonical ChatInterface for this session."""
         return self._interface
 
+    def request_history_rebuild(self, reason: str = "summarize_rebuild_only") -> bool:
+        """Start a fresh full replay on the next model request.
+
+        Chat Completions is client-managed: every request re-serializes the
+        canonical ChatInterface, so after ``context(action='rebuild')`` applies
+        pending summaries the next send naturally carries the compacted
+        history. Return True so callers surface ``rebuild_requested=true``.
+        """
+        return True
+
     def _build_messages(self) -> list[dict]:
         """Return the message list to send to the API.
 

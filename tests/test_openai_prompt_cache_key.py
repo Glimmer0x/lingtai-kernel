@@ -318,3 +318,58 @@ def test_chat_session_omits_cache_key_when_unset():
 
     sent = _chat_kwargs(session._client)
     assert "prompt_cache_key" not in sent
+
+
+def test_chat_session_request_history_rebuild_reports_true_without_key():
+    """request_history_rebuild on OpenAIChatSession returns True even when no
+    prompt cache key is configured: the session is client-managed and the next
+    request re-serializes the compacted interface regardless."""
+    from lingtai.kernel.llm.interface import ChatInterface
+
+    iface = ChatInterface()
+    iface.add_system("system prompt")
+    session = OpenAIChatSession(
+        client=_chat_client(),
+        model="gpt-5.5",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+    )
+
+    assert session.request_history_rebuild() is True
+
+    session.send("hello")
+    sent = _chat_kwargs(session._client)
+    assert "prompt_cache_key" not in sent
+
+
+def test_chat_session_request_history_rebuild_keeps_stable_cache_key():
+    """request_history_rebuild on OpenAIChatSession returns True and leaves the
+    configured prompt_cache_key stable: the session is client-managed, the next
+    request re-serializes the compacted interface, and the same cache-affinity
+    key keeps routing to the same provider cache slot across rebuilds."""
+    from lingtai.kernel.llm.interface import ChatInterface
+
+    iface = ChatInterface()
+    iface.add_system("system prompt")
+    session = OpenAIChatSession(
+        client=_chat_client(),
+        model="gpt-5.5",
+        interface=iface,
+        tools=None,
+        tool_choice=None,
+        extra_kwargs={},
+        prompt_cache_key="lingtai-test:gpt-5.5:v1",
+    )
+
+    # Before rebuild: stable key.
+    session.send("hello")
+    assert _chat_kwargs(session._client)["prompt_cache_key"] == "lingtai-test:gpt-5.5:v1"
+
+    # Rebuild reports True and does not churn the cache key.
+    assert session.request_history_rebuild() is True
+
+    # After rebuild: same key (no epoch suffix), next request carries compacted history.
+    session.send("again")
+    assert _chat_kwargs(session._client)["prompt_cache_key"] == "lingtai-test:gpt-5.5:v1"
