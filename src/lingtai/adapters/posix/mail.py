@@ -204,11 +204,16 @@ class PosixFilesystemMailAdapter(MailTransportPort):
                 staging_att_dir.mkdir(parents=True, exist_ok=True)
                 # Recipient-local paths recorded in the payload must point at
                 # the final location (``msg_dir``), not the staging path.
+                # Duplicate basenames are disambiguated with a ``-N`` suffix
+                # (``a.txt`` -> ``a-1.txt``) so no attachment silently
+                # overwrites an earlier one (#1354): every accepted source is
+                # delivered as its own physical file with its own payload path.
+                local_names = _unique_attachment_names(srcs)
                 local_copies = [
-                    str(msg_dir / "attachments" / src.name) for src in srcs
+                    str(msg_dir / "attachments" / name) for name in local_names
                 ]
-                for src in srcs:
-                    shutil.copy2(src, staging_att_dir / src.name)
+                for src, name in zip(srcs, local_names):
+                    shutil.copy2(src, staging_att_dir / name)
                 message = {**message, "attachments": local_copies}
 
             (staging_dir / "message.json").write_text(
@@ -729,6 +734,34 @@ class PosixFilesystemMailAdapter(MailTransportPort):
             self._poll_thread.join(timeout=3.0)
         self._poll_thread = None
         self._reset_own_inbox_iter()
+
+
+def _unique_attachment_names(srcs: list[Path]) -> list[str]:
+    """Map each source attachment to a unique recipient-local file name.
+
+    Basenames are preserved when unique. On a collision, a ``-1``, ``-2``,
+    ... counter is inserted before the suffix (``a.txt`` -> ``a-1.txt``) so
+    every accepted attachment keeps its own physical file and payload path
+    instead of silently overwriting an earlier one (#1354).
+    """
+    used: set[str] = set()
+    names: list[str] = []
+    for src in srcs:
+        candidate = src.name
+        if candidate not in used:
+            used.add(candidate)
+            names.append(candidate)
+            continue
+        stem, suffix = src.stem, src.suffix
+        i = 1
+        while True:
+            candidate = f"{stem}-{i}{suffix}"
+            if candidate not in used:
+                break
+            i += 1
+        used.add(candidate)
+        names.append(candidate)
+    return names
 
 
 def _runtime_probe_payload(payload: dict) -> dict | None:

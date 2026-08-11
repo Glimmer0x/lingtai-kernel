@@ -79,6 +79,53 @@ class TestSend:
         assert len(data["attachments"]) == 1
         assert "report.txt" in data["attachments"][0]
 
+    def test_send_preserves_duplicate_basename_attachments(self, tmp_path):
+        """#1354: two same-basename attachments from different source dirs
+        must both be delivered: two physical files, two distinct payload paths."""
+        from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
+
+        sender_dir = _make_agent_dir(tmp_path, "sender01")
+        recip_dir = _make_agent_dir(tmp_path, "recip01")
+        (recip_dir / "mailbox" / "inbox").mkdir(parents=True)
+
+        # Two different files that share the same basename, in different dirs.
+        src_a = tmp_path / "src_a" / "same.txt"
+        src_b = tmp_path / "src_b" / "same.txt"
+        src_a.parent.mkdir()
+        src_b.parent.mkdir()
+        src_a.write_text("content-A")
+        src_b.write_text("content-B")
+
+        svc = PosixFilesystemMailAdapter(sender_dir, mailbox_rel="mailbox")
+        result = svc.send(str(recip_dir), {
+            "message": "see attached",
+            "attachments": [str(src_a), str(src_b)],
+        })
+        assert result is None  # success, nothing silently dropped
+
+        inbox = recip_dir / "mailbox" / "inbox"
+        msg_dir = list(inbox.iterdir())[0]
+        att_dir = msg_dir / "attachments"
+        data = json.loads((msg_dir / "message.json").read_text())
+
+        # Both physical files survive with their original contents: the first
+        # keeps its basename, the second is disambiguated to ``same-1.txt``.
+        assert sorted(p.name for p in att_dir.iterdir()) == [
+            "same-1.txt",
+            "same.txt",
+        ]
+        assert (att_dir / "same.txt").read_text() == "content-A"
+        assert (att_dir / "same-1.txt").read_text() == "content-B"
+
+        # The payload carries two distinct recipient-local paths, each naming
+        # a delivered file (not two copies of the same path).
+        assert len(data["attachments"]) == 2
+        assert len(set(data["attachments"])) == 2
+        assert data["attachments"] == [
+            str(att_dir / "same.txt"),
+            str(att_dir / "same-1.txt"),
+        ]
+
     def test_send_fails_no_agent_json(self, tmp_path):
         from lingtai.adapters.posix.mail import PosixFilesystemMailAdapter
 
