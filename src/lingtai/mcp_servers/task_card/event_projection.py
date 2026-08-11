@@ -739,26 +739,68 @@ class TaskCardEventProjection:
             line2_parts.append("device · " + " · ".join(parts))
         working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
         if working_dir is not None:
-            line2_parts.append(f"path · {cls._short_working_dir(working_dir)}")
+            line2_parts.append(f"path · {working_dir}")
         line2 = " | ".join(line2_parts) if line2_parts else None
 
-        lines = [ln for ln in (line1, line2) if ln]
+        # Daemon status + statistics: active runs plus terminal runs finished
+        # within the last ten minutes. Counts only (no id lists); the stats
+        # line aggregates token input/output/cached and call counts over the
+        # same window. Nothing renders when no daemon is in scope.
+        daemons = metadata.get("daemons")
+        line3: str | None = None
+        line4: str | None = None
+        if isinstance(daemons, dict):
+            status_parts: list[str] = []
+            active = daemons.get("active")
+            if isinstance(active, int) and active > 0:
+                status_parts.append(f"active {active}")
+            for key in ("failed", "done", "cancelled", "timeout"):
+                count = daemons.get(key)
+                if isinstance(count, int) and count > 0:
+                    status_parts.append(f"{key} {count}")
+            if status_parts:
+                line3 = "daemons · " + " · ".join(status_parts)
+            stats_parts: list[str] = []
+            input_tokens = daemons.get("input_tokens")
+            output_tokens = daemons.get("output_tokens")
+            cached_tokens = daemons.get("cached_tokens")
+            calls = daemons.get("calls")
+            if isinstance(input_tokens, int) and input_tokens > 0:
+                stats_parts.append(f"in {cls.format_count(input_tokens)}")
+            if isinstance(output_tokens, int) and output_tokens > 0:
+                stats_parts.append(f"out {cls.format_count(output_tokens)}")
+            if (
+                isinstance(cached_tokens, int)
+                and isinstance(input_tokens, int)
+                and input_tokens > 0
+                and cached_tokens > 0
+            ):
+                stats_parts.append(f"cache {min(cached_tokens / input_tokens, 1.0):.1%}")
+            if isinstance(calls, int) and calls > 0:
+                stats_parts.append(f"calls {calls}")
+            if stats_parts:
+                line4 = "daemon stats · " + " · ".join(stats_parts)
+
+        lines = [ln for ln in (line1, line2, line3, line4) if ln]
         if not lines:
             return []
         joined = "\n".join(lines)
         if len(joined) <= cls.METADATA_MAX_CHARS:
             return lines
-        # Prefer preserving the session line; truncate from the identity line.
-        budget1 = cls.METADATA_MAX_CHARS
-        if len(lines) > 1:
-            budget1 = min(budget1, len(lines[0]) + 1)
+        # Prefer preserving the session line; truncate from the identity line
+        # and keep as many trailing lines as fit, each cut at its share.
         first = lines[0][: cls.METADATA_MAX_CHARS]
-        if len(lines) == 1:
-            return [first]
         remaining = cls.METADATA_MAX_CHARS - len(first) - 1
         if remaining <= 0:
             return [first]
-        return [first, lines[1][:remaining]]
+        kept = [first]
+        for extra in lines[1:]:
+            if remaining <= 0:
+                break
+            take = min(len(extra), remaining)
+            kept.append(extra[:take])
+            remaining -= take + 1
+        return kept
 
     @classmethod
     def _short_working_dir(cls, working_dir: str) -> str:

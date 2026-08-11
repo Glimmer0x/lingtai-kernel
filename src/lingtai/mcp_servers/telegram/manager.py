@@ -2381,7 +2381,94 @@ class TelegramManager:
                 shell_kind = ""
         if shell_kind:
             snapshot["shell_name"] = shell_kind
+        daemon_snapshot = self._task_card_daemon_snapshot()
+        if daemon_snapshot:
+            snapshot["daemons"] = daemon_snapshot
         return snapshot or None
+
+    def _task_card_daemon_snapshot(self) -> dict | None:
+        """Read-only daemon status/statistics for the resident Task Card.
+
+        Scans ``<working_dir>/daemons/*`` state files (``daemon.json``, falling
+        back to legacy ``n``) and returns counts plus token statistics over the
+        active runs plus terminal runs finished within the last ten minutes.
+        Terminal runs older than the window are excluded so the card does not
+        accumulate a permanent daemon history. Missing/invalid state files
+        degrade silently; an empty scan returns ``None`` so no line renders.
+        """
+        daemons_dir = self._working_dir / "daemons"
+        if not daemons_dir.is_dir():
+            return None
+        now = datetime.now(timezone.utc)
+        active = 0
+        terminal_counts: dict[str, int] = {
+            "done": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "timeout": 0,
+        }
+        totals = {"input": 0, "output": 0, "cached": 0, "calls": 0}
+        included = False
+        for run_path in daemons_dir.iterdir():
+            if not run_path.is_dir():
+                continue
+            state: dict | None = None
+            for candidate in ("daemon.json", "n"):
+                state_path = run_path / candidate
+                if not state_path.is_file():
+                    continue
+                try:
+                    loaded = json.loads(state_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if isinstance(loaded, dict):
+                    state = loaded
+                    break
+            if not state:
+                continue
+            status = state.get("state")
+            in_window = False
+            if status in ("running", "active"):
+                active += 1
+                in_window = True
+            elif status in terminal_counts:
+                finished_at = state.get("finished_at")
+                if isinstance(finished_at, str):
+                    try:
+                        finished_dt = datetime.fromisoformat(
+                            finished_at[:-1] + "+00:00"
+                            if finished_at.endswith("Z")
+                            else finished_at
+                        )
+                        if finished_dt.tzinfo is None:
+                            finished_dt = finished_dt.replace(tzinfo=timezone.utc)
+                        age = (now - finished_dt).total_seconds()
+                        if 0 <= age <= 600:
+                            terminal_counts[status] += 1
+                            in_window = True
+                    except ValueError:
+                        pass
+            if not in_window:
+                continue
+            included = True
+            tokens = state.get("tokens")
+            if not isinstance(tokens, dict):
+                tokens = state.get("cli_tokens")
+            if isinstance(tokens, dict):
+                for key in ("input", "output", "cached", "calls"):
+                    value = tokens.get(key)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        totals[key] += int(value)
+        if not included and active == 0 and not any(terminal_counts.values()):
+            return None
+        return {
+            "active": active,
+            **terminal_counts,
+            "input_tokens": totals["input"],
+            "output_tokens": totals["output"],
+            "cached_tokens": totals["cached"],
+            "calls": totals["calls"],
+        }
 
     def _task_card_current_model(self) -> str | None:
         """Read the agent's current LLM model from ``.agent.json``.
