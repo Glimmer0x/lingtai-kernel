@@ -2,6 +2,7 @@
 related_files:
   - ANATOMY.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/kernel/snapshot/BEHAVIORS.md
   - src/lingtai/kernel/snapshot/CONTRACT.md
   - src/lingtai/kernel/snapshot/__init__.py
   - src/lingtai/kernel/ANATOMY.md

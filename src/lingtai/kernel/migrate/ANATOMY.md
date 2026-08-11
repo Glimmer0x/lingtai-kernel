@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/migrate/BEHAVIORS.md
   - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/migrate/__init__.py
   - src/lingtai/kernel/migrate/agent_m001_init_procedures_override.py

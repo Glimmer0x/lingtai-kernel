@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py

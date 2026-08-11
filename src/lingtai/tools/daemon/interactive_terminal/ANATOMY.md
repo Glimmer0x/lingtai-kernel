@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/tools/daemon/interactive_terminal/BEHAVIORS.md
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
   - src/lingtai/adapters/posix/interactive_terminal.py

@@ -5,7 +5,7 @@ contract_version: 1
 related_files:
   - src/lingtai/kernel/agent_readme/BEHAVIORS.md
   - src/lingtai/kernel/agent_readme/ANATOMY.md
-  - src/lingtai/kernel/agent_readme/_readme.py
+  - src/lingtai/kernel/agent_readme/__init__.py
 maintenance: |
   The agent README folder role split (README.md vs substrate.md) and its
   ownership/maintenance boundary. Every agent-observable behavior clause

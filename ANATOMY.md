@@ -1,6 +1,7 @@
 ---
 related_files:
   - AGENTS.md
+  - BEHAVIORS.md
   - CLAUDE.md
   - CODE_OF_CONDUCT.md
   - CONTRACT.md

@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/refresh_watcher/BEHAVIORS.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py

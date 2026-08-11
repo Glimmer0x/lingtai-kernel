@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/daemon_supervisor/BEHAVIORS.md
   - src/lingtai/kernel/daemon_supervisor/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/daemon_supervisor/__init__.py

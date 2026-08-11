@@ -3,7 +3,7 @@ name: context-contract
 tool: context
 contract_version: 5
 related_files:
-  - BEHAVIORS.md
+  - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py

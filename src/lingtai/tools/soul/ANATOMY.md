@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/soul/BEHAVIORS.md
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/soul/config.py
   - src/lingtai/tools/soul/consultation.py

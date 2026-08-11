@@ -1,12 +1,15 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/feishu/BEHAVIORS.md
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/telegram/BEHAVIORS.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/task_card/ANATOMY.md

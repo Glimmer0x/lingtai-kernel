@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/file/BEHAVIORS.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/_read.py

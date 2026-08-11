@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/mcp_servers/telegram/task_card/BEHAVIORS.md
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/resident.py
   - src/lingtai/mcp_servers/task_card/resident.py

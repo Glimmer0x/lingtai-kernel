@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/agent.py
   - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/skills/BEHAVIORS.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/skills/manual/SKILL.md
   - src/lingtai/init_schema.py

@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/notification_store/BEHAVIORS.md
   - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/notification_store/__init__.py

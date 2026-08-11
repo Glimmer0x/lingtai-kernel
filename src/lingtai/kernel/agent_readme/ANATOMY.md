@@ -1,3 +1,17 @@
+---
+related_files:
+  - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/agent_readme/BEHAVIORS.md
+  - src/lingtai/kernel/agent_readme/CONTRACT.md
+  - src/lingtai/kernel/agent_readme/README.md.tpl
+  - src/lingtai/kernel/agent_readme/__init__.py
+maintenance: |
+  Keep related_files repo-relative, duplicate-free, and linked to real files.
+  This anatomy maps the agent_readme folder: the packaged README template,
+  the idempotent writer and pure renderer, and the behavior-test loop. When
+  CONTRACT or BEHAVIORS change, update this anatomy together and revalidate
+  the architecture-document graph before merge.
+---
 # agent_readme ANATOMY
 
 ## Components

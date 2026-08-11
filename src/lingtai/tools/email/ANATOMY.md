@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/__init__.py
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/email/BEHAVIORS.md
   - src/lingtai/tools/email/CONTRACT.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manager.py

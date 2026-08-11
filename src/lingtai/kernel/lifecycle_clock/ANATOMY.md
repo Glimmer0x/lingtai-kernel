@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/kernel/lifecycle_clock/BEHAVIORS.md
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/lifecycle_clock/__init__.py
   - src/lingtai/kernel/ANATOMY.md

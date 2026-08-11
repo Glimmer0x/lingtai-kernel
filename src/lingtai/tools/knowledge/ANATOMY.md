@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/_catalog.py
+  - src/lingtai/tools/knowledge/BEHAVIORS.md
   - src/lingtai/tools/knowledge/CONTRACT.md
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/knowledge/manual/SKILL.md
