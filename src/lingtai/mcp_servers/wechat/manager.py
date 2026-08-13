@@ -553,6 +553,37 @@ class WechatManager:
 
         results = []
 
+        def _persist_sent(status: str = "ok", media_error: dict | None = None) -> str:
+            """Persist an attempted outbound action for retry-safe inspection."""
+            msg_id = str(uuid.uuid4())
+            msg_dir = self._sent_dir / msg_id
+            msg_dir.mkdir(parents=True, exist_ok=True)
+            sent_data = {
+                "id": msg_id,
+                "to_user_id": user_id,
+                "text": text,
+                "media_path": media_path,
+                "status": status,
+                "date": datetime.now(timezone.utc).isoformat(),
+            }
+            if media_error is not None:
+                sent_data["media_error"] = media_error
+            (msg_dir / "message.json").write_text(
+                json.dumps(sent_data, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+            return msg_id
+
+        def _media_failure(error: media_mod.MediaUploadError) -> dict:
+            result = error.as_result()
+            result["sent"] = list(results)
+            if text and results:
+                result.update({
+                    "status": "partial",
+                    "partial_delivery": True,
+                    "message_id": _persist_sent("partial", result),
+                })
+            return result
+
         # Snapshot context token under lock (poll thread may update it)
         with self._lock:
             ctx_token = self._context_tokens.get(user_id)
@@ -581,9 +612,13 @@ class WechatManager:
         # Send media (already validated above)
         if media_path:
             path = Path(media_path)
-            upload_info = self._run_async(
-                media_mod.upload_media(path, self._base_url, self._token, user_id)
-            )
+            try:
+                upload_info = self._run_async(
+                    media_mod.upload_media(path, self._base_url, self._token, user_id)
+                )
+            except media_mod.MediaUploadError as exc:
+                return _media_failure(exc)
+
             media_item = media_mod.make_media_item(upload_info, path)
             msg = WeixinMessage(
                 from_user_id="",
@@ -594,26 +629,17 @@ class WechatManager:
                 context_token=ctx_token,
                 item_list=[media_item],
             )
-            self._run_async(
-                api.send_message(self._base_url, self._token, msg)
-            )
+            try:
+                self._run_async(
+                    api.send_message(self._base_url, self._token, msg)
+                )
+            except Exception as exc:
+                return _media_failure(media_mod.media_upload_error(
+                    "send_media_reference_failed", self._base_url, exc
+                ))
             results.append(f"media ({path.name})")
 
-        # Persist to sent
-        msg_id = str(uuid.uuid4())
-        msg_dir = self._sent_dir / msg_id
-        msg_dir.mkdir(parents=True, exist_ok=True)
-        sent_data = {
-            "id": msg_id,
-            "to_user_id": user_id,
-            "text": text,
-            "media_path": media_path,
-            "date": datetime.now(timezone.utc).isoformat(),
-        }
-        (msg_dir / "message.json").write_text(
-            json.dumps(sent_data, ensure_ascii=False, indent=2), encoding="utf-8",
-        )
-
+        msg_id = _persist_sent()
         return {"status": "ok", "sent": results, "message_id": msg_id}
 
     def _handle_check(self, args: dict) -> dict:

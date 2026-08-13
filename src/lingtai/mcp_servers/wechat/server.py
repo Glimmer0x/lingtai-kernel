@@ -16,7 +16,7 @@ Config schemas (plaintext, no env-indirection):
 
     config.json:
         {
-          "cdn_base_url": "...",         // optional
+          "cdn_base_url": "...",         // legacy compatibility; not an upload override
           "poll_interval": 1.0,          // optional
           "allowed_users": ["wxid_..."]  // optional allow-list
         }
@@ -297,6 +297,12 @@ def _safe_status_payload(
     if startup_error_type:
         notes.append(f"Startup error: {startup_error_type}: {startup_error}")
 
+    notes.append(
+        "Outbound media uploads use the iLink-returned pre-signed upload_full_url; "
+        "cdn_base_url is retained for configuration compatibility and is not a "
+        "current upload destination override."
+    )
+
     return {
         "status": "ok" if manager is not None else "degraded",
         "manager_initialized": manager is not None,
@@ -411,7 +417,7 @@ reads `config.json` from the path in `LINGTAI_WECHAT_CONFIG` and reads sibling
 
 ```json
 {
-  "cdn_base_url": "https://...",
+  "cdn_base_url": "https://...",  // retained for compatibility; not an upload override
   "poll_interval": 1.0,
   "allowed_users": ["wxid_xxxxx"]
 }

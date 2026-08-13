@@ -4,10 +4,17 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import platform
 import secrets
+import ssl
+import sys
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
 
+import httpcore
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -36,6 +43,167 @@ class UploadedMediaInfo:
     filekey: str
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class MediaUploadDiagnostic:
+    """Safe, structured context for a failed outbound media operation.
+
+    Upload URLs are pre-signed and may contain credentials in their query
+    strings. Keep only the public origin and a sanitized exception summary in
+    the diagnostic; never include the URL, token, recipient, or local path.
+    """
+
+    stage: str
+    endpoint: str | None
+    error_type: str
+    error_kind: str
+    error: str
+    runtime: dict[str, str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "endpoint": self.endpoint,
+            "error_type": self.error_type,
+            "error_kind": self.error_kind,
+            "error": self.error,
+            "runtime": dict(self.runtime),
+        }
+
+
+class MediaUploadError(RuntimeError):
+    """A media-path failure with an actionable, secret-free diagnostic."""
+
+    def __init__(self, diagnostic: MediaUploadDiagnostic) -> None:
+        self.diagnostic = diagnostic
+        super().__init__(self._format_message())
+
+    @property
+    def stage(self) -> str:
+        return self.diagnostic.stage
+
+    def _format_message(self) -> str:
+        endpoint = self.diagnostic.endpoint or "unknown endpoint"
+        return (
+            f"WeChat media upload failed at {self.stage} "
+            f"({endpoint}): {self.diagnostic.error}"
+        )
+
+    def as_result(self) -> dict[str, Any]:
+        """Return a tool result without leaking transport secrets."""
+        message = str(self)
+        return {
+            "status": "failed",
+            "error_code": "MEDIA_UPLOAD_FAILED",
+            "error": message,
+            "message": message,
+            "stage": self.stage,
+            "media_upload": self.diagnostic.as_dict(),
+        }
+
+
+def _package_version(distribution: str) -> str:
+    try:
+        return version(distribution)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _runtime_diagnostics() -> dict[str, str]:
+    """Return useful runtime versions without host paths or secrets."""
+    return {
+        "python": sys.version.split()[0],
+        "openssl": ssl.OPENSSL_VERSION,
+        "platform": f"{platform.system()} {platform.release()} {platform.machine()}".strip(),
+        "httpx": _package_version("httpx"),
+        "httpcore": _package_version("httpcore"),
+    }
+
+
+def _safe_endpoint(url: str | None) -> str | None:
+    """Reduce a URL to scheme/host/port; discard paths and query credentials."""
+    if not url:
+        return None
+    try:
+        parsed = urlsplit(url)
+        if not parsed.scheme or not parsed.hostname:
+            return None
+        host = parsed.hostname
+        port = parsed.port
+        if port is not None and not (
+            (parsed.scheme.lower() == "https" and port == 443)
+            or (parsed.scheme.lower() == "http" and port == 80)
+        ):
+            host = f"{host}:{port}"
+        return f"{parsed.scheme.lower()}://{host}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _exception_chain(exc: BaseException):
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_tls_handshake_error(exc: BaseException) -> bool:
+    """Recognize TLS failures wrapped by httpx/httpcore transport errors."""
+    markers = (
+        "ssl", "tls", "handshake", "certificate verify", "wrong version number",
+    )
+    for item in _exception_chain(exc):
+        if isinstance(item, ssl.SSLError):
+            return True
+        if isinstance(item, (httpx.ConnectError, httpcore.ConnectError)):
+            if any(marker in str(item).lower() for marker in markers):
+                return True
+        if any(marker in str(item).lower() for marker in markers):
+            return True
+    return False
+
+
+def _safe_exception_text(exc: BaseException) -> str:
+    """Sanitize exception text that may contain a pre-signed request URL."""
+    text = str(exc).strip() or type(exc).__name__
+    for marker in ("http://", "https://"):
+        while marker in text:
+            start = text.find(marker)
+            end = len(text)
+            for delimiter in ("'", '"', " ", ")", "]"):
+                candidate = text.find(delimiter, start)
+                if candidate >= 0:
+                    end = min(end, candidate)
+            text = text[:start] + "<redacted-url>" + text[end:]
+    return text[:240]
+
+
+def media_upload_error(
+    stage: str,
+    endpoint: str | None,
+    exc: BaseException,
+) -> MediaUploadError:
+    if _is_tls_handshake_error(exc):
+        kind = "tls_handshake"
+    elif isinstance(exc, httpx.HTTPStatusError):
+        kind = "http_status"
+    elif isinstance(exc, httpx.TimeoutException):
+        kind = "timeout"
+    else:
+        kind = "transport"
+    return MediaUploadError(
+        MediaUploadDiagnostic(
+            stage=stage,
+            endpoint=_safe_endpoint(endpoint),
+            error_type=type(exc).__name__,
+            error_kind=kind,
+            error=_safe_exception_text(exc),
+            runtime=_runtime_diagnostics(),
+        )
+    )
 
 
 # ── Magic-byte validation ──────────────────────────────────────────────────
@@ -331,34 +499,47 @@ async def upload_media(
     # Get upload URL. filesize is ciphertext size, rawsize is plaintext size.
     # Hermes/OpenClaw include filekey + no_need_thumb; without filekey iLink
     # may return HTTP 200 but omit upload_full_url.
-    upload_resp = await api.get_upload_url(
-        base_url, token,
-        media_type=int(media_type),
-        to_user_id=to_user_id,
-        rawsize=len(data),
-        rawfilemd5=md5,
-        filesize=len(ciphertext),
-        aeskey=aeskey_hex,
-        filekey=filekey,
-        no_need_thumb=True,
-    )
+    try:
+        upload_resp = await api.get_upload_url(
+            base_url, token,
+            media_type=int(media_type),
+            to_user_id=to_user_id,
+            rawsize=len(data),
+            rawfilemd5=md5,
+            filesize=len(ciphertext),
+            aeskey=aeskey_hex,
+            filekey=filekey,
+            no_need_thumb=True,
+        )
+    except Exception as exc:
+        raise media_upload_error("get_upload_url_failed", base_url, exc) from exc
 
     upload_url = upload_resp.upload_full_url
     if not upload_url:
-        raise RuntimeError("Server did not return an upload URL")
+        raise media_upload_error(
+            "get_upload_url_failed",
+            base_url,
+            RuntimeError("server did not return an upload URL"),
+        )
 
     # Upload encrypted bytes to CDN. OpenClaw uses POST (not PUT) and reads
     # the final download encrypted_query_param from the x-encrypted-param
     # response header. Some CDN responses also embed it in a JSON body.
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            upload_url,
-            content=ciphertext,
-            headers={"Content-Type": "application/octet-stream"},
-            timeout=120.0,
-        )
-        resp.raise_for_status()
-        raw = resp.text
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                upload_url,
+                content=ciphertext,
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=120.0,
+            )
+            resp.raise_for_status()
+            raw = resp.text
+    except Exception as exc:
+        error = media_upload_error("cdn_upload_http_failed", upload_url, exc)
+        if error.diagnostic.error_kind == "tls_handshake":
+            error = media_upload_error("cdn_tls_handshake_failed", upload_url, exc)
+        raise error from exc
 
     header_param = resp.headers.get("x-encrypted-param")
     json_param: str | None = None
@@ -376,11 +557,15 @@ async def upload_media(
     if not download_param:
         # Be strict here. The prior code fell back to upload_param/filekey,
         # which made the function appear to succeed while producing media
-        # the WeChat client could not open. Better to raise loudly.
-        raise RuntimeError(
-            "CDN upload response missing x-encrypted-param header and "
-            "encrypt_query_param / download_param JSON field. The upload "
-            "may have failed silently — refusing to return media reference."
+        # the WeChat client could not open. Better to raise loudly, while
+        # preserving the stage in the structured result.
+        raise media_upload_error(
+            "cdn_response_metadata_missing",
+            upload_url,
+            RuntimeError(
+                "response missing x-encrypted-param header and "
+                "encrypt_query_param / download_param JSON field"
+            ),
         )
 
     cdn_media = CDNMedia(
