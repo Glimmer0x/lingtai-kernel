@@ -113,6 +113,61 @@ _GIT_EXTERNAL_EXEC_OPTIONS = {"--ext-diff", "--textconv", "--show-signature"}
 # Subcommands whose diff machinery runs external textconv/diff filters by
 # default (git-diff(1): textconv external filters enabled by default).
 _GIT_TEXT_CONV_SUBCOMMANDS = {"diff", "log", "show"}
+# Positive option grammar for diff/log/show: ONLY these long options are
+# accepted on a read-only query. Anything else fails closed (Fable cross-check
+# P0 #10 direction): unknown options must not default-open because git keeps
+# gaining external-execution paths (--remerge-diff/--diff-merges=remerge runs
+# custom merge drivers; --show-signature runs gpg; --ext-diff/--textconv run
+# external filters). The merge/remap/exec families are simply NOT listed.
+_GIT_QUERY_LONG_OPTIONS = {
+    # required helper-disable flags
+    "--no-textconv", "--no-ext-diff",
+    # diff/log/show common read-only output selectors
+    "--name-only", "--name-status", "--stat", "--numstat", "--shortstat",
+    "--dirstat", "--dirstat-by-file", "--summary", "--patch", "--raw",
+    "--patch-with-stat", "--patch-with-raw",
+    "--no-color", "--color", "--color-moved", "--color-moved-ws", "--no-color-moved",
+    "--exit-code", "--quiet",
+    "--no-prefix", "--src-prefix", "--dst-prefix", "--line-prefix",
+    "--relative", "--unified", "--inter-hunk-context", "--function-context",
+    "--minimal", "--patience", "--histogram", "--anchored",
+    "--indent-heuristic", "--no-indent-heuristic",
+    "--ignore-space-at-eol", "--ignore-space-change", "--ignore-all-space",
+    "--ignore-blank-lines", "--ignore-cr-at-eol", "--ignore-matching-lines",
+    "--break-rewrites", "--irreversible-delete", "--find-renames",
+    "--no-renames", "--find-copies", "--find-copies-harder",
+    "--rename-empty", "--no-rename-empty", "--find-object",
+    "--diff-filter", "--diff-algorithm", "--word-diff", "--word-diff-regex",
+    "--color-words", "--ws-error-highlight", "--no-expand-tabs", "--expand-tabs",
+    "--submodule", "--full-index", "--binary", "--abbrev-commit", "--no-abbrev-commit",
+    "--output-indicator-new", "--output-indicator-old", "--output-indicator-context",
+    # log/show pretty/format
+    "--format", "--pretty", "--oneline", "--graph", "--decorate",
+    "--no-decorate", "--abbrev", "--no-abbrev", "--date",
+    # log revision/limit selectors (read-only queries)
+    "--all", "--branches", "--tags", "--remotes", "--glob", "--exclude",
+    "--reflog", "--not", "--first-parent", "--merges", "--no-merges",
+    "--min-parents", "--max-parents", "--reverse", "--topo-order",
+    "--date-order", "--author-date-order", "--since", "--until",
+    "--after", "--before", "--author", "--committer", "--grep",
+    "--all-match", "--invert-grep", "--regexp-ignore-case",
+    "--extended-regexp", "--fixed-strings", "--pickaxe-all",
+    "--pickaxe-regex", "--max-count", "--skip", "--count", "--follow",
+    "--full-history", "--simplify-merges", "--simplify-by-decoration",
+    "--dense", "--sparse", "--ancestry-path", "--left-right",
+    "--left-only", "--right-only", "--cherry-pick", "--cherry", "--boundary",
+    "--use-mailmap", "--no-mailmap",
+    # explicitly NOT listed (external exec / merge machinery):
+    # --ext-diff --textconv --show-signature --remerge-diff --diff-merges
+    # -m/-r/-c/-cc combined forms, --output (write), --no-optional-locks
+    # (global, consumed before subcommand only)
+}
+# Short options accepted on diff/log/show read-only queries (cluster of
+# characters, plus value-taking shorts below). Merge/combined short forms
+# (-m -r -c) are deliberately absent. Digits allow -1..-9 count limits.
+_GIT_QUERY_SHORT_OPTIONS = {"p", "q", "b", "w", "i", "E", "F", "M", "C", "B",
+                             "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+_GIT_QUERY_VALUE_SHORTS = {"n", "U", "G", "S", "L"}
 _READ_ONLY_GIT_SUBCOMMANDS = {"branch", "diff", "log", "ls-files", "remote", "show", "status", "tag"}
 # Git subcommands whose bare-name form is read-only but whose positional form
 # mutates (branch <name> creates, tag <name> creates, remote add mutates).
@@ -500,8 +555,13 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
     if any(_is_write_destination_flag(token) for token in rest):
         return f"git {subcommand} carries a write-destination flag"
     j = 0
+    after_double_dash = False
     while j < len(rest):
         token = rest[j]
+        if token == "--":
+            after_double_dash = True
+            j += 1
+            continue
         if token in _GIT_EXTERNAL_EXEC_OPTIONS:
             return f"git option {token} can execute an external helper"
         if token == "--format" or token == "--pretty":
@@ -523,6 +583,26 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
             fsmonitor_disabled = True
             j = next_j
             continue
+        if subcommand in _GIT_TEXT_CONV_SUBCOMMANDS and not after_double_dash:
+            # Positive per-subcommand option grammar: any unknown option on
+            # diff/log/show fails closed (Fable cross-check P0 #10 direction).
+            if token.startswith("--"):
+                name = token.split("=", 1)[0]
+                if name not in _GIT_QUERY_LONG_OPTIONS:
+                    return f"git {subcommand} option {name} is not an allowlisted read-only query option"
+                j += 1
+                continue
+            if token.startswith("-") and token != "-":
+                if len(token) == 2 and token[1] in _GIT_QUERY_SHORT_OPTIONS:
+                    j += 1
+                    continue
+                if token[1] in _GIT_QUERY_VALUE_SHORTS:
+                    j += 1
+                    continue
+                if all(ch in _GIT_QUERY_SHORT_OPTIONS for ch in token[1:]):
+                    j += 1
+                    continue
+                return f"git {subcommand} option {token} is not an allowlisted read-only query option"
         j += 1
     if subcommand in _GIT_TEXT_CONV_SUBCOMMANDS:
         if "--no-textconv" not in rest or "--no-ext-diff" not in rest:

@@ -615,6 +615,49 @@ def test_git_signature_pretty_atoms_denied(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_positive_query_grammar_denies_unknown_and_remerge(tmp_path):
+    """diff/log/show use a positive option grammar; unknown options fail closed.
+
+    Regression for Fable batch-A cross-check P0 #10: --remerge-diff /
+    --diff-merges=remerge / --diff-merges=r rerun the merge machinery on
+    two-parent merges and can execute repo/user-configured custom merge
+    drivers (merge.<driver>.driver). Blacklisting each new option class is not
+    audit-proof, so diff/log/show now accept ONLY the allowlisted read-only
+    query options; any unknown long/short option fails closed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git log --no-textconv --no-ext-diff --remerge-diff -1",
+        "git show --no-textconv --no-ext-diff --remerge-diff HEAD",
+        "git log --no-textconv --no-ext-diff --diff-merges=remerge -1",
+        "git log --no-textconv --no-ext-diff --diff-merges=r -1",
+        "git log --no-textconv --no-ext-diff --diff-merges remerge -1",
+        "git log --no-textconv --no-ext-diff --output=/tmp/fable-never-written -1",
+        "git diff --no-textconv --no-ext-diff --relative-path=x",
+        "git log --no-textconv --no-ext-diff -m -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Canonical fixed query shapes remain allowed.
+    for command in (
+        "git log --no-textconv --no-ext-diff -1",
+        "git show --no-textconv --no-ext-diff HEAD",
+        "git diff --no-textconv --no-ext-diff",
+        "git log --no-textconv --no-ext-diff --oneline --stat -5",
+        "git log --no-textconv --no-ext-diff --name-only --format=%h -1",
+        "git log --no-textconv --no-ext-diff --all --grep=foo -1",
+        "git log --no-textconv --no-ext-diff -n 3",
+        "git log --no-textconv --no-ext-diff --max-count=2 --diff-filter=AM",
+        "git show --no-textconv --no-ext-diff --stat --format=fuller HEAD",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     """Path-form executables must be denied before any basename fast-path.
 
