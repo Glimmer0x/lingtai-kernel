@@ -434,6 +434,7 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
     """
     args = tokens[1:]
     fsmonitor_disabled = False
+    no_optional_locks = False
     i = 0
     while i < len(args) and args[i].startswith("-"):
         token = args[i]
@@ -458,6 +459,10 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
             return "git --exec-path can execute external core programs"
         if token == "--git-dir" or token.startswith("--git-dir=") or token == "--work-tree" or token.startswith("--work-tree=") or token == "--namespace" or token.startswith("--namespace="):
             return f"git global option {token.split('=', 1)[0]} is not a read-only form"
+        if token == "--no-optional-locks":
+            no_optional_locks = True
+            i += 1
+            continue
         if token in _GIT_SAFE_GLOBAL_OPTIONS:
             i += 1
             continue
@@ -489,8 +494,8 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
     if subcommand in _GIT_TEXT_CONV_SUBCOMMANDS:
         if "--no-textconv" not in rest or "--no-ext-diff" not in rest:
             return f"git {subcommand} may run external textconv/diff helpers; require --no-textconv --no-ext-diff"
-    if subcommand == "status" and not fsmonitor_disabled:
-        return "git status may run a core.fsmonitor hook; require -c core.fsmonitor=false"
+    if subcommand == "status" and not (fsmonitor_disabled and no_optional_locks):
+        return "git status may run a core.fsmonitor hook or write .git/index; require -c core.fsmonitor=false and --no-optional-locks"
     if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
         return _git_list_only_risk(subcommand, rest)
     return None

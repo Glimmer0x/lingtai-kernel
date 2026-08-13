@@ -241,8 +241,9 @@ def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
         }))
         assert not decision.allowed, command
     # Bare list/query forms stay allowed (diff/log/show need explicit
-    # --no-textconv --no-ext-diff; status needs -c core.fsmonitor=false).
-    for command in ("git branch", "git tag", "git remote -v", "git status -c core.fsmonitor=false", "git log --no-textconv --no-ext-diff -1"):
+    # --no-textconv --no-ext-diff; status needs global --no-optional-locks
+    # and -c core.fsmonitor=false to stay read-only).
+    for command in ("git branch", "git tag", "git remote -v", "git --no-optional-locks -c core.fsmonitor=false status", "git log --no-textconv --no-ext-diff -1"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
@@ -312,7 +313,7 @@ def test_git_option_only_mutations_denied_but_git_write_flag_is_denied(tmp_path)
         "git diff --no-textconv --no-ext-diff",
         "git show --no-textconv --no-ext-diff HEAD",
         "git log --no-textconv --no-ext-diff -1",
-        "git status -c core.fsmonitor=false",
+        "git --no-optional-locks -c core.fsmonitor=false status",
     ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
@@ -455,7 +456,7 @@ def test_git_external_exec_options_are_denied(tmp_path):
         "git diff --no-textconv --no-ext-diff",
         "git show --no-textconv --no-ext-diff HEAD",
         "git log --no-textconv --no-ext-diff -1",
-        "git status -c core.fsmonitor=false",
+        "git --no-optional-locks -c core.fsmonitor=false status",
         "git log --no-textconv --no-ext-diff --oneline -5",
     ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
@@ -491,9 +492,9 @@ def test_git_ambient_helper_execution_requires_explicit_disable(tmp_path):
     for command in (
         "git diff --no-textconv --no-ext-diff",
         "git log --no-textconv --no-ext-diff -1",
-        "git status -c core.fsmonitor=false",
-        "git status -ccore.fsmonitor=false",
-        "env FOO=bar git status -c core.fsmonitor=false",
+        "git --no-optional-locks -c core.fsmonitor=false status",
+        "git --no-optional-locks -ccore.fsmonitor=false status",
+        "env FOO=bar git --no-optional-locks -c core.fsmonitor=false status",
     ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
@@ -524,12 +525,50 @@ def test_git_multi_c_and_remote_show_helpers_denied(tmp_path):
         assert not decision.allowed, command
     # Each -c independently safe; remote show -n (cached, no query) allowed.
     for command in (
-        "git -c core.fsmonitor=false status",
+        "git --no-optional-locks -c core.fsmonitor=false status",
         "git remote show -n origin",
         "git remote get-url origin",
         "git remote -v",
         "git -C /tmp diff --no-textconv --no-ext-diff",
         "git --no-pager log --no-textconv --no-ext-diff -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
+def test_git_status_requires_no_optional_locks(tmp_path):
+    """git status refreshes/writes .git/index unless optional locks are off.
+
+    Regression for Fable batch-A cross-check P0 #8: git-status(1) by default
+    refreshes the index, updating cached stat information and writing out the
+    result (taking an index lock) even with core.fsmonitor=false. So status is
+    read-only ONLY with an effective global --no-optional-locks in addition to
+    core.fsmonitor=false; subcommand-after spellings and any form without the
+    global flag fail closed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git status",
+        "git status -c core.fsmonitor=false",
+        "git status -ccore.fsmonitor=false",
+        "git status --no-optional-locks",
+        "git -c core.fsmonitor=false status",
+        "git -ccore.fsmonitor=false status",
+        "env FOO=bar git -c core.fsmonitor=false status",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Canonical global form: --no-optional-locks + core.fsmonitor=false before
+    # the subcommand. No subcommand-after spelling is relied upon.
+    for command in (
+        "git --no-optional-locks -c core.fsmonitor=false status",
+        "git --no-optional-locks -ccore.fsmonitor=false status",
+        "git -c core.fsmonitor=false --no-optional-locks status",
+        "env FOO=bar git --no-optional-locks -c core.fsmonitor=false status",
     ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
@@ -563,7 +602,7 @@ def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
         }))
         assert not decision.allowed, command
     # Bare basenames stay allowed (interpreter inline code is separately risky).
-    for command in ("git status -c core.fsmonitor=false", "ls -la"):
+    for command in ("git --no-optional-locks -c core.fsmonitor=false status", "ls -la"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
