@@ -171,26 +171,27 @@ _GIT_LIST_ONLY_READ_ONLY_OPTIONS: dict[str, set[str]] = {
         "--contains", "--merged", "--no-merged", "--points-at", "--column",
         "--no-column", "--verify", "-v",
     },
-    "remote": {"--verbose", "-v"},
+    "remote": {"--verbose", "-v", "-n"},
 }
 
 # For ``git remote`` the first positional is the sub-subcommand; only these
-# query forms are read-only. Any other sub-subcommand fails closed.
+# query forms are read-only. Any other sub-subcommand fails closed. ``show``
+# must carry ``-n`` (no remote query): without it git first runs
+# ``git ls-remote <name>`` and a repo-controlled remote URL (e.g. ext::<cmd>)
+# can execute an external transport/helper.
 _GIT_REMOTE_READ_ONLY_SUBCOMMANDS = {"get-url", "show"}
 
 
-def _git_list_only_risk(tokens: list[str], subcommand: str) -> str | None:
+def _git_list_only_risk(subcommand: str, rest: list[str]) -> str | None:
     """Fail-closed check for git branch/tag/remote list-only forms.
 
-    Returns ``None`` for a read-only list/query form and a reason string for
-    every creation, mutation, or unknown-option form. Only the allowed options
+    ``rest`` is the argument list after the subcommand (global options already
+    consumed by ``_git_risk_reason``). Returns ``None`` for a read-only
+    list/query form and a reason string for every creation, mutation, or
+    unknown-option form. Only the allowed options
     (``_GIT_LIST_ONLY_READ_ONLY_OPTIONS``) and, for remote, the read-only
     sub-subcommands are accepted; everything else is denied.
     """
-    # Drop ``git`` and the subcommand itself (handles global options such as
-    # ``git -C <dir> branch`` by scanning for the first non-option token).
-    index = next((i for i, t in enumerate(tokens[1:], start=1) if not t.startswith("-")), None)
-    rest = tokens[(index + 1):] if index is not None else []
     positionals = [t for t in rest if not t.startswith("-")]
     options = [t for t in rest if t.startswith("-")]
     allowed_options = _GIT_LIST_ONLY_READ_ONLY_OPTIONS.get(subcommand, set())
@@ -200,6 +201,8 @@ def _git_list_only_risk(tokens: list[str], subcommand: str) -> str | None:
     if subcommand == "remote":
         if positionals and positionals[0] not in _GIT_REMOTE_READ_ONLY_SUBCOMMANDS:
             return f"git remote subcommand {positionals[0]} is not read-only"
+        if positionals and positionals[0] == "show" and "-n" not in options:
+            return "git remote show may query a remote transport/helper; require -n"
         return None
     # branch / tag: a bare positional (no --list) is creation; only a single
     # ``--list <pattern>`` positional is read-only.
@@ -381,60 +384,115 @@ def _unwrap(tokens: list[str]) -> list[str] | None:
     return tokens[index:]
 
 
-def _git_fsmonitor_disabled(args: list[str]) -> bool:
-    """True when core.fsmonitor is explicitly disabled on the command line.
+# Git global options that are proven read-only (no external exec, no config
+# remap, no state mutation). Everything else before the subcommand fails
+# closed, including -c/--config* (except the exact core.fsmonitor=false
+# carve-out), --exec-path, --git-dir, --work-tree, --namespace.
+_GIT_SAFE_GLOBAL_OPTIONS = {
+    "--no-pager", "-P", "--paginate", "-p", "--no-optional-locks",
+    "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+    "--icase-pathspecs", "--no-replace-objects",
+}
+_GIT_FSMONITOR_DISABLE = "core.fsmonitor=false"
 
-    ``git status`` consults a core.fsmonitor hook when configured in repo,
-    system or injected config; the only classifier-verifiable disable is an
-    explicit ``-c core.fsmonitor=false`` (or joined ``-ccore.fsmonitor=false``).
+
+def _git_consume_config_override(args: list[str], i: int) -> tuple[str | None, int]:
+    """Consume one ``-c``/``--config``/``--config-env`` override.
+
+    Returns ``(value, next_index)`` for the only allowed override
+    (``core.fsmonitor=false``) or ``(reason, next_index)`` starting with a
+    denial message for anything else. ``-c`` may be joined
+    (``-ccore.fsmonitor=false``) or separate (``-c core.fsmonitor=false``);
+    ``--config``/``--config-env`` are always denied.
     """
-    for i, token in enumerate(args):
-        if token == "-c" and i + 1 < len(args) and args[i + 1] == "core.fsmonitor=false":
-            return True
-        if token == "-ccore.fsmonitor=false":
-            return True
-    return False
+    token = args[i]
+    if token == "--config" or token.startswith("--config=") or token == "--config-env" or token.startswith("--config-env="):
+        return "git --config/--config-env override can execute an external helper", i + 1
+    if token == "-c":
+        if i + 1 >= len(args):
+            return "git -c requires a value", i + 1
+        value = args[i + 1]
+        if value != _GIT_FSMONITOR_DISABLE:
+            return f"git -c config override {value!r} can execute an external helper", i + 2
+        return _GIT_FSMONITOR_DISABLE, i + 2
+    if token.startswith("-c") and not token.startswith("-C") and not token.startswith("--"):
+        value = token[2:]
+        if value != _GIT_FSMONITOR_DISABLE:
+            return f"git -c config override {value!r} can execute an external helper", i + 1
+        return _GIT_FSMONITOR_DISABLE, i + 1
+    return None, i + 1
 
 
-def _git_external_exec_reason(tokens: list[str]) -> str | None:
-    """Fail-closed check for git options that execute an external helper.
+def _git_risk_reason(tokens: list[str]) -> str | None:
+    """Fail-closed read-only classifier for one git command.
 
-    ``git diff --ext-diff`` / ``--textconv`` run external diff/textconv
-    programs, and ``git -c``/``--config``/``--config-env`` can remap any
-    external-exec config (diff.external, core.pager, alias.*). None of them
-    are needed by a read-only query, so deny them all. The single narrow
-    carve-out is ``-c core.fsmonitor=false`` (disables the fsmonitor hook that
-    ``git status`` would otherwise consult from ambient config).
+    Parses git global options first (each ``-c``/``--config*`` independently
+    consumed and validated, so one safe ``-c core.fsmonitor=false`` cannot
+    let an unsafe ``-c`` pass), then the subcommand, then subcommand-specific
+    checks: write-destination flags, external-exec options, ambient
+    textconv/fsmonitor helpers, and branch/tag/remote list-only rules.
     """
     args = tokens[1:]
-    for i, token in enumerate(args):
+    fsmonitor_disabled = False
+    i = 0
+    while i < len(args) and args[i].startswith("-"):
+        token = args[i]
+        if token.startswith("-c") or token.startswith("--config"):
+            value, next_i = _git_consume_config_override(args, i)
+            if value is None:
+                return f"git option {token} is not a read-only form"
+            if value != _GIT_FSMONITOR_DISABLE:
+                return value
+            fsmonitor_disabled = True
+            i = next_i
+            continue
+        if token == "-C":
+            if i + 1 >= len(args):
+                return "git -C requires a directory"
+            i += 2
+            continue
+        if token.startswith("-C") and len(token) > 2:
+            i += 1
+            continue
+        if token.startswith("--exec-path"):
+            return "git --exec-path can execute external core programs"
+        if token == "--git-dir" or token.startswith("--git-dir=") or token == "--work-tree" or token.startswith("--work-tree=") or token == "--namespace" or token.startswith("--namespace="):
+            return f"git global option {token.split('=', 1)[0]} is not a read-only form"
+        if token in _GIT_SAFE_GLOBAL_OPTIONS:
+            i += 1
+            continue
+        if token == "--":
+            i += 1
+            break
+        return f"git global option {token} is not a read-only form"
+    if i >= len(args):
+        return "git subcommand is missing"
+    subcommand = args[i]
+    rest = args[i + 1:]
+    if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
+        return f"git subcommand is not classified read-only: {subcommand}"
+    if any(_is_write_destination_flag(token) for token in rest):
+        return f"git {subcommand} carries a write-destination flag"
+    j = 0
+    while j < len(rest):
+        token = rest[j]
         if token in _GIT_EXTERNAL_EXEC_OPTIONS:
             return f"git option {token} can execute an external helper"
-        if token == "-c" or token.startswith("-c") and not token.startswith("-C"):
-            if _git_fsmonitor_disabled(args):
-                continue
-            return "git -c config override can execute an external helper"
-        if token == "--config" or token.startswith("--config=") or token == "--config-env" or token.startswith("--config-env="):
-            return "git --config override can execute an external helper"
-    return None
-
-
-def _git_ambient_exec_reason(tokens: list[str], subcommand: str) -> str | None:
-    """Fail-closed check for ambient git helper execution.
-
-    ``git diff`` / ``git log`` / ``git show`` run external textconv filters by
-    default (git-diff(1)), so require ``--no-textconv --no-ext-diff`` to prove
-    no external diff/textconv helper can run. ``git status`` consults a
-    core.fsmonitor hook from ambient config, so require it to be explicitly
-    disabled. A classifier cannot see repo/system config; only explicit flags
-    are verifiable.
-    """
-    args = tokens[1:]
+        if token.startswith("-c") or token.startswith("--config"):
+            value, next_j = _git_consume_config_override(rest, j)
+            if value != _GIT_FSMONITOR_DISABLE:
+                return value if value is not None else f"git option {token} is not a read-only form"
+            fsmonitor_disabled = True
+            j = next_j
+            continue
+        j += 1
     if subcommand in _GIT_TEXT_CONV_SUBCOMMANDS:
-        if "--no-textconv" not in args or "--no-ext-diff" not in args:
+        if "--no-textconv" not in rest or "--no-ext-diff" not in rest:
             return f"git {subcommand} may run external textconv/diff helpers; require --no-textconv --no-ext-diff"
-    if subcommand == "status" and not _git_fsmonitor_disabled(args):
+    if subcommand == "status" and not fsmonitor_disabled:
         return "git status may run a core.fsmonitor hook; require -c core.fsmonitor=false"
+    if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
+        return _git_list_only_risk(subcommand, rest)
     return None
 
 
@@ -498,21 +556,9 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
         if verb in _DESTINATION_VERBS:
             return f"destination-writing shell command: {verb}"
         if verb == "git":
-            subcommand = next((token for token in tokens[1:] if not token.startswith("-")), None)
-            if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
-                return f"git subcommand is not classified read-only: {subcommand or '<missing>'}"
-            if any(_is_write_destination_flag(token) for token in tokens[1:]):
-                return f"git {subcommand} carries a write-destination flag"
-            reason = _git_external_exec_reason(tokens)
+            reason = _git_risk_reason(tokens)
             if reason is not None:
                 return reason
-            reason = _git_ambient_exec_reason(tokens, subcommand)
-            if reason is not None:
-                return reason
-            if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
-                reason = _git_list_only_risk(tokens, subcommand)
-                if reason is not None:
-                    return reason
             continue
         if verb == "ssh":
             host = next((token for token in tokens[1:] if not token.startswith("-")), None)

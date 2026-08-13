@@ -501,6 +501,42 @@ def test_git_ambient_helper_execution_requires_explicit_disable(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_multi_c_and_remote_show_helpers_denied(tmp_path):
+    """Each git -c must be validated independently; remote show needs -n.
+
+    Regression for Fable batch-A cross-check P0 #7: one safe
+    -ccore.fsmonitor=false used to let an unsafe -ccore.fsmonitor=/tmp/helper
+    pass (whole-args fsmonitor check); git remote show without -n queries a
+    remote transport/helper; --exec-path global was unparsed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git -ccore.fsmonitor=false -ccore.fsmonitor=/tmp/fable-never-executed status",
+        "git -ccore.fsmonitor=/tmp/fable-never-executed -ccore.fsmonitor=false status",
+        "git -c core.fsmonitor=false -c core.fsmonitor=/tmp/x status",
+        "git -c diff.external=/tmp/x diff --no-textconv --no-ext-diff",
+        "git remote show origin",
+        "git --exec-path=/tmp/fable-exec-never-used remote show origin",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Each -c independently safe; remote show -n (cached, no query) allowed.
+    for command in (
+        "git -c core.fsmonitor=false status",
+        "git remote show -n origin",
+        "git remote get-url origin",
+        "git remote -v",
+        "git -C /tmp diff --no-textconv --no-ext-diff",
+        "git --no-pager log --no-textconv --no-ext-diff -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     """Path-form executables must be denied before any basename fast-path.
 
