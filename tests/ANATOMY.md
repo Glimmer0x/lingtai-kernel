@@ -244,6 +244,8 @@ related_files:
   - tests/test_molt_notification_persistence.py
   - tests/test_molt_task_persistence.py
   - tests/test_network.py
+  - tests/test_notification_attention_cap.py
+  - tests/test_notification_cap_doc_parity.py
   - tests/test_notification_persistent_cap.py
   - tests/test_notification_schema_wire_scrub.py
   - tests/test_notification_store.py

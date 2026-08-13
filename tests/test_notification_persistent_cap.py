@@ -345,3 +345,58 @@ def test_env_cap_tightened_by_operator(monkeypatch, tmp_path):
     expected_ids = [f"email-{i}" for i in range(1, 16)]
     assert [e["id"] for e in persistent["email"]["emails"]] == expected_ids
     assert persistent["email"]["email_ids"] == expected_ids
+
+
+def test_low_positive_caps_never_return_unchecked_persistent_payload(
+    monkeypatch, tmp_path
+):
+    """P1-2: every valid positive cap bounds the returned persistent envelope.
+
+    The shared-bar contract promises EVERY model-visible notification block
+    satisfies the effective cap by construction.  A normal one-email payload
+    (706-708 serialized chars) must therefore never be returned unchecked at
+    low positive caps (1/50/200/300): the shared 2048 floor clamps those values
+    UP so the payload (and any terminal stub) fits inside the effective cap.
+    """
+    agent = _cap_agent(tmp_path)
+    emails = [_email(1, message="ordinary email body")]
+    for configured in (1, 50, 200, 300):
+        monkeypatch.setenv(ENV, str(configured))
+        payload = meta_block.build_notification_persistent_payload(
+            agent, _email_payload(emails)
+        )
+        # Provider-visible serialization (default ASCII escaping, wrapper key
+        # included) must fit the effective cap = max(configured, 2048).
+        effective = max(configured, meta_block.NOTIFICATION_PERSISTENT_MAX_CHARS_MIN)
+        serialized = len(json.dumps(payload, default=str))
+        assert serialized <= effective, (configured, effective, serialized)
+
+
+def test_persistent_terminal_marker_only_envelope_is_capped_by_construction(
+    monkeypatch, tmp_path
+):
+    """P1-2: even a pathological persistent stub falls back to a marker-only
+    envelope that strictly fits; a too-long spill path is stripped and the
+    exact spill basename is retained as ``spill_file``."""
+    monkeypatch.setenv(ENV, "2048")  # floor
+    # A lane with an enormous number of id-only records exceeds even the 2048
+    # floor after stubbing, forcing the terminal marker-only fallback.
+    records = [
+        {
+            "id": f"email-{i}",
+            "event_id": f"evt-{i}",
+            "message": "X" * 300,
+        }
+        for i in range(1, 2000)
+    ]
+    persistent = {"email": {"emails": records, "email_ids": [r["id"] for r in records]}}
+    capped = meta_block._cap_notification_persistent(
+        _cap_agent(tmp_path), copy.deepcopy(persistent)
+    )
+    # Whatever degradation path was chosen, the returned wrapper fits the cap.
+    assert len(json.dumps({"notification_persistent": capped}, default=str)) <= 2048
+    # The recovery handle survives on the envelope.
+    assert capped["overflow"]["truncated"] is True
+    # If the path was omitted, the exact spill basename is the locator.
+    if capped["overflow"].get("path_omitted"):
+        assert capped["overflow"].get("spill_file") or capped["overflow"]["spill_failed"]

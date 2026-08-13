@@ -276,6 +276,16 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
 # disabled by accident); unset or invalid values fall back to this default.
 NOTIFICATION_PERSISTENT_MAX_CHARS = 10_000
 NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING = 10_000
+# Shared floor for BOTH notification lanes: a positive configured value below
+# this is clamped UP to it so the terminal marker-only recovery envelope
+# (which carries an absolute spill path) can always fit inside the cap.  The
+# cap remains a strict upper bound on the model-visible envelope; the floor
+# only guarantees the deterministic degradation can always express the
+# recovery handle.  When even this floor cannot fit an absolute spill path
+# (pathologically long workdir), the final guard strips the marker path and
+# the exact spill basename (including any ``-N`` suffix) still identifies the
+# file.
+NOTIFICATION_PERSISTENT_MAX_CHARS_MIN = 2048
 NOTIFICATION_PERSISTENT_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
 NOTIFICATION_PERSISTENT_OVERFLOW_KEY = "overflow"
 NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX = "notification-overflow-"
@@ -301,6 +311,86 @@ NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT = (
     "Truncated by the notification block size cap; the overflow file could not "
     "be written — use the producer tool for the full content."
 )
+
+# Hard cap on the model-visible *attention* notification lane
+# (``_meta.agent_meta.notifications.attention``) — the transient per-channel
+# routing payload that is re-stamped on every eligible tool batch and on every
+# IDLE/ASLEEP synthesized pair.  A busy hub agent (many unread emails plus
+# several IM lanes) could otherwise re-serialize a multi-ten-thousand-character
+# attention payload into every provider call, growing context fast and paying a
+# large cache miss.  Over the cap the FULL attention payload is spilled to a
+# file under the agent's ``logs/`` directory and the model-visible copy is
+# compacted until it fits, with an ``overflow`` marker that points the agent at
+# the file (or the producer tool when the spill fails).  Payloads at or under
+# the cap are returned completely unchanged (no spill file, no marker).
+#
+# The cap shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the
+# persistent lane (a positive integer, clamped to the 10,000 ceiling so the
+# context-size fix cannot be disabled by accident); unset or invalid values
+# fall back to this default.
+NOTIFICATION_ATTENTION_MAX_CHARS = 10_000
+NOTIFICATION_ATTENTION_MAX_CHARS_CEILING = 10_000
+# Documented floor for the attention lane: a positive configured value below
+# this is clamped UP to it so the terminal marker-only recovery envelope
+# (which carries an absolute spill path) can always fit inside the cap.  The
+# cap remains a strict upper bound on the model-visible envelope; the floor
+# only guarantees the deterministic degradation can always express the
+# recovery handle.  When even this floor cannot fit an absolute spill path
+# (pathologically long workdir), the final guard strips the marker path and
+# the deterministic content-addressed spill name still identifies the file.
+NOTIFICATION_ATTENTION_MAX_CHARS_MIN = 2048
+NOTIFICATION_ATTENTION_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
+NOTIFICATION_ATTENTION_OVERFLOW_KEY = "overflow"
+NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX = "notification-attention-overflow-"
+# Heavy free-text fields compacted first, regardless of lane family.  Structural
+# fields (ids, routing, counts, subjects, dates) are never touched.
+NOTIFICATION_ATTENTION_HEAVY_FIELDS = (
+    "text",
+    "message",
+    "body",
+    "preview",
+    "content",
+    "summary",
+    "caption",
+    "detail",
+    "instruction",
+)
+# Successively tighter per-field character budgets, tried in order until the
+# attention envelope fits.
+NOTIFICATION_ATTENTION_COMPACT_BUDGETS = (200, 100, 50, 0)
+NOTIFICATION_ATTENTION_OVERFLOW_COMMENT = (
+    "Full notification content exceeds the attention block size cap; read "
+    "{path} for the complete payload."
+)
+NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT = (
+    "Full notification content exceeds the attention block size cap and the "
+    "overflow file could not be written — use the producer tool for the full "
+    "content."
+)
+# Recovery comment for the terminal guard: the spill SUCCEEDED but the
+# absolute spill path is too long to fit the capped envelope, so the marker
+# path is stripped (``path_omitted``) and the exact spill basename (the
+# deterministic content-addressed name, including any ``-N`` suffix) still
+# locates the file on disk.
+NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT = (
+    "Full notification content exceeds the attention block size cap; the spill "
+    "path is omitted (too long for the cap) - read the content-addressed "
+    "logs/{name} in the agent workdir "
+    "logs/ for the complete payload, or use the producer tool."
+)
+# The attention spill identity is CONTENT-ADDRESSED: the file name embeds a
+# short sha256 digest of the lane's canonical serialization, so an unchanged
+# oversized payload (re-stamped every tool batch + IDLE pair) reuses the SAME
+# file instead of re-spilling every batch.  The file is created with an
+# exclusive ``os.link`` from a unique sibling temp, so a two-writer race can
+# never overwrite an existing recovery handle.
+NOTIFICATION_ATTENTION_OVERFLOW_DIGEST_LENGTH = 8
+# Bounded head kept when pathological stub compaction bounds id lists.
+NOTIFICATION_ATTENTION_ROUTING_ID_HEAD = 8
+# Bounded exclusive-allocate attempts when a content-address collision blocks
+# the primary name (practically impossible; mirrors the persistent lane's
+# 100-attempt bound).  Never overwrites an existing spill file.
+NOTIFICATION_ATTENTION_SPILL_SUFFIX_ATTEMPTS = 100
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
@@ -2671,14 +2761,19 @@ def _notification_persistent_envelope_chars(persistent: dict) -> int:
     """Return the serialized size of the model-visible persistent envelope.
 
     Measures exactly what the provider sees (the ``notification_persistent``
-    wrapper key included).  An unserializable payload is reported as ``0`` so
-    the cap never turns a serialization problem into a spill/compaction.
+    wrapper key included).  The canonical provider converters re-serialize
+    projected dictionaries with default ASCII escaping
+    (``json.dumps(..., default=str)``), so the ruler uses the same escaping
+    (``ensure_ascii=True``): multilingual content is counted exactly as the
+    provider will serialize it.  An unserializable payload is reported as
+    ``0`` so the cap never turns a serialization problem into a
+    spill/compaction.
     """
     try:
         return len(
             _json.dumps(
                 {NOTIFICATION_PERSISTENT_KEY: persistent},
-                ensure_ascii=False,
+                ensure_ascii=True,
                 sort_keys=True,
                 default=str,
             )
@@ -2876,15 +2971,50 @@ def _drop_notification_persistent_records(persistent: dict) -> dict:
     return persistent
 
 
+def _drop_notification_persistent_terminal(
+    persistent: dict, marker: dict, max_chars: int
+) -> dict:
+    """Return a marker-only persistent envelope that strictly fits *max_chars*.
+
+    Pathological last resort, reached only when even the id-only stub envelope
+    still exceeds the cap.  The kernel-owned overflow marker is the recovery
+    handle; when the absolute spill path is pathologically long, the marker
+    path is stripped (``path=None``, ``path_omitted=True``) and the exact spill
+    basename (including any ``-N`` suffix) is retained in ``spill_file`` so the
+    file stays findable.  With the 2048 floor this compact envelope ALWAYS
+    satisfies ``len(json.dumps(..., default=str)) <= max_chars`` for the
+    bounded production spill basename; the production allocator never produces
+    an unbounded basename (it is a timestamped ``notification-overflow-<ts>.json``
+    sibling created in the agent's own ``logs/`` directory).
+    """
+    envelope = {NOTIFICATION_PERSISTENT_OVERFLOW_KEY: dict(marker)}
+    if _notification_persistent_envelope_chars(envelope) <= max_chars:
+        return envelope
+    compact_marker = dict(marker)
+    spill_path = marker.get("path")
+    spill_basename = (
+        Path(spill_path).name if isinstance(spill_path, str) and spill_path else None
+    )
+    compact_marker["path"] = None
+    compact_marker["path_omitted"] = True
+    if spill_basename:
+        compact_marker["spill_file"] = spill_basename
+    return {NOTIFICATION_PERSISTENT_OVERFLOW_KEY: compact_marker}
+
+
 def _notification_persistent_max_chars() -> int:
     """Return the effective model-visible persistent notification cap.
 
     Live-read ``LINGTAI_NOTIFICATION_MAX_CHARS`` at every payload build (no
     restart needed, like the nudge env vars): a positive integer is used,
-    clamped to the 10,000 ceiling so the context-size fix cannot be silently
-    disabled; missing, blank, non-numeric, zero, or negative values fall back
-    to the default 10,000.  Kept as a function rather than a module constant so
-    an operator can tighten or relax the cap per-process without a code change.
+    clamped to [``NOTIFICATION_PERSISTENT_MAX_CHARS_MIN`` (2048),
+    ``NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING`` (10,000)] so the context-size
+    fix cannot be silently disabled and the terminal record-stub recovery
+    envelope ALWAYS fits (the 2048 floor mirrors the attention lane's floor:
+    ONE shared bar means ONE shared floor).  Missing, blank, non-numeric, zero,
+    or negative values fall back to the default 10,000.  Kept as a function
+    rather than a module constant so an operator can tighten or relax the cap
+    per-process without a code change.
     """
     raw = os.environ.get(NOTIFICATION_PERSISTENT_MAX_CHARS_ENV, "").strip()
     if raw:
@@ -2895,7 +3025,10 @@ def _notification_persistent_max_chars() -> int:
         # Env values are always str, so ``int(raw)`` never yields a ``bool``;
         # the guard is kept for symmetry with the other env int parsers.
         if not isinstance(value, bool) and value > 0:
-            return min(value, NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING)
+            return min(
+                max(value, NOTIFICATION_PERSISTENT_MAX_CHARS_MIN),
+                NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING,
+            )
     return NOTIFICATION_PERSISTENT_MAX_CHARS
 
 
@@ -2937,7 +3070,434 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
             <= max_chars
         ):
             return compacted
-    return _drop_notification_persistent_records(compacted)
+    dropped = _drop_notification_persistent_records(compacted)
+    if _notification_persistent_envelope_chars(dropped) <= max_chars:
+        return dropped
+    return _drop_notification_persistent_terminal(dropped, marker, max_chars)
+
+
+def _notification_attention_envelope_chars(attention: dict) -> int:
+    """Return the serialized size of the model-visible attention lane.
+
+    Measures exactly what the provider sees under
+    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic,
+    OpenAI Chat/Responses, and Gemini ToolResultBlock converters re-serialize
+    projected dictionaries with default ASCII escaping
+    (``json.dumps(..., default=str)``, i.e. ``ensure_ascii=True``), so the
+    ruler uses the same escaping: multilingual content is counted exactly as
+    the provider will serialize it and cannot silently cross the cap on the
+    wire after the ruler reports it under.  An unserializable payload is
+    reported as ``0`` so the cap never turns a serialization problem into a
+    spill/compaction.
+    """
+    try:
+        return len(
+            _json.dumps(attention, ensure_ascii=True, sort_keys=True, default=str)
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _notification_attention_max_chars() -> int:
+    """Return the effective model-visible attention notification cap.
+
+    Shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the persistent
+    lane so one operator control enforces the upper limit across all
+    notification channels (Jason 2026-08-13).  A positive integer is used,
+    clamped to [``NOTIFICATION_ATTENTION_MAX_CHARS_MIN`` (2048),
+    ``NOTIFICATION_ATTENTION_MAX_CHARS_CEILING`` (10,000)]: configured values
+    below 2048 are clamped UP to 2048 so the terminal marker-only recovery
+    envelope (which carries an absolute spill path) ALWAYS fits, and values
+    above 10,000 clamp down so the context-size fix cannot be silently
+    disabled.  The cap is still a strict upper bound on the model-visible
+    envelope.  Missing, blank, non-numeric, zero, or negative values fall back
+    to the default 10,000.
+    """
+    raw = os.environ.get(NOTIFICATION_ATTENTION_MAX_CHARS_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 0
+        if not isinstance(value, bool) and value > 0:
+            return min(
+                max(value, NOTIFICATION_ATTENTION_MAX_CHARS_MIN),
+                NOTIFICATION_ATTENTION_MAX_CHARS_CEILING,
+            )
+    return NOTIFICATION_ATTENTION_MAX_CHARS
+
+
+def _attention_spill_canonical_text(attention: dict) -> str:
+    """Return the canonical serialization that defines the spill identity."""
+    return _json.dumps(attention, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _attention_spill_digest8(attention: dict) -> str:
+    """Return the short sha256 content digest used in the spill file name."""
+    return _hashlib.sha256(
+        _attention_spill_canonical_text(attention).encode("utf-8")
+    ).hexdigest()[:NOTIFICATION_ATTENTION_OVERFLOW_DIGEST_LENGTH]
+
+
+def _attention_spill_matches(path: Path, attention: dict) -> bool:
+    """True when *path* already holds the same attention payload.
+
+    Two writers race on the same content-addressed name; the loser must verify
+    that the winner's file is genuinely the same payload before reusing it (an
+    existing recovery handle is never overwritten).
+    """
+    try:
+        existing = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    try:
+        return _attention_spill_canonical_text(existing) == _attention_spill_canonical_text(
+            attention
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _attention_spill_create_exclusive(path: Path, attention: dict) -> Path | None:
+    """Write *attention* to a unique sibling temp and link it exclusively.
+
+    ``os.link`` is atomic and fails with ``FileExistsError`` when *path* already
+    exists (``O_EXCL`` semantics), so a two-writer race can never overwrite an
+    existing recovery handle.  Returns *path* when this writer created it, or
+    ``None`` when the name was already taken (the winner owns it; callers verify
+    content next).
+    """
+    tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+    try:
+        atomic_write_json(tmp, attention, default=str)
+        os.link(str(tmp), str(path))
+        return path
+    except FileExistsError:
+        return None
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _attention_spill_allocate(
+    logs_dir: Path, digest: str, attention: dict
+) -> Path | None:
+    """Exclusive-create the content-addressed spill name, with a bounded fallback.
+
+    Primary name ``notification-attention-overflow-<digest>.json``; on a content
+    collision (existing file with a DIFFERENT payload) fall back to a bounded
+    suffix loop with exclusive create, never overwriting.  Returns the allocated
+    path, or ``None`` when no name could be allocated.
+    """
+    base = logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}.json"
+    for suffix in range(NOTIFICATION_ATTENTION_SPILL_SUFFIX_ATTEMPTS + 1):
+        candidate = (
+            base
+            if suffix == 0
+            else logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}-{suffix}.json"
+        )
+        created = _attention_spill_create_exclusive(candidate, attention)
+        if created is not None:
+            return created
+        if _attention_spill_matches(candidate, attention):
+            return candidate
+    return None
+
+
+def _spill_notification_attention(agent, attention: dict) -> str | None:
+    """Write the full attention lane once, content-addressed and exclusive.
+
+    The file name embeds a short sha256 digest of the lane's canonical
+    serialization (``logs/notification-attention-overflow-<digest8>.json``), so
+    an unchanged oversized payload — re-stamped on every tool batch and every
+    IDLE/ASLEEP synthesized pair — reuses the SAME file instead of re-spilling
+    every batch (no disk amplification, stable marker path).  The file is
+    created with an exclusive ``os.link`` from a unique sibling temp: a
+    two-writer race can never overwrite an existing recovery handle; the loser
+    verifies the existing file holds the same payload and reuses it.  A hash
+    collision with different content (practically impossible) falls back to a
+    bounded exclusive suffix loop; if no name can be allocated the spill fails.
+
+    Returns the absolute spill path, or ``None`` when the agent has no working
+    directory or no exclusive name could be allocated — the lane is still
+    compacted either way, the agent just gets the producer tool instead of a
+    file as the recovery handle.  The spill file always holds the FULL original
+    attention lane.
+    """
+    workdir = getattr(agent, "_working_dir", None)
+    if not workdir:
+        return None
+    try:
+        logs_dir = Path(workdir) / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        digest = _attention_spill_digest8(attention)
+        path = _attention_spill_allocate(logs_dir, digest, attention)
+        if path is None:
+            return None
+        return str(path.resolve())
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
+    """Return ``(compacted, changed)`` with heavy attention strings truncated.
+
+    Walks the attention lane's per-source payloads (dicts and lists) and caps
+    every heavy free-text field at *budget*; structural fields (ids, routing,
+    counts, subjects, dates) are left untouched.
+    """
+    if isinstance(node, dict):
+        out: dict = {}
+        changed = False
+        for key, value in node.items():
+            if key in NOTIFICATION_ATTENTION_HEAVY_FIELDS and isinstance(value, str):
+                new_value, this_changed = _truncate_persistent_value(value, budget)
+                if this_changed:
+                    changed = True
+                out[key] = new_value
+            elif isinstance(value, (dict, list)):
+                new_value, this_changed = _compact_attention_node(value, budget)
+                if this_changed:
+                    changed = True
+                out[key] = new_value
+            else:
+                out[key] = value
+        return out, changed
+    if isinstance(node, list):
+        out_list = []
+        changed = False
+        for item in node:
+            if isinstance(item, (dict, list)):
+                new_item, this_changed = _compact_attention_node(item, budget)
+                if this_changed:
+                    changed = True
+                out_list.append(new_item)
+            else:
+                out_list.append(item)
+        return out_list, changed
+    return node, False
+
+
+# Routing keys preserved in the terminal attention stub, in order of
+# increasing criticality.  ``message_ids`` is the stable IM routing identifier
+# produced by ``_sanitize_im_notification_after_persistent`` and is kept for as
+# long as any routing remains (the bounded degradation drops or bounds the
+# other keys first).
+NOTIFICATION_ATTENTION_ROUTING_KEYS = (
+    "count",
+    "email_ids",
+    "message_ref",
+    "event_id",
+    "event_ids",
+    "ref",
+    "ref_id",
+    "message_ids",
+)
+
+
+def _attention_stub_drop_keys(stub: dict, keys: tuple[str, ...]) -> None:
+    """Drop *keys* from every per-source routing payload in *stub*."""
+    for payload in stub.values():
+        if not isinstance(payload, dict):
+            continue
+        for key in keys:
+            payload.pop(key, None)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in keys:
+                data.pop(key, None)
+
+
+def _attention_stub_bound_id_lists(stub: dict) -> None:
+    """Bound ``email_ids``/``message_ids`` lists to a deterministic head."""
+    for payload in stub.values():
+        if not isinstance(payload, dict):
+            continue
+        holders = [payload]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            holders.append(data)
+        for holder in holders:
+            for key in ("email_ids", "message_ids"):
+                value = holder.get(key)
+                if isinstance(value, list) and len(value) > NOTIFICATION_ATTENTION_ROUTING_ID_HEAD:
+                    holder[key] = value[:NOTIFICATION_ATTENTION_ROUTING_ID_HEAD]
+
+
+def _drop_notification_attention_records(
+    attention: dict, marker: dict, comment: str, max_chars: int
+) -> dict:
+    """Return a routing-only attention stub that strictly fits *max_chars*.
+
+    Pathological last resort, reached only when every heavy field is already
+    empty and the structural metadata alone still exceeds the cap.  The stub
+    keeps per-source routing (``count`` and id-bearing fields: ``email_ids``,
+    ``message_ref``, ``event_id`` lists, and — critically — ``message_ids``,
+    the stable IM routing identifier) so the agent still knows which channels
+    have events and which producer records to read, while dropping heavy
+    preview bodies.  The kernel-owned overflow marker and the recovery comment
+    ride on the stub.
+
+    The configured cap is enforced STRICTLY on the serialized stub (the old
+    code returned a stub that was still over cap with ``message_ids`` missing).
+    When the routing stub is over cap, a deterministic bounded degradation
+    drops the least-critical routing keys in a fixed order — first
+    ``ref``/``ref_id``, then ``event_id``/``event_ids``, then ``message_ref``,
+    then bounds the ``email_ids``/``message_ids`` lists to a head of 8, then
+    drops ``count`` — re-measuring after each phase until it fits.
+    ``message_ids`` is kept as long as possible (it is the IM routing
+    identifier).  Under a pathologically small cap the recovery comment (long
+    relative to a tiny cap) is dropped before any routing id, then the per-
+    source routing itself, ending at the minimal marker-only envelope.  A final
+    guard makes the terminal envelope capped BY CONSTRUCTION: when even the
+    marker-only envelope exceeds the cap (pathologically long absolute spill
+    path), the marker path is stripped (``path=None``, ``path_omitted=True``)
+    and the compact envelope is returned with the exact spill basename
+    (including any ``-N`` suffix) in a short recovery comment.  With the 2048
+    floor, that compact envelope ALWAYS satisfies
+    ``len(json.dumps(..., default=str)) <= max_chars`` for the bounded
+    production basename; the runtime allocator bounds the spill basename to
+    ``notification-attention-overflow-<digest8>[-<N>].json`` (digest8 plus at
+    most a two-digit suffix under the 100-attempt bound), so an arbitrary
+    white-box 3,000-character basename is not a production input.  The spill
+    file remains on disk, findable by its deterministic content-addressed name.
+    """
+    stub: dict = {}
+    for source, payload in attention.items():
+        if source in (NOTIFICATION_ATTENTION_OVERFLOW_KEY, "comment"):
+            continue
+        if not isinstance(payload, dict):
+            stub[source] = payload
+            continue
+        routed: dict = {}
+        for key, value in payload.items():
+            if key == "data" and isinstance(value, dict):
+                routed[key] = {
+                    k: v for k, v in value.items() if k in NOTIFICATION_ATTENTION_ROUTING_KEYS
+                }
+            elif key in NOTIFICATION_ATTENTION_ROUTING_KEYS:
+                routed[key] = value
+        stub[source] = routed
+    stub[NOTIFICATION_ATTENTION_OVERFLOW_KEY] = dict(marker)
+    stub["comment"] = comment
+
+    def fits(candidate: dict) -> bool:
+        return _notification_attention_envelope_chars(candidate) <= max_chars
+
+    if fits(stub):
+        return stub
+
+    for phase_keys in (
+        ("ref", "ref_id"),
+        ("event_id", "event_ids"),
+        ("message_ref",),
+    ):
+        _attention_stub_drop_keys(stub, phase_keys)
+        if fits(stub):
+            return stub
+
+    _attention_stub_bound_id_lists(stub)
+    if fits(stub):
+        return stub
+
+    _attention_stub_drop_keys(stub, ("count",))
+    if fits(stub):
+        return stub
+
+    # Pathologically small cap: drop the long recovery comment before any
+    # routing id, then the per-source routing, ending at the minimal
+    # marker-only envelope (the guard: if nothing fits, the marker still
+    # survives as the recovery handle).
+    stub.pop("comment", None)
+    if fits(stub):
+        return stub
+    marker_only = {
+        NOTIFICATION_ATTENTION_OVERFLOW_KEY: stub.get(
+            NOTIFICATION_ATTENTION_OVERFLOW_KEY, dict(marker)
+        )
+    }
+    if fits(marker_only):
+        return marker_only
+
+    # FINAL GUARD: even the marker-only envelope exceeds the cap because the
+    # absolute spill path is pathologically long.  Strip the path, record the
+    # omission and the actual spill basename (the deterministic
+    # content-addressed name, INCLUDING any ``-N`` suffix allocated when the
+    # unsuffixed base name was already occupied by a different payload) so the
+    # recovery comment points at the exact file on disk, and re-attach the
+    # short recovery comment.  With the 2048 floor this compact envelope
+    # ALWAYS satisfies ``len(json.dumps(..., default=str)) <= max_chars``.
+    compact_marker = dict(marker)
+    spill_path = marker.get("path")
+    spill_basename = (
+        Path(spill_path).name if isinstance(spill_path, str) and spill_path else None
+    )
+    compact_marker["path"] = None
+    compact_marker["path_omitted"] = True
+    if spill_basename:
+        compact_marker["spill_file"] = spill_basename
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
+            name=spill_basename
+        )
+    else:
+        # No path at all (spill failed earlier): keep the digest-only recovery
+        # hint (the deterministic content-addressed name still locates the file
+        # if any later spill succeeded under the same digest).
+        compact_marker["digest"] = _attention_spill_digest8(attention)
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
+            name=f"notification-attention-overflow-{compact_marker['digest']}.json"
+        )
+    return {
+        NOTIFICATION_ATTENTION_OVERFLOW_KEY: compact_marker,
+        "comment": comment,
+    }
+
+
+def _cap_notification_attention(agent, attention: dict) -> dict:
+    """Return *attention* unchanged, or a compacted copy plus a spill file.
+
+    At or under ``NOTIFICATION_ATTENTION_MAX_CHARS`` this is a no-op: no spill
+    file, no marker, byte-identical block.  Over the cap the full attention
+    lane is spilled to disk and the returned copy carries an ``overflow``
+    marker with the spill path, the original size, and a comment that guides
+    the agent to read the file-based notification (or use the producer tool
+    when the spill failed).
+    """
+    full_chars = _notification_attention_envelope_chars(attention)
+    max_chars = _notification_attention_max_chars()
+    if full_chars <= max_chars:
+        return attention
+
+    spill_path = _spill_notification_attention(agent, attention)
+    marker: dict = {
+        "path": spill_path,
+        "full_chars": full_chars,
+        "truncated": True,
+    }
+    if spill_path:
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_COMMENT.format(path=spill_path)
+    else:
+        marker["spill_failed"] = True
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT
+
+    compacted: dict = attention
+    for budget in NOTIFICATION_ATTENTION_COMPACT_BUDGETS:
+        node, _changed = _compact_attention_node(attention, budget)
+        if not isinstance(node, dict):
+            compacted = {"data": node}
+        else:
+            compacted = node
+        # Kernel-owned marker: overwrite any producer key of the same name.
+        # The top-level comment is a short recovery hint, so it is stamped on
+        # every compacted budget (the payload is rebuilt from the original at
+        # each budget, and a budget that eventually fits may not be the widest).
+        compacted[NOTIFICATION_ATTENTION_OVERFLOW_KEY] = dict(marker)
+        compacted["comment"] = comment
+        if _notification_attention_envelope_chars(compacted) <= max_chars:
+            return compacted
+    return _drop_notification_attention_records(attention, marker, comment, max_chars)
 
 
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
@@ -3220,7 +3780,9 @@ def build_synthetic_meta_envelope(
             "instruction": AGENT_META_INSTRUCTION,
             "agent_state": state,
             "notifications": {
-                "attention": notification_payload.get(NOTIFICATIONS_KEY, {}),
+                "attention": _cap_notification_attention(
+                    agent, notification_payload.get(NOTIFICATIONS_KEY, {})
+                ),
                 "persistent": notification_payload.get(NOTIFICATION_PERSISTENT_KEY, {}),
             },
             "guidance": {
@@ -3520,7 +4082,9 @@ def attach_active_notifications(
     # guidance; notification attachment owns notifications and transient
     # guidance. Neither phase may replace the other phase's current subtree.
     agent_meta["instruction"] = AGENT_META_INSTRUCTION
-    agent_meta.setdefault("notifications", {})["attention"] = payload.get(NOTIFICATIONS_KEY, {})
+    agent_meta.setdefault("notifications", {})["attention"] = _cap_notification_attention(
+        agent, payload.get(NOTIFICATIONS_KEY, {})
+    )
     agent_meta.setdefault("guidance", {})["transient"] = payload.get(NOTIFICATION_GUIDANCE_KEY, {})
     if persistent_payload:
         agent_meta.setdefault("notifications", {})["persistent"] = persistent_payload.get(
