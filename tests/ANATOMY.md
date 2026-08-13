@@ -371,6 +371,7 @@ related_files:
   - tests/test_timely_transient_serialization.py
   - tests/test_token_ledger.py
   - tests/test_tool_dispatch.py
+  - tests/test_risky_action_gate.py
   - tests/test_tool_executor.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_context_migration.py
