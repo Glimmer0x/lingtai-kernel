@@ -276,6 +276,24 @@ def _resolve(path: str | os.PathLike[str]) -> str:
     return str(Path(path).expanduser().resolve())
 
 
+def _canonical_target(target: str | None, base_cwd: str | None) -> str | None:
+    """Resolve a shell/file target against the executor's effective cwd.
+
+    The gate and the executors must agree on where a relative target lands.
+    Shell omits ``working_dir`` -> executor uses the agent workdir; file
+    resolves relative ``file_path`` against the agent workdir. Using a bare
+    ``Path(...).resolve()`` here would resolve against the *process* cwd,
+    which can differ from the executor's effective cwd and let an approved
+    target point outside the approved root at execution time.
+    """
+    if not target or not base_cwd:
+        return _resolve(target) if target else None
+    path = Path(target).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    return str((Path(base_cwd) / path).resolve())
+
+
 def _is_within_roots(path: str | os.PathLike[str], roots: list[str]) -> bool:
     resolved = _resolve(path)
     for root in roots:
@@ -364,28 +382,47 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 @contextlib.contextmanager
-def _request_lock(request_path: Path, *, timeout_seconds: float = 5.0) -> Iterator[None]:
+def _request_lock(request_path: Path, *, timeout_seconds: float = 5.0, stale_after_seconds: float = 30.0) -> Iterator[None]:
     """Serialize writers on the same pending request via an exclusive lock file.
 
     The lock file is created with ``O_CREAT|O_EXCL`` so only one process can
     hold it at a time; a bounded retry loop waits for a concurrent writer.
     ``mark_approval``/``expire_pending`` re-read the request *inside* this
     lock, so a stale reader can never overwrite a newer terminal decision.
+
+    A crashed holder leaves the lock file behind. After ``stale_after_seconds``
+    the lock is treated as stale and reclaimed (unlinked and retried), so a
+    crash cannot permanently wedge request mutation; the stale owner is
+    recorded in the lock file for diagnosis.
     """
     lock_path = request_path.with_name(request_path.name + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + max(timeout_seconds, 0.0)
-    acquired = False
-    while not acquired:
+    owner = f"pid={os.getpid()}"
+    while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
+            try:
+                age = time.time() - lock_path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age > stale_after_seconds:
+                try:
+                    lock_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"could not acquire request lock: {lock_path}")
             time.sleep(0.02)
             continue
-        os.close(fd)
+        try:
+            os.write(fd, owner.encode("utf-8"))
+        finally:
+            os.close(fd)
         acquired = True
+        break
     try:
         yield
     finally:
@@ -658,7 +695,6 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
     if not segments:
         return "shell command cannot be parsed safely"
     trusted_scripts = {_resolve(path) for path in _list_value(config, "trusted_scripts")}
-    resolve_cwd = Path(cwd).expanduser().resolve() if isinstance(cwd, str) and cwd else None
     ssh_hosts = set(_list_value(config, "ssh_hosts"))
     for tokens in segments:
         unwrapped = _unwrap(tokens)
@@ -690,14 +726,8 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             if any(flag in tokens for flag in ("-c", "-e")):
                 return "inline interpreter code is risky"
             script = next((token for token in tokens[1:] if not token.startswith("-")), None)
-            script_path = (
-                (resolve_cwd / script).resolve()
-                if script is not None and resolve_cwd is not None and not Path(script).is_absolute()
-                else _resolve(script)
-                if script is not None
-                else None
-            )
-            if script_path is None or str(script_path) not in trusted_scripts:
+            script_path = _canonical_target(script, cwd) if script is not None else None
+            if script_path is None or script_path not in trusted_scripts:
                 return "interpreter script is not in trusted_scripts"
             continue
         if any(
@@ -725,7 +755,7 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
     return None
 
 
-def _file_risk_reason(args: dict[str, Any], config: dict[str, Any]) -> tuple[str, str] | None:
+def _file_risk_reason(args: dict[str, Any], config: dict[str, Any], *, base_cwd: str | None = None) -> tuple[str, str] | None:
     action = args.get("action")
     if action not in {"write", "edit"}:
         return None
@@ -735,9 +765,10 @@ def _file_risk_reason(args: dict[str, Any], config: dict[str, Any]) -> tuple[str
     target = action_input.get("file_path")
     if not isinstance(target, str) or not target:
         return "file target is missing", ""
-    if _is_within_roots(target, _list_value(config, "local_write_roots")):
+    canonical = _canonical_target(target, base_cwd)
+    if _is_within_roots(canonical, _list_value(config, "local_write_roots")):
         return None
-    return f"file.{action} target is outside local_write_roots", _resolve(target)
+    return f"file.{action} target is outside local_write_roots", canonical
 
 
 def _operation(proposal: ToolProposal, reason: str) -> dict[str, Any]:
@@ -758,7 +789,12 @@ def _operation(proposal: ToolProposal, reason: str) -> dict[str, Any]:
     }
     if proposal.tool_name == "shell" and isinstance(args.get("input"), dict):
         operation["command"] = args["input"].get("command")
-        operation["cwd"] = args["input"].get("working_dir")
+        operation["cwd"] = args["input"].get("working_dir") or None
+        operation["effective_cwd"] = args["input"].get("working_dir") or None
+    if proposal.tool_name == "file" and isinstance(args.get("input"), dict):
+        target = args["input"].get("file_path")
+        if isinstance(target, str) and target:
+            operation["target"] = _canonical_target(target, None)
     return operation
 
 
@@ -798,7 +834,7 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
             return GuardDecision.allow()
         reason: str | None = None
         if proposal.tool_name == "file":
-            file_result = _file_risk_reason(proposal.tool_args, config)
+            file_result = _file_risk_reason(proposal.tool_args, config, base_cwd=str(workdir))
             if file_result is not None:
                 reason = file_result[0]
         elif proposal.tool_name in ("shell", "bash"):
@@ -809,10 +845,14 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
             action_input = proposal.tool_args.get("input")
             action = proposal.tool_args.get("action")
             if action in (None, "run") and isinstance(action_input, dict):
+                # The executor uses the agent workdir when working_dir is
+                # omitted, so the gate must resolve targets against the same
+                # effective cwd rather than the gate process cwd.
+                effective_cwd = action_input.get("working_dir") or str(workdir)
                 reason = _shell_risk_reason(
                     str(action_input.get("command", "")),
                     config,
-                    cwd=action_input.get("working_dir"),
+                    cwd=effective_cwd,
                 )
         if not reason:
             return GuardDecision.allow()

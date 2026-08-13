@@ -1,0 +1,17 @@
+VERDICT: PASS
+Commit under test: d4e1c3e6f3e83ff5d3f53dd36960b76123e1cb20 (HEAD matches expected)
+Date: 2026-08-13
+
+Results:
+1) HEAD check: d4e1c3e6f3e83ff5d3f53dd36960b76123e1cb20 (expected match).
+   git status --short: only untracked entries '?? pr-body.md', '?? scratch/' -- no source modifications.
+2) tests/test_risky_action_gate.py            : 22 passed, 0 failed
+3) gate + loop_guard + preset_context_guard   : 38 passed, 0 failed
+4) tests/test_daemon.py -k 'stub or guard or tool_call': 1 passed, 132 deselected, 0 failed
+5) git diff --check: diffcheck-ok; compileall src/lingtai/kernel/risky_action_gate.py: compile-ok
+
+Pass count: 61 (22 + 38 + 1)
+Fail count: 0
+Pre-existing failures: none observed.
+Pre-existing untracked files (not failures, left untouched): pr-body.md, scratch/
+No source modified, no commit, no push, nothing deleted.

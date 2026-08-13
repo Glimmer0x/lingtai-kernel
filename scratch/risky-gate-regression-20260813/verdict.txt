@@ -1,0 +1,47 @@
+VERDICT: PASS (no regressions attributable to the risky-action gate hardening)
+Worktree: /Users/huangzesen/work/projects/lingtai-dev/dev-3/.lingtai/lingtaidev3bot/.worktrees/risky-gate-fix-20260813
+Date: 2026-08-13
+
+Per-command results (full log: regression.txt, full CMD3 collection log: cmd3_full.log)
+
+CMD 1: pytest tests/test_risky_action_gate.py tests/test_tool_call_guard.py -q
+  ERROR: file or directory not found: tests/test_tool_call_guard.py -> "no tests ran".
+  tests/test_tool_call_guard.py does NOT exist in this worktree (only the module
+  src/lingtai/kernel/tool_call_guard.py exists; no test file with that name anywhere).
+  Command-spec issue, NOT a code failure.
+  Rerun of tests/test_risky_action_gate.py alone: 16 passed, 0 failed.
+
+CMD 2: pytest tests/test_daemon.py -q -k 'stub or guard or tool_call'
+  1 passed, 132 deselected, 0 failed.
+
+CMD 3: pytest tests/ -q -k 'risky_action or tool_call_guard'
+  Interrupted at collection: 0 tests ran, 70 collection errors, 7581 deselected.
+  ALL 70 errors are PRE-EXISTING ENVIRONMENT ABI mismatches, not regressions:
+    - 62x ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
+      (interpreter python3 = homebrew Python 3.14.6, but site-packages resolved from
+      the Python 3.13 venv .../venv-main-c202433f/lib/python3.13/site-packages)
+    - 8x cffi version mismatch (cffi 2.1.1 from 3.13 venv vs _cffi_backend 2.0.0
+      from /opt/homebrew/lib/python3.14)
+  No mcp ServerRequestContext import error was observed in this run; the failures are
+  third-party import failures (openai/pydantic/pydantic_core/cffi) that do not touch
+  the 3 modified files. Same class of pre-existing env issue as previously reported.
+
+Supplementary (because CMD 1's target file is missing):
+  Adjacent guard suites (test_loop_guard.py, test_preset_context_guard.py,
+  test_daemon_claude_p_background_guard.py): 26 passed, 0 failed.
+
+Static checks:
+  git status --short: only expected gate-fix files modified
+    (src/lingtai/kernel/daemon_supervisor/agent_stub.py,
+     src/lingtai/kernel/risky_action_gate.py, tests/test_risky_action_gate.py)
+    plus untracked scratch/ (this regression output). No unexpected changes.
+  git diff --check: clean (no whitespace errors).
+  compileall (risky_action_gate.py, agent_stub.py): clean, exit 0.
+
+Counts:
+  Passed: 43 (16 gate + 1 daemon stub/guard + 26 adjacent guard suites)
+  Failed: 0
+  Pre-existing env collection errors (CMD 3): 70 -- reported, not regressions
+  CMD 1 as-specified: error only because tests/test_tool_call_guard.py does not exist
+
+No source files were modified; nothing committed or pushed.

@@ -691,6 +691,74 @@ def test_git_trace_env_sinks_denied(tmp_path):
         assert decision.allowed, command
 
 
+def test_effective_cwd_binds_relative_targets_to_agent_workdir(tmp_path):
+    """Omitted/empty cwd and relative file targets resolve to the agent workdir.
+
+    Regression for Fable final P1: the shell/file executors run with the
+    agent workdir when cwd is omitted, so the gate must resolve relative
+    targets and trusted scripts against the same base instead of the gate
+    process cwd. A relative file write is therefore checked against the
+    workdir-relative path, and a relative trusted script must match the
+    workdir-relative canonical path.
+    """
+    _file_config(tmp_path)
+    approved = tmp_path / "approved"
+    approved.mkdir()
+    security = tmp_path / ".security"
+    (security / "gate_config.json").write_text(json.dumps({
+        "local_write_roots": [str(approved)],
+        "trusted_scripts": [str(approved / "run.py")],
+    }, ensure_ascii=False), encoding="utf-8")
+    # Relative file target inside the approved root (resolved against workdir)
+    # stays allowed; a relative target escaping the approved root is denied.
+    decision = build_risky_action_check(tmp_path)(_proposal("file", {
+        "action": "write", "input": {"file_path": "approved/out.txt"}
+    }))
+    assert decision.allowed
+    decision = build_risky_action_check(tmp_path)(_proposal("file", {
+        "action": "write", "input": {"file_path": "../outside.txt"}
+    }))
+    assert not decision.allowed
+    # Relative trusted script resolves against the workdir, not process cwd.
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "python approved/run.py", "working_dir": None}
+    }))
+    assert decision.allowed, "relative trusted script under workdir must be allowed"
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "python ../run.py", "working_dir": None}
+    }))
+    assert not decision.allowed
+
+
+def test_stale_request_lock_is_reclaimed(tmp_path):
+    """A crashed holder's lock file must not permanently wedge mutation.
+
+    Regression for Fable final P1 #2: _request_lock now records an owner and
+    reclaims a lock older than stale_after_seconds, so a crashed process
+    cannot wedge mark_approval/expire_pending forever.
+    """
+    from lingtai.kernel.risky_action_gate import expire_pending, mark_approval, _request_lock
+    import os, time
+    request = tmp_path / "req.json"
+    request.write_text(json.dumps({
+        "id": "x", "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_in_seconds": 3600, "status": "pending",
+        "operation": {}, "approvals": {"telegram": None, "wechat": None},
+    }), encoding="utf-8")
+    lock = tmp_path / "req.json.lock"
+    lock.write_text("pid=999999", encoding="utf-8")
+    # Make it look stale (older than the default 30s reclaim threshold).
+    old = time.time() - 60
+    os.utime(lock, (old, old))
+    with _request_lock(request, stale_after_seconds=30.0):
+        pass
+    assert not lock.exists(), "stale lock should have been reclaimed"
+    result = mark_approval(request, "telegram", "approve")
+    assert result["status"] == "pending"  # second channel still needed
+    result = mark_approval(request, "wechat", "approve")
+    assert result["status"] == "approved"
+
+
 def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     """Path-form executables must be denied before any basename fast-path.
 
