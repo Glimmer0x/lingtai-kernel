@@ -493,16 +493,16 @@ SCHEMA = {
                 "accounts", "manual",
             ],
             "description": (
-                "send: send message to a chat (chat_id, rendering_mode, and text or structured_message; optional media, reply_markup, placeholder, chat_action, entities). "
+                "send: send message to a chat (chat_id and text or structured_message; rendering_mode defaults to Markdown; optional media, reply_markup, placeholder, chat_action, entities). "
                 "For charts, reports, generated artifacts, and other files the user should open intact, prefer media.type='document'; use media.type='photo' only when an inline Telegram photo preview is desired, because photo previews may crop, compress, or display poorly for text-heavy graphics. "
                 "If chat_action is set and no text/media is provided, sends a typing "
                 "indicator (auto-expires after 5s) instead of a message. "
                 "check: list recent conversations with unread counts (optional account). "
                 "read: read messages from a chat (chat_id; optional limit). "
-                "reply: reply to a specific message (message_id from read results, rendering_mode, and text or structured_message; optional entities). "
+                "reply: reply to a specific message (message_id from read results and text or structured_message; rendering_mode defaults to Markdown; optional entities). "
                 "search: search messages (query; optional account, chat_id). "
                 "delete: delete a bot message (message_id). "
-                "edit: edit a bot message (message_id, rendering_mode, and text or structured_message; optional reply_markup, entities). "
+                "edit: edit a bot message (message_id and text or structured_message; rendering_mode defaults to Markdown; optional reply_markup, entities). "
                 "contacts: list saved contacts. "
                 "add_contact: save a chat alias (chat_id, alias); this does not grant inbound permission. "
                 "To receive messages from that user, their Telegram user ID must also be in allowed_users. "
@@ -561,11 +561,12 @@ SCHEMA = {
         "rendering_mode": {
             "type": "string",
             "enum": ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities"],
+            "default": "Markdown",
             "description": (
-                "Required for every content-bearing send/reply/edit. Choose "
-                "plain_text, HTML, Markdown, MarkdownV2, or entities; there is no "
-                "default. The runtime maps the choice to Telegram parse_mode or "
-                "MessageEntity data."
+                "Defaults to Markdown for agent messages; the agent may omit it. Choose "
+                "plain_text, HTML, MarkdownV2, or entities when needed. The runtime "
+                "maps the choice to Telegram parse_mode or MessageEntity data; "
+                "internal manager-owned sends without it remain plain text."
             ),
         },
         "entities": {
@@ -893,6 +894,9 @@ class TelegramManager:
         if chat_id_error is not None:
             return chat_id_error
         try:
+            if action in {"send", "reply", "edit"}:
+                args = {**args}
+                args.setdefault("rendering_mode", "Markdown")
             if action == "send":
                 return self._send(args)
             elif action == "check":
@@ -3819,12 +3823,12 @@ class TelegramManager:
 
     @classmethod
     def _rendering_mode(cls, args: dict) -> str:
-        """Return the explicit rendering choice, with an internal plain fallback.
+        """Return the rendering choice, with an internal plain-text fallback.
 
-        The public ToolFamily requires ``rendering_mode``.  Manager internals
-        also send text (for example automatic progress) without passing through
-        that model-facing schema, so those internal calls retain plain-text
-        behavior without creating a public default.
+        The public ToolFamily now defaults to Markdown at dispatch. The
+        ``None`` to ``plain_text`` fallback remains only for internal
+        manager-owned sends (for example automatic progress) that do not pass
+        through that model-facing boundary.
         """
         value = args.get("rendering_mode")
         return "plain_text" if value is None else value
@@ -3853,9 +3857,9 @@ class TelegramManager:
     def _rich_text_options(self, args: dict) -> tuple[dict[str, Any], str | None]:
         """Extract Bot API options for a text message from rendering_mode.
 
-        ``rendering_mode`` is required at the public family boundary.  Missing
-        values here are only for manager-owned internal sends and mean plain
-        text; the model-facing schema never relies on that fallback.
+        The public ToolFamily defaults ``rendering_mode`` to Markdown at its
+        dispatch boundary. Missing values here are only for manager-owned
+        internal sends and mean plain text.
         """
         opts: dict[str, Any] = {}
         entities = args.get("entities")
