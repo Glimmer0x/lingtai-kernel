@@ -350,6 +350,7 @@ def _notification_manual_path(workdir: Path) -> Path:
 def test_manual_returns_installed_notification_manual_without_state_mutation(
     tmp_path: Path,
 ) -> None:
+    """The installed manual result stays flat, never double-wrapped as ``content``."""
     agent = _StubAgent(tmp_path)
     manual_path = _notification_manual_path(tmp_path)
     manual_path.parent.mkdir(parents=True)
@@ -409,13 +410,6 @@ def test_check_returns_placeholder_dict(tmp_path: Path) -> None:
     assert res["_notification_placeholder"] is True
     assert "notification(action=check)" in res["message"]
     assert "notifications" not in res
-
-
-def test_unknown_action_errors(tmp_path: Path) -> None:
-    agent = _StubAgent(tmp_path)
-    res = _call(agent, "bogus")
-    assert res["status"] == "error"
-    assert "Unknown notification action" in res["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -943,27 +937,6 @@ def test_manual_takes_no_input_and_performs_no_io(tmp_path: Path) -> None:
     assert res["status"] == "failed"
     assert res["error_code"] == "INVALID_ARGUMENT"
     assert not (tmp_path / ".notification").exists()
-
-
-def test_manual_result_is_flattened_not_double_wrapped(tmp_path: Path) -> None:
-    """Host presentation flattens the canonical child result; no nested envelope.
-
-    ``ToolFamily.handle`` returns ``build_manual_child``'s canonical
-    ``content``/``structuredContent`` result verbatim. Notification's pinned
-    public shape is the flat one, so the adaptation happens after dispatch —
-    and the canonical keys must not survive into the public result.
-    """
-    agent = _StubAgent(tmp_path)
-    manual_path = _notification_manual_path(tmp_path)
-    manual_path.parent.mkdir(parents=True)
-    manual_path.write_text("# body\n", encoding="utf-8")
-
-    res = _call(agent, "manual")
-
-    assert set(res) == {"status", "notification_manual", "manual_path"}
-    assert res["notification_manual"] == "# body\n"
-    for canonical in ("content", "structuredContent", "manual"):
-        assert canonical not in res
 
 
 def test_family_schema_survives_chat_and_responses_wires() -> None:

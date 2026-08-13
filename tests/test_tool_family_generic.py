@@ -105,6 +105,7 @@ def test_schema_composes_action_input_reasoning_summarize_root():
     assert spin_branch["additionalProperties"] is False
     assert manual_branch["properties"] == {}
     for branch in branches:
+        assert branch["additionalProperties"] is False
         assert "reasoning" not in branch.get("properties", {})
         assert "_reasoning" not in branch.get("properties", {})
         assert "summarize" not in branch.get("properties", {})
@@ -309,21 +310,6 @@ def test_manual_child_dispatch_returns_full_manual_shape():
         "manual": "widget manual body",
         "manual_path": "/fake/manual_path",
     }
-
-
-def test_manual_child_rejects_nonempty_input():
-    fam = _widget_family()
-    # The manual branch's own strict-empty schema is model-facing guidance;
-    # dispatch-time correspondence is a separate, real check per
-    # tools/CONTRACT.md "Dispatch and actions": a family MUST validate
-    # action/input correspondence, not just rely on schema conformance.
-    # ChildTool handlers here do not themselves reject extra keys (that is
-    # each child's own responsibility, per "implementation independence"),
-    # but the family-level schema composition still advertises strict-empty.
-    schema = fam.build_schema()
-    manual_branch = next(b for b in schema["properties"]["input"]["oneOf"] if b["title"] == "manual input")
-    assert manual_branch["additionalProperties"] is False
-    assert manual_branch["properties"] == {}
 
 
 def _minimal_evaluate_if_then(condition: dict, action: str, input_value: dict) -> bool | None:

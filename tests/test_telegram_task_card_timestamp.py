@@ -90,6 +90,7 @@ def test_current_time_line_present_even_when_no_row_has_a_stamp():
         {"tool": "read", "tool_action": "", "reasoning": "y",
          "elapsed_s": 2, "done": False},
     ], now=_NOW)
+    assert "bash.run" in text
     # Last Updated never depends on any row carrying a stamp — it always
     # reflects the render instant.
     assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
@@ -112,13 +113,4 @@ def test_api_error_row_never_carries_a_stamp_alongside_a_tool_row():
     assert "UTC" not in bash_line
     api_line = next(ln for ln in text.splitlines() if "API error" in ln)
     assert "UTC" not in api_line
-    assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
-
-
-def test_render_tool_row_without_started_at_is_safe():
-    text = TelegramManager._format_task_card_text("", "", "", rows=[
-        {"tool": "bash", "tool_action": "run", "reasoning": "x",
-         "elapsed_s": 1, "done": False},
-    ], now=_NOW)
-    assert "bash.run" in text
     assert text.splitlines()[-1] == "Last Updated: 17:18:36 U-7"
