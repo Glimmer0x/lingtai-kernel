@@ -225,7 +225,7 @@ def test_journal_rehydrates_complete_lines_and_consumes_partial_later(
     assert groups[0]["events"][0]["elapsed_s"] == 1.25
     assert all(row.get("text") != "done" for row in groups[0]["events"])
     assert changed is True
-    assert completed_groups[-1]["events"] == [{"kind": "text", "text": "done"}]
+    assert completed_groups[-1]["events"] == [{"kind": "text", "text": "done", "_api_call_id": "api-2"}]
     assert len(changes) == 2
 
 
