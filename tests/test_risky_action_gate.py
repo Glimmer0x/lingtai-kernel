@@ -287,6 +287,84 @@ def test_git_list_only_option_mutations_are_denied(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_option_only_mutations_denied_but_git_write_flag_is_denied(tmp_path):
+    """Git fast-path must still reject --output/--outfile write destinations.
+
+    Regression for Fable batch-A cross-check P0 #3-A: the git fast-path
+    ``continue`` skipped the generic write-flag check, so ``git diff
+    --output=/tmp/x`` etc. were allowed despite writing a file.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git diff --output=/tmp/fable-never-created",
+        "git diff --output /tmp/fable-never-created",
+        "git show --output=/tmp/fable-never-created HEAD",
+        "git log --output=/tmp/fable-never-created -1",
+        "git diff --outfile=/tmp/fable-never-created",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Git read-only without a write flag still passes.
+    for command in ("git diff", "git show HEAD", "git log -1", "git status"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
+def test_mark_approval_cannot_overwrite_denied_or_expired(tmp_path, monkeypatch):
+    """A stale approve must never resurrect a denied/expired request.
+
+    Regression for Fable batch-A cross-check P0 #3-B: mark_approval was a
+    lock-free read-modify-atomic-replace, so a concurrent stale ``approved``
+    write after ``denied`` could flip the terminal state. Both writers now
+    serialize on the request lock and re-read before transition; deny and
+    expire are irreversible.
+    """
+    from lingtai.kernel.risky_action_gate import expire_pending, mark_approval
+    import json, shutil, threading
+
+    _file_config(tmp_path)
+    pending_dir = tmp_path / ".security" / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    req = pending_dir / "race.json"
+
+    def fresh_payload(created_at: str) -> dict:
+        return {
+            "status": "pending",
+            "created_at": created_at,
+            "expires_in_seconds": 3600,
+            "operation": "NEVER EXECUTED",
+        }
+
+    def deny_and_approve():
+        mark_approval(req, "telegram", "deny")
+        mark_approval(req, "telegram", "approve")
+
+    def expire_and_approve():
+        expire_pending(req)
+        mark_approval(req, "telegram", "approve")
+
+    scenarios = (
+        # deny must be irreversible: approve afterwards must not flip it.
+        ("denied", fresh_payload("2099-01-01T00:00:00+00:00"), deny_and_approve),
+        # expired must be irreversible: approve afterwards must not resurrect.
+        ("expired", fresh_payload("2020-01-01T00:00:00+00:00"), expire_and_approve),
+    )
+    for scenario, payload, writer in scenarios:
+        req.write_text(json.dumps(payload), encoding="utf-8")
+        threads = [threading.Thread(target=writer) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        final = json.loads(req.read_text(encoding="utf-8"))
+        assert final["status"] == scenario, (scenario, final["status"])
+        assert final["operation"] == "NEVER EXECUTED"
+
+
 def test_read_only_verb_with_write_flag_is_denied(tmp_path):
     _file_config(tmp_path)
     for command in ("sort -o /tmp/x input", "curl -o /tmp/x https://example.com", "wget -O /tmp/x https://example.com"):

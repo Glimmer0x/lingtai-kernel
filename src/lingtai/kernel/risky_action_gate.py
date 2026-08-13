@@ -11,14 +11,16 @@ fail-closed boundary for the first-class ``file`` and ``shell`` surfaces.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
 import tempfile
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .tool_call_guard import GuardDecision, ToolProposal
 
@@ -218,6 +220,38 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
             pass
 
 
+@contextlib.contextmanager
+def _request_lock(request_path: Path, *, timeout_seconds: float = 5.0) -> Iterator[None]:
+    """Serialize writers on the same pending request via an exclusive lock file.
+
+    The lock file is created with ``O_CREAT|O_EXCL`` so only one process can
+    hold it at a time; a bounded retry loop waits for a concurrent writer.
+    ``mark_approval``/``expire_pending`` re-read the request *inside* this
+    lock, so a stale reader can never overwrite a newer terminal decision.
+    """
+    lock_path = request_path.with_name(request_path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    acquired = False
+    while not acquired:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"could not acquire request lock: {lock_path}")
+            time.sleep(0.02)
+            continue
+        os.close(fd)
+        acquired = True
+    try:
+        yield
+    finally:
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            pass
+
+
 def _token_is_ambiguous(token: str) -> bool:
     return any(char in token for char in ("*", "?", "$", "`")) or ("[" in token and "]" in token)
 
@@ -288,6 +322,8 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             subcommand = next((token for token in tokens[1:] if not token.startswith("-")), None)
             if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
                 return f"git subcommand is not classified read-only: {subcommand or '<missing>'}"
+            if any(_is_write_destination_flag(token) for token in tokens[1:]):
+                return f"git {subcommand} carries a write-destination flag"
             if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
                 reason = _git_list_only_risk(tokens, subcommand)
                 if reason is not None:
@@ -441,60 +477,70 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
 
 
 def expire_pending(path: str | os.PathLike[str], *, now: datetime | None = None) -> dict[str, Any]:
-    """Mark an unapproved request expired; expired requests are never replayable."""
+    """Mark an unapproved request expired; expired requests are never replayable.
+
+    Runs under the exclusive request lock and re-reads the file so a stale
+    reader cannot resurrect a request that a concurrent writer already denied
+    or expired. Terminal states (denied/expired/approved) are irreversible.
+    """
     request_path = Path(path)
-    payload = json.loads(request_path.read_text(encoding="utf-8"))
-    if payload.get("status") != "pending":
-        return payload
-    created_raw = payload.get("created_at")
-    try:
-        created = datetime.fromisoformat(str(created_raw))
-        ttl = int(payload.get("expires_in_seconds", DEFAULT_APPROVAL_TTL_SECONDS))
-    except (TypeError, ValueError):
-        # A malformed timestamp is not permission to execute; fail closed.
-        payload["status"] = "expired"
-    else:
-        current = now or datetime.now(timezone.utc)
-        if created + timedelta(seconds=max(ttl, 0)) <= current:
+    with _request_lock(request_path):
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        if payload.get("status") != "pending":
+            return payload
+        created_raw = payload.get("created_at")
+        try:
+            created = datetime.fromisoformat(str(created_raw))
+            ttl = int(payload.get("expires_in_seconds", DEFAULT_APPROVAL_TTL_SECONDS))
+        except (TypeError, ValueError):
+            # A malformed timestamp is not permission to execute; fail closed.
             payload["status"] = "expired"
-    if payload.get("status") == "expired":
-        _write_json_atomic(request_path, payload)
-    return payload
+        else:
+            current = now or datetime.now(timezone.utc)
+            if created + timedelta(seconds=max(ttl, 0)) <= current:
+                payload["status"] = "expired"
+        if payload.get("status") == "expired":
+            _write_json_atomic(request_path, payload)
+        return payload
 
 
 def mark_approval(path: str | os.PathLike[str], channel: str, decision: str, *, now: datetime | None = None) -> dict[str, Any]:
     """Record one human approval leg; replay remains a separate worker concern.
 
-    An expired request is never replayable: this function refuses to record an
-    approval (or anything else) on a request whose TTL has already elapsed, so
-    a late human approval cannot resurrect an expired pending record.
+    An expired request is never replayable, and a denied request is
+    irreversible: this function refuses to record an approval (or anything
+    else) on a request whose TTL has already elapsed or whose status has
+    already left ``pending``. Runs under the exclusive request lock and
+    re-reads the file, so a concurrent stale approve can never overwrite a
+    newer deny/expire.
     """
     if channel not in APPROVAL_CHANNELS:
         raise ValueError(f"unknown approval channel: {channel}")
     if decision not in {"approve", "deny"}:
         raise ValueError("decision must be approve or deny")
     request_path = Path(path)
-    payload = json.loads(request_path.read_text(encoding="utf-8"))
-    if payload.get("status") != "pending":
-        return payload
-    created_raw = payload.get("created_at")
-    try:
-        created = datetime.fromisoformat(str(created_raw))
-        ttl = int(payload.get("expires_in_seconds", DEFAULT_APPROVAL_TTL_SECONDS))
-    except (TypeError, ValueError):
-        # A malformed timestamp is not permission to execute; fail closed.
-        payload["status"] = "expired"
+    with _request_lock(request_path):
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        if payload.get("status") != "pending":
+            return payload
+        created_raw = payload.get("created_at")
+        try:
+            created = datetime.fromisoformat(str(created_raw))
+            ttl = int(payload.get("expires_in_seconds", DEFAULT_APPROVAL_TTL_SECONDS))
+        except (TypeError, ValueError):
+            # A malformed timestamp is not permission to execute; fail closed.
+            payload["status"] = "expired"
+            _write_json_atomic(request_path, payload)
+            return payload
+        current = now or datetime.now(timezone.utc)
+        if created + timedelta(seconds=max(ttl, 0)) <= current:
+            payload["status"] = "expired"
+            _write_json_atomic(request_path, payload)
+            return payload
+        payload.setdefault("approvals", {})[channel] = decision
+        if decision == "deny":
+            payload["status"] = "denied"
+        elif all(payload["approvals"].get(item) == "approve" for item in APPROVAL_CHANNELS):
+            payload["status"] = "approved"
         _write_json_atomic(request_path, payload)
         return payload
-    current = now or datetime.now(timezone.utc)
-    if created + timedelta(seconds=max(ttl, 0)) <= current:
-        payload["status"] = "expired"
-        _write_json_atomic(request_path, payload)
-        return payload
-    payload.setdefault("approvals", {})[channel] = decision
-    if decision == "deny":
-        payload["status"] = "denied"
-    elif all(payload["approvals"].get(item) == "approve" for item in APPROVAL_CHANNELS):
-        payload["status"] = "approved"
-    _write_json_atomic(request_path, payload)
-    return payload
