@@ -13,6 +13,11 @@ from typing import Any
 from lingtai.kernel.logging import get_logger
 
 from .interface import ChatInterface
+from .reasoning_effort import (
+    UNAVAILABLE_CAPABILITY,
+    ReasoningEffortCapability,
+    ReasoningEffortSnapshot,
+)
 
 logger = get_logger()
 
@@ -271,6 +276,23 @@ class ChatSession(ABC):
     # Default ``None`` — adapters that don't install a hook treat the
     # call as a no-op, preserving the legacy zero-hook behavior.
     pre_request_hook: "Callable[[ChatInterface], None] | None" = None
+
+    # -- Runtime reasoning-effort port ------------------------------------
+    # Separate from pre_request_hook: providers may need both seams at once.
+    def reasoning_effort_capability(self) -> ReasoningEffortCapability:
+        """Describe the active route's exact live-effort capability."""
+        return UNAVAILABLE_CAPABILITY
+
+    def set_reasoning_effort_policy(
+        self,
+        provider: "Callable[[], ReasoningEffortSnapshot | None] | None",
+    ) -> bool:
+        """Install a per-dispatch immutable policy provider, if supported."""
+        return False
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        """Return safe evidence for the latest effort dispatch, if supported."""
+        return None
 
     def adapter_comment(self):
         """Optional legacy combined adapter note for ``_meta.agent_meta``.
