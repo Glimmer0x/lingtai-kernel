@@ -69,6 +69,7 @@ _STRUCTURED_MESSAGE_TEXT_CAP = 500
 # state file bounded.
 SEEN_KEYS_MAX = 5000
 _PENDING_PUBLICATION_KEY = "pending_publication"
+_HISTORY_INDEX_VERSION = 1
 
 # Public callers receive the strict LTP-v2 family schema. Manager dispatch
 # remains the internal flat action boundary after family validation.
@@ -126,6 +127,16 @@ class WechatManager:
         self._inbox_dir = self._wechat_dir / "inbox"
         self._sent_dir = self._wechat_dir / "sent"
         self._media_dir = self._wechat_dir / "media"
+        # Rebuildable metadata index used by bounded conversation views. The
+        # message JSON files remain authoritative; this index only avoids
+        # reparsing the full history on every check/read/notification preview.
+        self._history_index_file = self._wechat_dir / "history_index.json"
+        self._history_index: list[dict] | None = None
+        self._history_by_peer: dict[str, list[dict]] = {}
+        self._history_by_id: dict[str, dict] = {}
+        self._history_conversations: dict[str, dict] = {}
+        self._history_index_checked = False
+        self._history_roots_signature: tuple[int | None, int | None] | None = None
         for d in (self._inbox_dir, self._sent_dir, self._media_dir):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -156,6 +167,15 @@ class WechatManager:
         # Load persisted state. Pending producer callbacks are drained only by
         # start(), after this manager owns the per-account poller lock.
         self._load_state()
+        try:
+            # Build/recover the derived index once at startup, not inside each
+            # check/read/preview call. message.json remains authoritative.
+            self._ensure_history_index()
+        except Exception as exc:
+            # A transient filesystem failure must not prevent the addon from
+            # starting; the next bounded view retries the rebuild.
+            self._history_index_checked = False
+            log.warning("Failed to initialize WeChat history index: %s", type(exc).__name__)
 
     def start(self) -> None:
         """Start the long-poll loop on a dedicated daemon thread.
@@ -476,6 +496,12 @@ class WechatManager:
         # Record only after the complete inbox landing and exact pending
         # callback payload are durable. A False/exception leaves that marker.
         self._record_seen(stable_key, msg_id)
+        try:
+            self._upsert_history_index(msg_data, folder="inbox")
+        except Exception as exc:
+            # The inbox record is authoritative and remains readable even if
+            # the derived index cannot be persisted right now.
+            log.warning("Failed to update WeChat history index: %s", type(exc).__name__)
         self._deliver_pending_callback(msg_file, msg_data)
 
     # ── Tool handler dispatch ──────────────────────────────────
@@ -571,6 +597,12 @@ class WechatManager:
             (msg_dir / "message.json").write_text(
                 json.dumps(sent_data, ensure_ascii=False, indent=2), encoding="utf-8",
             )
+            try:
+                self._upsert_history_index(sent_data, folder="sent")
+            except Exception as exc:
+                # The message file remains authoritative; a later startup can
+                # rebuild a missing/stale index without losing the sent record.
+                log.warning("Failed to update WeChat history index: %s", type(exc).__name__)
             return msg_id
 
         def _media_failure(error: media_mod.MediaUploadError) -> dict:
@@ -650,34 +682,24 @@ class WechatManager:
         Unread counts incoming messages only — outgoing ones are things
         the agent already produced.
         """
-        all_msgs = self._load_inbox_messages() + self._load_sent_messages()
-        all_msgs.sort(key=lambda m: m.get("date", ""), reverse=True)
+        # The durable index contains only the fields needed to aggregate a
+        # conversation. It avoids opening every retained message.json just to
+        # answer a bounded metadata request.
+        self._history_entries_sorted()
 
-        conversations: dict[str, dict] = {}
-        for data in all_msgs:
-            direction = "outgoing" if data.get("to_user_id") else "incoming"
-            user = data.get("to_user_id") if direction == "outgoing" else data.get("from_user_id", "unknown")
-            if not user:
-                continue
-            msg_id = data.get("id", "")
-            preview = data.get("body") or data.get("text") or ""
-            if user not in conversations:
-                contact = self._find_contact_by_user_id(user)
-                conversations[user] = {
-                    "user_id": user,
-                    "alias": contact.get("alias", user) if contact else user,
-                    "total": 0,
-                    "unread": 0,
-                    "latest": preview[:100],
-                    "date": data.get("date", ""),
-                }
-            conversations[user]["total"] += 1
-            if direction == "incoming" and msg_id not in self._read_ids:
-                conversations[user]["unread"] += 1
-            # Don't overwrite latest — messages are sorted newest-first,
-            # so the first entry per user (set in the if-block above) is correct.
+        conversations = []
+        for user, aggregate in self._history_conversations.items():
+            contact = self._find_contact_by_user_id(user)
+            conversations.append({
+                "user_id": user,
+                "alias": contact.get("alias", user) if contact else user,
+                "total": aggregate["total"],
+                "unread": aggregate["unread"],
+                "latest": aggregate["latest"],
+                "date": aggregate["date"],
+            })
 
-        return {"conversations": list(conversations.values())}
+        return {"conversations": conversations}
 
     def _handle_read(self, args: dict) -> dict:
         user_id = args.get("user_id")
@@ -685,22 +707,22 @@ class WechatManager:
         if not user_id:
             return {"error": "user_id is required for read"}
 
-        # Merge inbox + sent so the agent can see its own outgoing replies
-        # after a molt and avoid sending duplicate responses.
-        combined = self._load_inbox_messages() + self._load_sent_messages()
-        combined.sort(key=lambda m: m.get("date", ""), reverse=True)
-
+        # Read only the newest indexed entries for this peer. Message files
+        # are opened for those entries, so limit=1 performs one bounded read
+        # rather than scanning the retained inbox and sent history.
+        self._ensure_history_index()
+        entries = self._history_by_peer.get(user_id, [])
         messages = []
-        for data in combined:
-            if data.get("to_user_id"):
-                if data.get("to_user_id") != user_id:
-                    continue
+        for entry in entries:
+            data = self._read_indexed_message(entry)
+            if data is None:
+                # A deleted/corrupt record is skipped; continue past it so a
+                # bounded read still returns up to the requested number.
+                continue
+            if entry["direction"] == "outgoing":
                 data = {**data, "_direction": "outgoing"}
             else:
-                if data.get("from_user_id") != user_id:
-                    continue
-                msg_id = data.get("id", "")
-                self._read_ids.add(msg_id)
+                self._mark_history_read(entry["id"])
                 data = {**data, "_direction": "incoming"}
             messages.append(data)
             if len(messages) >= limit:
@@ -729,7 +751,7 @@ class WechatManager:
         # drains after a reply (mirrors the Telegram addon's reply handler).
         # Only mark when the send actually succeeded.
         if result.get("status") == "ok":
-            self._read_ids.add(message_id)
+            self._mark_history_read(message_id)
             self._save_read()
         return result
 
@@ -927,20 +949,14 @@ class WechatManager:
         """
         now = datetime.now(timezone.utc)
 
-        inbox = [
-            {**m, "_direction": "incoming"}
-            for m in self._load_inbox_messages()
-            if m.get("from_user_id") == user_id
-        ]
-        sent = [
-            {**m, "_direction": "outgoing"}
-            for m in self._load_sent_messages()
-            if m.get("to_user_id") == user_id
-        ]
-        messages = inbox + sent
+        # The index is newest-first, so only the bounded preview window needs
+        # to reopen message.json records. The optional current record is already
+        # in memory and is merged before the final chronological slice.
+        messages = self._load_indexed_messages_for_peer(user_id, max_messages)
         if (
             isinstance(current_record, dict)
             and current_record.get("from_user_id") == user_id
+            and not any(m.get("id") == current_record.get("id") for m in messages)
         ):
             messages.append({**current_record, "_direction": "incoming"})
         messages.sort(key=lambda m: m.get("date") or "")
@@ -991,6 +1007,271 @@ class WechatManager:
         if latest_incoming is not None:
             metadata["latest_incoming"] = latest_incoming
         return body, metadata
+
+    @staticmethod
+    def _history_entry_from_record(
+        data: dict, *, folder: str, message_dir: str,
+    ) -> dict | None:
+        """Return the small derived index record for one landed message."""
+        if not isinstance(data, dict) or folder not in {"inbox", "sent"}:
+            return None
+        if not WechatManager._safe_local_id(message_dir):
+            return None
+        direction = "outgoing" if data.get("to_user_id") else "incoming"
+        peer = (
+            data.get("to_user_id")
+            if direction == "outgoing"
+            else data.get("from_user_id", "unknown")
+        )
+        if not isinstance(peer, str):
+            peer = ""
+        message_id = data.get("id", "")
+        if not isinstance(message_id, str):
+            message_id = str(message_id) if message_id is not None else ""
+        date = data.get("date", "") or ""
+        if not isinstance(date, str):
+            date = str(date)
+        preview = data.get("body") or data.get("text") or ""
+        if not isinstance(preview, str):
+            preview = str(preview)
+        return {
+            "id": message_id,
+            "folder": folder,
+            "message_dir": message_dir,
+            "path": f"{folder}/{message_dir}/message.json",
+            "direction": direction,
+            "peer": peer,
+            "date": date,
+            # Check only exposes the first 100 characters; keep the derived
+            # index compact even when a landed message has a very large body.
+            "preview": preview[:100],
+        }
+
+    def _set_history_entries(self, entries: list[dict]) -> None:
+        # Keep the source insertion order for equal timestamps, matching the
+        # prior stable sort of inbox records before sent records.
+        entries.sort(key=lambda entry: entry.get("date", ""), reverse=True)
+        by_peer: dict[str, list[dict]] = {}
+        by_id: dict[str, dict] = {}
+        conversations: dict[str, dict] = {}
+        for entry in entries:
+            by_id[entry["id"]] = entry
+            peer = entry["peer"]
+            if peer:
+                by_peer.setdefault(peer, []).append(entry)
+                aggregate = conversations.setdefault(
+                    peer,
+                    {
+                        "total": 0,
+                        "unread": 0,
+                        "latest": entry["preview"][:100],
+                        "date": entry["date"],
+                    },
+                )
+                aggregate["total"] += 1
+                if (
+                    entry["direction"] == "incoming"
+                    and entry["id"] not in self._read_ids
+                ):
+                    aggregate["unread"] += 1
+        self._history_index = entries
+        self._history_by_peer = by_peer
+        self._history_by_id = by_id
+        self._history_conversations = conversations
+
+    def _save_history_index(self) -> None:
+        self._atomic_write(
+            self._history_index_file,
+            json.dumps(
+                {
+                    "version": _HISTORY_INDEX_VERSION,
+                    "entries": self._history_index or [],
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    def _rebuild_history_index(self) -> None:
+        """Rebuild the derived index from authoritative message files once."""
+        entries: list[dict] = []
+        for folder_name, folder in (
+            ("inbox", self._inbox_dir),
+            ("sent", self._sent_dir),
+        ):
+            if not folder.is_dir():
+                continue
+            for msg_dir in folder.iterdir():
+                if msg_dir.is_symlink() or not msg_dir.is_dir():
+                    continue
+                msg_file = msg_dir / "message.json"
+                if msg_file.is_symlink() or not msg_file.is_file():
+                    continue
+                try:
+                    data = json.loads(msg_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if isinstance(data, dict):
+                    data.pop(_PENDING_PUBLICATION_KEY, None)
+                    entry = self._history_entry_from_record(
+                        data, folder=folder_name, message_dir=msg_dir.name,
+                    )
+                    if entry is not None:
+                        entries.append(entry)
+        self._set_history_entries(entries)
+        try:
+            self._save_history_index()
+        except OSError as exc:
+            log.warning("Failed to persist WeChat history index: %s", type(exc).__name__)
+
+    def _history_roots(self) -> tuple[int | None, int | None]:
+        def mtime_ns(path: Path) -> int | None:
+            try:
+                return path.stat().st_mtime_ns
+            except OSError:
+                return None
+
+        return mtime_ns(self._inbox_dir), mtime_ns(self._sent_dir)
+
+    def _ensure_history_index(self) -> None:
+        roots_signature = self._history_roots()
+        if (
+            self._history_index_checked
+            and self._history_roots_signature == roots_signature
+        ):
+            return
+        if self._history_index_checked and self._history_roots_signature != roots_signature:
+            self._history_index_checked = True
+            self._rebuild_history_index()
+            self._history_roots_signature = roots_signature
+            return
+        self._history_index_checked = True
+        try:
+            if self._history_index_file.is_symlink() or not self._history_index_file.is_file():
+                raise ValueError("history index is missing")
+            payload = json.loads(
+                self._history_index_file.read_text(encoding="utf-8")
+            )
+            if payload.get("version") != _HISTORY_INDEX_VERSION:
+                raise ValueError("unsupported history index version")
+            entries = payload.get("entries")
+            if not isinstance(entries, list) or not all(
+                isinstance(entry, dict) and {
+                    "id", "folder", "message_dir", "path", "direction",
+                    "peer", "date", "preview",
+                }.issubset(entry)
+                for entry in entries
+            ):
+                raise ValueError("invalid history index entries")
+            for entry in entries:
+                if (
+                    entry["folder"] not in {"inbox", "sent"}
+                    or not self._safe_local_id(entry["message_dir"])
+                    or entry["path"]
+                    != f"{entry['folder']}/{entry['message_dir']}/message.json"
+                    or entry["direction"] not in {"incoming", "outgoing"}
+                    or not all(isinstance(entry[key], str) for key in (
+                        "id", "message_dir", "path", "direction", "peer", "date", "preview",
+                    ))
+                ):
+                    raise ValueError("invalid history index entry")
+                folder = self._inbox_dir if entry["folder"] == "inbox" else self._sent_dir
+                msg_dir = folder / entry["message_dir"]
+                msg_file = msg_dir / "message.json"
+                if (
+                    msg_dir.is_symlink()
+                    or not msg_dir.is_dir()
+                    or msg_file.is_symlink()
+                    or not msg_file.is_file()
+                ):
+                    raise ValueError("history index points to an unsafe or missing record")
+            self._set_history_entries(entries)
+            self._history_roots_signature = roots_signature
+        except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            self._rebuild_history_index()
+            self._history_roots_signature = self._history_roots()
+
+    def _history_entries_sorted(self) -> list[dict]:
+        self._ensure_history_index()
+        return self._history_index or []
+
+    def _read_indexed_message(self, entry: dict) -> dict | None:
+        folder = self._inbox_dir if entry["folder"] == "inbox" else self._sent_dir
+        msg_dir = folder / entry["message_dir"]
+        msg_file = msg_dir / "message.json"
+        if (
+            msg_dir.is_symlink()
+            or not msg_dir.is_dir()
+            or msg_file.is_symlink()
+            or not msg_file.is_file()
+        ):
+            return None
+        try:
+            data = json.loads(msg_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        if not isinstance(data, dict) or data.get("id") != entry["id"]:
+            return None
+        expected_peer = (
+            data.get("to_user_id")
+            if entry["direction"] == "outgoing"
+            else data.get("from_user_id")
+        )
+        if expected_peer != entry["peer"]:
+            return None
+        data.pop(_PENDING_PUBLICATION_KEY, None)
+        return data
+
+    def _load_indexed_messages_for_peer(
+        self, user_id: str, max_messages: int,
+    ) -> list[dict]:
+        self._ensure_history_index()
+        messages: list[dict] = []
+        for entry in self._history_by_peer.get(user_id, []):
+            data = self._read_indexed_message(entry)
+            if data is None:
+                continue
+            data = {
+                **data,
+                "_direction": entry["direction"],
+            }
+            messages.append(data)
+            if len(messages) >= max_messages:
+                break
+        return messages
+
+    def _upsert_history_index(self, data: dict, *, folder: str) -> None:
+        # Inbound/sent writers own this mutation, so do not mistake the new
+        # child directory for an external change and rebuild the full index.
+        # Direct filesystem changes are still detected by the next view call.
+        if not self._history_index_checked:
+            self._ensure_history_index()
+        message_dir = data.get("id")
+        if not isinstance(message_dir, str):
+            return
+        entry = self._history_entry_from_record(
+            data, folder=folder, message_dir=message_dir,
+        )
+        if entry is None:
+            return
+        entries = [
+            existing for existing in self._history_index or []
+            if existing["path"] != entry["path"]
+        ]
+        entries.append(entry)
+        self._set_history_entries(entries)
+        self._save_history_index()
+        self._history_roots_signature = self._history_roots()
+
+    def _mark_history_read(self, message_id: str) -> None:
+        if message_id in self._read_ids:
+            return
+        self._read_ids.add(message_id)
+        self._ensure_history_index()
+        entry = self._history_by_id.get(message_id)
+        if entry is not None and entry["direction"] == "incoming":
+            aggregate = self._history_conversations.get(entry["peer"])
+            if aggregate is not None and aggregate["unread"] > 0:
+                aggregate["unread"] -= 1
 
     def _load_inbox_messages(self) -> list[dict]:
         """Load all inbox messages, sorted by date (newest first). Skips corrupt files."""
