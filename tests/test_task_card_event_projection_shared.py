@@ -131,7 +131,8 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "\n"
         "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
         "/taskcard N sets normal rows (1-10, current: 1).\n"
-        "active · calls 2\n"
+        "────────\n"
+        "Session · active · calls 2\n"
         "Last Updated: 02:30:00 U+8"
     )
 
@@ -188,14 +189,13 @@ def test_metadata_renders_device_and_working_dir_lines() -> None:
         "working_dir": "C:\\Users\\zhuang\\.lingtai\\deepseek-1",
     }
     lines = TaskCardEventProjection.format_metadata(metadata)
-    # Session + identity + the identity-closing divider (stable sectioned look).
-    assert len(lines) == 4
-    assert lines[0] == "active · calls 2"
+    # Explicit Session and Identity sections, with no identity closing divider.
+    assert len(lines) == 3
+    assert lines[0] == "Session · active · calls 2"
     # Session and identity are separate sections with a divider between them.
     assert lines[1] == "────────"
     identity = lines[2]
-    # Identity section is closed with a divider even without a daemon block.
-    assert lines[3] == "────────"
+    assert lines[-1].startswith("Identity · ")
     assert "device · zesen-desktop · shell powershell" in identity
     assert "path · C:\\Users\\zhuang" in identity
     assert " | " in identity

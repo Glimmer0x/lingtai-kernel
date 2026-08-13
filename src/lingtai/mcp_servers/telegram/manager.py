@@ -33,6 +33,7 @@ from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel._frontmatter import strip_frontmatter
 from lingtai.kernel.agent_presence import observe_alive
 from lingtai.kernel.state import AgentState
+from lingtai.tools.bash._async_supervisor import load_state
 from lingtai.mcp_servers.task_card import (
     TaskCardEventProjection,
     TaskCardResident,
@@ -141,7 +142,9 @@ _TASK_CARD_DELETE_NONDELETABLE_DESCRIPTIONS = frozenset({
 _TASK_CARD_FOOTER = TaskCardEventProjection.FOOTER
 _TASK_CARD_DEFAULT_NORMAL_ROWS = TaskCardEventProjection.DEFAULT_NORMAL_ROWS
 _TASK_CARD_METADATA_MAX_CHARS = TaskCardEventProjection.METADATA_MAX_CHARS
-_TASK_CARD_METADATA_MAX_LINES = TaskCardEventProjection.METADATA_MAX_LINES
+_TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS = 600
+_TASK_CARD_ASYNC_STATUS_KEYS = ("running", "done", "failed", "cancelled", "timeout", "unknown")
+_TASK_CARD_DAEMON_TERMINAL_STATUS = frozenset({"done", "failed", "cancelled", "timeout"})
 
 # Canonical AgentState values that render without a /refresh hint; "stuck" is
 # the exact same enum plus the hint, and "offline" is not an AgentState value
@@ -156,6 +159,77 @@ _TASK_CARD_AGENT_STATES = TaskCardEventProjection.AGENT_STATES
 # always present — unlike the retired started_at-derived line, it never
 # depends on any row carrying a stamp.
 _TASK_CARD_TIME_PREFIX = TaskCardEventProjection.TIME_PREFIX
+
+
+def _task_card_nonnegative_count(value: object) -> int:
+    """Coerce finite non-negative numeric counters without accepting bool."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if not math.isfinite(number) or number < 0:
+        return 0
+    return int(number)
+
+
+def _task_card_parse_daemon_finished_at(value: object, now: datetime) -> bool:
+    """Return whether an ISO daemon terminal timestamp is in the strict window."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        finished = datetime.fromisoformat(text)
+        if finished.tzinfo is None:
+            finished = finished.replace(tzinfo=timezone.utc)
+        else:
+            finished = finished.astimezone(timezone.utc)
+        age = (now.astimezone(timezone.utc) - finished).total_seconds()
+    except (TypeError, ValueError, OverflowError, OSError):
+        return False
+    return math.isfinite(age) and 0 <= age <= _TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS
+
+
+def _task_card_shell_status(state: object) -> str | None:
+    """Classify durable async-shell truth without probing processes or mutating state."""
+    if not isinstance(state, dict):
+        return None
+    raw = state.get("status")
+    if raw in ("launching", "running"):
+        return "running"
+    if raw == "unrecoverable":
+        return "failed"
+    if raw == "completed":
+        if state.get("cancellation_outcome") == "group_cancelled":
+            return "cancelled"
+        if state.get("exit_status_known") is True:
+            exit_code = state.get("exit_code")
+            if type(exit_code) is int:
+                return "done" if exit_code == 0 else "failed"
+        return "unknown"
+    # A non-empty status other than the known nonterminal states is terminal
+    # truth we cannot explain exactly; retain it as unknown inside its window.
+    if isinstance(raw, str) and raw.strip():
+        return "unknown"
+    return None
+
+
+def _task_card_shell_in_window(state: object, now_epoch: float) -> bool:
+    """Nonterminal shell jobs are always visible; terminal jobs need epoch time."""
+    if not isinstance(state, dict):
+        return False
+    if state.get("status") in ("launching", "running"):
+        return True
+    finished = state.get("finished_at")
+    if isinstance(finished, bool) or not isinstance(finished, (int, float)):
+        return False
+    if not math.isfinite(float(finished)) or not math.isfinite(float(now_epoch)):
+        return False
+    age = float(now_epoch) - float(finished)
+    return 0 <= age <= _TASK_CARD_ASYNC_TERMINAL_WINDOW_SECONDS
 
 
 def _task_card_footer(normal_rows: int, locale: str = "en") -> str:
@@ -2352,13 +2426,6 @@ class TelegramManager:
                 snapshot["endpoint"] = llm_extra["endpoint"]
             if "thinking" in llm_extra:
                 snapshot["thinking"] = llm_extra["thinking"]
-        # Physical path + device short name make the card self-identifying:
-        # the reader can tell exactly which agent on which machine produced
-        # this card, and where its durable state lives. ``socket.gethostname``
-        # returns the short host name (no FQDN suffix); failures degrade to
-        # omitting the key so no line is fabricated. ``shell_kind`` is carried
-        # from the agent's resolved dialect when available so the card also
-        # shows which shell the agent runs on.
         try:
             snapshot["device_short_name"] = socket.gethostname()
         except (OSError, ValueError):
@@ -2381,102 +2448,150 @@ class TelegramManager:
                 shell_kind = ""
         if shell_kind:
             snapshot["shell_name"] = shell_kind
-        daemon_snapshot = self._task_card_daemon_snapshot()
-        if daemon_snapshot:
-            snapshot["daemons"] = daemon_snapshot
+        snapshot.pop("daemons", None)
+        snapshot.pop("async_work", None)
+        async_work = self._task_card_async_work_snapshot()
+        if async_work is not None:
+            snapshot["async_work"] = async_work
         return snapshot or None
 
     def _task_card_daemon_snapshot(self) -> dict | None:
-        """Read-only daemon status/statistics for the resident Task Card.
-
-        Scans ``<working_dir>/daemons/*`` state files (``daemon.json``, falling
-        back to legacy ``n``) and returns counts plus token statistics over the
-        active runs plus terminal runs finished within the last ten minutes.
-        Terminal runs older than the window are excluded so the card does not
-        accumulate a permanent daemon history. Missing/invalid state files
-        degrade silently; an empty scan returns ``None`` so no line renders.
-        """
+        """Read-only daemon lane snapshot over the strict terminal window."""
         daemons_dir = self._working_dir / "daemons"
-        if not daemons_dir.is_dir():
+        try:
+            if daemons_dir.is_symlink() or not daemons_dir.is_dir():
+                return None
+        except OSError:
             return None
         now = datetime.now(timezone.utc)
-        active = 0
-        terminal_counts: dict[str, int] = {
-            "done": 0,
-            "failed": 0,
-            "cancelled": 0,
-            "timeout": 0,
-        }
-        totals = {"input": 0, "output": 0, "cached": 0, "calls": 0}
+        counts = {key: 0 for key in _TASK_CARD_ASYNC_STATUS_KEYS}
+        totals = {"input": 0, "output": 0, "cached": 0}
+        cli_calls = 0
         backend_counts: dict[str, int] = {}
         included = False
-        for run_path in daemons_dir.iterdir():
-            if not run_path.is_dir():
-                continue
-            state: dict | None = None
-            for candidate in ("daemon.json",):
-                state_path = run_path / candidate
-                if not state_path.is_file():
+        try:
+            children = list(daemons_dir.iterdir())
+        except OSError:
+            return None
+        for run_path in children:
+            try:
+                if run_path.is_symlink() or not run_path.is_dir():
                     continue
-                try:
-                    loaded = json.loads(state_path.read_text(encoding="utf-8"))
-                except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                state_path = run_path / "daemon.json"
+                if state_path.is_symlink() or not state_path.is_file():
                     continue
-                if isinstance(loaded, dict):
-                    state = loaded
-                    break
-            if not state:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                if not isinstance(state, dict):
+                    continue
+                raw_status = state.get("state")
+                if raw_status in ("running", "active"):
+                    status = "running"
+                    in_window = True
+                elif raw_status in _TASK_CARD_DAEMON_TERMINAL_STATUS:
+                    status = raw_status
+                    in_window = _task_card_parse_daemon_finished_at(
+                        state.get("finished_at"), now
+                    )
+                else:
+                    continue
+                if not in_window:
+                    continue
+                included = True
+                counts[status] += 1
+                backend = state.get("backend")
+                backend = (
+                    backend.strip()
+                    if isinstance(backend, str) and backend.strip()
+                    else "unknown"
+                )
+                backend = TaskCardEventProjection.machine_identifier(backend, limit=48) or "unknown"
+                backend_counts[backend] = backend_counts.get(backend, 0) + 1
+
+                tokens = state.get("tokens")
+                cli_tokens = state.get("cli_tokens")
+                if not isinstance(tokens, dict):
+                    tokens = None
+                if not isinstance(cli_tokens, dict):
+                    cli_tokens = None
+                backend_name = state.get("backend")
+                if backend_name == "lingtai":
+                    usage = tokens
+                elif isinstance(backend_name, str) and backend_name.strip():
+                    usage = cli_tokens or tokens
+                else:
+                    # Legacy records had no backend marker. Prefer a non-zero
+                    # external CLI ledger, then fall back to kernel tokens.
+                    cli_nonzero = (
+                        cli_tokens is not None
+                        and any(_task_card_nonnegative_count(cli_tokens.get(k)) > 0
+                                for k in ("input", "output", "thinking", "cached", "calls"))
+                    )
+                    usage = cli_tokens if cli_nonzero else (tokens or cli_tokens)
+                if isinstance(usage, dict):
+                    for source_key, total_key in (("input", "input"), ("output", "output"), ("cached", "cached")):
+                        totals[total_key] += _task_card_nonnegative_count(usage.get(source_key))
+                # API call statistics are meaningful only for the external CLI
+                # ledger; daemon tool_call_count is deliberately not substituted.
+                cli_calls += _task_card_nonnegative_count(
+                    cli_tokens.get("calls") if cli_tokens is not None else None
+                )
+            except (OSError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            status = state.get("state")
-            in_window = False
-            if status in ("running", "active"):
-                active += 1
-                in_window = True
-            elif status in terminal_counts:
-                finished_at = state.get("finished_at")
-                if isinstance(finished_at, str):
-                    try:
-                        finished_dt = datetime.fromisoformat(
-                            finished_at[:-1] + "+00:00"
-                            if finished_at.endswith("Z")
-                            else finished_at
-                        )
-                        if finished_dt.tzinfo is None:
-                            finished_dt = finished_dt.replace(tzinfo=timezone.utc)
-                        age = (now - finished_dt).total_seconds()
-                        if 0 <= age <= 600:
-                            terminal_counts[status] += 1
-                            in_window = True
-                    except ValueError:
-                        pass
-            if not in_window:
-                continue
-            included = True
-            backend = state.get("backend")
-            if not isinstance(backend, str) or not backend.strip():
-                backend = "unknown"
-            else:
-                backend = backend.strip()
-            backend_counts[backend] = backend_counts.get(backend, 0) + 1
-            tokens = state.get("tokens")
-            if not isinstance(tokens, dict):
-                tokens = state.get("cli_tokens")
-            if isinstance(tokens, dict):
-                for key in ("input", "output", "cached", "calls"):
-                    value = tokens.get(key)
-                    if isinstance(value, (int, float)) and not isinstance(value, bool):
-                        totals[key] += int(value)
-        if not included and active == 0 and not any(terminal_counts.values()):
+        if not included:
             return None
         return {
-            "active": active,
-            **terminal_counts,
+            **counts,
             "backend_counts": backend_counts,
             "input_tokens": totals["input"],
             "output_tokens": totals["output"],
             "cached_tokens": totals["cached"],
-            "calls": totals["calls"],
+            "cli_calls": cli_calls,
         }
+
+    def _task_card_async_shell_snapshot(self) -> dict | None:
+        """Read-only async-shell lane using only durable ``state.json`` files."""
+        jobs_dir = self._working_dir / "system" / "jobs"
+        try:
+            if jobs_dir.is_symlink() or not jobs_dir.is_dir():
+                return None
+            children = list(jobs_dir.iterdir())
+        except OSError:
+            return None
+        now_epoch = time.time()
+        counts = {key: 0 for key in _TASK_CARD_ASYNC_STATUS_KEYS}
+        included = False
+        for job_dir in children:
+            try:
+                if job_dir.is_symlink() or not job_dir.is_dir():
+                    continue
+                state = load_state(job_dir)
+                if not isinstance(state, dict):
+                    continue
+                status = _task_card_shell_status(state)
+                if status is None or not _task_card_shell_in_window(state, now_epoch):
+                    continue
+                counts[status] += 1
+                included = True
+            except (OSError, ValueError, TypeError, UnicodeDecodeError):
+                continue
+        return counts if included else None
+
+    def _task_card_async_work_snapshot(self) -> dict | None:
+        daemon = self._task_card_daemon_snapshot()
+        shell = self._task_card_async_shell_snapshot()
+        if daemon is None and shell is None:
+            return None
+        lanes = [lane for lane in (daemon, shell) if lane is not None]
+        combined = {
+            key: sum(_task_card_nonnegative_count(lane.get(key)) for lane in lanes)
+            for key in _TASK_CARD_ASYNC_STATUS_KEYS
+        }
+        result: dict = {**combined}
+        if daemon is not None:
+            result["daemon"] = daemon
+        if shell is not None:
+            result["shell"] = shell
+        return result
 
     def _task_card_current_model(self) -> str | None:
         """Read the agent's current LLM model from ``.agent.json``.
@@ -3757,7 +3872,7 @@ class TelegramManager:
 
     @classmethod
     def _format_task_card_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
-        """Render at most two compact session lines within a 150-char budget."""
+        """Render bounded semantic resident-card sections."""
         return TaskCardEventProjection.format_metadata(metadata, locale)
 
     @classmethod

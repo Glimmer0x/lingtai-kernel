@@ -245,10 +245,11 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     manager._poll_event_tail()
     rendered = [call for call in acct.calls if call[0] == "edit_message"][-1][3]
     divider = manager._TASK_CARD_API_CALL_DIVIDER
-    # Two API groups → two symmetric divider header lines, plus one resident
-    # identity-closing metadata divider (each line carries the dash run once or
-    # twice, so count lines, not substring occurrences).
-    assert sum(ln.startswith(divider) for ln in rendered.splitlines()) == 3
+    api_dividers = [ln for ln in rendered.splitlines()
+                    if ln == divider or (ln.startswith(divider + " ") and ln.endswith(" " + divider))]
+    footer_idx = next(i for i, ln in enumerate(rendered.splitlines()) if "Don't reply to this Task Card." in ln)
+    assert len(api_dividers) == 2
+    assert rendered.splitlines()[footer_idx + 1] == TaskCardEventProjection.METADATA_DIVIDER
     assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
@@ -258,7 +259,11 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     service.normal_rows = 1
     manager._broadcast_task_card_event_window()
     latest = acct.calls[-1][3]
-    assert sum(ln.startswith(divider) for ln in latest.splitlines()) == 2 and "text two" in latest and "• read.read:" in latest
+    latest_lines = latest.splitlines()
+    latest_api_dividers = [ln for ln in latest_lines
+                           if ln == divider or (ln.startswith(divider + " ") and ln.endswith(" " + divider))]
+    latest_footer_idx = next(i for i, ln in enumerate(latest_lines) if "Don't reply to this Task Card." in ln)
+    assert len(latest_api_dividers) == 1 and latest_lines[latest_footer_idx + 1] == TaskCardEventProjection.METADATA_DIVIDER and "text two" in latest and "• read.read:" in latest
     assert "text one" not in latest and "• bash.run:" not in latest
 
 

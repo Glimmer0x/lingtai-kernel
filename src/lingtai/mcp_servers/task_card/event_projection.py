@@ -11,6 +11,9 @@ from lingtai.kernel.state import AgentState
 from lingtai.kernel.trace_redaction import redact_text
 
 
+_ASYNC_STATUS_KEYS = ("running", "done", "failed", "cancelled", "timeout", "unknown")
+
+
 class TaskCardEventProjection:
     """Shared, transport-free event grouping, redaction, and rendering core."""
 
@@ -28,7 +31,6 @@ class TaskCardEventProjection:
     )
     DEFAULT_NORMAL_ROWS = 1
     METADATA_MAX_CHARS = 500
-    METADATA_MAX_LINES = 2
     TIME_PREFIX = "Last Updated: "
     AGENT_STATES = frozenset(state.value for state in AgentState)
 
@@ -48,6 +50,13 @@ class TaskCardEventProjection:
             "failed": "failed",
             "retrying": "retrying",
             "retrying_attempt": "retrying (attempt {n})",
+            "session": "Session",
+            "identity": "Identity",
+            "async_work": "Async Work",
+            "daemons": "Daemons",
+            "backends": "Backends",
+            "shell": "Shell",
+            "daemon_stats": "Daemon stats",
         },
         "zh": {
             "header": "📋 活动",
@@ -63,6 +72,13 @@ class TaskCardEventProjection:
             "failed": "失败",
             "retrying": "重试中",
             "retrying_attempt": "重试中 (第 {n} 次)",
+            "session": "会话",
+            "identity": "身份",
+            "async_work": "异步工作",
+            "daemons": "守护进程",
+            "backends": "后端",
+            "shell": "Shell",
+            "daemon_stats": "守护进程统计",
         },
     }
 
@@ -98,6 +114,7 @@ class TaskCardEventProjection:
     # old full-width run so section breaks read as compact separators
     # (Jason 2026-08-13).
     METADATA_DIVIDER = "────────"
+    _ASYNC_STATUS_KEYS = _ASYNC_STATUS_KEYS
 
     @classmethod
     def footer(cls, normal_rows: int, locale: str = "en") -> str:
@@ -653,18 +670,27 @@ class TaskCardEventProjection:
 
     @classmethod
     def format_metadata(cls, metadata: object, locale: str = "en") -> list[str]:
+        """Render bounded resident-card metadata as explicit semantic sections.
+
+        The manager supplies ``async_work`` as a render-time, read-only snapshot.
+        This method deliberately knows nothing about the filesystem or providers;
+        it only sanitizes and arranges the already validated payload.
+        """
         if not isinstance(metadata, dict):
             return []
 
+        def label(key: str) -> str:
+            return cls._locale_text(key, locale)
+
         session_parts: list[str] = []
         model = metadata.get("model")
-        if isinstance(model, str) and model.strip():
+        if isinstance(model, str) and model.strip() and len(model.strip()) <= 128:
             session_parts.append(model.strip())
         thinking = metadata.get("thinking")
-        if isinstance(thinking, str) and thinking.strip():
+        if isinstance(thinking, str) and thinking.strip() and len(thinking.strip()) <= 48:
             session_parts.append(thinking.strip())
         endpoint = metadata.get("endpoint")
-        if isinstance(endpoint, str) and endpoint.strip():
+        if isinstance(endpoint, str) and endpoint.strip() and len(endpoint.strip()) <= 96:
             session_parts.append(f"@{endpoint.strip()}")
         context = cls.format_count(metadata.get("context_tokens"))
         window = cls.format_count(metadata.get("context_window"))
@@ -672,6 +698,7 @@ class TaskCardEventProjection:
         if (
             type(usage) in {int, float}
             and not isinstance(usage, bool)
+            and math.isfinite(float(usage))
             and 0 <= usage <= 1
         ):
             if context is not None:
@@ -690,6 +717,7 @@ class TaskCardEventProjection:
         if (
             type(cache_rate) in {int, float}
             and not isinstance(cache_rate, bool)
+            and math.isfinite(float(cache_rate))
             and 0 <= cache_rate <= 1
         ):
             session_parts.append(f"cache {float(cache_rate):.1%}")
@@ -712,6 +740,7 @@ class TaskCardEventProjection:
             if (
                 type(active_seconds) in {int, float}
                 and not isinstance(active_seconds, bool)
+                and math.isfinite(float(active_seconds))
                 and active_seconds >= 0
             ):
                 agent_part = f"active ({float(active_seconds):.0f}s)"
@@ -720,126 +749,225 @@ class TaskCardEventProjection:
         elif lifecycle in cls.AGENT_STATES:
             agent_part = f"agent · {lifecycle}"
 
-        # Line 1 = running state: agent lifecycle + session identity/usage,
-        # compact (no per-part prefixes; effort/endpoint/ctx/cache/miss are
-        # self-evident from position). Line 2 = identity: device + short path.
         line1_parts: list[str] = []
         if agent_part:
             line1_parts.append(agent_part)
         line1_parts.extend(session_parts)
-        line1 = " · ".join(line1_parts) if line1_parts else None
-
-        device = cls.machine_identifier(
-            metadata.get("device_short_name"), limit=64
+        session_line = (
+            f"{label('session')} · {' · '.join(line1_parts)}"
+            if line1_parts
+            else None
         )
+
+        # Keep all identity values behind the strict machine_identifier allowlist.
+        # In particular, working_dir is never rendered from an arbitrary string.
+        device = cls.machine_identifier(metadata.get("device_short_name"), limit=64)
         shell_name = cls.machine_identifier(metadata.get("shell_name"), limit=48)
-        line2_parts: list[str] = []
+        identity_parts: list[str] = []
         if device is not None or shell_name is not None:
             parts: list[str] = []
             if device is not None:
                 parts.append(device)
             if shell_name is not None:
                 parts.append(f"shell {shell_name}")
-            line2_parts.append("device · " + " · ".join(parts))
+            identity_parts.append("device · " + " · ".join(parts))
         working_dir = cls.machine_identifier(metadata.get("working_dir"), limit=220)
         if working_dir is not None:
-            line2_parts.append(f"path · {working_dir}")
-        line2 = " | ".join(line2_parts) if line2_parts else None
+            identity_parts.append(f"path · {working_dir}")
+        identity_payload = " | ".join(identity_parts) if identity_parts else None
+        identity_line = (
+            f"{label('identity')} · {identity_payload}"
+            if identity_payload
+            else None
+        )
 
-        # Daemon status + statistics: active runs plus terminal runs finished
-        # within the last ten minutes. Counts and backend distribution only
-        # (no id lists); the stats line aggregates token input/output/cached
-        # and call counts over the same window. Nothing renders when no daemon
-        # is in scope.
-        daemons = metadata.get("daemons")
-        line3: str | None = None
-        line3b: str | None = None
-        line4: str | None = None
-        if isinstance(daemons, dict):
-            status_parts: list[str] = []
-            active = daemons.get("active")
-            if isinstance(active, int) and active > 0:
-                status_parts.append(f"active {active}")
-            for key in ("failed", "done", "cancelled", "timeout"):
-                count = daemons.get(key)
-                if isinstance(count, int) and count > 0:
-                    status_parts.append(f"{key} {count}")
-            if status_parts:
-                line3 = "daemons · " + " · ".join(status_parts)
-            backend_counts = daemons.get("backend_counts")
-            if isinstance(backend_counts, dict) and backend_counts:
-                backend_parts: list[str] = []
-                for backend in sorted(backend_counts):
-                    count = backend_counts.get(backend)
-                    if isinstance(count, int) and count > 0:
-                        backend_parts.append(f"{backend} {count}")
-                if backend_parts:
-                    line3b = "backends · " + " · ".join(backend_parts)
+        def count(value: object) -> int | None:
+            if type(value) is int and value >= 0:
+                return value
+            return None
+
+        def status_parts(source: object) -> list[str]:
+            if not isinstance(source, dict):
+                return []
+            out: list[str] = []
+            for key in cls._ASYNC_STATUS_KEYS:
+                value = count(source.get(key))
+                if value is not None and value > 0:
+                    out.append(f"{key} {value}")
+            return out
+
+        async_work = metadata.get("async_work")
+        async_sections: list[tuple[str, str, int]] = []
+        if isinstance(async_work, dict):
+            daemon = async_work.get("daemon")
+            shell = async_work.get("shell")
+            daemon_parts = status_parts(daemon)
+            shell_parts = status_parts(shell)
+            # The adapter normally supplies validated combined counts. When a
+            # carrier is hand-built or stale, prefer the two lane truths so the
+            # visible unified kanban cannot contradict its detail rows.
+            if isinstance(daemon, dict) or isinstance(shell, dict):
+                totals = []
+                for key in cls._ASYNC_STATUS_KEYS:
+                    value = 0
+                    for lane in (daemon, shell):
+                        if isinstance(lane, dict):
+                            lane_value = count(lane.get(key))
+                            if lane_value is not None:
+                                value += lane_value
+                    if value > 0:
+                        totals.append(f"{key} {value}")
+            else:
+                totals = status_parts(async_work)
+            backend_parts: list[str] = []
+            if isinstance(daemon, dict) and isinstance(daemon.get("backend_counts"), dict):
+                safe_backends: list[tuple[str, int]] = []
+                for raw_backend, raw_count in daemon["backend_counts"].items():
+                    backend = cls.machine_identifier(raw_backend, limit=48)
+                    value = count(raw_count)
+                    if backend is None:
+                        backend = "unknown"
+                    if value is not None and value > 0:
+                        safe_backends.append((backend, value))
+                for backend, value in sorted(safe_backends):
+                    backend_parts.append(f"{backend} {value}")
+
             stats_parts: list[str] = []
-            input_tokens = daemons.get("input_tokens")
-            output_tokens = daemons.get("output_tokens")
-            cached_tokens = daemons.get("cached_tokens")
-            calls = daemons.get("calls")
-            if isinstance(input_tokens, int) and input_tokens > 0:
-                stats_parts.append(f"in {cls.format_count(input_tokens)}")
-            if isinstance(output_tokens, int) and output_tokens > 0:
-                stats_parts.append(f"out {cls.format_count(output_tokens)}")
-            if (
-                isinstance(cached_tokens, int)
-                and isinstance(input_tokens, int)
-                and input_tokens > 0
-                and cached_tokens > 0
-            ):
-                stats_parts.append(f"cache {min(cached_tokens / input_tokens, 1.0):.1%}")
-            if isinstance(calls, int) and calls > 0:
-                stats_parts.append(f"calls {calls}")
-            if stats_parts:
-                line4 = "daemon stats · " + " · ".join(stats_parts)
+            if isinstance(daemon, dict):
+                input_tokens = count(daemon.get("input_tokens"))
+                output_tokens = count(daemon.get("output_tokens"))
+                cached_tokens = count(daemon.get("cached_tokens"))
+                cli_calls = count(daemon.get("cli_calls"))
+                if input_tokens is not None and input_tokens > 0:
+                    stats_parts.append(f"in {cls.format_count(input_tokens)}")
+                if output_tokens is not None and output_tokens > 0:
+                    stats_parts.append(f"out {cls.format_count(output_tokens)}")
+                if (
+                    cached_tokens is not None
+                    and input_tokens is not None
+                    and input_tokens > 0
+                    and cached_tokens > 0
+                ):
+                    stats_parts.append(
+                        f"cache {min(cached_tokens / input_tokens, 1.0):.1%}"
+                    )
+                if cli_calls is not None and cli_calls > 0:
+                    stats_parts.append(f"CLI calls {cli_calls}")
 
-        # Metadata is organized into three sections — Session (line1),
-        # Identity (line2), Daemon (line3/backends/stats) — with a horizontal
-        # divider between adjacent sections that are both present, so the
-        # daemon block stands out and each section is scannable on its own.
-        sections: list[tuple[str, str | None]] = [
-            ("session", line1),
-            ("identity", line2),
-            ("daemon", line3),
-            ("daemon", line3b),
-            ("daemon", line4),
+            # All rows belong to one Async Work section. The priority value is
+            # used only by the whole-line 500-character budget below.
+            if totals:
+                async_sections.append(("totals", f"{label('async_work')} · {' · '.join(totals)}", 2))
+            if daemon_parts:
+                async_sections.append(("daemon", f"{label('daemons')} · {' · '.join(daemon_parts)}", 3))
+            if backend_parts:
+                async_sections.append(("backend", f"{label('backends')} · {' · '.join(backend_parts)}", 4))
+            if shell_parts:
+                async_sections.append(("shell", f"{label('shell')} · {' · '.join(shell_parts)}", 3))
+            if stats_parts:
+                async_sections.append(("stats", f"{label('daemon_stats')} · {' · '.join(stats_parts)}", 4))
+
+        # ``sections`` is intentionally list[list[str]]: a section is either
+        # present or absent, and dividers are inserted only between present
+        # adjacent sections (never after Identity or inside Async Work).
+        sections: list[list[str]] = []
+        priorities: list[list[int]] = []
+        if session_line is not None:
+            sections.append([session_line])
+            priorities.append([0])
+        if identity_line is not None:
+            sections.append([identity_line])
+            priorities.append([1])
+        if async_sections:
+            sections.append([line for _, line, _ in async_sections])
+            priorities.append([priority for _, _, priority in async_sections])
+
+        def render_selected(selected: list[list[tuple[str, int]]]) -> list[str]:
+            result: list[str] = []
+            previous = False
+            for section in selected:
+                present = [line for line, _ in section if line]
+                if not present:
+                    continue
+                if previous:
+                    result.append(cls.METADATA_DIVIDER)
+                result.extend(present)
+                previous = True
+            return result
+
+        def total_length(lines: list[str]) -> int:
+            return len("\n".join(lines))
+
+        selected: list[list[tuple[str, int]]] = [
+            [(line, priority) for line, priority in zip(lines, section_priorities)]
+            for lines, section_priorities in zip(sections, priorities)
         ]
-        lines: list[str] = []
-        prev_section: str | None = None
-        for section, text in sections:
-            if text is None:
-                continue
-            if prev_section is not None and section != prev_section:
-                lines.append(cls.METADATA_DIVIDER)
-            lines.append(text)
-            prev_section = section
-        # Close the identity section with a divider even when no daemon block
-        # follows, so the resident card keeps a stable sectioned look while
-        # idle (Jason 2026-08-13).
-        if prev_section == "identity":
-            lines.append(cls.METADATA_DIVIDER)
-        if not lines:
-            return []
-        joined = "\n".join(lines)
-        if len(joined) <= cls.METADATA_MAX_CHARS:
-            return lines
-        # Prefer preserving the session line; truncate from the identity line
-        # and keep as many trailing lines as fit, each cut at its share.
-        first = lines[0][: cls.METADATA_MAX_CHARS]
-        remaining = cls.METADATA_MAX_CHARS - len(first) - 1
-        if remaining <= 0:
-            return [first]
-        kept = [first]
-        for extra in lines[1:]:
-            if remaining <= 0:
+
+        # Remove lower-priority complete rows before touching Identity. Session
+        # and Identity are section rows, while Async totals outrank lane detail.
+        for priority_to_drop in (4, 3, 2):
+            if total_length(render_selected(selected)) <= cls.METADATA_MAX_CHARS:
                 break
-            take = min(len(extra), remaining)
-            kept.append(extra[:take])
-            remaining -= take + 1
-        return kept
+            for section in selected:
+                section[:] = [item for item in section if item[1] != priority_to_drop]
+
+        # If necessary, shorten only the Identity payload. The label and its
+        # separator remain atomic, and the ellipsis is added only to a shortened
+        # payload (never to a divider or a partial label).
+        if total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
+            identity_location: tuple[int, int] | None = None
+            for section_index, section in enumerate(selected):
+                for item_index, (_, priority) in enumerate(section):
+                    if priority == 1:
+                        identity_location = (section_index, item_index)
+                        break
+                if identity_location is not None:
+                    break
+            if identity_location is not None:
+                section_index, item_index = identity_location
+                original, priority = selected[section_index][item_index]
+                marker = " · "
+                marker_index = original.find(marker)
+                if marker_index >= 0:
+                    prefix = original[: marker_index + len(marker)]
+                    payload = original[marker_index + len(marker) :]
+                    low, high = 0, len(payload)
+                    best: str | None = None
+                    while low <= high:
+                        mid = (low + high) // 2
+                        candidate_payload = payload if mid == len(payload) else (
+                            payload[: max(0, mid - 1)] + "…"
+                        )
+                        candidate = prefix + candidate_payload
+                        trial = [list(section) for section in selected]
+                        trial[section_index][item_index] = (candidate, priority)
+                        if total_length(render_selected(trial)) <= cls.METADATA_MAX_CHARS:
+                            best = candidate
+                            low = mid + 1
+                        else:
+                            high = mid - 1
+                    if best is not None:
+                        selected[section_index][item_index] = (best, priority)
+                    else:
+                        selected[section_index].pop(item_index)
+
+        # A pathological session payload may itself exceed the budget. There is
+        # no safe partial Session representation; retain the higher-priority
+        # whole line and discard lower-priority whole lines rather than splitting
+        # a label/separator. Normal session fields are bounded well below this.
+        while total_length(render_selected(selected)) > cls.METADATA_MAX_CHARS:
+            removable = [
+                (priority, section_index, item_index)
+                for section_index, section in enumerate(selected)
+                for item_index, (_, priority) in enumerate(section)
+                if priority > 0
+            ]
+            if not removable:
+                break
+            _, section_index, item_index = max(removable)
+            selected[section_index].pop(item_index)
+
+        return render_selected(selected)
 
     @classmethod
     def _short_working_dir(cls, working_dir: str) -> str:
@@ -916,7 +1044,7 @@ class TaskCardEventProjection:
         metadata_lines = cls.format_metadata(metadata, locale)
         time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
         if not tool_prepared and not text_prepared and not api_prepared:
-            lines = [cls.header(locale), "", footer]
+            lines = [cls.header(locale), "", footer, cls.METADATA_DIVIDER]
             lines.extend(metadata_lines)
             lines.append(time_line)
             return "\n".join(lines)
@@ -940,6 +1068,8 @@ class TaskCardEventProjection:
             + 1
             + 1
             + len(footer)
+            + len(cls.METADATA_DIVIDER)
+            + 1
             + sum(len(line) + 1 for line in metadata_lines)
             + len(time_line)
             + 1
@@ -971,6 +1101,7 @@ class TaskCardEventProjection:
         lines.extend(by_idx[index] for index in sorted(by_idx))
         lines.append("")
         lines.append(footer)
+        lines.append(cls.METADATA_DIVIDER)
         lines.extend(metadata_lines)
         lines.append(time_line)
         return "\n".join(lines)

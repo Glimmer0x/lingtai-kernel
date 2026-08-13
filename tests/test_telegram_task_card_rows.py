@@ -9,9 +9,15 @@ can never survive a length-pressure trim.
 
 from __future__ import annotations
 
+import json
+import os
+import time
+
 from lingtai.mcp_servers.telegram.manager import (
     TelegramManager,
     _TASK_CARD_FOOTER,
+    _task_card_shell_status,
+    _task_card_shell_in_window,
 )
 from tests._notification_store_helpers import FakeNotificationStore
 
@@ -337,9 +343,10 @@ def test_metadata_is_two_lines_bounded_and_between_footer_and_timestamp():
     lines = text.splitlines()
     footer_idx = next(i for i, line in enumerate(lines) if _TASK_CARD_FOOTER in line)
     time_idx = next(i for i, line in enumerate(lines) if line.startswith("Last Updated: "))
-    metadata_lines = lines[footer_idx + 1:time_idx]
+    assert lines[footer_idx + 1] == "────────"
+    metadata_lines = lines[footer_idx + 2:time_idx]
     assert metadata_lines == [
-        "ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "Session · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
     assert len(metadata_lines) == 1
     assert len(metadata_lines[0]) <= 500
@@ -380,10 +387,7 @@ def test_metadata_pathological_counts_never_overflow_or_break_budget():
 def test_metadata_renders_compact_normal_lifecycle_states():
     for state in ("active", "idle", "asleep", "suspended"):
         lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": state})
-        if state == "active":
-            assert lines == ["active"]
-        else:
-            assert lines == [f"agent · {state}"]
+        assert lines == [f"Session · {'active' if state == 'active' else 'agent · ' + state}"]
 
 
 def test_metadata_renders_active_seconds_only_when_active():
@@ -392,36 +396,36 @@ def test_metadata_renders_active_seconds_only_when_active():
         "agent_lifecycle": "active",
         "agent_active_seconds": 12.0,
     })
-    assert lines == ["active (12s)"]
+    assert lines == ["Session · active (12s)"]
     # Non-active states never render the suffix even if the field is present.
     lines = TelegramManager._format_task_card_metadata({
         "agent_lifecycle": "idle",
         "agent_active_seconds": 12.0,
     })
-    assert lines == ["agent · idle"]
+    assert lines == ["Session · agent · idle"]
     # Missing/invalid age degrades to the plain lifecycle line.
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "active"})
-    assert lines == ["active"]
+    assert lines == ["Session · active"]
     lines = TelegramManager._format_task_card_metadata({
         "agent_lifecycle": "active",
         "agent_active_seconds": "secret",
     })
-    assert lines == ["active"]
+    assert lines == ["Session · active"]
 
 
 def test_metadata_renders_stuck_with_refresh_hint():
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "stuck"})
-    assert lines == ["agent · stuck · try /refresh"]
+    assert lines == ["Session · agent · stuck · try /refresh"]
 
 
 def test_metadata_renders_offline_with_refresh_hint():
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "offline"})
-    assert lines == ["agent · offline · try /refresh"]
+    assert lines == ["Session · agent · offline · try /refresh"]
 
 
 def test_metadata_suspended_never_gets_refresh_hint():
     lines = TelegramManager._format_task_card_metadata({"agent_lifecycle": "suspended"})
-    assert lines == ["agent · suspended"]
+    assert lines == ["Session · agent · suspended"]
     assert "/refresh" not in lines[0]
 
 
@@ -430,7 +434,7 @@ def test_metadata_ignores_unrecognized_lifecycle_value():
         "agent_lifecycle": "haunted",
         "session_cache_rate": 0.5,
     })
-    assert lines == ["cache 50.0%"]
+    assert lines == ["Session · cache 50.0%"]
 
 
 def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
@@ -446,7 +450,7 @@ def test_metadata_agent_and_session_combine_on_line_one_ctx_preserved():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "active · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "Session · active · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
     assert len(lines) == 1
     assert len(lines[0]) <= 500
@@ -466,9 +470,9 @@ def test_metadata_stuck_hint_and_ctx_both_survive_full_metadata():
     # The 2-line cap holds; the hint leads line 1 (safe from end-truncation)
     # and ctx survives as line 2 instead of being dropped by the cap.
     assert lines == [
-        "agent · stuck · try /refresh · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "Session · agent · stuck · try /refresh · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
-    assert lines[0].startswith("agent · stuck · try /refresh ·")
+    assert lines[0].startswith("Session · agent · stuck · try /refresh ·")
     assert len(lines) == 1
     assert len(lines[0]) <= 500
 
@@ -485,7 +489,7 @@ def test_metadata_unchanged_when_no_agent_lifecycle_present():
         "context_usage": 0.62958,
     })
     assert lines == [
-        "ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
+        "Session · ctx 63% · 171.2k/272.0k · cache 87.8% · miss 170.6k/1.0M · calls 13",
     ]
 
 
@@ -648,7 +652,7 @@ def test_metadata_renders_current_model_first():
         "model": "deepseek-v4-flash",
         "session_cache_rate": 0.5,
     })
-    assert lines == ["deepseek-v4-flash · cache 50.0%"]
+    assert lines == ["Session · deepseek-v4-flash · cache 50.0%"]
 
 
 def test_event_metadata_snapshot_adds_current_model(tmp_path):
@@ -671,52 +675,48 @@ def test_metadata_renders_absolute_path_not_shortened():
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "device_short_name": "MacStudio",
     })
-    assert len(lines) == 2
-    assert "device · MacStudio | path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1" in lines[0]
+    assert len(lines) == 1
+    assert "Identity · device · MacStudio | path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1" in lines[0]
     assert "dev-2/.lingtai/mimo-1" not in lines[0].replace("dev-2/.lingtai/mimo-1", "")
-    assert lines[1] == "────────"
 
 
 def test_metadata_renders_daemon_status_and_stats():
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {
-            "active": 3,
-            "failed": 1,
-            "done": 2,
-            "cancelled": 0,
-            "timeout": 0,
-            "backend_counts": {"lingtai": 2, "claude-p": 1},
-            "input_tokens": 1_234_567,
-            "output_tokens": 340_000,
-            "cached_tokens": 1_049_382,
-            "calls": 12,
+        "async_work": {
+            "running": 3, "failed": 1, "done": 2,
+            "daemon": {"running": 3, "failed": 1, "done": 2,
+                        "backend_counts": {"lingtai": 2, "claude-p": 1},
+                        "input_tokens": 1_234_567, "output_tokens": 340_000,
+                        "cached_tokens": 1_049_382, "cli_calls": 12},
         },
     })
     assert lines == [
-        "daemons · active 3 · failed 1 · done 2",
-        "backends · claude-p 1 · lingtai 2",
-        "daemon stats · in 1.2M · out 340.0k · cache 85.0% · calls 12",
+        "Async Work · running 3 · done 2 · failed 1",
+        "Daemons · running 3 · done 2 · failed 1",
+        "Backends · claude-p 1 · lingtai 2",
+        "Daemon stats · in 1.2M · out 340.0k · cache 85.0% · CLI calls 12",
     ]
 
 
 def test_metadata_renders_backend_stats_only_when_present():
     # No backend_counts -> no backends line.
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {"active": 1},
+        "async_work": {"running": 1, "daemon": {"running": 1}},
     })
-    assert lines == ["daemons · active 1"]
+    assert lines == ["Async Work · running 1", "Daemons · running 1"]
     # Empty backend_counts -> no backends line.
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {"active": 1, "backend_counts": {}},
+        "async_work": {"running": 1, "daemon": {"running": 1, "backend_counts": {}}},
     })
-    assert lines == ["daemons · active 1"]
+    assert lines == ["Async Work · running 1", "Daemons · running 1"]
     # Populated backend_counts -> sorted backends line.
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {"active": 1, "backend_counts": {"claude-p": 2, "lingtai": 1}},
+        "async_work": {"running": 1, "daemon": {"running": 1, "backend_counts": {"claude-p": 2, "lingtai": 1}}},
     })
     assert lines == [
-        "daemons · active 1",
-        "backends · claude-p 2 · lingtai 1",
+        "Async Work · running 1",
+        "Daemons · running 1",
+        "Backends · claude-p 2 · lingtai 1",
     ]
 
 
@@ -727,58 +727,50 @@ def test_metadata_section_dividers_between_present_sections():
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
     })
     assert lines == [
-        "active",
+        "Session · active",
         "────────",
-        "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
-        "────────",
+        "Identity · path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
     ]
     # Session + Identity + Daemon -> dividers between all adjacent sections.
     lines = TelegramManager._format_task_card_metadata({
         "agent_lifecycle": "active",
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
-        "daemons": {"active": 1, "backend_counts": {"lingtai": 1}},
+        "async_work": {"running": 1, "daemon": {"running": 1, "backend_counts": {"lingtai": 1}}},
     })
     assert lines == [
-        "active",
+        "Session · active",
         "────────",
-        "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "Identity · path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "────────",
-        "daemons · active 1",
-        "backends · lingtai 1",
+        "Async Work · running 1",
+        "Daemons · running 1",
+        "Backends · lingtai 1",
     ]
     # A single daemon section alone stays clean with no divider.
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {"active": 2},
+        "async_work": {"running": 2, "daemon": {"running": 2}},
     })
-    assert lines == ["daemons · active 2"]
+    assert lines == ["Async Work · running 2", "Daemons · running 2"]
 
 
 def test_metadata_omits_daemon_lines_when_no_daemons():
     lines = TelegramManager._format_task_card_metadata({
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
-        "daemons": {"active": 0, "failed": 0, "done": 0, "cancelled": 0, "timeout": 0},
+        "async_work": {"running": 0, "failed": 0, "done": 0, "cancelled": 0, "timeout": 0},
     })
-    assert len(lines) == 2
-    assert "daemons" not in lines[0]
-    assert "daemon stats" not in lines[0]
-    assert lines[1] == "────────"
+    assert len(lines) == 1
+    assert "Async Work" not in lines[0]
+    assert "Daemon stats" not in lines[0]
 
 
 def test_metadata_daemon_stats_require_positive_counts():
     lines = TelegramManager._format_task_card_metadata({
-        "daemons": {
-            "active": 1,
-            "failed": 0,
-            "done": 0,
-            "cancelled": 0,
-            "timeout": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "cached_tokens": 0,
-            "calls": 0,
-        },
+        "async_work": {"running": 1, "daemon": {
+            "running": 1, "failed": 0, "done": 0, "cancelled": 0,
+            "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "cli_calls": 0,
+        }},
     })
-    assert lines == ["daemons · active 1"]
+    assert lines == ["Async Work · running 1", "Daemons · running 1"]
 
 
 def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
@@ -803,14 +795,14 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
 
     mgr, _ = _integration_manager(tmp_path)
     snap = mgr._task_card_daemon_snapshot()
-    assert snap["active"] == 1
+    assert snap["running"] == 1
     assert snap["done"] == 1
     assert snap["failed"] == 1
     # em-4 outside the 10-minute window is excluded entirely.
     assert snap["input_tokens"] == 1000 + 2000 + 3000
     assert snap["output_tokens"] == 500 + 700 + 100
     assert snap["cached_tokens"] == 800 + 1500 + 0
-    assert snap["calls"] == 3 + 4 + 1
+    assert snap["cli_calls"] == 1
     # Backend distribution counts only in-window runs; em-3 without a backend
     # falls back to "unknown".
     assert snap["backend_counts"] == {"lingtai": 1, "claude-p": 1, "unknown": 1}
@@ -819,3 +811,106 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
 def test_daemon_snapshot_returns_none_when_no_daemons(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
     assert mgr._task_card_daemon_snapshot() is None
+
+
+# ---------------------------------------------------------------------------
+# Unified async-work lanes: shell classification, mixed arithmetic, and RO scan
+# ---------------------------------------------------------------------------
+
+
+def test_shell_status_classification_matrix() -> None:
+    now = time.time()
+    cases = [
+        ({"status": "launching"}, "running"),
+        ({"status": "running", "cancel_requested_at": now}, "running"),
+        ({"status": "completed", "cancellation_outcome": "group_cancelled"}, "cancelled"),
+        ({"status": "completed", "exit_status_known": True, "exit_code": 0}, "done"),
+        ({"status": "completed", "exit_status_known": True, "exit_code": 7}, "failed"),
+        ({"status": "completed", "exit_status_known": True, "exit_code": False}, "unknown"),
+        ({"status": "completed", "exit_status_known": False}, "unknown"),
+        ({"status": "unrecoverable"}, "failed"),
+    ]
+    for state, expected in cases:
+        assert _task_card_shell_status(state) == expected
+    assert _task_card_shell_in_window({"status": "running"}, now) is True
+    assert _task_card_shell_in_window(
+        {"status": "completed", "finished_at": now - 600}, now
+    ) is True
+    assert _task_card_shell_in_window(
+        {"status": "completed", "finished_at": now - 601}, now
+    ) is False
+    assert _task_card_shell_in_window(
+        {"status": "completed", "finished_at": float("nan")}, now
+    ) is False
+
+
+def test_shell_snapshot_is_read_only_and_skips_legacy_jobs(tmp_path):
+    jobs = tmp_path / "system" / "jobs"
+    jobs.mkdir(parents=True)
+    state_dir = jobs / "job-1"
+    state_dir.mkdir()
+    state_path = state_dir / "state.json"
+    state_path.write_text(json.dumps({
+        "status": "completed", "finished_at": time.time(),
+        "exit_status_known": True, "exit_code": 0,
+    }), encoding="utf-8")
+    legacy = jobs / "legacy"
+    legacy.mkdir()
+    before = state_path.read_bytes()
+    before_mtime = state_path.stat().st_mtime_ns
+    mgr, _ = _integration_manager(tmp_path)
+    assert mgr._task_card_async_shell_snapshot() == {
+        "running": 0, "done": 1, "failed": 0,
+        "cancelled": 0, "timeout": 0, "unknown": 0,
+    }
+    assert state_path.read_bytes() == before
+    assert state_path.stat().st_mtime_ns == before_mtime
+
+
+def test_async_work_snapshot_mixes_daemon_and_shell_lanes(tmp_path, monkeypatch):
+    mgr, _ = _integration_manager(tmp_path)
+    monkeypatch.setattr(mgr, "_task_card_daemon_snapshot", lambda: {
+        "running": 2, "done": 1, "failed": 0, "cancelled": 0,
+        "timeout": 0, "unknown": 1, "backend_counts": {"lingtai": 2},
+        "input_tokens": 4, "output_tokens": 5, "cached_tokens": 3,
+        "cli_calls": 2,
+    })
+    monkeypatch.setattr(mgr, "_task_card_async_shell_snapshot", lambda: {
+        "running": 1, "done": 0, "failed": 1, "cancelled": 1,
+        "timeout": 0, "unknown": 0,
+    })
+    snapshot = mgr._task_card_async_work_snapshot()
+    assert snapshot["running"] == 3
+    assert snapshot["done"] == 1
+    assert snapshot["failed"] == 1
+    assert snapshot["cancelled"] == 1
+    assert snapshot["unknown"] == 1
+    assert "daemon" in snapshot and "shell" in snapshot
+
+
+def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_calls_not_fabricated(tmp_path):
+    import datetime as _datetime
+    daemons = tmp_path / "daemons"
+    daemons.mkdir()
+    recent = (_datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(seconds=2)).isoformat()
+    cli = daemons / "cli"
+    cli.mkdir()
+    (cli / "daemon.json").write_text(json.dumps({
+        "state": "done", "backend": "codex", "finished_at": recent,
+        "tokens": {"input": 0, "output": 0, "cached": 0},
+        "cli_tokens": {"input": 100, "output": 40, "cached": 20, "calls": 3},
+        "tool_call_count": 99,
+    }), encoding="utf-8")
+    kernel = daemons / "kernel"
+    kernel.mkdir()
+    (kernel / "daemon.json").write_text(json.dumps({
+        "state": "running", "backend": "lingtai",
+        "tokens": {"input": 9, "output": 4, "cached": 2},
+        "tool_call_count": 17,
+    }), encoding="utf-8")
+    mgr, _ = _integration_manager(tmp_path)
+    snapshot = mgr._task_card_daemon_snapshot()
+    assert snapshot["input_tokens"] == 109
+    assert snapshot["output_tokens"] == 44
+    assert snapshot["cached_tokens"] == 22
+    assert snapshot["cli_calls"] == 3
