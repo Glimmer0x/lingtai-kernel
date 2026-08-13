@@ -16,6 +16,8 @@ from ..safety_limits import (
     ACTIVE_TURN_TOOL_CALL_EMERGENCY_LIMIT,
 )
 from ..tool_executor import ToolExecutor
+from ..tool_call_guard import ToolCallGuard
+from ..risky_action_gate import build_risky_action_check
 from ..tool_result_artifacts import CompactionStats, compact_oversized_history
 from ..llm.base import (
     is_all_empty_response,
@@ -1919,6 +1921,9 @@ def _make_tool_executor(agent, guard: LoopGuard) -> ToolExecutor:
         logger_fn=agent._log,
         meta_fn=lambda: build_meta(agent),
         working_dir=agent._working_dir,
+        tool_call_guard=ToolCallGuard([
+            build_risky_action_check(agent._working_dir),
+        ]),
         summarize_notification_threshold=getattr(
             agent, "_summarize_notification_threshold", None
         ),
