@@ -576,6 +576,45 @@ def test_git_status_requires_no_optional_locks(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_signature_pretty_atoms_denied(tmp_path):
+    """log/show must not run gpg.program via --show-signature or %G*/%g* atoms.
+
+    Regression for Fable batch-A cross-check P0 #9: git-log/show's
+    --show-signature hands the signature to gpg --verify and pretty-format
+    %GG/%G?/%GS/%GK/%GF/%GP/%GT (and reflog %gD/%gN) ask for the same,
+    executing the configurable gpg.program / gpg.<format>.program from ambient
+    config. Those forms fail closed; safe pretty atoms (%% %h %s ...) stay
+    allowed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git log --no-textconv --no-ext-diff --show-signature -1",
+        "git show --no-textconv --no-ext-diff --show-signature HEAD",
+        "git log --no-textconv --no-ext-diff --format=%GG -1",
+        "git log --no-textconv --no-ext-diff --pretty=%G? -1",
+        "git log --no-textconv --no-ext-diff --format=%GS -1",
+        "git log --no-textconv --no-ext-diff --format=%gD -1",
+        "git log --no-textconv --no-ext-diff --pretty=%gN -1",
+        "git log --no-textconv --no-ext-diff --format=%h --show-signature -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Safe pretty atoms and plain log/show stay allowed.
+    for command in (
+        "git log --no-textconv --no-ext-diff -1",
+        "git show --no-textconv --no-ext-diff HEAD",
+        "git log --no-textconv --no-ext-diff --format=%h %s -1",
+        "git log --no-textconv --no-ext-diff --format=oneline -1",
+        "git log --no-textconv --no-ext-diff --pretty=%% -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     """Path-form executables must be denied before any basename fast-path.
 

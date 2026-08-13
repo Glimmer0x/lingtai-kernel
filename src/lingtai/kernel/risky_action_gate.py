@@ -109,7 +109,7 @@ _READ_ONLY_VERB_VALUE_SHORTS: dict[str, set[str]] = {
 # Git options that make a nominally read-only subcommand execute an external
 # helper (git diff --ext-diff/--textconv, config overrides that remap
 # diff.external/core.pager/alias etc.). Fail closed on all of them.
-_GIT_EXTERNAL_EXEC_OPTIONS = {"--ext-diff", "--textconv"}
+_GIT_EXTERNAL_EXEC_OPTIONS = {"--ext-diff", "--textconv", "--show-signature"}
 # Subcommands whose diff machinery runs external textconv/diff filters by
 # default (git-diff(1): textconv external filters enabled by default).
 _GIT_TEXT_CONV_SUBCOMMANDS = {"diff", "log", "show"}
@@ -423,6 +423,27 @@ def _git_consume_config_override(args: list[str], i: int) -> tuple[str | None, i
     return None, i + 1
 
 
+def _git_format_has_gpg_atom(value: str) -> bool:
+    """True when a pretty-format string contains a GPG/reflog-signature atom.
+
+    ``%G*`` atoms ask git to run ``gpg --verify`` (configurable via
+    ``gpg.program`` / ``gpg.<format>.program``) and ``%g*`` reflog-selector
+    atoms are treated conservatively as non-read-only. ``%%`` is a literal
+    percent and is skipped.
+    """
+    i = 0
+    while i < len(value):
+        if value[i] != "%":
+            i += 1
+            continue
+        if i + 1 >= len(value):
+            return False
+        if value[i + 1] in ("G", "g"):
+            return True
+        i += 2  # skip %% and all other two-char atoms
+    return False
+
+
 def _git_risk_reason(tokens: list[str]) -> str | None:
     """Fail-closed read-only classifier for one git command.
 
@@ -483,6 +504,18 @@ def _git_risk_reason(tokens: list[str]) -> str | None:
         token = rest[j]
         if token in _GIT_EXTERNAL_EXEC_OPTIONS:
             return f"git option {token} can execute an external helper"
+        if token == "--format" or token == "--pretty":
+            if j + 1 >= len(rest):
+                return f"git option {token} requires a value"
+            if _git_format_has_gpg_atom(rest[j + 1]):
+                return "git pretty format may invoke gpg.program via signature atoms; not read-only"
+            j += 2
+            continue
+        if token.startswith("--format=") or token.startswith("--pretty="):
+            if _git_format_has_gpg_atom(token.split("=", 1)[1]):
+                return "git pretty format may invoke gpg.program via signature atoms; not read-only"
+            j += 1
+            continue
         if token.startswith("-c") or token.startswith("--config"):
             value, next_j = _git_consume_config_override(rest, j)
             if value != _GIT_FSMONITOR_DISABLE:
