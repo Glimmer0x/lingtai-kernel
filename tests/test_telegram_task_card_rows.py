@@ -692,7 +692,6 @@ def test_metadata_renders_daemon_status_and_stats():
         },
     })
     assert lines == [
-        "────────────────",
         "daemons · active 3 · failed 1 · done 2",
         "backends · claude-p 1 · lingtai 2",
         "daemon stats · in 1.2M · out 340.0k · cache 85.0% · calls 12",
@@ -704,30 +703,52 @@ def test_metadata_renders_backend_stats_only_when_present():
     lines = TelegramManager._format_task_card_metadata({
         "daemons": {"active": 1},
     })
-    assert lines == ["────────────────", "daemons · active 1"]
+    assert lines == ["daemons · active 1"]
     # Empty backend_counts -> no backends line.
     lines = TelegramManager._format_task_card_metadata({
         "daemons": {"active": 1, "backend_counts": {}},
     })
-    assert lines == ["────────────────", "daemons · active 1"]
+    assert lines == ["daemons · active 1"]
     # Populated backend_counts -> sorted backends line.
     lines = TelegramManager._format_task_card_metadata({
         "daemons": {"active": 1, "backend_counts": {"claude-p": 2, "lingtai": 1}},
     })
     assert lines == [
-        "────────────────",
         "daemons · active 1",
         "backends · claude-p 2 · lingtai 1",
     ]
 
 
-def test_metadata_no_divider_without_daemon_block():
-    # A session/identity-only card never renders the divider.
+def test_metadata_section_dividers_between_present_sections():
+    # Session + Identity -> one divider between the two sections.
     lines = TelegramManager._format_task_card_metadata({
         "agent_lifecycle": "active",
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
     })
-    assert all("─" not in line for line in lines)
+    assert lines == [
+        "active",
+        "────────────────",
+        "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+    ]
+    # Session + Identity + Daemon -> dividers between all adjacent sections.
+    lines = TelegramManager._format_task_card_metadata({
+        "agent_lifecycle": "active",
+        "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "daemons": {"active": 1, "backend_counts": {"lingtai": 1}},
+    })
+    assert lines == [
+        "active",
+        "────────────────",
+        "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "────────────────",
+        "daemons · active 1",
+        "backends · lingtai 1",
+    ]
+    # A single daemon section alone stays clean with no divider.
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {"active": 2},
+    })
+    assert lines == ["daemons · active 2"]
 
 
 def test_metadata_omits_daemon_lines_when_no_daemons():
@@ -754,7 +775,7 @@ def test_metadata_daemon_stats_require_positive_counts():
             "calls": 0,
         },
     })
-    assert lines == ["────────────────", "daemons · active 1"]
+    assert lines == ["daemons · active 1"]
 
 
 def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):

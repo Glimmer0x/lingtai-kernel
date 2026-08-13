@@ -188,9 +188,11 @@ def test_metadata_renders_device_and_working_dir_lines() -> None:
         "working_dir": "C:\\Users\\zhuang\\.lingtai\\deepseek-1",
     }
     lines = TaskCardEventProjection.format_metadata(metadata)
-    assert len(lines) == 2
+    assert len(lines) == 3
     assert lines[0] == "active · calls 2"
-    identity = lines[1]
+    # Session and identity are separate sections with a divider between them.
+    assert lines[1] == "────────────────"
+    identity = lines[2]
     assert "device · zesen-desktop · shell powershell" in identity
     assert "path · C:\\Users\\zhuang" in identity
     assert " | " in identity

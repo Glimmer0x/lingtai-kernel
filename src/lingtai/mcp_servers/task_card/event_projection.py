@@ -792,13 +792,26 @@ class TaskCardEventProjection:
             if stats_parts:
                 line4 = "daemon stats · " + " · ".join(stats_parts)
 
-        daemon_lines = [ln for ln in (line3, line3b, line4) if ln]
-        lines = [ln for ln in (line1, line2) if ln]
-        if daemon_lines:
-            # Visually separate the daemon block from the session/identity
-            # lines so it stands out on the resident card.
-            lines.append("────────────────")
-            lines.extend(daemon_lines)
+        # Metadata is organized into three sections — Session (line1),
+        # Identity (line2), Daemon (line3/backends/stats) — with a horizontal
+        # divider between adjacent sections that are both present, so the
+        # daemon block stands out and each section is scannable on its own.
+        sections: list[tuple[str, str | None]] = [
+            ("session", line1),
+            ("identity", line2),
+            ("daemon", line3),
+            ("daemon", line3b),
+            ("daemon", line4),
+        ]
+        lines: list[str] = []
+        prev_section: str | None = None
+        for section, text in sections:
+            if text is None:
+                continue
+            if prev_section is not None and section != prev_section:
+                lines.append("────────────────")
+            lines.append(text)
+            prev_section = section
         if not lines:
             return []
         joined = "\n".join(lines)
