@@ -48,10 +48,24 @@ def test_both_docs_mention_shared_env_bar_with_floor_and_ceiling() -> None:
 def test_licc_item4_no_longer_claims_sparse_update_driven_attachment() -> None:
     """LICC item 4 now describes copy-to-every-carrier ACTIVE semantics; the
     stale 'sparse and update-driven' wording (and 'only on first appearance')
-    must not appear anywhere in the contract."""
+    must not appear anywhere in the contract, and the contract must affirm the
+    copy-to-every-carrier invariant instead of sparse/attachment-only wording."""
     contract = _text(CONTRACT)
     assert "only on first appearance" not in contract
     assert "sparse and update-driven" not in contract
+    assert "copy-to-every-carrier" in contract
+    assert "every eligible final ToolResultBlock" in contract or "EVERY eligible" in contract
+
+
+def test_licc_describes_persistent_terminal_by_construction() -> None:
+    """The LICC contract records the shared 2048 floor for BOTH lanes and the
+    persistent terminal marker-only/spill_file degradation."""
+    contract = _text(CONTRACT)
+    manual = _text(MANUAL)
+    assert "[2048, 10,000]" in contract
+    assert "spill_file" in contract
+    assert "spill_file" in manual
+    assert "-N" in contract or "`-N`" in contract
 
 
 def test_manual_describes_both_lanes_not_persistent_only() -> None:

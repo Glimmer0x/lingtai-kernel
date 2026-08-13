@@ -172,30 +172,34 @@ lanes with ONE shared bar (`LINGTAI_NOTIFICATION_MAX_CHARS`):
 - **Over the cap - persistent lane**: the FULL block is written atomically to
   `<workdir>/logs/notification-overflow-<ts>.json`, and the model-visible copy
   is compacted (heavy free-text fields 200 → 100 → 50 → 0, then id-only
-  message stubs) until it fits. The compacted block carries an `overflow`
-  marker `{path, full_chars, truncated}`. Message ids are never dropped, so
-  delivery tracking still sees every message and never re-delivers a
-  truncated one.
+  message stubs) until it fits; a terminal marker-only envelope with the exact
+  spill basename is returned BY CONSTRUCTION when even id-only stubs exceed
+  the cap. The compacted block carries an `overflow` marker
+  `{path, full_chars, truncated}` (and `path_omitted` + `spill_file` when the
+  absolute path is stripped). Message ids are never dropped, so delivery
+  tracking still sees every message and never re-delivers a truncated one.
 - **Over the cap - attention lane**: the FULL lane is written once to
   `<workdir>/logs/notification-attention-overflow-<digest8>.json` — the name
   is content-addressed (short sha256 of the lane's canonical serialization),
   so an unchanged oversized lane reuses the SAME file instead of re-spilling
   every batch, and exclusive creation never overwrites an existing recovery
-  handle. The model-visible copy is compacted (heavy fields truncated;
-  routing ids including `message_ids` preserved) and carries the same
-  `overflow` marker. If even the routing stub cannot fit, the lane degrades
-  deterministically to a marker-only envelope that is capped BY
+  handle (a different-content collision allocates `<digest8>-<N>.json`; the
+  exact allocated basename, including any `-N` suffix, is returned as
+  `overflow.spill_file`). The model-visible copy is compacted (heavy fields
+  truncated; routing ids including `message_ids` preserved) and carries the
+  same `overflow` marker. If even the routing stub cannot fit, the lane
+  degrades deterministically to a marker-only envelope that is capped BY
   CONSTRUCTION: a pathologically long absolute spill path is stripped from the
-  marker (`path = None`, `path_omitted`, content digest retained) so the
-  envelope always satisfies the cap; the full payload remains on disk under
-  the deterministic content-addressed name. If the spill file itself cannot
-  be written, the marker carries `spill_failed` and the block points the
-  agent at the producer tool for the full content.
+  marker (`path = None`, `path_omitted`, exact `spill_file` basename retained)
+  so the envelope always satisfies the cap; the full payload remains on disk
+  under the deterministic content-addressed name. If the spill file itself
+  cannot be written, the marker carries `spill_failed` and the block points
+  the agent at the producer tool for the full content.
 
 The cap is **live-configurable** with the environment variable
 `LINGTAI_NOTIFICATION_MAX_CHARS` (positive integer; values above `10000` clamp
-back to `10000`; for the attention lane values below `2048` clamp UP to
-`2048` so the terminal recovery envelope always fits; missing/blank/
+back to `10000`; values below `2048` clamp UP to `2048` on BOTH lanes so the
+terminal recovery envelope always fits; missing/blank/
 non-numeric/zero/negative values fall back to `10000`). It is read at every
 payload build, so setting it in the agent's `env_file` and refreshing applies
 it without editing `init.json`. This is a context-size steering knob only: it

@@ -276,6 +276,16 @@ NOTIFICATION_PERSISTENT_EMAIL_TRUNCATED_COMMENT = (
 # disabled by accident); unset or invalid values fall back to this default.
 NOTIFICATION_PERSISTENT_MAX_CHARS = 10_000
 NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING = 10_000
+# Shared floor for BOTH notification lanes: a positive configured value below
+# this is clamped UP to it so the terminal marker-only recovery envelope
+# (which carries an absolute spill path) can always fit inside the cap.  The
+# cap remains a strict upper bound on the model-visible envelope; the floor
+# only guarantees the deterministic degradation can always express the
+# recovery handle.  When even this floor cannot fit an absolute spill path
+# (pathologically long workdir), the final guard strips the marker path and
+# the exact spill basename (including any ``-N`` suffix) still identifies the
+# file.
+NOTIFICATION_PERSISTENT_MAX_CHARS_MIN = 2048
 NOTIFICATION_PERSISTENT_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
 NOTIFICATION_PERSISTENT_OVERFLOW_KEY = "overflow"
 NOTIFICATION_PERSISTENT_OVERFLOW_FILE_PREFIX = "notification-overflow-"
@@ -2751,14 +2761,19 @@ def _notification_persistent_envelope_chars(persistent: dict) -> int:
     """Return the serialized size of the model-visible persistent envelope.
 
     Measures exactly what the provider sees (the ``notification_persistent``
-    wrapper key included).  An unserializable payload is reported as ``0`` so
-    the cap never turns a serialization problem into a spill/compaction.
+    wrapper key included).  The canonical provider converters re-serialize
+    projected dictionaries with default ASCII escaping
+    (``json.dumps(..., default=str)``), so the ruler uses the same escaping
+    (``ensure_ascii=True``): multilingual content is counted exactly as the
+    provider will serialize it.  An unserializable payload is reported as
+    ``0`` so the cap never turns a serialization problem into a
+    spill/compaction.
     """
     try:
         return len(
             _json.dumps(
                 {NOTIFICATION_PERSISTENT_KEY: persistent},
-                ensure_ascii=False,
+                ensure_ascii=True,
                 sort_keys=True,
                 default=str,
             )
@@ -2956,15 +2971,50 @@ def _drop_notification_persistent_records(persistent: dict) -> dict:
     return persistent
 
 
+def _drop_notification_persistent_terminal(
+    persistent: dict, marker: dict, max_chars: int
+) -> dict:
+    """Return a marker-only persistent envelope that strictly fits *max_chars*.
+
+    Pathological last resort, reached only when even the id-only stub envelope
+    still exceeds the cap.  The kernel-owned overflow marker is the recovery
+    handle; when the absolute spill path is pathologically long, the marker
+    path is stripped (``path=None``, ``path_omitted=True``) and the exact spill
+    basename (including any ``-N`` suffix) is retained in ``spill_file`` so the
+    file stays findable.  With the 2048 floor this compact envelope ALWAYS
+    satisfies ``len(json.dumps(..., default=str)) <= max_chars`` for the
+    bounded production spill basename; the production allocator never produces
+    an unbounded basename (it is a timestamped ``notification-overflow-<ts>.json``
+    sibling created in the agent's own ``logs/`` directory).
+    """
+    envelope = {NOTIFICATION_PERSISTENT_OVERFLOW_KEY: dict(marker)}
+    if _notification_persistent_envelope_chars(envelope) <= max_chars:
+        return envelope
+    compact_marker = dict(marker)
+    spill_path = marker.get("path")
+    spill_basename = (
+        Path(spill_path).name if isinstance(spill_path, str) and spill_path else None
+    )
+    compact_marker["path"] = None
+    compact_marker["path_omitted"] = True
+    if spill_basename:
+        compact_marker["spill_file"] = spill_basename
+    return {NOTIFICATION_PERSISTENT_OVERFLOW_KEY: compact_marker}
+
+
 def _notification_persistent_max_chars() -> int:
     """Return the effective model-visible persistent notification cap.
 
     Live-read ``LINGTAI_NOTIFICATION_MAX_CHARS`` at every payload build (no
     restart needed, like the nudge env vars): a positive integer is used,
-    clamped to the 10,000 ceiling so the context-size fix cannot be silently
-    disabled; missing, blank, non-numeric, zero, or negative values fall back
-    to the default 10,000.  Kept as a function rather than a module constant so
-    an operator can tighten or relax the cap per-process without a code change.
+    clamped to [``NOTIFICATION_PERSISTENT_MAX_CHARS_MIN`` (2048),
+    ``NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING`` (10,000)] so the context-size
+    fix cannot be silently disabled and the terminal record-stub recovery
+    envelope ALWAYS fits (the 2048 floor mirrors the attention lane's floor:
+    ONE shared bar means ONE shared floor).  Missing, blank, non-numeric, zero,
+    or negative values fall back to the default 10,000.  Kept as a function
+    rather than a module constant so an operator can tighten or relax the cap
+    per-process without a code change.
     """
     raw = os.environ.get(NOTIFICATION_PERSISTENT_MAX_CHARS_ENV, "").strip()
     if raw:
@@ -2975,7 +3025,10 @@ def _notification_persistent_max_chars() -> int:
         # Env values are always str, so ``int(raw)`` never yields a ``bool``;
         # the guard is kept for symmetry with the other env int parsers.
         if not isinstance(value, bool) and value > 0:
-            return min(value, NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING)
+            return min(
+                max(value, NOTIFICATION_PERSISTENT_MAX_CHARS_MIN),
+                NOTIFICATION_PERSISTENT_MAX_CHARS_CEILING,
+            )
     return NOTIFICATION_PERSISTENT_MAX_CHARS
 
 
@@ -3017,20 +3070,29 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
             <= max_chars
         ):
             return compacted
-    return _drop_notification_persistent_records(compacted)
+    dropped = _drop_notification_persistent_records(compacted)
+    if _notification_persistent_envelope_chars(dropped) <= max_chars:
+        return dropped
+    return _drop_notification_persistent_terminal(dropped, marker, max_chars)
 
 
 def _notification_attention_envelope_chars(attention: dict) -> int:
     """Return the serialized size of the model-visible attention lane.
 
     Measures exactly what the provider sees under
-    ``_meta.agent_meta.notifications.attention``.  An unserializable payload is
+    ``_meta.agent_meta.notifications.attention``.  The canonical Anthropic,
+    OpenAI Chat/Responses, and Gemini ToolResultBlock converters re-serialize
+    projected dictionaries with default ASCII escaping
+    (``json.dumps(..., default=str)``, i.e. ``ensure_ascii=True``), so the
+    ruler uses the same escaping: multilingual content is counted exactly as
+    the provider will serialize it and cannot silently cross the cap on the
+    wire after the ruler reports it under.  An unserializable payload is
     reported as ``0`` so the cap never turns a serialization problem into a
     spill/compaction.
     """
     try:
         return len(
-            _json.dumps(attention, ensure_ascii=False, sort_keys=True, default=str)
+            _json.dumps(attention, ensure_ascii=True, sort_keys=True, default=str)
         )
     except (TypeError, ValueError):
         return 0
@@ -3294,8 +3356,12 @@ def _drop_notification_attention_records(
     path), the marker path is stripped (``path=None``, ``path_omitted=True``)
     and the compact envelope is returned with the exact spill basename
     (including any ``-N`` suffix) in a short recovery comment.  With the 2048
-    recovery comment.  With the 2048 floor, that compact envelope ALWAYS
-    satisfies ``len(json.dumps(..., default=str)) <= max_chars``; the spill
+    floor, that compact envelope ALWAYS satisfies
+    ``len(json.dumps(..., default=str)) <= max_chars`` for the bounded
+    production basename; the runtime allocator bounds the spill basename to
+    ``notification-attention-overflow-<digest8>[-<N>].json`` (digest8 plus at
+    most a two-digit suffix under the 100-attempt bound), so an arbitrary
+    white-box 3,000-character basename is not a production input.  The spill
     file remains on disk, findable by its deterministic content-addressed name.
     """
     stub: dict = {}

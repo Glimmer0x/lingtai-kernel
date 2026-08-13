@@ -129,23 +129,26 @@ where they share the `.notification/` filesystem protocol.
    lane is bounded by the SAME `LINGTAI_NOTIFICATION_MAX_CHARS` env bar as the
    persistent lane (`NOTIFICATION_ATTENTION_MAX_CHARS` in `meta_block.py`,
    default 10,000; a positive configured value clamps to [2048, 10,000] — the
-   2048 floor guarantees the terminal marker-only recovery envelope ALWAYS
-   fits, and the cap remains a strict upper bound on the model-visible
-   envelope): over the cap the FULL lane is spilled once to
+   2048 floor is shared by BOTH lanes and guarantees the terminal marker-only
+   recovery envelope ALWAYS fits, and the cap remains a strict upper bound on
+   the model-visible envelope): over the cap the FULL lane is spilled once to
    `<agent workdir>/logs/notification-attention-overflow-<digest8>.json`
    (content-addressed sha256, so an unchanged oversized lane reuses the same
-   file; exclusive create never overwrites an existing recovery handle), the
-   model-visible copy is compacted (heavy fields truncated, routing ids
-   including `message_ids` preserved), and the block carries
-   `attention.overflow = {path, full_chars, truncated}` as the recovery handle
-   (`src/lingtai/kernel/meta_block.py:3374`). `message_ids` survive compaction
-   and are dropped only under a pathological stub that cannot fit, which
-   degrades deterministically to a marker-only envelope that is capped BY
+   file; exclusive create never overwrites an existing recovery handle; a
+   different-content collision allocates `<digest8>-<N>.json` and the exact
+   allocated basename, including any `-N` suffix, is returned as
+   `overflow.spill_file`), the model-visible copy is compacted (heavy fields
+   truncated, routing ids including `message_ids` preserved), and the block
+   carries `attention.overflow = {path, full_chars, truncated}` as the recovery
+   handle (`src/lingtai/kernel/meta_block.py:3374`). `message_ids` survive
+   compaction and are dropped only under a pathological stub that cannot fit,
+   which degrades deterministically to a marker-only envelope that is capped BY
    CONSTRUCTION: a pathologically long absolute spill path is stripped from
-   the marker (`path = None`, `path_omitted`, content digest retained) so the
-   envelope always satisfies the cap (`src/lingtai/kernel/meta_block.py:3266`),
-   or the block carries producer-tool guidance when the spill failed.
-5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate) The whole persistent envelope is capped at 10,000 serialized characters by default (`NOTIFICATION_PERSISTENT_MAX_CHARS` in `meta_block.py`; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, a positive integer clamped to at most 10,000): when a busy hub exceeds the cap, the full block is spilled to `<agent workdir>/logs/notification-overflow-<ts>.json`, the model-visible copy is compacted (heavy message bodies truncated, message ids always preserved so delivery tracking still records every message), and the block carries `persistent.overflow = {path, full_chars, truncated}` as the recovery handle. The attention lane shares the same env bar and spills content-addressed (see item 4).
+   the marker (`path = None`, `path_omitted`, exact `spill_file` basename
+   retained) so the envelope always satisfies the cap
+   (`src/lingtai/kernel/meta_block.py:3266`), or the block carries
+   producer-tool guidance when the spill failed.
+5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate) The whole persistent envelope is capped at 10,000 serialized characters by default (`NOTIFICATION_PERSISTENT_MAX_CHARS` in `meta_block.py`; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, a positive integer clamped to [2048, 10,000] — the 2048 floor is shared with the attention lane so the terminal recovery envelope always fits): when a busy hub exceeds the cap, the full block is spilled to `<agent workdir>/logs/notification-overflow-<ts>.json`, the model-visible copy is compacted (heavy message bodies truncated, message ids always preserved so delivery tracking still records every message), and the block carries `persistent.overflow = {path, full_chars, truncated}` as the recovery handle; when even id-only stubs exceed the cap, a marker-only envelope with the exact spill basename (`path_omitted` + `spill_file`) is returned BY CONSTRUCTION. The attention lane shares the same env bar and spills content-addressed (see item 4).
    (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`
    metadata. Every Telegram message object in those fields carries the explicit
@@ -181,7 +184,7 @@ MCP/server state
   -> LICC event file (.mcp_inbox/<mcp>/<event>.json)
   -> MCPInboxPoller coalesced notification (.notification/mcp.<mcp>.json)
   -> BaseAgent notification sync (IDLE synthetic notification check, or ACTIVE
-     sparse _meta attachment)
+     copy-to-every-carrier _meta attachment on each eligible final block)
   -> _meta.agent_meta.notifications.attention high-attention hook
   -> optional _meta.agent_meta.notifications.persistent communication context
   -> producer tool read/reply/dismiss for exact data and state changes
@@ -193,7 +196,7 @@ The transient and persistent lanes have different jobs:
 |---|---|---|
 | `.notification/<channel>.json` | Producer-owned live mirror/hook that wakes the agent and carries enough structured data for the kernel projection. | A durable arrival log. |
 | `_meta.agent_meta.notifications.attention.<channel>` | High-attention hook saying "this producer needs handling" and carrying only the minimal identity needed to correlate/dismiss. | A second copy of chat/mail content when a persistent lane exists. |
-| `_meta.agent_meta.notifications.persistent...` | Context lane for conversation content, routing hooks, and continuity comments that should survive sparse notification movement. | A dismiss/action channel or producer source of truth. |
+| `_meta.agent_meta.notifications.persistent...` | Context lane for conversation content, routing hooks, and continuity comments that survive carrier re-stamping. | A dismiss/action channel or producer source of truth. |
 | Producer tool/store | Exact read/reply/dismiss state and external side effects. | A passive mirror inferred from `_meta`. |
 
 ### New human-message LICC channel acceptance gate
@@ -398,7 +401,10 @@ Persistent/on-disk state involved in this contract:
 In-memory state involved in this contract:
 
 - `agent._notification_live_holder` and `_notification_payload_signature` control
-  sparse movement of the transient notification payload.
+  which carrier carries the transient notification payload; ACTIVE copies the
+  current notification state onto EVERY eligible final ToolResultBlock, and
+  the live-holder/signature is bookkeeping that describes the copy, not the
+  attachment gate.
 - `agent._notification_persistent_telegram_message_ids` /
   `_notification_persistent_telegram_last_tool_id`, the WeChat counterparts
   `agent._notification_persistent_wechat_message_ids` /
@@ -418,7 +424,7 @@ Re-check this contract whenever a change touches any of these areas:
 - `.notification` helper semantics, channel allowlists, publish/clear/dismiss,
   or generic-dismiss guards: `src/lingtai/kernel/notifications.py` and
   `src/lingtai/tools/notification/`.
-- Notification injection, sparse live-holder movement, `notification_guidance`,
+- Notification injection, copy-to-every-carrier live-holder semantics, `notification_guidance`,
   `_meta.agent_meta.notifications.attention`, `_meta.agent_meta.notifications.persistent`, or sanitizer logic:
   `src/lingtai/kernel/meta_block.py`, `src/lingtai/kernel/base_agent/__init__.py`,
   and `src/lingtai/kernel/base_agent/turn.py`.

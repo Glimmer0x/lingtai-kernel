@@ -606,3 +606,35 @@ def test_concurrent_writers_different_payloads_never_lose(tmp_path):
         for path in spill_files
     }
     assert markers == {"A", "B"}
+
+def test_non_ascii_attention_measured_with_provider_escaping(tmp_path, monkeypatch):
+    """P1-1: multilingual attention is measured like the provider serializes it.
+
+    Anthropic/OpenAI Chat/OpenAI Responses/Gemini canonical converters
+    re-serialize projected ToolResultBlock dictionaries with default ASCII
+    escaping (``json.dumps(..., default=str)``), so a CJK body that is small
+    under ``ensure_ascii=False`` is far larger on the wire.  The cap ruler must
+    measure the provider-visible representation: a 2000-CJK-char attention
+    body (2,035 chars unescaped) must spill instead of silently staying under
+    the 10,000 cap at 12,035 escaped chars.
+    """
+    agent = _cap_agent(tmp_path)
+    messages = [_telegram_message(1, text="中" * 2000)]
+    attention = _attention_payload(messages)
+
+    # The ruler must equal the provider-visible serialization (default ASCII
+    # escaping), not the smaller UTF-8-preserving one.
+    ruler_chars = meta_block._notification_attention_envelope_chars(attention)
+    provider_chars = len(json.dumps(attention, default=str))
+    assert ruler_chars == provider_chars
+    assert ruler_chars > MAX  # 12,035 > 10,000: would previously NOT spill
+
+    capped = meta_block._cap_notification_attention(agent, attention)
+    overflow = capped["overflow"]
+    assert overflow["truncated"] is True
+    assert overflow["full_chars"] == ruler_chars
+    # The returned compacted attention block itself satisfies the promised cap
+    # under provider-visible serialization (no later wire expansion can push it
+    # back over the ceiling).
+    assert len(json.dumps(capped, default=str)) <= MAX
+    assert len(_spill_files(tmp_path)) == 1
