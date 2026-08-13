@@ -34,13 +34,82 @@ GATE_CHECK_NAME = "risky_action_gate"
 _DESTRUCTIVE_VERBS = {"rm", "rmdir", "unlink", "shred", "truncate"}
 _DESTINATION_VERBS = {"mv", "cp", "install", "rsync"}
 _READ_ONLY_VERBS = {
-    "cat", "cut", "date", "echo", "env", "head", "jq", "ls", "pwd",
+    "cat", "cut", "echo", "env", "head", "jq", "ls", "pwd",
     "printf", "rg", "sort", "tail", "true", "type", "uname", "wc", "which",
 }
 # Read-only verbs that ALSO accept a write-destination flag (e.g. sort -o,
 # curl -o, wget -O, tee). A bare ``-o``/``--output``/``-O``/``-i``/``--in-place``
 # would turn an otherwise read-only invocation into a write; reject them.
 _READ_ONLY_WRITE_FLAGS = {"-o", "--output", "-O", "--outfile", "-i", "--in-place"}
+# Option-aware per-verb allowlists for the read-only verbs. A read-only verb is
+# only trusted when every option token is a known read-only form; unknown or
+# risky options fail closed so free-form shell cannot smuggle helper execution
+# (rg --pre), system mutation (date <new_date>), or config-remapped execution
+# through an allowlisted verb name.
+_READ_ONLY_VERB_LONG_OPTIONS: dict[str, set[str]] = {
+    "cat": {"--number", "--number-nonblank", "--show-all", "--show-ends", "--show-tabs", "--show-nonprinting", "--squeeze-blank"},
+    "cut": {"--bytes", "--characters", "--delimiter", "--fields", "--only-delimited", "--zero-terminated"},
+    "echo": set(),
+    "env": {"--chdir", "--unset", "--null", "--ignore-signal"},
+    "head": {"--bytes", "--lines", "--quiet", "--verbose", "--zero-terminated"},
+    "jq": {"--compact-output", "--raw-output", "--null-input", "--exit-status", "--slurp", "--raw-input", "--sort-keys", "--color-output", "--monochrome-output", "--join-output", "--ascii-output", "--from-file", "--arg", "--argjson", "--slurpfile", "--rawfile", "--args", "--jsonargs", "--seq", "--stream", "--indent", "--tab", "--unbuffered"},
+    "ls": {"--all", "--almost-all", "--author", "--block-size", "--classify", "--color", "--directory", "--dereference-command-line", "--file-type", "--format", "--full-time", "--group-directories-first", "--hide", "--human-readable", "--ignore", "--inode", "--literal", "--no-group", "--no-owner", "--numeric-uid-gid", "--quote-name", "--recursive", "--reverse", "--size", "--sort", "--time", "--time-style", "--zero"},
+    "pwd": {"--logical", "--physical"},
+    "printf": set(),
+    "rg": {"--text", "--ignore-case", "--line-number", "--files-with-matches", "--count", "--invert-match", "--word-regexp", "--line-regexp", "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--context", "--after-context", "--before-context", "--multiline", "--pcre2", "--smart-case", "--no-config", "--no-ignore", "--hidden", "--no-messages", "--column", "--heading", "--follow", "--no-line-number", "--only-matching", "--case-sensitive", "--files", "--no-filename", "--with-filename", "--json", "--null", "--max-columns", "--max-columns-preview", "--colors", "--color", "--encoding", "--path-separator", "--sort", "--type-add", "--type-clear"},
+    "sort": {"--check", "--dictionary-order", "--field-separator", "--ignore-case", "--key", "--numeric-sort", "--reverse", "--stable", "--unique", "--version-sort", "--human-numeric-sort", "--general-numeric-sort", "--month-sort", "--random-sort", "--zero-terminated", "--ignore-leading-blanks", "--ignore-nonprinting", "--random-source", "--parallel", "--batch-size"},
+    "tail": {"--bytes", "--follow", "--lines", "--quiet", "--retry", "--sleep-interval", "--verbose"},
+    "true": set(),
+    "type": set(),
+    "uname": {"--all", "--kernel-name", "--nodename", "--kernel-release", "--kernel-version", "--machine", "--processor", "--hardware-platform", "--operating-system"},
+    "wc": {"--bytes", "--chars", "--lines", "--max-line-length", "--words"},
+    "which": {"--all", "--read-alias", "--skip-alias", "--skip-dot", "--skip-tilde"},
+}
+_READ_ONLY_VERB_SHORT_OPTIONS: dict[str, set[str]] = {
+    "cat": {"A", "b", "e", "E", "n", "s", "t", "T", "u", "v"},
+    "cut": {"b", "c", "d", "f", "s", "z", "n"},
+    "echo": {"n", "e", "E"},
+    "env": {"i", "0", "C"},
+    "head": {"n", "c", "q", "v", "z"},
+    "jq": {"c", "r", "n", "e", "s", "R", "S", "C", "M", "j", "a", "o", "u"},
+    "ls": {"a", "A", "b", "c", "C", "d", "f", "F", "g", "G", "h", "H", "i", "k", "l", "L", "m", "n", "N", "p", "q", "Q", "r", "R", "s", "S", "t", "T", "u", "U", "v", "w", "x", "X", "Z", "1"},
+    "pwd": {"L", "P"},
+    "printf": set(),
+    "rg": {"a", "i", "n", "l", "c", "v", "w", "x", "U", "P", "S", "H", "o", "N", "L", "M", "I", "s", "j", "0"},
+    "sort": {"b", "c", "d", "f", "g", "h", "i", "m", "M", "n", "r", "R", "s", "u", "V", "z", "C"},
+    "tail": {"n", "c", "f", "F", "q", "s", "v", "r", "z"},
+    "true": set(),
+    "type": {"a", "p", "P", "t"},
+    "uname": {"a", "s", "n", "r", "v", "m", "p", "i", "o"},
+    "wc": {"c", "l", "m", "w", "L"},
+    "which": {"a", "s", "p"},
+}
+# Short options that take an attached value (e.g. ``sort -k2``, ``head -n5``,
+# ``cut -d,``, ``rg -ePAT``). The first character may be a value-taking short;
+# every other short-option cluster must be wholly allowlisted.
+_READ_ONLY_VERB_VALUE_SHORTS: dict[str, set[str]] = {
+    "cat": set(),
+    "cut": {"b", "c", "d", "f"},
+    "echo": set(),
+    "env": {"u", "C"},
+    "head": {"n", "c"},
+    "jq": {"f", "L"},
+    "ls": {"I", "T", "w"},
+    "pwd": set(),
+    "printf": set(),
+    "rg": {"e", "f", "g", "t", "T", "m", "A", "B", "C"},
+    "sort": {"k", "t"},
+    "tail": {"n", "c", "s"},
+    "true": set(),
+    "type": set(),
+    "uname": set(),
+    "wc": set(),
+    "which": set(),
+}
+# Git options that make a nominally read-only subcommand execute an external
+# helper (git diff --ext-diff/--textconv, config overrides that remap
+# diff.external/core.pager/alias etc.). Fail closed on all of them.
+_GIT_EXTERNAL_EXEC_OPTIONS = {"--ext-diff", "--textconv"}
 _READ_ONLY_GIT_SUBCOMMANDS = {"branch", "diff", "log", "ls-files", "remote", "show", "status", "tag"}
 # Git subcommands whose bare-name form is read-only but whose positional form
 # mutates (branch <name> creates, tag <name> creates, remote add mutates).
@@ -51,6 +120,9 @@ _WRAPPERS = {"command", "env", "exec", "nohup", "sudo", "time", "doas"}
 _ENV_EXECUTION_REDIRECT_KEYS = {
     "PATH", "ENV", "BASH_ENV", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
     "PYTHONPATH", "PYTHONSTARTUP", "PERL5LIB", "RUBYLIB", "NODE_PATH", "GEM_HOME", "GEM_PATH",
+    # Git env vars that redirect git to execute an external program.
+    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+    "GIT_SSH_COMMAND", "GIT_SSH",
 }
 _INTERPRETERS = {"bash", "fish", "node", "perl", "python", "python2", "python3", "ruby", "sh", "zsh"}
 _CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n", ">>", ">", "<<", "<", "|&")
@@ -297,6 +369,60 @@ def _unwrap(tokens: list[str]) -> list[str] | None:
     return tokens[index:]
 
 
+def _git_external_exec_reason(tokens: list[str]) -> str | None:
+    """Fail-closed check for git options that execute an external helper.
+
+    ``git diff --ext-diff`` / ``--textconv`` run external diff/textconv
+    programs, and ``git -c``/``--config``/``--config-env`` can remap any
+    external-exec config (diff.external, core.pager, alias.*). None of them
+    are needed by a read-only query, so deny them all.
+    """
+    for token in tokens[1:]:
+        if token in _GIT_EXTERNAL_EXEC_OPTIONS:
+            return f"git option {token} can execute an external helper"
+        if token == "-c" or token.startswith("-c") and not token.startswith("-C"):
+            return "git -c config override can execute an external helper"
+        if token == "--config" or token.startswith("--config=") or token == "--config-env" or token.startswith("--config-env="):
+            return "git --config override can execute an external helper"
+    return None
+
+
+def _read_only_option_reason(verb: str, tokens: list[str]) -> str | None:
+    """Per-verb option allowlist for read-only verbs.
+
+    Unknown or risky options fail closed: a verb name alone is not enough to
+    call an invocation read-only (rg --pre executes a helper; date <new_date>
+    sets the system clock). ``--`` ends option parsing; a lone ``-`` is a
+    positional. A short cluster (``ls -la``) is accepted only when every
+    character is an allowlisted short option; a short option with an attached
+    value (``sort -k2``) is accepted only when the first character is an
+    allowlisted value-taking short option.
+    """
+    longs = _READ_ONLY_VERB_LONG_OPTIONS.get(verb, set())
+    shorts = _READ_ONLY_VERB_SHORT_OPTIONS.get(verb, set())
+    value_shorts = _READ_ONLY_VERB_VALUE_SHORTS.get(verb, set())
+    after_double_dash = False
+    for token in tokens[1:]:
+        if token == "--":
+            after_double_dash = True
+            continue
+        if after_double_dash or token == "-" or not token.startswith("-"):
+            continue
+        if token.startswith("--"):
+            name = token.split("=", 1)[0]
+            if name not in longs:
+                return f"read-only verb {verb} carries an unknown option: {token}"
+            continue
+        if len(token) == 2 and token[1] in shorts:
+            continue
+        if token[1] in value_shorts:
+            continue
+        if all(ch in shorts for ch in token[1:]):
+            continue
+        return f"read-only verb {verb} carries an unknown option: {token}"
+    return None
+
+
 def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None = None) -> str | None:
     segments = _command_segments(command)
     if not segments:
@@ -324,6 +450,9 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
                 return f"git subcommand is not classified read-only: {subcommand or '<missing>'}"
             if any(_is_write_destination_flag(token) for token in tokens[1:]):
                 return f"git {subcommand} carries a write-destination flag"
+            reason = _git_external_exec_reason(tokens)
+            if reason is not None:
+                return reason
             if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
                 reason = _git_list_only_risk(tokens, subcommand)
                 if reason is not None:
@@ -360,6 +489,9 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             return f"shell command is not classified read-only: {verb}"
         if any(_is_write_destination_flag(token) for token in tokens[1:]):
             return f"read-only verb {verb} carries a write-destination flag"
+        reason = _read_only_option_reason(verb, tokens)
+        if reason is not None:
+            return reason
         if "/" in tokens[0]:
             # Any path-form executable (absolute, ../, bin/, ./) reduces to an
             # allowlisted basename via Path(...).name; only bare verbs are

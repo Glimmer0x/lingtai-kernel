@@ -393,6 +393,65 @@ def test_read_only_verb_with_joined_write_flag_is_denied(tmp_path):
         assert not decision.allowed, command
 
 
+def test_read_only_verb_option_allowlist_denies_helper_execution(tmp_path):
+    """Read-only verbs must be option-aware; unknown/exec options fail closed.
+
+    Regression for Fable batch-A cross-check P0 #4: rg --pre executes an
+    arbitrary preprocessor, date <new_date> sets the system clock, and both
+    were previously allowed because only the verb name was classified.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "rg --pre /tmp/fable-never-executed needle .",
+        "rg --pre-glob '*.rs' /tmp/fable-never-executed needle .",
+        "rg --search-zip needle archive.zip",
+        "rg -z needle archive.zip",
+        "sudo rg --pre /tmp/fable-never-executed needle .",
+        "date 010101012030",
+        "sudo date 010101012030",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Option-aware read-only forms stay allowed.
+    for command in ("rg -n needle .", "rg --ignore-case needle .", "ls -la", "head -n5 file", "sort -k2 file", "cut -d, -f1 file"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
+def test_git_external_exec_options_are_denied(tmp_path):
+    """Git read-only fast-path must not run external diff/textconv helpers.
+
+    Regression for Fable batch-A cross-check P0 #4: --ext-diff, --textconv and
+    config overrides (git -c diff.external=..., env GIT_EXTERNAL_DIFF=...) all
+    execute external programs yet were allowed because only output flags and
+    list-only subcommands were checked.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git diff --ext-diff",
+        "git diff --textconv",
+        "git show --ext-diff HEAD",
+        "git -c diff.external=/tmp/fable-never-executed diff --ext-diff",
+        "git --config diff.external=/tmp/fable-never-executed diff --ext-diff",
+        "env GIT_EXTERNAL_DIFF=/tmp/fable-never-executed git diff --ext-diff",
+        "env GIT_PAGER=/tmp/fable-never-executed git log -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Ordinary read-only git queries stay allowed.
+    for command in ("git diff", "git show HEAD", "git log -1", "git status", "git log --oneline -5"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_bash_compat_name_is_treated_as_shell(tmp_path):
     """A compat ``bash`` tool call must hit the same shell gate as ``shell``."""
     _file_config(tmp_path)
