@@ -743,11 +743,13 @@ class TaskCardEventProjection:
         line2 = " | ".join(line2_parts) if line2_parts else None
 
         # Daemon status + statistics: active runs plus terminal runs finished
-        # within the last ten minutes. Counts only (no id lists); the stats
-        # line aggregates token input/output/cached and call counts over the
-        # same window. Nothing renders when no daemon is in scope.
+        # within the last ten minutes. Counts and backend distribution only
+        # (no id lists); the stats line aggregates token input/output/cached
+        # and call counts over the same window. Nothing renders when no daemon
+        # is in scope.
         daemons = metadata.get("daemons")
         line3: str | None = None
+        line3b: str | None = None
         line4: str | None = None
         if isinstance(daemons, dict):
             status_parts: list[str] = []
@@ -760,6 +762,15 @@ class TaskCardEventProjection:
                     status_parts.append(f"{key} {count}")
             if status_parts:
                 line3 = "daemons · " + " · ".join(status_parts)
+            backend_counts = daemons.get("backend_counts")
+            if isinstance(backend_counts, dict) and backend_counts:
+                backend_parts: list[str] = []
+                for backend in sorted(backend_counts):
+                    count = backend_counts.get(backend)
+                    if isinstance(count, int) and count > 0:
+                        backend_parts.append(f"{backend} {count}")
+                if backend_parts:
+                    line3b = "backends · " + " · ".join(backend_parts)
             stats_parts: list[str] = []
             input_tokens = daemons.get("input_tokens")
             output_tokens = daemons.get("output_tokens")
@@ -781,7 +792,7 @@ class TaskCardEventProjection:
             if stats_parts:
                 line4 = "daemon stats · " + " · ".join(stats_parts)
 
-        lines = [ln for ln in (line1, line2, line3, line4) if ln]
+        lines = [ln for ln in (line1, line2, line3, line3b, line4) if ln]
         if not lines:
             return []
         joined = "\n".join(lines)

@@ -684,6 +684,7 @@ def test_metadata_renders_daemon_status_and_stats():
             "done": 2,
             "cancelled": 0,
             "timeout": 0,
+            "backend_counts": {"lingtai": 2, "claude-p": 1},
             "input_tokens": 1_234_567,
             "output_tokens": 340_000,
             "cached_tokens": 1_049_382,
@@ -692,8 +693,27 @@ def test_metadata_renders_daemon_status_and_stats():
     })
     assert lines == [
         "daemons · active 3 · failed 1 · done 2",
+        "backends · claude-p 1 · lingtai 2",
         "daemon stats · in 1.2M · out 340.0k · cache 85.0% · calls 12",
     ]
+
+
+def test_metadata_renders_backend_stats_only_when_present():
+    # No backend_counts -> no backends line.
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {"active": 1},
+    })
+    assert lines == ["daemons · active 1"]
+    # Empty backend_counts -> no backends line.
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {"active": 1, "backend_counts": {}},
+    })
+    assert lines == ["daemons · active 1"]
+    # Populated backend_counts -> sorted backends line.
+    lines = TelegramManager._format_task_card_metadata({
+        "daemons": {"active": 1, "backend_counts": {"claude-p": 2, "lingtai": 1}},
+    })
+    assert lines == ["daemons · active 1", "backends · claude-p 2 · lingtai 1"]
 
 
 def test_metadata_omits_daemon_lines_when_no_daemons():
@@ -736,10 +756,10 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     recent = (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     old = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for name, state in [
-        ("em-1", {"state": "running", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
-        ("em-2", {"state": "done", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
+        ("em-1", {"state": "running", "backend": "lingtai", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
+        ("em-2", {"state": "done", "backend": "claude-p", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
         ("em-3", {"state": "failed", "finished_at": recent, "cli_tokens": {"input": 3000, "output": 100, "cached": 0, "calls": 1}}),
-        ("em-4", {"state": "done", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
+        ("em-4", {"state": "done", "backend": "codex", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
     ]:
         (daemons / name / "daemon.json").write_text(_json.dumps(state), encoding="utf-8")
 
@@ -753,6 +773,9 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     assert snap["output_tokens"] == 500 + 700 + 100
     assert snap["cached_tokens"] == 800 + 1500 + 0
     assert snap["calls"] == 3 + 4 + 1
+    # Backend distribution counts only in-window runs; em-3 without a backend
+    # falls back to "unknown".
+    assert snap["backend_counts"] == {"lingtai": 1, "claude-p": 1, "unknown": 1}
 
 
 def test_daemon_snapshot_returns_none_when_no_daemons(tmp_path):

@@ -2408,12 +2408,13 @@ class TelegramManager:
             "timeout": 0,
         }
         totals = {"input": 0, "output": 0, "cached": 0, "calls": 0}
+        backend_counts: dict[str, int] = {}
         included = False
         for run_path in daemons_dir.iterdir():
             if not run_path.is_dir():
                 continue
             state: dict | None = None
-            for candidate in ("daemon.json", "n"):
+            for candidate in ("daemon.json",):
                 state_path = run_path / candidate
                 if not state_path.is_file():
                     continue
@@ -2451,6 +2452,12 @@ class TelegramManager:
             if not in_window:
                 continue
             included = True
+            backend = state.get("backend")
+            if not isinstance(backend, str) or not backend.strip():
+                backend = "unknown"
+            else:
+                backend = backend.strip()
+            backend_counts[backend] = backend_counts.get(backend, 0) + 1
             tokens = state.get("tokens")
             if not isinstance(tokens, dict):
                 tokens = state.get("cli_tokens")
@@ -2464,6 +2471,7 @@ class TelegramManager:
         return {
             "active": active,
             **terminal_counts,
+            "backend_counts": backend_counts,
             "input_tokens": totals["input"],
             "output_tokens": totals["output"],
             "cached_tokens": totals["cached"],
