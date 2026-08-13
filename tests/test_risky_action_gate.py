@@ -163,3 +163,103 @@ def test_shared_config_grants_are_unioned_and_two_approvals_transition_status(tm
     request_path = agent / ".security" / "pending" / f"{decision.metadata['pending_request_id']}.json"
     assert mark_approval(request_path, "telegram", "approve")["status"] == "pending"
     assert mark_approval(request_path, "wechat", "approve")["status"] == "approved"
+
+
+def test_glued_redirection_is_denied(tmp_path):
+    """`printf pwn>/tmp/x` must not be unwrapped into read-only printf."""
+    _file_config(tmp_path)
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "printf pwn>/tmp/x"}
+    }))
+    assert not decision.allowed
+
+
+def test_glued_append_redirection_is_denied(tmp_path):
+    _file_config(tmp_path)
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "echo hi >>/tmp/x"}
+    }))
+    assert not decision.allowed
+
+
+def test_path_form_executable_is_denied(tmp_path):
+    """`./ls` must not be trusted as the read-only system ``ls``."""
+    _file_config(tmp_path)
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "./ls"}
+    }))
+    assert not decision.allowed
+
+
+def test_env_path_override_is_denied(tmp_path):
+    """`env PATH=/attacker ls` must not unwrap into read-only ls."""
+    _file_config(tmp_path)
+    for command in (
+        "env PATH=/attacker ls",
+        "env LD_PRELOAD=/attacker.so ls",
+        "env PYTHONPATH=/attacker python3 -c pass",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+
+
+def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
+    _file_config(tmp_path)
+    for command in ("git branch pwn", "git tag v1", "git remote add x y"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Bare list/query forms stay allowed.
+    for command in ("git branch", "git tag", "git remote -v", "git status", "git log -1"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
+def test_read_only_verb_with_write_flag_is_denied(tmp_path):
+    _file_config(tmp_path)
+    for command in ("sort -o /tmp/x input", "curl -o /tmp/x https://example.com", "wget -O /tmp/x https://example.com"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+
+
+def test_bash_compat_name_is_treated_as_shell(tmp_path):
+    """A compat ``bash`` tool call must hit the same shell gate as ``shell``."""
+    _file_config(tmp_path)
+    decision = build_risky_action_check(tmp_path)(_proposal("bash", {
+        "action": "run", "input": {"command": "rm -f x"}
+    }))
+    assert not decision.allowed
+
+
+def test_daemon_stub_wires_risky_action_gate(tmp_path):
+    """Detached daemon stub must not bypass an opted-in gate."""
+    _file_config(tmp_path)
+    from lingtai.kernel.daemon_supervisor.agent_stub import DaemonSupervisorAgentStub
+    stub = DaemonSupervisorAgentStub(tmp_path)
+    assert stub._tool_call_guard is not None
+    decision = stub._tool_call_guard.evaluate(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    }))
+    assert not decision.allowed
+
+
+def test_mark_approval_refuses_expired_inline(tmp_path):
+    """mark_approval itself must refuse an already-expired pending request."""
+    _file_config(tmp_path)
+    decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    }))
+    request_path = tmp_path / ".security" / "pending" / f"{decision.metadata['pending_request_id']}.json"
+    payload = json.loads(request_path.read_text(encoding="utf-8"))
+    payload["created_at"] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    request_path.write_text(json.dumps(payload), encoding="utf-8")
+    result = mark_approval(request_path, "telegram", "approve")
+    assert result["status"] == "expired"
+    assert request_path.read_text(encoding="utf-8") != ""

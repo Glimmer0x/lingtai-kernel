@@ -21,6 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from lingtai.kernel.config import AgentConfig
+from lingtai.kernel.risky_action_gate import build_risky_action_check
+from lingtai.kernel.tool_call_guard import ToolCallGuard
 
 
 class DaemonSupervisorAgentStub:
@@ -47,7 +49,12 @@ class DaemonSupervisorAgentStub:
         # does not own any other host-service construction.
         self._file_io = None
         self._mcp_tool_names = set()
-        self._tool_call_guard = None
+        # The risky-action gate is opt-in and rooted at the daemon's parent
+        # working dir (the same config the parent agent would consult), so
+        # daemon tool dispatch cannot silently bypass an opted-in gate.
+        self._tool_call_guard = ToolCallGuard([
+            build_risky_action_check(self._working_dir),
+        ])
         self._log_fn = log_fn
 
     def _log(self, event_type: str, **fields) -> None:

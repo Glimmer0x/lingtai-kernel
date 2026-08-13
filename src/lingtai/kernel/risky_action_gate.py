@@ -35,10 +35,24 @@ _READ_ONLY_VERBS = {
     "cat", "cut", "date", "echo", "env", "head", "jq", "ls", "pwd",
     "printf", "rg", "sort", "tail", "true", "type", "uname", "wc", "which",
 }
+# Read-only verbs that ALSO accept a write-destination flag (e.g. sort -o,
+# curl -o, wget -O, tee). A bare ``-o``/``--output``/``-O``/``-i``/``--in-place``
+# would turn an otherwise read-only invocation into a write; reject them.
+_READ_ONLY_WRITE_FLAGS = {"-o", "--output", "-O", "--outfile", "-i", "--in-place"}
 _READ_ONLY_GIT_SUBCOMMANDS = {"branch", "diff", "log", "ls-files", "remote", "show", "status", "tag"}
+# Git subcommands whose bare-name form is read-only but whose positional form
+# mutates (branch <name> creates, tag <name> creates, remote add mutates).
+_GIT_LIST_ONLY_SUBCOMMANDS = {"branch", "remote", "tag"}
 _WRAPPERS = {"command", "env", "exec", "nohup", "sudo", "time", "doas"}
+# Environment variables whose assignment can redirect execution or load hostile
+# code; ``env PATH=/attacker ls`` must not be unwrapped into a read-only ``ls``.
+_ENV_EXECUTION_REDIRECT_KEYS = {
+    "PATH", "ENV", "BASH_ENV", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
+    "PYTHONPATH", "PYTHONSTARTUP", "PERL5LIB", "RUBYLIB", "NODE_PATH", "GEM_HOME", "GEM_PATH",
+}
 _INTERPRETERS = {"bash", "fish", "node", "perl", "python", "python2", "python3", "ruby", "sh", "zsh"}
-_CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n")
+_CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n", ">>", ">", "<<", "<", "|&")
+
 
 
 def _resolve(path: str | os.PathLike[str]) -> str:
@@ -132,7 +146,14 @@ def _command_segments(command: str) -> list[list[str]]:
     return result
 
 
-def _unwrap(tokens: list[str]) -> list[str]:
+def _unwrap(tokens: list[str]) -> list[str] | None:
+    """Strip leading wrappers, returning ``None`` when a wrapper is unsafe.
+
+    Returns the remaining tokens after benign wrappers (command/env/exec/etc.
+    with plain flags and ordinary ``KEY=value`` assignments), or ``None`` when
+    an ``env`` assignment redirects execution (PATH, LD_PRELOAD, PYTHONPATH,
+    etc.) so the caller can fail closed instead of trusting the unwrapped verb.
+    """
     index = 0
     while index < len(tokens) and tokens[index] in _WRAPPERS:
         wrapper = tokens[index]
@@ -141,6 +162,9 @@ def _unwrap(tokens: list[str]) -> list[str]:
         # attempt to model wrappers with option values (fail closed later).
         if wrapper == "env":
             while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
+                key = tokens[index].split("=", 1)[0]
+                if key in _ENV_EXECUTION_REDIRECT_KEYS:
+                    return None
                 index += 1
     return tokens[index:]
 
@@ -153,7 +177,10 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
     resolve_cwd = Path(cwd).expanduser().resolve() if isinstance(cwd, str) and cwd else None
     ssh_hosts = set(_list_value(config, "ssh_hosts"))
     for tokens in segments:
-        tokens = _unwrap(tokens)
+        unwrapped = _unwrap(tokens)
+        if unwrapped is None:
+            return "env assignment redirects execution (PATH/LD_*/PYTHONPATH/...)"
+        tokens = unwrapped
         if not tokens:
             return "shell command has no resolvable executable"
         verb = Path(tokens[0]).name
@@ -167,6 +194,11 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             subcommand = next((token for token in tokens[1:] if not token.startswith("-")), None)
             if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
                 return f"git subcommand is not classified read-only: {subcommand or '<missing>'}"
+            if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
+                # ``git branch <name>`` / ``git tag <name>`` create; ``git remote
+                # add`` mutates. Only the bare list/query forms are read-only.
+                if len([t for t in tokens[1:] if not t.startswith("-")]) > 1:
+                    return f"git {subcommand} with a positional argument is not read-only"
             continue
         if verb == "ssh":
             host = next((token for token in tokens[1:] if not token.startswith("-")), None)
@@ -197,6 +229,14 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             return "piped installer execution is risky"
         if verb not in _READ_ONLY_VERBS:
             return f"shell command is not classified read-only: {verb}"
+        if any(
+            token in _READ_ONLY_WRITE_FLAGS
+            or token.startswith("--output=") or token.startswith("--outfile=")
+            for token in tokens[1:]
+        ):
+            return f"read-only verb {verb} carries a write-destination flag"
+        if tokens[0].startswith("./"):
+            return f"path-form executable {tokens[0]} is not a bare read-only verb"
     return None
 
 
@@ -276,7 +316,11 @@ def build_risky_action_check(working_dir: str | os.PathLike[str]):
             file_result = _file_risk_reason(proposal.tool_args, config)
             if file_result is not None:
                 reason = file_result[0]
-        elif proposal.tool_name == "shell":
+        elif proposal.tool_name in ("shell", "bash"):
+            # ``bash`` is the legacy compatibility name that the registry maps
+            # to the ``shell`` capability after guard evaluation; treating it
+            # as shell here prevents a compat-named shell call from bypassing
+            # the opted-in gate.
             action_input = proposal.tool_args.get("input")
             action = proposal.tool_args.get("action")
             if action in (None, "run") and isinstance(action_input, dict):
@@ -324,8 +368,13 @@ def expire_pending(path: str | os.PathLike[str], *, now: datetime | None = None)
     return payload
 
 
-def mark_approval(path: str | os.PathLike[str], channel: str, decision: str) -> dict[str, Any]:
-    """Record one human approval leg; replay remains a separate worker concern."""
+def mark_approval(path: str | os.PathLike[str], channel: str, decision: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Record one human approval leg; replay remains a separate worker concern.
+
+    An expired request is never replayable: this function refuses to record an
+    approval (or anything else) on a request whose TTL has already elapsed, so
+    a late human approval cannot resurrect an expired pending record.
+    """
     if channel not in APPROVAL_CHANNELS:
         raise ValueError(f"unknown approval channel: {channel}")
     if decision not in {"approve", "deny"}:
@@ -333,6 +382,20 @@ def mark_approval(path: str | os.PathLike[str], channel: str, decision: str) -> 
     request_path = Path(path)
     payload = json.loads(request_path.read_text(encoding="utf-8"))
     if payload.get("status") != "pending":
+        return payload
+    created_raw = payload.get("created_at")
+    try:
+        created = datetime.fromisoformat(str(created_raw))
+        ttl = int(payload.get("expires_in_seconds", DEFAULT_APPROVAL_TTL_SECONDS))
+    except (TypeError, ValueError):
+        # A malformed timestamp is not permission to execute; fail closed.
+        payload["status"] = "expired"
+        _write_json_atomic(request_path, payload)
+        return payload
+    current = now or datetime.now(timezone.utc)
+    if created + timedelta(seconds=max(ttl, 0)) <= current:
+        payload["status"] = "expired"
+        _write_json_atomic(request_path, payload)
         return payload
     payload.setdefault("approvals", {})[channel] = decision
     if decision == "deny":
