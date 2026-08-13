@@ -100,7 +100,7 @@ def normalize_wa_id(value: Any) -> str:
     """Canonicalize a wa_id so config and inbound JIDs compare equal.
 
     ``15551234567`` (the form ``send`` accepts and the form humans write in
-    ``allowed_users``) and ``15551234567@c.us`` (the form the bridge always
+    ``allowed_wa_ids``) and ``15551234567@c.us`` (the form the bridge always
     reports) are the same user.
     """
     text = str(value or "").strip().lower()
@@ -134,7 +134,8 @@ class WhatsAppManager:
       - bridge_dir: path to the Node bridge directory (default: bundled)
       - session_dir: path to store the whatsapp-web.js session (default: <workdir>/.wwebjs_auth)
       - store_dir: path to store message/contact metadata (default: <workdir>/whatsapp)
-      - allowed_users: optional allowlist of wa_ids / @c.us ids for inbound push
+      - allowed_wa_ids: optional allowlist of wa_ids / @c.us ids for inbound push
+      - allowed_users: legacy alias for allowed_wa_ids
       - autostart: start the Node bridge on construction (default: true)
     """
 
@@ -143,11 +144,25 @@ class WhatsAppManager:
         self.working_dir = Path(working_dir or os.environ.get("LINGTAI_AGENT_DIR", os.getcwd()))
         self.store_dir = Path(self.config.get("store_dir") or self.working_dir / DEFAULT_STORE)
         self.session_dir = Path(self.config.get("session_dir") or self.working_dir / ".wwebjs_auth")
-        # Both sides of the allowlist go through one normalizer so bare digits
-        # in config match the ``@c.us`` JIDs the bridge reports.
-        self.allowed_users: set[str] = {
-            normalize_wa_id(u) for u in (self.config.get("allowed_users") or []) if normalize_wa_id(u)
-        }
+        # Both sides of the allow-list go through one normalizer so bare
+        # digits in config match the ``@c.us`` JIDs the bridge reports. The
+        # issue's name is canonical; retain ``allowed_users`` as a compatibility
+        # alias for configs written before this option was documented.
+        raw_allowed = (
+            self.config.get("allowed_wa_ids")
+            if "allowed_wa_ids" in self.config
+            else self.config.get("allowed_users")
+        )
+        self.allowed_wa_ids: set[str] | None = (
+            {
+                normalize_wa_id(value)
+                for value in raw_allowed
+                if normalize_wa_id(value)
+            }
+            if raw_allowed
+            else None
+        )
+        self.allowed_users = self.allowed_wa_ids
         self.contacts_path = self.store_dir / "contacts.json"
         self._contacts: dict[str, dict[str, Any]] = {}
         self._load_contacts()
@@ -394,13 +409,24 @@ class WhatsAppManager:
         else:
             log.debug("whatsapp bridge event: %s", etype)
 
+    def _is_allowed_sender(self, wa_id: Any) -> bool:
+        """Return whether an inbound sender may reach the agent.
+
+        ``None`` means the option was omitted or empty, preserving the
+        historical allow-all behavior. When configured, compare normalized
+        values before any message is stored or pushed to the inbox.
+        """
+        if self.allowed_wa_ids is None:
+            return True
+        return normalize_wa_id(wa_id) in self.allowed_wa_ids
+
     def _handle_incoming(self, msg: dict[str, Any]) -> None:
         if not isinstance(msg, dict):
             return
         from_id = msg.get("from")
         if not from_id:
             return
-        if self.allowed_users and normalize_wa_id(from_id) not in self.allowed_users:
+        if not self._is_allowed_sender(from_id):
             log.info("whatsapp: ignored inbound from non-allowed %s", from_id)
             return
         # Replay guard. Bridge redelivery is at-least-once: on reconnect or
@@ -443,6 +469,12 @@ class WhatsAppManager:
 
     # ------------------------------------------------------------------ identity
 
+    def allowed_wa_ids_count(self) -> int | None:
+        """Return the configured sender count without exposing identifiers."""
+        if self.allowed_wa_ids is None:
+            return None
+        return len(self.allowed_wa_ids)
+
     def account_details(self) -> list[dict[str, Any]]:
         """Non-secret public identity details for the paired personal account.
 
@@ -455,6 +487,7 @@ class WhatsAppManager:
             "backend": "personal_account_whatsapp_web",
             "wa_id": self._me,
             "contact_count": len(self._contacts),
+            "allowed_wa_ids_count": self.allowed_wa_ids_count(),
             "last_verified_at": self._last_verified_at,
         }
         return [{k: v for k, v in item.items() if v is not None}]
@@ -513,6 +546,9 @@ class WhatsAppManager:
                 status["error"] = str(e)
         else:
             status["ready"] = False
+        allowed_count = self.allowed_wa_ids_count()
+        if allowed_count is not None:
+            status["allowed_wa_ids_count"] = allowed_count
         return redaction.safe_status(status)
 
     def _get_qr(self, args: dict[str, Any]) -> dict[str, Any]:

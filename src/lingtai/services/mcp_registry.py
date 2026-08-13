@@ -227,6 +227,7 @@ IDENTITY_SAFE_ACCOUNT_KEYS: tuple[str, ...] = (
     "email",
     # non-secret routing / size hints
     "allowed_users_count",
+    "allowed_wa_ids_count",
     "contact_count",
     "channel_count",
     "config_source",
