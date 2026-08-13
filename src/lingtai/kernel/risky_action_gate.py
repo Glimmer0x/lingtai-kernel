@@ -73,12 +73,34 @@ def _list_value(config: dict[str, Any], key: str) -> list[str]:
     return [item for item in value if isinstance(item, str) and item] if isinstance(value, list) else []
 
 
+# Environment-variable opt-in switch. The gate is opt-in and DEFAULT CLOSED:
+# without ``LINGTAI_RISKY_ACTION_GATE`` set (or a ``.security/gate_config.json``
+# present) existing agents see zero behavior change. Set it to a truthy value
+# (``1``/``true``/``yes``/``on``) to enable the gate even without a config file;
+# an empty config then denies every file write and every unclassified shell
+# command until the deployment adds allowlists.
+_GATE_OPT_IN_ENV = "LINGTAI_RISKY_ACTION_GATE"
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_opt_in_enabled() -> bool:
+    return os.environ.get(_GATE_OPT_IN_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
 def load_gate_config(working_dir: str | os.PathLike[str]) -> dict[str, Any] | None:
-    """Load the opt-in config and union its sibling shared-network grants."""
+    """Load the opt-in config and union its sibling shared-network grants.
+
+    Returns ``None`` when the gate is not opted in at all: no config file AND
+    no ``LINGTAI_RISKY_ACTION_GATE`` environment switch. When the env switch is
+    present without a config file, returns an empty config (gate enabled,
+    strict default).
+    """
     workdir = Path(working_dir).expanduser().resolve()
     own_path = workdir / ".security" / "gate_config.json"
     if not own_path.is_file():
-        return None
+        if not _env_opt_in_enabled():
+            return None
+        return {}
     own = json.loads(own_path.read_text(encoding="utf-8"))
     if not isinstance(own, dict):
         raise ValueError("gate_config.json must contain a JSON object")

@@ -263,3 +263,43 @@ def test_mark_approval_refuses_expired_inline(tmp_path):
     result = mark_approval(request_path, "telegram", "approve")
     assert result["status"] == "expired"
     assert request_path.read_text(encoding="utf-8") != ""
+
+
+def test_env_opt_in_default_closed(tmp_path, monkeypatch):
+    """Without config file AND without env switch the gate stays off."""
+    monkeypatch.delenv("LINGTAI_RISKY_ACTION_GATE", raising=False)
+    check = build_risky_action_check(tmp_path)
+    assert check(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    })).allowed
+    assert check(_proposal("file", {
+        "action": "write", "input": {"file_path": str(tmp_path / "x"), "content": "x"}
+    })).allowed
+
+
+def test_env_opt_in_enables_gate_without_config(tmp_path, monkeypatch):
+    """LINGTAI_RISKY_ACTION_GATE=1 enables the gate with an empty strict config."""
+    monkeypatch.setenv("LINGTAI_RISKY_ACTION_GATE", "1")
+    check = build_risky_action_check(tmp_path)
+    assert not check(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    })).allowed
+    assert not check(_proposal("file", {
+        "action": "write", "input": {"file_path": str(tmp_path / "x"), "content": "x"}
+    })).allowed
+    # A bare read-only shell command stays allowed under the empty strict config.
+    assert check(_proposal("shell", {
+        "action": "run", "input": {"command": "ls"}
+    })).allowed
+
+
+def test_env_opt_in_truthy_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINGTAI_RISKY_ACTION_GATE", "true")
+    check = build_risky_action_check(tmp_path)
+    assert not check(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    })).allowed
+    monkeypatch.setenv("LINGTAI_RISKY_ACTION_GATE", "off")
+    assert check(_proposal("shell", {
+        "action": "run", "input": {"command": "rm -f x"}
+    })).allowed
