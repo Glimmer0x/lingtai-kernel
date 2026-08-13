@@ -348,6 +348,19 @@ NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT = (
     "overflow file could not be written — use the producer tool for the full "
     "content."
 )
+# The attention spill identity is CONTENT-ADDRESSED: the file name embeds a
+# short sha256 digest of the lane's canonical serialization, so an unchanged
+# oversized payload (re-stamped every tool batch + IDLE pair) reuses the SAME
+# file instead of re-spilling every batch.  The file is created with an
+# exclusive ``os.link`` from a unique sibling temp, so a two-writer race can
+# never overwrite an existing recovery handle.
+NOTIFICATION_ATTENTION_OVERFLOW_DIGEST_LENGTH = 8
+# Bounded head kept when pathological stub compaction bounds id lists.
+NOTIFICATION_ATTENTION_ROUTING_ID_HEAD = 8
+# Bounded exclusive-allocate attempts when a content-address collision blocks
+# the primary name (practically impossible; mirrors the persistent lane's
+# 100-attempt bound).  Never overwrites an existing spill file.
+NOTIFICATION_ATTENTION_SPILL_SUFFIX_ATTEMPTS = 100
 
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
@@ -3024,30 +3037,116 @@ def _notification_attention_max_chars() -> int:
     return NOTIFICATION_ATTENTION_MAX_CHARS
 
 
+def _attention_spill_canonical_text(attention: dict) -> str:
+    """Return the canonical serialization that defines the spill identity."""
+    return _json.dumps(attention, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _attention_spill_digest8(attention: dict) -> str:
+    """Return the short sha256 content digest used in the spill file name."""
+    return _hashlib.sha256(
+        _attention_spill_canonical_text(attention).encode("utf-8")
+    ).hexdigest()[:NOTIFICATION_ATTENTION_OVERFLOW_DIGEST_LENGTH]
+
+
+def _attention_spill_matches(path: Path, attention: dict) -> bool:
+    """True when *path* already holds the same attention payload.
+
+    Two writers race on the same content-addressed name; the loser must verify
+    that the winner's file is genuinely the same payload before reusing it (an
+    existing recovery handle is never overwritten).
+    """
+    try:
+        existing = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    try:
+        return _attention_spill_canonical_text(existing) == _attention_spill_canonical_text(
+            attention
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _attention_spill_create_exclusive(path: Path, attention: dict) -> Path | None:
+    """Write *attention* to a unique sibling temp and link it exclusively.
+
+    ``os.link`` is atomic and fails with ``FileExistsError`` when *path* already
+    exists (``O_EXCL`` semantics), so a two-writer race can never overwrite an
+    existing recovery handle.  Returns *path* when this writer created it, or
+    ``None`` when the name was already taken (the winner owns it; callers verify
+    content next).
+    """
+    tmp = path.with_name(f".{path.name}.{os.urandom(8).hex()}.tmp")
+    try:
+        atomic_write_json(tmp, attention, default=str)
+        os.link(str(tmp), str(path))
+        return path
+    except FileExistsError:
+        return None
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _attention_spill_allocate(
+    logs_dir: Path, digest: str, attention: dict
+) -> Path | None:
+    """Exclusive-create the content-addressed spill name, with a bounded fallback.
+
+    Primary name ``notification-attention-overflow-<digest>.json``; on a content
+    collision (existing file with a DIFFERENT payload) fall back to a bounded
+    suffix loop with exclusive create, never overwriting.  Returns the allocated
+    path, or ``None`` when no name could be allocated.
+    """
+    base = logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}.json"
+    for suffix in range(NOTIFICATION_ATTENTION_SPILL_SUFFIX_ATTEMPTS + 1):
+        candidate = (
+            base
+            if suffix == 0
+            else logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}-{suffix}.json"
+        )
+        created = _attention_spill_create_exclusive(candidate, attention)
+        if created is not None:
+            return created
+        if _attention_spill_matches(candidate, attention):
+            return candidate
+    return None
+
+
 def _spill_notification_attention(agent, attention: dict) -> str | None:
-    """Write the full attention lane to the agent's ``logs/`` dir.
+    """Write the full attention lane once, content-addressed and exclusive.
+
+    The file name embeds a short sha256 digest of the lane's canonical
+    serialization (``logs/notification-attention-overflow-<digest8>.json``), so
+    an unchanged oversized payload — re-stamped on every tool batch and every
+    IDLE/ASLEEP synthesized pair — reuses the SAME file instead of re-spilling
+    every batch (no disk amplification, stable marker path).  The file is
+    created with an exclusive ``os.link`` from a unique sibling temp: a
+    two-writer race can never overwrite an existing recovery handle; the loser
+    verifies the existing file holds the same payload and reuses it.  A hash
+    collision with different content (practically impossible) falls back to a
+    bounded exclusive suffix loop; if no name can be allocated the spill fails.
 
     Returns the absolute spill path, or ``None`` when the agent has no working
-    directory or the write failed — the lane is still compacted either way, the
-    agent just gets the producer tool instead of a file as the recovery handle.
+    directory or no exclusive name could be allocated — the lane is still
+    compacted either way, the agent just gets the producer tool instead of a
+    file as the recovery handle.  The spill file always holds the FULL original
+    attention lane.
     """
     workdir = getattr(agent, "_working_dir", None)
     if not workdir:
         return None
     try:
         logs_dir = Path(workdir) / "logs"
-        stamp = int(_time.time())
-        path = logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{stamp}.json"
-        suffix = 1
-        while path.exists() and suffix <= 100:
-            path = logs_dir / (
-                f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{stamp}-{suffix}.json"
-            )
-            suffix += 1
-        written = atomic_write_json(path, attention, default=str)
-        if not written.is_absolute():
-            written = written.resolve()
-        return str(written)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        digest = _attention_spill_digest8(attention)
+        path = _attention_spill_allocate(logs_dir, digest, attention)
+        if path is None:
+            return None
+        return str(path.resolve())
     except (OSError, TypeError, ValueError):
         return None
 
@@ -3091,26 +3190,81 @@ def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
     return node, False
 
 
-def _drop_notification_attention_records(attention: dict, marker: dict, comment: str) -> dict:
-    """Return a routing-only attention stub when compaction cannot fit.
+# Routing keys preserved in the terminal attention stub, in order of
+# increasing criticality.  ``message_ids`` is the stable IM routing identifier
+# produced by ``_sanitize_im_notification_after_persistent`` and is kept for as
+# long as any routing remains (the bounded degradation drops or bounds the
+# other keys first).
+NOTIFICATION_ATTENTION_ROUTING_KEYS = (
+    "count",
+    "email_ids",
+    "message_ref",
+    "event_id",
+    "event_ids",
+    "ref",
+    "ref_id",
+    "message_ids",
+)
+
+
+def _attention_stub_drop_keys(stub: dict, keys: tuple[str, ...]) -> None:
+    """Drop *keys* from every per-source routing payload in *stub*."""
+    for payload in stub.values():
+        if not isinstance(payload, dict):
+            continue
+        for key in keys:
+            payload.pop(key, None)
+        data = payload.get("data")
+        if isinstance(data, dict):
+            for key in keys:
+                data.pop(key, None)
+
+
+def _attention_stub_bound_id_lists(stub: dict) -> None:
+    """Bound ``email_ids``/``message_ids`` lists to a deterministic head."""
+    for payload in stub.values():
+        if not isinstance(payload, dict):
+            continue
+        holders = [payload]
+        data = payload.get("data")
+        if isinstance(data, dict):
+            holders.append(data)
+        for holder in holders:
+            for key in ("email_ids", "message_ids"):
+                value = holder.get(key)
+                if isinstance(value, list) and len(value) > NOTIFICATION_ATTENTION_ROUTING_ID_HEAD:
+                    holder[key] = value[:NOTIFICATION_ATTENTION_ROUTING_ID_HEAD]
+
+
+def _drop_notification_attention_records(
+    attention: dict, marker: dict, comment: str, max_chars: int
+) -> dict:
+    """Return a routing-only attention stub that strictly fits *max_chars*.
 
     Pathological last resort, reached only when every heavy field is already
     empty and the structural metadata alone still exceeds the cap.  The stub
     keeps per-source routing (``count`` and id-bearing fields: ``email_ids``,
-    ``message_ref``, ``event_id`` lists) so the agent still knows which channels
+    ``message_ref``, ``event_id`` lists, and — critically — ``message_ids``,
+    the stable IM routing identifier) so the agent still knows which channels
     have events and which producer records to read, while dropping heavy
     preview bodies.  The kernel-owned overflow marker and the recovery comment
     ride on the stub.
+
+    The configured cap is enforced STRICTLY on the serialized stub (the old
+    code returned a stub that was still over cap with ``message_ids`` missing).
+    When the routing stub is over cap, a deterministic bounded degradation
+    drops the least-critical routing keys in a fixed order — first
+    ``ref``/``ref_id``, then ``event_id``/``event_ids``, then ``message_ref``,
+    then bounds the ``email_ids``/``message_ids`` lists to a head of 8, then
+    drops ``count`` — re-measuring after each phase until it fits.
+    ``message_ids`` is kept as long as possible (it is the IM routing
+    identifier).  Under a pathologically small cap the recovery comment (long
+    relative to a tiny cap) is dropped before any routing id, then the per-
+    source routing itself, ending at the minimal marker-only envelope; that
+    envelope is returned even if it cannot fit (nothing smaller can carry the
+    recovery handle, and the cap is clamped to a positive integer so this
+    regime is reachable only through a deliberately pathological env value).
     """
-    routing_keys = (
-        "count",
-        "email_ids",
-        "message_ref",
-        "event_id",
-        "event_ids",
-        "ref",
-        "ref_id",
-    )
     stub: dict = {}
     for source, payload in attention.items():
         if source in (NOTIFICATION_ATTENTION_OVERFLOW_KEY, "comment"):
@@ -3122,14 +3276,49 @@ def _drop_notification_attention_records(attention: dict, marker: dict, comment:
         for key, value in payload.items():
             if key == "data" and isinstance(value, dict):
                 routed[key] = {
-                    k: v for k, v in value.items() if k in routing_keys
+                    k: v for k, v in value.items() if k in NOTIFICATION_ATTENTION_ROUTING_KEYS
                 }
-            elif key in routing_keys:
+            elif key in NOTIFICATION_ATTENTION_ROUTING_KEYS:
                 routed[key] = value
         stub[source] = routed
     stub[NOTIFICATION_ATTENTION_OVERFLOW_KEY] = dict(marker)
     stub["comment"] = comment
-    return stub
+
+    def fits(candidate: dict) -> bool:
+        return _notification_attention_envelope_chars(candidate) <= max_chars
+
+    if fits(stub):
+        return stub
+
+    for phase_keys in (
+        ("ref", "ref_id"),
+        ("event_id", "event_ids"),
+        ("message_ref",),
+    ):
+        _attention_stub_drop_keys(stub, phase_keys)
+        if fits(stub):
+            return stub
+
+    _attention_stub_bound_id_lists(stub)
+    if fits(stub):
+        return stub
+
+    _attention_stub_drop_keys(stub, ("count",))
+    if fits(stub):
+        return stub
+
+    # Pathologically small cap: drop the long recovery comment before any
+    # routing id, then the per-source routing, ending at the minimal
+    # marker-only envelope (the guard: if nothing fits, the marker still
+    # survives as the recovery handle).
+    stub.pop("comment", None)
+    if fits(stub):
+        return stub
+    return {
+        NOTIFICATION_ATTENTION_OVERFLOW_KEY: stub.get(
+            NOTIFICATION_ATTENTION_OVERFLOW_KEY, dict(marker)
+        )
+    }
 
 
 def _cap_notification_attention(agent, attention: dict) -> dict:
@@ -3174,7 +3363,7 @@ def _cap_notification_attention(agent, attention: dict) -> dict:
         compacted["comment"] = comment
         if _notification_attention_envelope_chars(compacted) <= max_chars:
             return compacted
-    return _drop_notification_attention_records(attention, marker, comment)
+    return _drop_notification_attention_records(attention, marker, comment, max_chars)
 
 
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
