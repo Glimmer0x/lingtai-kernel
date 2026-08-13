@@ -240,8 +240,9 @@ def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
             "action": "run", "input": {"command": command}
         }))
         assert not decision.allowed, command
-    # Bare list/query forms stay allowed.
-    for command in ("git branch", "git tag", "git remote -v", "git status", "git log -1"):
+    # Bare list/query forms stay allowed (diff/log/show need explicit
+    # --no-textconv --no-ext-diff; status needs -c core.fsmonitor=false).
+    for command in ("git branch", "git tag", "git remote -v", "git status -c core.fsmonitor=false", "git log --no-textconv --no-ext-diff -1"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
@@ -306,8 +307,13 @@ def test_git_option_only_mutations_denied_but_git_write_flag_is_denied(tmp_path)
             "action": "run", "input": {"command": command}
         }))
         assert not decision.allowed, command
-    # Git read-only without a write flag still passes.
-    for command in ("git diff", "git show HEAD", "git log -1", "git status"):
+    # Git read-only with explicit helper-disable flags still passes.
+    for command in (
+        "git diff --no-textconv --no-ext-diff",
+        "git show --no-textconv --no-ext-diff HEAD",
+        "git log --no-textconv --no-ext-diff -1",
+        "git status -c core.fsmonitor=false",
+    ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
@@ -444,8 +450,51 @@ def test_git_external_exec_options_are_denied(tmp_path):
             "action": "run", "input": {"command": command}
         }))
         assert not decision.allowed, command
-    # Ordinary read-only git queries stay allowed.
-    for command in ("git diff", "git show HEAD", "git log -1", "git status", "git log --oneline -5"):
+    # Ordinary read-only git queries stay allowed (with explicit helper-disable flags).
+    for command in (
+        "git diff --no-textconv --no-ext-diff",
+        "git show --no-textconv --no-ext-diff HEAD",
+        "git log --no-textconv --no-ext-diff -1",
+        "git status -c core.fsmonitor=false",
+        "git log --no-textconv --no-ext-diff --oneline -5",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
+def test_git_ambient_helper_execution_requires_explicit_disable(tmp_path):
+    """Bare git queries must not run ambient textconv/fsmonitor helpers.
+
+    Regression for Fable batch-A cross-check P0 #6: git diff/log run external
+    textconv filters by default, and git status consults a core.fsmonitor hook
+    from ambient config; GIT_CONFIG_* env could inject core.fsmonitor. Only
+    explicit --no-textconv --no-ext-diff / -c core.fsmonitor=false prove no
+    external helper can run.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git diff",
+        "git log -1",
+        "git show HEAD",
+        "git status",
+        "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=/tmp/fable-never-executed git status",
+        "env GIT_CONFIG_GLOBAL=/tmp/fable-config-never-read git status",
+        "env GIT_CONFIG_KEY_0=diff.external git diff",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Explicit helper-disable forms stay allowed.
+    for command in (
+        "git diff --no-textconv --no-ext-diff",
+        "git log --no-textconv --no-ext-diff -1",
+        "git status -c core.fsmonitor=false",
+        "git status -ccore.fsmonitor=false",
+        "env FOO=bar git status -c core.fsmonitor=false",
+    ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
@@ -478,7 +527,7 @@ def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
         }))
         assert not decision.allowed, command
     # Bare basenames stay allowed (interpreter inline code is separately risky).
-    for command in ("git status", "ls -la"):
+    for command in ("git status -c core.fsmonitor=false", "ls -la"):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))

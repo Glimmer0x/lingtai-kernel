@@ -110,6 +110,9 @@ _READ_ONLY_VERB_VALUE_SHORTS: dict[str, set[str]] = {
 # helper (git diff --ext-diff/--textconv, config overrides that remap
 # diff.external/core.pager/alias etc.). Fail closed on all of them.
 _GIT_EXTERNAL_EXEC_OPTIONS = {"--ext-diff", "--textconv"}
+# Subcommands whose diff machinery runs external textconv/diff filters by
+# default (git-diff(1): textconv external filters enabled by default).
+_GIT_TEXT_CONV_SUBCOMMANDS = {"diff", "log", "show"}
 _READ_ONLY_GIT_SUBCOMMANDS = {"branch", "diff", "log", "ls-files", "remote", "show", "status", "tag"}
 # Git subcommands whose bare-name form is read-only but whose positional form
 # mutates (branch <name> creates, tag <name> creates, remote add mutates).
@@ -123,7 +126,14 @@ _ENV_EXECUTION_REDIRECT_KEYS = {
     # Git env vars that redirect git to execute an external program.
     "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
     "GIT_SSH_COMMAND", "GIT_SSH",
+    # Git config-path / config-pair env vars inject ambient config (e.g.
+    # GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor
+    # GIT_CONFIG_VALUE_0=/tmp/helper makes git status run an external hook).
+    "GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
 }
+# Env assignment keys matched by prefix (numbered pairs such as
+# GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0).
+_ENV_EXECUTION_REDIRECT_KEY_PREFIXES = {"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
 _INTERPRETERS = {"bash", "fish", "node", "perl", "python", "python2", "python3", "ruby", "sh", "zsh"}
 _CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n", ">>", ">", "<<", "<", "|&")
 
@@ -363,10 +373,27 @@ def _unwrap(tokens: list[str]) -> list[str] | None:
         if wrapper == "env":
             while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("="):
                 key = tokens[index].split("=", 1)[0]
-                if key in _ENV_EXECUTION_REDIRECT_KEYS:
+                if key in _ENV_EXECUTION_REDIRECT_KEYS or any(
+                    key.startswith(prefix) for prefix in _ENV_EXECUTION_REDIRECT_KEY_PREFIXES
+                ):
                     return None
                 index += 1
     return tokens[index:]
+
+
+def _git_fsmonitor_disabled(args: list[str]) -> bool:
+    """True when core.fsmonitor is explicitly disabled on the command line.
+
+    ``git status`` consults a core.fsmonitor hook when configured in repo,
+    system or injected config; the only classifier-verifiable disable is an
+    explicit ``-c core.fsmonitor=false`` (or joined ``-ccore.fsmonitor=false``).
+    """
+    for i, token in enumerate(args):
+        if token == "-c" and i + 1 < len(args) and args[i + 1] == "core.fsmonitor=false":
+            return True
+        if token == "-ccore.fsmonitor=false":
+            return True
+    return False
 
 
 def _git_external_exec_reason(tokens: list[str]) -> str | None:
@@ -375,15 +402,39 @@ def _git_external_exec_reason(tokens: list[str]) -> str | None:
     ``git diff --ext-diff`` / ``--textconv`` run external diff/textconv
     programs, and ``git -c``/``--config``/``--config-env`` can remap any
     external-exec config (diff.external, core.pager, alias.*). None of them
-    are needed by a read-only query, so deny them all.
+    are needed by a read-only query, so deny them all. The single narrow
+    carve-out is ``-c core.fsmonitor=false`` (disables the fsmonitor hook that
+    ``git status`` would otherwise consult from ambient config).
     """
-    for token in tokens[1:]:
+    args = tokens[1:]
+    for i, token in enumerate(args):
         if token in _GIT_EXTERNAL_EXEC_OPTIONS:
             return f"git option {token} can execute an external helper"
         if token == "-c" or token.startswith("-c") and not token.startswith("-C"):
+            if _git_fsmonitor_disabled(args):
+                continue
             return "git -c config override can execute an external helper"
         if token == "--config" or token.startswith("--config=") or token == "--config-env" or token.startswith("--config-env="):
             return "git --config override can execute an external helper"
+    return None
+
+
+def _git_ambient_exec_reason(tokens: list[str], subcommand: str) -> str | None:
+    """Fail-closed check for ambient git helper execution.
+
+    ``git diff`` / ``git log`` / ``git show`` run external textconv filters by
+    default (git-diff(1)), so require ``--no-textconv --no-ext-diff`` to prove
+    no external diff/textconv helper can run. ``git status`` consults a
+    core.fsmonitor hook from ambient config, so require it to be explicitly
+    disabled. A classifier cannot see repo/system config; only explicit flags
+    are verifiable.
+    """
+    args = tokens[1:]
+    if subcommand in _GIT_TEXT_CONV_SUBCOMMANDS:
+        if "--no-textconv" not in args or "--no-ext-diff" not in args:
+            return f"git {subcommand} may run external textconv/diff helpers; require --no-textconv --no-ext-diff"
+    if subcommand == "status" and not _git_fsmonitor_disabled(args):
+        return "git status may run a core.fsmonitor hook; require -c core.fsmonitor=false"
     return None
 
 
@@ -453,6 +504,9 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             if any(_is_write_destination_flag(token) for token in tokens[1:]):
                 return f"git {subcommand} carries a write-destination flag"
             reason = _git_external_exec_reason(tokens)
+            if reason is not None:
+                return reason
+            reason = _git_ambient_exec_reason(tokens, subcommand)
             if reason is not None:
                 return reason
             if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
