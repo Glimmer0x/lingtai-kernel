@@ -359,12 +359,13 @@ NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT = (
 )
 # Recovery comment for the terminal guard: the spill SUCCEEDED but the
 # absolute spill path is too long to fit the capped envelope, so the marker
-# path is stripped (``path_omitted``) and the deterministic content-addressed
-# name still locates the file on disk.
+# path is stripped (``path_omitted``) and the exact spill basename (the
+# deterministic content-addressed name, including any ``-N`` suffix) still
+# locates the file on disk.
 NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT = (
     "Full notification content exceeds the attention block size cap; the spill "
     "path is omitted (too long for the cap) - read the content-addressed "
-    "logs/notification-attention-overflow-{digest}.json in the agent workdir "
+    "logs/{name} in the agent workdir "
     "logs/ for the complete payload, or use the producer tool."
 )
 # The attention spill identity is CONTENT-ADDRESSED: the file name embeds a
@@ -3291,7 +3292,8 @@ def _drop_notification_attention_records(
     guard makes the terminal envelope capped BY CONSTRUCTION: when even the
     marker-only envelope exceeds the cap (pathologically long absolute spill
     path), the marker path is stripped (``path=None``, ``path_omitted=True``)
-    and the compact envelope is returned with the content digest in a short
+    and the compact envelope is returned with the exact spill basename
+    (including any ``-N`` suffix) in a short recovery comment.  With the 2048
     recovery comment.  With the 2048 floor, that compact envelope ALWAYS
     satisfies ``len(json.dumps(..., default=str)) <= max_chars``; the spill
     file remains on disk, findable by its deterministic content-addressed name.
@@ -3355,19 +3357,35 @@ def _drop_notification_attention_records(
 
     # FINAL GUARD: even the marker-only envelope exceeds the cap because the
     # absolute spill path is pathologically long.  Strip the path, record the
-    # omission and the content digest (the deterministic content-addressed
-    # spill name still locates the full payload on disk), and re-attach the
+    # omission and the actual spill basename (the deterministic
+    # content-addressed name, INCLUDING any ``-N`` suffix allocated when the
+    # unsuffixed base name was already occupied by a different payload) so the
+    # recovery comment points at the exact file on disk, and re-attach the
     # short recovery comment.  With the 2048 floor this compact envelope
     # ALWAYS satisfies ``len(json.dumps(..., default=str)) <= max_chars``.
     compact_marker = dict(marker)
+    spill_path = marker.get("path")
+    spill_basename = (
+        Path(spill_path).name if isinstance(spill_path, str) and spill_path else None
+    )
     compact_marker["path"] = None
     compact_marker["path_omitted"] = True
-    compact_marker["digest"] = _attention_spill_digest8(attention)
+    if spill_basename:
+        compact_marker["spill_file"] = spill_basename
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
+            name=spill_basename
+        )
+    else:
+        # No path at all (spill failed earlier): keep the digest-only recovery
+        # hint (the deterministic content-addressed name still locates the file
+        # if any later spill succeeded under the same digest).
+        compact_marker["digest"] = _attention_spill_digest8(attention)
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
+            name=f"notification-attention-overflow-{compact_marker['digest']}.json"
+        )
     return {
         NOTIFICATION_ATTENTION_OVERFLOW_KEY: compact_marker,
-        "comment": NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
-            digest=compact_marker["digest"]
-        ),
+        "comment": comment,
     }
 
 

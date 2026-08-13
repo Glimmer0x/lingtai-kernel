@@ -352,8 +352,8 @@ def test_marker_only_envelope_strips_pathologically_long_spill_path(
     The marker-only envelope carries the absolute spill path; when even that
     envelope exceeds the cap (an absolute path long enough to dominate the
     2048 floor), the final guard strips the path (``path=None``,
-    ``path_omitted=True``), records the content digest, and returns a compact
-    envelope that ALWAYS satisfies ``len(json.dumps(...)) <= max_chars``.  The
+    ``path_omitted=True``), records the exact spill basename, and returns a
+    compact envelope that ALWAYS satisfies ``len(json.dumps(...)) <= max_chars``.  The
     spill file remains on disk under the deterministic content-addressed name.
     """
     attention, _ = _real_sanitized_telegram_attention()
@@ -365,7 +365,8 @@ def test_marker_only_envelope_strips_pathologically_long_spill_path(
     # near-PATH_MAX workdirs are platform-limited; the guard is exercised
     # deterministically with a synthetic path.)
     long_path = "/" + "x" * 3000
-    marker = {"path": long_path, "full_chars": 228, "truncated": True}
+    spill_name = f"{meta_block.NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{meta_block._attention_spill_digest8(copy.deepcopy(attention))}.json"
+    marker = {"path": f"{long_path}/{spill_name}", "full_chars": 228, "truncated": True}
     result = meta_block._drop_notification_attention_records(
         copy.deepcopy(attention), marker, "recovery comment", max_chars
     )
@@ -375,14 +376,68 @@ def test_marker_only_envelope_strips_pathologically_long_spill_path(
     overflow = result["overflow"]
     assert overflow["path"] is None
     assert overflow["path_omitted"] is True
-    assert overflow["digest"]
-    assert overflow["digest"] in result["comment"]
+    # The exact spill basename (content-addressed, including any suffix) is
+    # preserved so the recovery comment points at the real file on disk.
+    assert overflow["spill_file"] == spill_name
+    assert spill_name in result["comment"]
 
-    # The same payload's deterministic digest appears in the recovery comment.
-    assert (
-        overflow["digest"]
-        == meta_block._attention_spill_digest8(copy.deepcopy(attention))
+
+def test_path_omitted_recovery_points_at_suffixed_spill_file(tmp_path, monkeypatch):
+    """P1-3b: path-omitted recovery names the ACTUAL ``-N`` spill file.
+
+    When the unsuffixed content-addressed name is already occupied by a
+    different payload, the allocator correctly writes ``<digest>-N.json``.  If
+    the absolute path is then omitted by the terminal guard, the marker and
+    comment must point at the SUFFIXED file, not the unsuffixed (wrong)
+    payload.
+    """
+    # A large payload that exceeds the (floored) cap so the real spill path
+    # runs and must allocate a suffix because the unsuffixed name is taken.
+    messages = [_telegram_message(i, text="T" * 3000) for i in range(1, 41)]
+    attention = _attention_payload(messages)
+    digest = meta_block._attention_spill_digest8(copy.deepcopy(attention))
+    base_name = f"{meta_block.NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}.json"
+    suffixed_name = f"{meta_block.NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{digest}-1.json"
+
+    # Occupy the unsuffixed name with a DIFFERENT payload so a real spill of
+    # *attention* must allocate the -1 suffix.
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    other = {"mcp.telegram": {"data": {"message_ids": ["wrong-other-payload"]}}}
+    (logs_dir / base_name).write_text(
+        json.dumps(other, ensure_ascii=False), encoding="utf-8"
     )
+
+    agent = _cap_agent(tmp_path)
+    monkeypatch.setenv(ENV, "1")
+    capped = meta_block._cap_notification_attention(agent, copy.deepcopy(attention))
+
+    # With a short workdir the absolute path fits and is kept; the spill must
+    # have used the -1 suffix (unsuffixed occupied by different content).
+    overflow = capped["overflow"]
+    assert overflow["path"] is not None
+    assert Path(overflow["path"]).name == suffixed_name
+
+    # Now force the path-omitted guard on the exact same suffixed path and
+    # assert the recovery comment points at the suffixed file, not unsuffixed.
+    long_path = "/" + "x" * 3000
+    marker = {
+        "path": f"{long_path}/{suffixed_name}",
+        "full_chars": 228,
+        "truncated": True,
+    }
+    result = meta_block._drop_notification_attention_records(
+        copy.deepcopy(attention), marker, "recovery comment",
+        meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN,
+    )
+    overflow2 = result["overflow"]
+    assert overflow2["path"] is None
+    assert overflow2["path_omitted"] is True
+    assert overflow2["spill_file"] == suffixed_name
+    assert suffixed_name in result["comment"]
+    assert base_name not in result["comment"]
+    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+    assert len(serialized) <= meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
 
 
 def test_many_source_structural_overflow_stays_under_default_cap(tmp_path):
