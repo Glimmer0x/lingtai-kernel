@@ -438,6 +438,8 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
         if not tokens:
             return "shell command has no resolvable executable"
         verb = Path(tokens[0]).name
+        if "/" in tokens[0]:
+            return "shell command uses a path-form executable"
         if any(_token_is_ambiguous(token) for token in tokens):
             return "shell command contains an ambiguous token"
         if verb in _DESTRUCTIVE_VERBS:

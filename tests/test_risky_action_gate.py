@@ -452,6 +452,39 @@ def test_git_external_exec_options_are_denied(tmp_path):
         assert decision.allowed, command
 
 
+def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
+    """Path-form executables must be denied before any basename fast-path.
+
+    Regression for Fable batch-A cross-check P0 #5: git/interpreter branches
+    previously continued before the generic read-only path-form check, so
+    /tmp/git status, ../python <trusted>, and wrapper-wrapped variants all
+    passed while /tmp/ls was denied.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "/tmp/git status",
+        "../git status",
+        "command /tmp/git status",
+        "sudo /tmp/git status",
+        "/tmp/python -c pass",
+        "../python -c pass",
+        "command /tmp/python -c pass",
+        "sudo /tmp/python -c pass",
+        "./git status",
+        "usr/bin/git status",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Bare basenames stay allowed (interpreter inline code is separately risky).
+    for command in ("git status", "ls -la"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_bash_compat_name_is_treated_as_shell(tmp_path):
     """A compat ``bash`` tool call must hit the same shell gate as ``shell``."""
     _file_config(tmp_path)
