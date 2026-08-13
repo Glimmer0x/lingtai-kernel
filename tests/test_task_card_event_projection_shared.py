@@ -188,11 +188,14 @@ def test_metadata_renders_device_and_working_dir_lines() -> None:
         "working_dir": "C:\\Users\\zhuang\\.lingtai\\deepseek-1",
     }
     lines = TaskCardEventProjection.format_metadata(metadata)
-    assert len(lines) == 3
+    # Session + identity + the identity-closing divider (stable sectioned look).
+    assert len(lines) == 4
     assert lines[0] == "active · calls 2"
     # Session and identity are separate sections with a divider between them.
-    assert lines[1] == "────────────────"
+    assert lines[1] == "────────"
     identity = lines[2]
+    # Identity section is closed with a divider even without a daemon block.
+    assert lines[3] == "────────"
     assert "device · zesen-desktop · shell powershell" in identity
     assert "path · C:\\Users\\zhuang" in identity
     assert " | " in identity

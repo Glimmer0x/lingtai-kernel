@@ -671,9 +671,10 @@ def test_metadata_renders_absolute_path_not_shortened():
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "device_short_name": "MacStudio",
     })
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert "device · MacStudio | path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1" in lines[0]
     assert "dev-2/.lingtai/mimo-1" not in lines[0].replace("dev-2/.lingtai/mimo-1", "")
+    assert lines[1] == "────────"
 
 
 def test_metadata_renders_daemon_status_and_stats():
@@ -727,8 +728,9 @@ def test_metadata_section_dividers_between_present_sections():
     })
     assert lines == [
         "active",
-        "────────────────",
+        "────────",
         "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
+        "────────",
     ]
     # Session + Identity + Daemon -> dividers between all adjacent sections.
     lines = TelegramManager._format_task_card_metadata({
@@ -738,9 +740,9 @@ def test_metadata_section_dividers_between_present_sections():
     })
     assert lines == [
         "active",
-        "────────────────",
+        "────────",
         "path · /Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
-        "────────────────",
+        "────────",
         "daemons · active 1",
         "backends · lingtai 1",
     ]
@@ -756,9 +758,10 @@ def test_metadata_omits_daemon_lines_when_no_daemons():
         "working_dir": "/Users/huangzesen/work/projects/lingtai-dev/dev-2/.lingtai/mimo-1",
         "daemons": {"active": 0, "failed": 0, "done": 0, "cancelled": 0, "timeout": 0},
     })
-    assert len(lines) == 1
+    assert len(lines) == 2
     assert "daemons" not in lines[0]
     assert "daemon stats" not in lines[0]
+    assert lines[1] == "────────"
 
 
 def test_metadata_daemon_stats_require_positive_counts():

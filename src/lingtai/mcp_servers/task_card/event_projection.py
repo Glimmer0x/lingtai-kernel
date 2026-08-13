@@ -94,6 +94,10 @@ class TaskCardEventProjection:
     # the divider becomes a log-style section header `──── 00:22:02 U-7 ────`
     # (Jason 2026-08-09).
     API_CALL_DIVIDER = "────"
+    # Section divider on the resident card — deliberately shorter than the
+    # old full-width run so section breaks read as compact separators
+    # (Jason 2026-08-13).
+    METADATA_DIVIDER = "────────"
 
     @classmethod
     def footer(cls, normal_rows: int, locale: str = "en") -> str:
@@ -809,9 +813,14 @@ class TaskCardEventProjection:
             if text is None:
                 continue
             if prev_section is not None and section != prev_section:
-                lines.append("────────────────")
+                lines.append(cls.METADATA_DIVIDER)
             lines.append(text)
             prev_section = section
+        # Close the identity section with a divider even when no daemon block
+        # follows, so the resident card keeps a stable sectioned look while
+        # idle (Jason 2026-08-13).
+        if prev_section == "identity":
+            lines.append(cls.METADATA_DIVIDER)
         if not lines:
             return []
         joined = "\n".join(lines)
