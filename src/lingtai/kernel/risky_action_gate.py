@@ -54,6 +54,22 @@ _INTERPRETERS = {"bash", "fish", "node", "perl", "python", "python2", "python3",
 _CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n", ">>", ">", "<<", "<", "|&")
 
 
+def _is_write_destination_flag(token: str) -> bool:
+    """True for any token that names a write destination on a read-only verb.
+
+    Covers the standalone flags (``-o``/``--output``/``-O``/``-i``), their
+    joined short forms (``sort -oFILE``, ``wget -OFILE``, ``sed -i.bak``), and
+    the long ``--output=``/``--outfile=``/``--in-place=`` assignments.
+    """
+    if token in _READ_ONLY_WRITE_FLAGS:
+        return True
+    if token.startswith(("--output=", "--outfile=", "--in-place=")):
+        return True
+    if len(token) > 2 and token.startswith(("-o", "-O", "-i")):
+        return True
+    return False
+
+
 
 def _resolve(path: str | os.PathLike[str]) -> str:
     return str(Path(path).expanduser().resolve())
@@ -251,13 +267,14 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             return "piped installer execution is risky"
         if verb not in _READ_ONLY_VERBS:
             return f"shell command is not classified read-only: {verb}"
-        if any(
-            token in _READ_ONLY_WRITE_FLAGS
-            or token.startswith("--output=") or token.startswith("--outfile=")
-            for token in tokens[1:]
-        ):
+        if any(_is_write_destination_flag(token) for token in tokens[1:]):
             return f"read-only verb {verb} carries a write-destination flag"
-        if tokens[0].startswith("./"):
+        if "/" in tokens[0]:
+            # Any path-form executable (absolute, ../, bin/, ./) reduces to an
+            # allowlisted basename via Path(...).name; only bare verbs are
+            # classified read-only. Reject every path form so /tmp/ls, ../ls,
+            # bin/ls, /usr/bin/printf and /usr/bin/env cannot masquerade as
+            # their bare allowlisted names.
             return f"path-form executable {tokens[0]} is not a bare read-only verb"
     return None
 

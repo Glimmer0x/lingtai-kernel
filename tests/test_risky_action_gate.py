@@ -191,6 +191,34 @@ def test_path_form_executable_is_denied(tmp_path):
     assert not decision.allowed
 
 
+def test_any_path_form_executable_is_denied(tmp_path):
+    """Path(tokens[0]).name must not reduce an arbitrary path to a bare verb.
+
+    Regression for Fable batch-A cross-check P0: /tmp/ls, ../ls, bin/ls and
+    /usr/bin/printf all reduce to allowlisted basenames and were allowed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "/tmp/ls",
+        "../ls",
+        "bin/ls",
+        "/usr/bin/printf hello",
+        "command /tmp/ls",
+        "sudo /tmp/ls",
+        "/usr/bin/env PATH=/attacker ls",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Bare allowlisted verbs still pass.
+    for command in ("ls", "printf hello", "ls -la"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_env_path_override_is_denied(tmp_path):
     """`env PATH=/attacker ls` must not unwrap into read-only ls."""
     _file_config(tmp_path)
@@ -223,6 +251,25 @@ def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
 def test_read_only_verb_with_write_flag_is_denied(tmp_path):
     _file_config(tmp_path)
     for command in ("sort -o /tmp/x input", "curl -o /tmp/x https://example.com", "wget -O /tmp/x https://example.com"):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+
+
+def test_read_only_verb_with_joined_write_flag_is_denied(tmp_path):
+    """Joined short-option write flags (-oFILE) must be denied too.
+
+    Regression for Fable batch-A cross-check P0: `sort -o/tmp/x input`
+    was allowed because only the standalone ``-o`` token was matched.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "sort -o/tmp/fable-never-executed input",
+        "sort -o/tmp/x input",
+        "wget -O/tmp/x https://example.com",
+        "sort --output=/tmp/x input",
+    ):
         decision = build_risky_action_check(tmp_path)(_proposal("shell", {
             "action": "run", "input": {"command": command}
         }))
