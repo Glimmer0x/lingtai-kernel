@@ -181,6 +181,9 @@ _ENV_EXECUTION_REDIRECT_KEYS = {
     # Git env vars that redirect git to execute an external program.
     "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
     "GIT_SSH_COMMAND", "GIT_SSH",
+    # Git trace sinks: GIT_TRACE* / GIT_TRACE2* write to an arbitrary file
+    # path or open a Unix domain socket (git(1) trace output options).
+    "GIT_TRACE", "GIT_TRACE2",
     # Git config-path / config-pair env vars inject ambient config (e.g.
     # GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor
     # GIT_CONFIG_VALUE_0=/tmp/helper makes git status run an external hook).
@@ -188,7 +191,7 @@ _ENV_EXECUTION_REDIRECT_KEYS = {
 }
 # Env assignment keys matched by prefix (numbered pairs such as
 # GIT_CONFIG_KEY_0 / GIT_CONFIG_VALUE_0).
-_ENV_EXECUTION_REDIRECT_KEY_PREFIXES = {"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+_ENV_EXECUTION_REDIRECT_KEY_PREFIXES = {"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_", "GIT_TRACE_", "GIT_TRACE2_"}
 _INTERPRETERS = {"bash", "fish", "node", "perl", "python", "python2", "python3", "ruby", "sh", "zsh"}
 _CHAIN_SEPARATORS = ("&&", "||", ";", "|", "\n", ">>", ">", "<<", "<", "|&")
 

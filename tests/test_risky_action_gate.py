@@ -658,6 +658,39 @@ def test_git_positive_query_grammar_denies_unknown_and_remerge(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_trace_env_sinks_denied(tmp_path):
+    """GIT_TRACE* env vars must not write files or open Unix sockets.
+
+    Regression for Fable batch-A cross-check P0 #11: git(1) trace output
+    options (GIT_TRACE / GIT_TRACE_* / GIT_TRACE2 / GIT_TRACE2_*) append to
+    an arbitrary file path or open a Unix domain socket (af_unix:), so a
+    nominally read-only git query could write files or connect to a local
+    socket without dual approval. Fail closed by exact key and prefix.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "env GIT_TRACE=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
+        "env GIT_TRACE_PACKET=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
+        "env GIT_TRACE2=/tmp/fable-never-written git show --no-textconv --no-ext-diff HEAD",
+        "env GIT_TRACE2_EVENT=af_unix:/tmp/fable-never-connected git diff --no-textconv --no-ext-diff",
+        "env GIT_TRACE2_PERF=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
+        "env GIT_TRACE_SHALLOW=/tmp/fable-never-written git log --no-textconv --no-ext-diff -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    # Unrelated env assignments on git queries stay allowed.
+    for command in (
+        "env FOO=bar git log --no-textconv --no-ext-diff -1",
+        "git log --no-textconv --no-ext-diff -1",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_path_form_executable_denied_across_all_fast_paths(tmp_path):
     """Path-form executables must be denied before any basename fast-path.
 
