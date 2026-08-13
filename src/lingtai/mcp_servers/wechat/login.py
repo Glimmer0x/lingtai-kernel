@@ -31,6 +31,8 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
+
 from . import api
 
 log = logging.getLogger(__name__)
@@ -38,6 +40,45 @@ log = logging.getLogger(__name__)
 LOGIN_TIMEOUT = 300  # 5 minutes per QR code
 POLL_INTERVAL = 2.0
 MAX_QR_REFRESHES = 3  # auto-refresh expired QR codes up to this many times
+QR_FETCH_MAX_ATTEMPTS = 3
+QR_FETCH_RETRY_DELAYS = (1.0, 2.0)
+QR_RETRYABLE_HTTP_STATUSES = frozenset({408, 429})
+
+
+async def _fetch_qr_with_retry(base_url: str) -> dict:
+    """Fetch a QR code, retrying transient endpoint failures with backoff.
+
+    The retry budget belongs to one QR acquisition and is independent of the
+    number of expired QR codes. Non-retryable HTTP responses fail immediately;
+    cancellation is intentionally not caught so callers can stop promptly.
+    """
+    for attempt in range(QR_FETCH_MAX_ATTEMPTS):
+        try:
+            return await api.get_qrcode(base_url)
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            retryable = True
+            error = exc
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            retryable = (
+                status_code in QR_RETRYABLE_HTTP_STATUSES
+                or (status_code is not None and 500 <= status_code < 600)
+            )
+            error = exc
+
+        if not retryable or attempt == QR_FETCH_MAX_ATTEMPTS - 1:
+            raise error
+        delay = QR_FETCH_RETRY_DELAYS[min(attempt, len(QR_FETCH_RETRY_DELAYS) - 1)]
+        log.debug(
+            "QR fetch failed (attempt %s/%s), retrying in %.1fs: %s",
+            attempt + 1,
+            QR_FETCH_MAX_ATTEMPTS,
+            delay,
+            error,
+        )
+        await asyncio.sleep(delay)
+
+    raise AssertionError("QR fetch retry loop exited unexpectedly")
 
 
 # ── Shared helpers ──────────────────────────────────────────────────
@@ -149,7 +190,7 @@ async def _login_flow(
     """
     print("Fetching QR code...")
     try:
-        qr_data = await api.get_qrcode(base_url)
+        qr_data = await _fetch_qr_with_retry(base_url)
     except Exception as e:
         print(f"Error fetching QR code: {e}")
         return None
@@ -208,14 +249,14 @@ async def _login_flow(
 
             await asyncio.sleep(POLL_INTERVAL)
 
-        qr_refresh_count += 1
-        if qr_refresh_count > MAX_QR_REFRESHES:
+        if qr_refresh_count >= MAX_QR_REFRESHES:
             print(f"\nQR code expired {MAX_QR_REFRESHES} times. Please try again later.")
             return None
 
-        print(f"\n⏳ QR code expired, refreshing... ({qr_refresh_count}/{MAX_QR_REFRESHES})")
+        next_refresh = qr_refresh_count + 1
+        print(f"\n⏳ QR code expired, refreshing... ({next_refresh}/{MAX_QR_REFRESHES})")
         try:
-            qr_data = await api.get_qrcode(base_url)
+            qr_data = await _fetch_qr_with_retry(base_url)
         except Exception as e:
             print(f"Failed to refresh QR code: {e}")
             return None
@@ -225,6 +266,8 @@ async def _login_flow(
             print("Failed to get new QR code from server.")
             return None
 
+        # Consume the refresh budget only after a usable replacement QR arrives.
+        qr_refresh_count = next_refresh
         current_base_url = base_url
         if on_new_qr is not None:
             try:
