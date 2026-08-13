@@ -70,6 +70,62 @@ def _is_write_destination_flag(token: str) -> bool:
     return False
 
 
+# Read-only options for each list-only git subcommand. An option token is
+# accepted only when its option name (before any ``=``) is in this set; every
+# other option on branch/tag/remote fails closed so option-only mutations
+# (``--unset-upstream``, ``--set-upstream-to=``, ``--edit-description``,
+# ``-a``/``-s``/``-m`` for tags, ``remote set-url``) cannot be smuggled in.
+_GIT_LIST_ONLY_READ_ONLY_OPTIONS: dict[str, set[str]] = {
+    "branch": {
+        "--list", "-l", "--all", "-a", "--remotes", "-r", "--verbose", "-v",
+        "--no-color", "--color", "--format", "--contains", "--merged",
+        "--no-merged", "--points-at", "--show-current", "--quiet", "-q",
+        "--column", "--no-column", "--abbrev", "--no-abbrev",
+    },
+    "tag": {
+        "--list", "-l", "--sort", "--format", "--color", "--no-color",
+        "--contains", "--merged", "--no-merged", "--points-at", "--column",
+        "--no-column", "--verify", "-v",
+    },
+    "remote": {"--verbose", "-v"},
+}
+
+# For ``git remote`` the first positional is the sub-subcommand; only these
+# query forms are read-only. Any other sub-subcommand fails closed.
+_GIT_REMOTE_READ_ONLY_SUBCOMMANDS = {"get-url", "show"}
+
+
+def _git_list_only_risk(tokens: list[str], subcommand: str) -> str | None:
+    """Fail-closed check for git branch/tag/remote list-only forms.
+
+    Returns ``None`` for a read-only list/query form and a reason string for
+    every creation, mutation, or unknown-option form. Only the allowed options
+    (``_GIT_LIST_ONLY_READ_ONLY_OPTIONS``) and, for remote, the read-only
+    sub-subcommands are accepted; everything else is denied.
+    """
+    # Drop ``git`` and the subcommand itself (handles global options such as
+    # ``git -C <dir> branch`` by scanning for the first non-option token).
+    index = next((i for i, t in enumerate(tokens[1:], start=1) if not t.startswith("-")), None)
+    rest = tokens[(index + 1):] if index is not None else []
+    positionals = [t for t in rest if not t.startswith("-")]
+    options = [t for t in rest if t.startswith("-")]
+    allowed_options = _GIT_LIST_ONLY_READ_ONLY_OPTIONS.get(subcommand, set())
+    for option in options:
+        if option.split("=", 1)[0] not in allowed_options:
+            return f"git {subcommand} option {option} is not a read-only form"
+    if subcommand == "remote":
+        if positionals and positionals[0] not in _GIT_REMOTE_READ_ONLY_SUBCOMMANDS:
+            return f"git remote subcommand {positionals[0]} is not read-only"
+        return None
+    # branch / tag: a bare positional (no --list) is creation; only a single
+    # ``--list <pattern>`` positional is read-only.
+    if len(positionals) > 1:
+        return f"git {subcommand} with multiple positional arguments is not read-only"
+    if positionals and "--list" not in options:
+        return f"git {subcommand} with a positional argument is not read-only"
+    return None
+
+
 
 def _resolve(path: str | os.PathLike[str]) -> str:
     return str(Path(path).expanduser().resolve())
@@ -233,10 +289,9 @@ def _shell_risk_reason(command: str, config: dict[str, Any], *, cwd: str | None 
             if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
                 return f"git subcommand is not classified read-only: {subcommand or '<missing>'}"
             if subcommand in _GIT_LIST_ONLY_SUBCOMMANDS:
-                # ``git branch <name>`` / ``git tag <name>`` create; ``git remote
-                # add`` mutates. Only the bare list/query forms are read-only.
-                if len([t for t in tokens[1:] if not t.startswith("-")]) > 1:
-                    return f"git {subcommand} with a positional argument is not read-only"
+                reason = _git_list_only_risk(tokens, subcommand)
+                if reason is not None:
+                    return reason
             continue
         if verb == "ssh":
             host = next((token for token in tokens[1:] if not token.startswith("-")), None)

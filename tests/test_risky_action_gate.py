@@ -248,6 +248,45 @@ def test_git_list_only_subcommands_reject_positional_mutation(tmp_path):
         assert decision.allowed, command
 
 
+def test_git_list_only_option_mutations_are_denied(tmp_path):
+    """Option-only git mutations must fail closed.
+
+    Regression for Fable batch-A cross-check P0 #2: `git branch
+    --unset-upstream` / `--set-upstream-to=` / `--edit-description` mutate
+    branch config yet previously passed because only positional tokens were
+    counted. Unknown options on list-only subcommands fail closed; read-only
+    query forms stay allowed.
+    """
+    _file_config(tmp_path)
+    for command in (
+        "git branch --unset-upstream",
+        "git branch --set-upstream-to=origin/main",
+        "git branch --edit-description",
+        "git branch -m new-name",
+        "git tag -a v1 -m msg",
+        "git remote set-url origin http://evil",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert not decision.allowed, command
+    for command in (
+        "git branch",
+        "git branch --list",
+        "git branch --list feature",
+        "git branch --show-current",
+        "git tag",
+        "git tag --list",
+        "git remote",
+        "git remote -v",
+        "git remote get-url origin",
+    ):
+        decision = build_risky_action_check(tmp_path)(_proposal("shell", {
+            "action": "run", "input": {"command": command}
+        }))
+        assert decision.allowed, command
+
+
 def test_read_only_verb_with_write_flag_is_denied(tmp_path):
     _file_config(tmp_path)
     for command in ("sort -o /tmp/x input", "curl -o /tmp/x https://example.com", "wget -O /tmp/x https://example.com"):
