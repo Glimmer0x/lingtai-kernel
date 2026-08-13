@@ -792,7 +792,13 @@ class TaskCardEventProjection:
             if stats_parts:
                 line4 = "daemon stats · " + " · ".join(stats_parts)
 
-        lines = [ln for ln in (line1, line2, line3, line3b, line4) if ln]
+        daemon_lines = [ln for ln in (line3, line3b, line4) if ln]
+        lines = [ln for ln in (line1, line2) if ln]
+        if daemon_lines:
+            # Visually separate the daemon block from the session/identity
+            # lines so it stands out on the resident card.
+            lines.append("────────────────")
+            lines.extend(daemon_lines)
         if not lines:
             return []
         joined = "\n".join(lines)
