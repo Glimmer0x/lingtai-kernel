@@ -200,3 +200,4 @@ def test_status_payload_exposes_resolution_without_secrets(tmp_path, monkeypatch
     assert payload["has_bot_token"] is True
     # backward-compat resolution is flagged in notes
     assert any("backward-compat" in n for n in payload["notes"])
+    assert any("pre-signed upload_full_url" in n for n in payload["notes"])
