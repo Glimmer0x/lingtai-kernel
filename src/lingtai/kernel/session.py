@@ -33,6 +33,7 @@ from .llm_utils import (
     send_with_timeout_stream,
     track_llm_usage,
 )
+from .llm.reasoning_effort import ReasoningEffortController, ReasoningEffortResult
 from .agent_session import AgentSession, RuntimeSession, new_runtime_session
 from .logging import get_logger
 from .reminders.context_pressure import ContextPressureReminder
@@ -84,6 +85,10 @@ _SAFE_USAGE_EXTRA_EVENT_KEYS = {
     "codex_store",
     "codex_fallback_error_type",
     "codex_fallback_error_message",
+    "claude_reasoning_effort",
+    "claude_reasoning_effort_emitted",
+    "claude_reasoning_effort_source",
+    "claude_reasoning_effort_revision",
 }
 
 
@@ -214,6 +219,11 @@ class SessionManager:
         self._latest_input_tokens = 0
         self._latest_token_usage_snapshot: dict[str, Any] | None = None
 
+        # Process-local runtime reasoning-effort control. The controller is
+        # agent-owned, survives in-process session rebuilds, and is intentionally
+        # not persisted across refresh/restart/molt.
+        self._reasoning_effort = ReasoningEffortController()
+
         # Sustained context-pressure / molt reminder (channel B). Transient
         # runtime state — not persisted, since a fresh/restored session has
         # fresh pressure. The streak state machine, warn decision, and reminder
@@ -244,6 +254,7 @@ class SessionManager:
     def chat(self, value: ChatSession | None) -> None:
         self._chat = value
         self._attach_tool_result_recovery_lookup(value)
+        self._bind_reasoning_effort(value)
 
     @property
     def token_decomp_dirty(self) -> bool:
@@ -300,6 +311,7 @@ class SessionManager:
                 provider=self._config.provider,
             )
             self._attach_tool_result_recovery_lookup(self._chat)
+            self._bind_reasoning_effort(self._chat)
         return self._chat
 
     def _rebuild_session(
@@ -317,6 +329,43 @@ class SessionManager:
             interface=interface,
         )
         self._attach_tool_result_recovery_lookup(self._chat)
+        self._bind_reasoning_effort(self._chat)
+
+    # ------------------------------------------------------------------
+    # Runtime reasoning effort (process-local, self-facing)
+    # ------------------------------------------------------------------
+
+    def _bind_reasoning_effort(self, chat: ChatSession | None) -> None:
+        if chat is None:
+            self._reasoning_effort.bind_capability(None)
+            return
+        capability_fn = getattr(chat, "reasoning_effort_capability", None)
+        try:
+            capability = capability_fn() if callable(capability_fn) else None
+        except Exception:
+            capability = None
+        self._reasoning_effort.bind_capability(capability)
+        bind = getattr(chat, "set_reasoning_effort_policy", None)
+        if callable(bind):
+            try:
+                bind(self._reasoning_effort.snapshot)
+            except Exception:
+                logger.warning("reasoning_effort_bind_failed", exc_info=True)
+
+    def reasoning_effort_status(self) -> dict:
+        return self._reasoning_effort.status()
+
+    def set_reasoning_effort(self, value: str) -> ReasoningEffortResult:
+        return self._reasoning_effort.set(value)
+
+    def clear_reasoning_effort(self) -> ReasoningEffortResult:
+        return self._reasoning_effort.clear()
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        if self._chat is None:
+            return None
+        getter = getattr(self._chat, "last_reasoning_effort_dispatch", None)
+        return getter() if callable(getter) else None
 
     def _attach_tool_result_recovery_lookup(self, chat: ChatSession | None) -> None:
         if chat is None or self._tool_result_recovery_lookup_fn is None:

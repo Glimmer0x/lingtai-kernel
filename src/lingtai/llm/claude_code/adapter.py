@@ -24,6 +24,11 @@ from lingtai.kernel.llm.base import (
     ToolCall,
     UsageMetadata,
 )
+from lingtai.kernel.llm.reasoning_effort import (
+    ReasoningEffortCapability,
+    ReasoningEffortSnapshot,
+    UNAVAILABLE_CAPABILITY,
+)
 from lingtai.kernel.llm.interface import (
     ChatInterface,
     TextBlock,
@@ -241,6 +246,8 @@ class ClaudeCodeChatSession(ChatSession):
         interface: ChatInterface,
         context_window: int,
         effort_argv: list[str] | None = None,
+        effort_baseline: str | None = None,
+        effort_capability: ReasoningEffortCapability | None = None,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -255,6 +262,10 @@ class ClaudeCodeChatSession(ChatSession):
         # ``--resume`` call, and each overflow-recovery retry inside one
         # logical send — carries this one effort decision (or none).
         self._effort_argv = list(effort_argv or [])
+        self._effort_baseline = effort_baseline
+        self._effort_capability = effort_capability or UNAVAILABLE_CAPABILITY
+        self._effort_policy = None
+        self._last_effort_dispatch: dict | None = None
         # Remote state is an acceleration only. The canonical interface remains
         # the recovery source whenever this continuation cannot be trusted.
         self._remote_session_id: str | None = None
@@ -271,6 +282,71 @@ class ClaudeCodeChatSession(ChatSession):
     @property
     def interface(self) -> ChatInterface:
         return self._interface
+
+    def reasoning_effort_capability(self) -> ReasoningEffortCapability:
+        return self._effort_capability
+
+    def set_reasoning_effort_policy(self, provider) -> bool:
+        if not self._effort_capability.available:
+            return False
+        self._effort_policy = provider
+        return True
+
+    def last_reasoning_effort_dispatch(self) -> dict | None:
+        return dict(self._last_effort_dispatch) if self._last_effort_dispatch else None
+
+    def _capture_effort_snapshot(self) -> ReasoningEffortSnapshot:
+        policy_bound = callable(self._effort_policy)
+        snapshot = self._effort_policy() if policy_bound else None
+        if snapshot is None:
+            # Direct adapter users have no controller: preserve their frozen
+            # construction argv exactly, including omitted effort.
+            effective = self._effort_baseline
+            snapshot = ReasoningEffortSnapshot(
+                effective=effective,
+                source="baseline",
+                revision=0,
+                fingerprint=self._effort_capability.fingerprint,
+                baseline=self._effort_capability.baseline
+                if self._effort_capability.available
+                else effective,
+            )
+        self._last_effort_dispatch = {
+            "route": self._effort_capability.route,
+            "fingerprint": snapshot.fingerprint,
+            "baseline": snapshot.baseline,
+            "requested": snapshot.requested,
+            "effective": snapshot.effective,
+            "emitted": snapshot.effective,
+            "source": snapshot.source,
+            # Direct construction has no controller revision; live policy
+            # captures carry the monotonic controller revision.
+            "revision": snapshot.revision if policy_bound else None,
+            "applied": bool(policy_bound and snapshot.source == "override"),
+            "completed": False,
+        }
+        return snapshot
+
+    def _effort_usage_extra(self) -> dict[str, str]:
+        """Return safe completion evidence for the current logical dispatch."""
+        record = self._last_effort_dispatch
+        if not record:
+            return {}
+        emitted = record.get("effective")
+        extra = {
+            "claude_reasoning_effort": str(emitted) if emitted is not None else "omitted",
+            "claude_reasoning_effort_emitted": str(emitted) if emitted is not None else "omitted",
+            "claude_reasoning_effort_source": str(record.get("source") or "baseline"),
+        }
+        if record.get("revision") is not None:
+            extra["claude_reasoning_effort_revision"] = str(record["revision"])
+        return extra
+
+    @staticmethod
+    def _effort_argv_for_snapshot(snapshot: ReasoningEffortSnapshot) -> list[str]:
+        if snapshot.effective is None:
+            return []
+        return ["--effort", snapshot.effective]
 
     def send(self, message) -> LLMResponse:
         # Snapshot the canonical history *before* we mutate it, so a failure
@@ -290,6 +366,11 @@ class ClaudeCodeChatSession(ChatSession):
             if self.pre_request_hook is not None:
                 self.pre_request_hook(self._interface)
 
+            # Capture after the kernel's pre-request hook but before the first
+            # physical invocation. The closure reuses this exact snapshot for
+            # resume and overflow recovery retries.
+            effort_snapshot = self._capture_effort_snapshot()
+
             def _do_call():
                 self._interface.enforce_tool_pairing()
                 prompt = self._render_prompt(
@@ -300,7 +381,7 @@ class ClaudeCodeChatSession(ChatSession):
                         prompt,
                         self._model,
                         resume_session_id=self._remote_session_id,
-                        effort_argv=self._effort_argv,
+                        effort_argv=self._effort_argv_for_snapshot(effort_snapshot),
                     )
                 except ClaudeCodeContextOverflow:
                     # A locally trimmed retry cannot safely continue a remote
@@ -322,6 +403,8 @@ class ClaudeCodeChatSession(ChatSession):
                 self._reset_remote_session()
             else:
                 self._remember_remote_session(raw)
+            if self._last_effort_dispatch is not None:
+                self._last_effort_dispatch["completed"] = True
             return response
         except Exception:
             # A failed child may have accepted a prompt before failing. Rebuild
@@ -458,6 +541,7 @@ class ClaudeCodeChatSession(ChatSession):
             text = str(text)
             blocks.append(TextBlock(text=text))
 
+        usage.extra.update(self._effort_usage_extra())
         self._interface.add_assistant_message(
             blocks,
             model=self._model,
@@ -628,6 +712,20 @@ class ClaudeCodeAdapter(LLMAdapter):
 
     # -- LLMAdapter contract --------------------------------------------------
 
+    def _extra_argv_effort(self) -> str | None:
+        """Return a caller-owned ``--effort`` value, if present.
+
+        An explicit extra argv is outside the live controller's ownership.
+        Invalid values fail closed through the descriptor resolver rather than
+        being reported as a controllable route.
+        """
+        for index, token in enumerate(self._extra_argv):
+            if token.startswith("--effort="):
+                return token.split("=", 1)[1]
+            if token == "--effort" and index + 1 < len(self._extra_argv):
+                return self._extra_argv[index + 1]
+        return None
+
     def create_chat(
         self,
         model: str,
@@ -642,10 +740,35 @@ class ClaudeCodeAdapter(LLMAdapter):
         context_window: int = 0,
     ) -> ChatSession:
         # Claude Code is the one provider with its own reasoning-control flag:
-        # the thinking level becomes the CLI's ``--effort`` argv, normalized
-        # exactly once here (an out-of-vocabulary level raises before any
-        # interface mutation or subprocess) and frozen for the session's life.
+        # direct adapter callers retain the construction-time argv; the
+        # SessionManager-bound controller can replace it only for the next
+        # unsnapshotted logical dispatch. A caller-supplied --effort is already
+        # the effective fixed route, so live writes are get-only rather than
+        # silently claiming they can override an argv collision.
         effort_argv = _claude_effort_argv(thinking)
+        extra_effort = self._extra_argv_effort()
+        effort_baseline = (
+            extra_effort
+            if extra_effort is not None
+            else (thinking if thinking not in (None, "default") else None)
+        )
+        from .live_effort import resolve_claude_effort_descriptor
+        descriptor = resolve_claude_effort_descriptor(
+            model=model or self._model,
+            cli_path=self._cli_path,
+            construction_baseline=effort_baseline,
+        )
+        capability = descriptor.to_capability() if descriptor is not None else UNAVAILABLE_CAPABILITY
+        if extra_effort is not None and capability.available:
+            from dataclasses import replace
+            capability = replace(
+                capability,
+                settable=False,
+                reason="fixed_by_extra_argv",
+            )
+            # The command's explicit argv is already present in extra_argv; do
+            # not leave a misleading configured flag in the frozen fallback.
+            effort_argv = []
         iface = interface or ChatInterface()
         tool_list = list(tools) if tools else []
         if interface is None:
@@ -661,6 +784,8 @@ class ClaudeCodeAdapter(LLMAdapter):
             interface=iface,
             context_window=context_window or self._context_window,
             effort_argv=effort_argv,
+            effort_baseline=effort_baseline,
+            effort_capability=capability,
         )
         return self._wrap_with_gate(session)
 

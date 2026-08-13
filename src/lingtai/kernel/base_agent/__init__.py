@@ -2305,6 +2305,18 @@ class BaseAgent:
     # Session persistence (delegates to SessionManager)
     # ------------------------------------------------------------------
 
+    def reasoning_effort_status(self) -> dict:
+        """Return the current process-local reasoning-effort route/status."""
+        return self._session.reasoning_effort_status()
+
+    def set_reasoning_effort(self, value: str):
+        """Request an effort override for the next unsnapshotted dispatch."""
+        return self._session.set_reasoning_effort(value)
+
+    def clear_reasoning_effort(self):
+        """Remove the override and restore the active route baseline/omission."""
+        return self._session.clear_reasoning_effort()
+
     def get_token_usage(self) -> dict:
         """Return token usage summary (delegates to SessionManager)."""
         if not hasattr(self, "_session"):

@@ -25,7 +25,7 @@ THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 # extended-thinking budget, and the openai/deepseek factories always pin an
 # OpenAI-compatible adapter, so their blocks carry an implicit
 # ``api_compat="openai"``.
-THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek")
+THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek", "claude-code", "claude_code")
 
 
 def llm_supports_thinking(llm: dict) -> bool:
@@ -34,8 +34,9 @@ def llm_supports_thinking(llm: dict) -> bool:
     Every thinking-capable wire is accepted:
 
     * the Codex family (``THINKING_PROVIDERS``) — it owns its own wire/backend;
-    * ``THINKING_NATIVE_PROVIDERS`` — ``anthropic`` (thinking budget) plus the
-      OpenAI-wire natives whose ``api_compat`` may be left implicit;
+    * ``THINKING_NATIVE_PROVIDERS`` — ``anthropic`` (thinking budget),
+      Claude Code's provider-local CLI effort route, plus the OpenAI-wire
+      natives whose ``api_compat`` may be left implicit;
     * any OpenAI-compatible block (``api_compat == "openai"``) regardless of
       ``wire_api`` — Responses sends ``reasoning.effort`` and Chat Completions
       sends ``reasoning_effort``, so both wires carry the effort.
