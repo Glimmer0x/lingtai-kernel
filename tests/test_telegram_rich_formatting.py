@@ -124,7 +124,8 @@ def test_schema_exposes_explicit_rendering_fields():
     for field in ("rendering_mode", "entities", "caption_entities", "link_preview_options", "disable_web_page_preview"):
         assert field in props
     assert _schema_enum(props["rendering_mode"]) == ["plain_text", "HTML", "MarkdownV2", "Markdown", "entities", "rich"]
-    assert "no default" in _schema_description(props["rendering_mode"])
+    assert props["rendering_mode"]["default"] == "Markdown"
+    assert "default is markdown" in _schema_description(props["rendering_mode"]).lower()
     assert "parse_mode" not in props
 
 
@@ -324,6 +325,27 @@ def test_send_reply_target_precedence_prefers_private_field(tmp_path):
 
     read_result = manager._read({"account": "mybot", "chat_id": 123, "limit": 1})
     assert read_result["messages"][0]["reply_to_message_id"] == 111
+
+
+def test_public_send_without_rendering_mode_defaults_to_markdown(tmp_path):
+    manager, account = _manager(tmp_path)
+
+    result = manager.handle({
+        "action": "send",
+        "account": "mybot",
+        "chat_id": 123,
+        "text": "formatted",
+    })
+
+    assert result == {"status": "sent", "message_id": "mybot:123:111"}
+    assert account.calls == [(
+        "send_message",
+        123,
+        "formatted",
+        None,
+        None,
+        {"parse_mode": "Markdown"},
+    )]
 
 
 def test_internal_send_without_rendering_mode_keeps_plain_fallback(tmp_path):

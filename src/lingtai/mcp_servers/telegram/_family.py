@@ -108,6 +108,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             }),
             "rendering_mode": {
                 "type": "string", "enum": list(_RENDERING_MODES),
+                "default": "Markdown",
             },
             "entities": _nullable({"type": "array"}),
             "caption_entities": _nullable({"type": "array"}),
@@ -122,7 +123,7 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
             "link_preview_options": _nullable({"type": "object"}),
             "disable_web_page_preview": _nullable({"type": "boolean"}),
         },
-        required=["chat_id", "rendering_mode"],
+        required=["chat_id"],
         any_of=[
             {"required": ["text"]},
             {"required": ["media"]},
@@ -139,10 +140,10 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
         "file paths in message text as a substitute for attaching the file."
     )
     send["properties"]["rendering_mode"]["description"] = (
-        "Required rendering choice for every send. Choose plain_text for unformatted "
-        "text or chat actions, HTML/Markdown/MarkdownV2 for Telegram parse_mode, "
+        "Default is Markdown for the agent's messages. Choose plain_text for "
+        "unformatted text/chat actions, HTML/MarkdownV2 for other parse modes, "
         "entities when supplying MessageEntity data, or rich for a native structured "
-        "message. There is no default; do not combine the modes."
+        "message; you may omit it to use Markdown; do not combine modes."
     )
     send["properties"]["entities"]["anyOf"][0]["description"] = (
         "Telegram MessageEntity[] for rendering_mode='entities' on message text."
@@ -173,15 +174,13 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "text": {"type": "string"},
                 "rendering_mode": {
                     "type": "string", "enum": list(_RENDERING_MODES),
-                    "description": (
-                        "Required rendering choice: plain_text, HTML, Markdown, "
-                        "MarkdownV2, entities, or rich. There is no default."
-                    ),
+                    "default": "Markdown",
+                    "description": "Default is Markdown; you may omit rendering_mode.",
                 },
                 "entities": _nullable({"type": "array"}),
                 "structured_message": _nullable(structured_message),
             },
-            required=["message_id", "rendering_mode"],
+            required=["message_id"],
             any_of=[{"required": ["text"]}, {"required": ["structured_message"]}],
         ),
         "search": _object(
@@ -200,15 +199,13 @@ def _telegram_input_schemas() -> dict[str, dict[str, Any]]:
                 "reply_markup": _nullable({"type": "object"}),
                 "rendering_mode": {
                     "type": "string", "enum": list(_RENDERING_MODES),
-                    "description": (
-                        "Required rendering choice: plain_text, HTML, Markdown, "
-                        "MarkdownV2, entities, or rich. There is no default."
-                    ),
+                    "default": "Markdown",
+                    "description": "Default is Markdown; you may omit rendering_mode.",
                 },
                 "entities": _nullable({"type": "array"}),
                 "structured_message": _nullable(structured_message),
             },
-            required=["message_id", "rendering_mode"],
+            required=["message_id"],
             any_of=[{"required": ["text"]}, {"required": ["structured_message"]}],
         ),
         "contacts": _object({"account": _nullable({"type": "string"})}),
@@ -257,8 +254,9 @@ def telegram_schema() -> dict[str, Any]:
     schema["properties"]["input"]["anyOf"] = schema["properties"]["input"].pop("oneOf")
     schema["properties"]["action"]["description"] = (
         "Telegram action. Each action owns a strict input branch. Content-bearing "
-        "send/reply/edit calls must provide rendering_mode explicitly: plain_text, "
-        "HTML, Markdown, MarkdownV2, entities, or rich; there is no default. For charts, "
+        "send/reply/edit calls default to rendering_mode=\"Markdown\"; the agent may omit "
+        "rendering_mode and it will render as Markdown. Choose plain_text/HTML/MarkdownV2/"
+        "entities/rich only when needed. For charts, "
         "reports, generated artifacts, and other files the user should open intact, "
         "prefer media.type='document'; use media.type='photo' only for an inline "
         "preview because photo previews may crop or compress text-heavy graphics. "

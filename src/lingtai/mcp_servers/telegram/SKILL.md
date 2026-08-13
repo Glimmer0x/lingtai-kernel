@@ -131,14 +131,14 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
   non-numeric value the schema accepts) to `read`/`search` to recover them;
   `send`/`reply` still require a real numeric chat ID.
 
-## RENDERING MODE: explicit per-message choice
+## RENDERING MODE: Markdown default for agent messages
 
-- Every content-bearing `send`, `reply`, and `edit` must include
-  `rendering_mode`; there is no default. Choose exactly one of `plain_text`,
-  `HTML`, `Markdown`, `MarkdownV2`, `entities`, or `rich`.
+- Content-bearing `send`, `reply`, and `edit` default to `rendering_mode='Markdown'`; the
+  agent may omit it for agent messages. Choose exactly one of `plain_text`, `HTML`,
+  `Markdown`, `MarkdownV2`, `entities`, or `rich` when needed. Internal manager-owned
+  sends (such as progress/typing) still use the plain-text fallback when they omit it.
 - `plain_text` maps to an omitted Bot API `parse_mode`; the other three named
-  formats map to Telegram `parse_mode`. The agent must still provide the label
-  even when no formatting is wanted.
+  formats map to Telegram `parse_mode`. Choose it explicitly when no formatting is wanted.
 - `entities` selects explicit `MessageEntity[]` formatting. Pass `entities` for
   message text or `caption_entities` for media captions; do not combine entity
   fields with a parse-mode rendering choice.
@@ -158,8 +158,8 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
   actions. Ordinary conversational prose should remain ordinary text rather
   than being forced into a card.
 - For `send` with only `chat_action` and no text/media, use `plain_text` because
-  no message body is rendered. `rendering_mode` is still required by the strict
-  public branch.
+  no message body is rendered. The public branch defaults to Markdown if the
+  agent omits `rendering_mode`; internal manager-owned sends still use plain text.
 
 ## CHAT ACTION
 
