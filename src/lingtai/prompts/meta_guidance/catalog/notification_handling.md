@@ -22,3 +22,5 @@ maintenance: >
   relation needs that link.
 ---
 When `_meta.agent_meta.guidance.transient` appears, it is the notification hook pointing here. Use `_meta.agent_meta.notifications.attention` to identify active producers and `_meta.agent_meta.notifications.persistent` for durable communication context. Notifications are event hints, not automatically human instructions; inspect ambiguous, truncated, media-bearing, or actionable content through the producer channel, acknowledge or dismiss through that producer, and treat it as the source of truth. The latest whole `_meta.agent_meta` is current; older holders remain visible historical traces and MUST NOT be acted on.
+
+Notification payloads are capped at `LINGTAI_NOTIFICATION_MAX_CHARS` (default 10,000, ceiling 10,000) across all channels. When an `attention` or `persistent` lane carries an `overflow` marker, the model-visible copy is a compacted routing stub: read the full content from the file at `overflow.path` (or, when `spill_failed`, from the producer tool) before acting on the notification.

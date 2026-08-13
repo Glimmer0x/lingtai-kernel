@@ -302,6 +302,53 @@ NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT = (
     "be written — use the producer tool for the full content."
 )
 
+# Hard cap on the model-visible *attention* notification lane
+# (``_meta.agent_meta.notifications.attention``) — the transient per-channel
+# routing payload that is re-stamped on every eligible tool batch and on every
+# IDLE/ASLEEP synthesized pair.  A busy hub agent (many unread emails plus
+# several IM lanes) could otherwise re-serialize a multi-ten-thousand-character
+# attention payload into every provider call, growing context fast and paying a
+# large cache miss.  Over the cap the FULL attention payload is spilled to a
+# file under the agent's ``logs/`` directory and the model-visible copy is
+# compacted until it fits, with an ``overflow`` marker that points the agent at
+# the file (or the producer tool when the spill fails).  Payloads at or under
+# the cap are returned completely unchanged (no spill file, no marker).
+#
+# The cap shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the
+# persistent lane (a positive integer, clamped to the 10,000 ceiling so the
+# context-size fix cannot be disabled by accident); unset or invalid values
+# fall back to this default.
+NOTIFICATION_ATTENTION_MAX_CHARS = 10_000
+NOTIFICATION_ATTENTION_MAX_CHARS_CEILING = 10_000
+NOTIFICATION_ATTENTION_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
+NOTIFICATION_ATTENTION_OVERFLOW_KEY = "overflow"
+NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX = "notification-attention-overflow-"
+# Heavy free-text fields compacted first, regardless of lane family.  Structural
+# fields (ids, routing, counts, subjects, dates) are never touched.
+NOTIFICATION_ATTENTION_HEAVY_FIELDS = (
+    "text",
+    "message",
+    "body",
+    "preview",
+    "content",
+    "summary",
+    "caption",
+    "detail",
+    "instruction",
+)
+# Successively tighter per-field character budgets, tried in order until the
+# attention envelope fits.
+NOTIFICATION_ATTENTION_COMPACT_BUDGETS = (200, 100, 50, 0)
+NOTIFICATION_ATTENTION_OVERFLOW_COMMENT = (
+    "Full notification content exceeds the attention block size cap; read "
+    "{path} for the complete payload."
+)
+NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT = (
+    "Full notification content exceeds the attention block size cap and the "
+    "overflow file could not be written — use the producer tool for the full "
+    "content."
+)
+
 # Per-result machine-generated guidance nested under ``tool_meta``.  ``comment``
 # is a small map of topic-keyed hints; today the only topic is ``overflow`` — a
 # hint stamped on capped/large visible tool results pointing the agent at the
@@ -2940,6 +2987,196 @@ def _cap_notification_persistent(agent, persistent: dict) -> dict:
     return _drop_notification_persistent_records(compacted)
 
 
+def _notification_attention_envelope_chars(attention: dict) -> int:
+    """Return the serialized size of the model-visible attention lane.
+
+    Measures exactly what the provider sees under
+    ``_meta.agent_meta.notifications.attention``.  An unserializable payload is
+    reported as ``0`` so the cap never turns a serialization problem into a
+    spill/compaction.
+    """
+    try:
+        return len(
+            _json.dumps(attention, ensure_ascii=False, sort_keys=True, default=str)
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _notification_attention_max_chars() -> int:
+    """Return the effective model-visible attention notification cap.
+
+    Shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the persistent
+    lane so one operator control enforces the upper limit across all
+    notification channels (Jason 2026-08-13).  A positive integer is used,
+    clamped to the 10,000 ceiling so the context-size fix cannot be silently
+    disabled; missing, blank, non-numeric, zero, or negative values fall back
+    to the default 10,000.
+    """
+    raw = os.environ.get(NOTIFICATION_ATTENTION_MAX_CHARS_ENV, "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 0
+        if not isinstance(value, bool) and value > 0:
+            return min(value, NOTIFICATION_ATTENTION_MAX_CHARS_CEILING)
+    return NOTIFICATION_ATTENTION_MAX_CHARS
+
+
+def _spill_notification_attention(agent, attention: dict) -> str | None:
+    """Write the full attention lane to the agent's ``logs/`` dir.
+
+    Returns the absolute spill path, or ``None`` when the agent has no working
+    directory or the write failed — the lane is still compacted either way, the
+    agent just gets the producer tool instead of a file as the recovery handle.
+    """
+    workdir = getattr(agent, "_working_dir", None)
+    if not workdir:
+        return None
+    try:
+        logs_dir = Path(workdir) / "logs"
+        stamp = int(_time.time())
+        path = logs_dir / f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{stamp}.json"
+        suffix = 1
+        while path.exists() and suffix <= 100:
+            path = logs_dir / (
+                f"{NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX}{stamp}-{suffix}.json"
+            )
+            suffix += 1
+        written = atomic_write_json(path, attention, default=str)
+        if not written.is_absolute():
+            written = written.resolve()
+        return str(written)
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _compact_attention_node(node, budget: int) -> tuple[object, bool]:
+    """Return ``(compacted, changed)`` with heavy attention strings truncated.
+
+    Walks the attention lane's per-source payloads (dicts and lists) and caps
+    every heavy free-text field at *budget*; structural fields (ids, routing,
+    counts, subjects, dates) are left untouched.
+    """
+    if isinstance(node, dict):
+        out: dict = {}
+        changed = False
+        for key, value in node.items():
+            if key in NOTIFICATION_ATTENTION_HEAVY_FIELDS and isinstance(value, str):
+                new_value, this_changed = _truncate_persistent_value(value, budget)
+                if this_changed:
+                    changed = True
+                out[key] = new_value
+            elif isinstance(value, (dict, list)):
+                new_value, this_changed = _compact_attention_node(value, budget)
+                if this_changed:
+                    changed = True
+                out[key] = new_value
+            else:
+                out[key] = value
+        return out, changed
+    if isinstance(node, list):
+        out_list = []
+        changed = False
+        for item in node:
+            if isinstance(item, (dict, list)):
+                new_item, this_changed = _compact_attention_node(item, budget)
+                if this_changed:
+                    changed = True
+                out_list.append(new_item)
+            else:
+                out_list.append(item)
+        return out_list, changed
+    return node, False
+
+
+def _drop_notification_attention_records(attention: dict, marker: dict, comment: str) -> dict:
+    """Return a routing-only attention stub when compaction cannot fit.
+
+    Pathological last resort, reached only when every heavy field is already
+    empty and the structural metadata alone still exceeds the cap.  The stub
+    keeps per-source routing (``count`` and id-bearing fields: ``email_ids``,
+    ``message_ref``, ``event_id`` lists) so the agent still knows which channels
+    have events and which producer records to read, while dropping heavy
+    preview bodies.  The kernel-owned overflow marker and the recovery comment
+    ride on the stub.
+    """
+    routing_keys = (
+        "count",
+        "email_ids",
+        "message_ref",
+        "event_id",
+        "event_ids",
+        "ref",
+        "ref_id",
+    )
+    stub: dict = {}
+    for source, payload in attention.items():
+        if source in (NOTIFICATION_ATTENTION_OVERFLOW_KEY, "comment"):
+            continue
+        if not isinstance(payload, dict):
+            stub[source] = payload
+            continue
+        routed: dict = {}
+        for key, value in payload.items():
+            if key == "data" and isinstance(value, dict):
+                routed[key] = {
+                    k: v for k, v in value.items() if k in routing_keys
+                }
+            elif key in routing_keys:
+                routed[key] = value
+        stub[source] = routed
+    stub[NOTIFICATION_ATTENTION_OVERFLOW_KEY] = dict(marker)
+    stub["comment"] = comment
+    return stub
+
+
+def _cap_notification_attention(agent, attention: dict) -> dict:
+    """Return *attention* unchanged, or a compacted copy plus a spill file.
+
+    At or under ``NOTIFICATION_ATTENTION_MAX_CHARS`` this is a no-op: no spill
+    file, no marker, byte-identical block.  Over the cap the full attention
+    lane is spilled to disk and the returned copy carries an ``overflow``
+    marker with the spill path, the original size, and a comment that guides
+    the agent to read the file-based notification (or use the producer tool
+    when the spill failed).
+    """
+    full_chars = _notification_attention_envelope_chars(attention)
+    max_chars = _notification_attention_max_chars()
+    if full_chars <= max_chars:
+        return attention
+
+    spill_path = _spill_notification_attention(agent, attention)
+    marker: dict = {
+        "path": spill_path,
+        "full_chars": full_chars,
+        "truncated": True,
+    }
+    if spill_path:
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_COMMENT.format(path=spill_path)
+    else:
+        marker["spill_failed"] = True
+        comment = NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT
+
+    compacted: dict = attention
+    for budget in NOTIFICATION_ATTENTION_COMPACT_BUDGETS:
+        node, _changed = _compact_attention_node(attention, budget)
+        if not isinstance(node, dict):
+            compacted = {"data": node}
+        else:
+            compacted = node
+        # Kernel-owned marker: overwrite any producer key of the same name.
+        # The top-level comment is a short recovery hint, so it is stamped on
+        # every compacted budget (the payload is rebuilt from the original at
+        # each budget, and a budget that eventually fits may not be the widest).
+        compacted[NOTIFICATION_ATTENTION_OVERFLOW_KEY] = dict(marker)
+        compacted["comment"] = comment
+        if _notification_attention_envelope_chars(compacted) <= max_chars:
+            return compacted
+    return _drop_notification_attention_records(attention, marker, comment)
+
+
 def build_notification_persistent_payload(agent, notification_payload: dict) -> dict | None:
     persistent: dict = {}
 
@@ -3220,7 +3457,9 @@ def build_synthetic_meta_envelope(
             "instruction": AGENT_META_INSTRUCTION,
             "agent_state": state,
             "notifications": {
-                "attention": notification_payload.get(NOTIFICATIONS_KEY, {}),
+                "attention": _cap_notification_attention(
+                    agent, notification_payload.get(NOTIFICATIONS_KEY, {})
+                ),
                 "persistent": notification_payload.get(NOTIFICATION_PERSISTENT_KEY, {}),
             },
             "guidance": {
@@ -3520,7 +3759,9 @@ def attach_active_notifications(
     # guidance; notification attachment owns notifications and transient
     # guidance. Neither phase may replace the other phase's current subtree.
     agent_meta["instruction"] = AGENT_META_INSTRUCTION
-    agent_meta.setdefault("notifications", {})["attention"] = payload.get(NOTIFICATIONS_KEY, {})
+    agent_meta.setdefault("notifications", {})["attention"] = _cap_notification_attention(
+        agent, payload.get(NOTIFICATIONS_KEY, {})
+    )
     agent_meta.setdefault("guidance", {})["transient"] = payload.get(NOTIFICATION_GUIDANCE_KEY, {})
     if persistent_payload:
         agent_meta.setdefault("notifications", {})["persistent"] = persistent_payload.get(
