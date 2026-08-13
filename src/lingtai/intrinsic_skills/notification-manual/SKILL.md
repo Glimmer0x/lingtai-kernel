@@ -9,7 +9,7 @@ description: >
   `context-manual` → `reference/summarize-manual/SKILL.md`.
 version: 0.9.1
 tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-10T18:22:00Z"
+last_changed_at: "2026-08-13"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -155,31 +155,52 @@ such an event, run `list` to inspect hooks and
    revokes the channel, then stop the watcher process per how_to_cancel.
 ```
 
-## Persistent block size cap
+## Block size cap (persistent and attention lanes)
 
-The model-visible persistent notification envelope
+Two model-visible notification envelopes are re-serialized into provider
+context: the persistent block
 (`_meta.agent_meta.notifications.persistent`, the `notification_persistent`
-block) is re-serialized into provider context on every turn, so a busy hub
-agent with many unread emails plus several IM lanes could otherwise grow
-context fast and pay a large per-call cache miss. The kernel caps that block:
+block, rebuilt per payload build) and the attention lane
+(`_meta.agent_meta.notifications.attention`, the transient per-channel routing
+payload re-stamped on every eligible tool batch and every IDLE/ASLEEP pair).
+A busy hub agent with many unread emails plus several IM lanes could otherwise
+grow context fast and pay a large per-call cache miss. The kernel caps BOTH
+lanes with ONE shared bar (`LINGTAI_NOTIFICATION_MAX_CHARS`):
 
 - **At or under the cap** (default `10000` characters): the block is delivered
   byte-identical, no spill file, no marker.
-- **Over the cap**: the FULL block is written atomically to
+- **Over the cap - persistent lane**: the FULL block is written atomically to
   `<workdir>/logs/notification-overflow-<ts>.json`, and the model-visible copy
   is compacted (heavy free-text fields 200 → 100 → 50 → 0, then id-only
   message stubs) until it fits. The compacted block carries an `overflow`
   marker `{path, full_chars, truncated}`. Message ids are never dropped, so
   delivery tracking still sees every message and never re-delivers a
   truncated one.
+- **Over the cap - attention lane**: the FULL lane is written once to
+  `<workdir>/logs/notification-attention-overflow-<digest8>.json` — the name
+  is content-addressed (short sha256 of the lane's canonical serialization),
+  so an unchanged oversized lane reuses the SAME file instead of re-spilling
+  every batch, and exclusive creation never overwrites an existing recovery
+  handle. The model-visible copy is compacted (heavy fields truncated;
+  routing ids including `message_ids` preserved) and carries the same
+  `overflow` marker. If even the routing stub cannot fit, the lane degrades
+  deterministically to a marker-only envelope that is capped BY
+  CONSTRUCTION: a pathologically long absolute spill path is stripped from the
+  marker (`path = None`, `path_omitted`, content digest retained) so the
+  envelope always satisfies the cap; the full payload remains on disk under
+  the deterministic content-addressed name. If the spill file itself cannot
+  be written, the marker carries `spill_failed` and the block points the
+  agent at the producer tool for the full content.
 
 The cap is **live-configurable** with the environment variable
 `LINGTAI_NOTIFICATION_MAX_CHARS` (positive integer; values above `10000` clamp
-back to `10000`; missing/blank/non-numeric/zero/negative values fall back to
-`10000`). It is read at every payload build, so setting it in the agent's
-`env_file` and refreshing applies it without editing `init.json`. This is a
-context-size steering knob only: it never grants access and never changes which
-messages are considered delivered.
+back to `10000`; for the attention lane values below `2048` clamp UP to
+`2048` so the terminal recovery envelope always fits; missing/blank/
+non-numeric/zero/negative values fall back to `10000`). It is read at every
+payload build, so setting it in the agent's `env_file` and refreshing applies
+it without editing `init.json`. This is a context-size steering knob only: it
+never grants access and never changes which messages are considered
+delivered.
 
 ## Nested reference catalog
 
@@ -205,7 +226,7 @@ messages are considered delivered.
 | Need / keywords | Read |
 |---|---|
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
-| `notification_persistent` block size cap; `LINGTAI_NOTIFICATION_MAX_CHARS`; overflow spill file; compacted copy; message-id preservation | this section (`Persistent block size cap`) |
+| `notification_persistent` and `notification.attention` block size cap; `LINGTAI_NOTIFICATION_MAX_CHARS` (floor `2048` / ceiling `10000`); `notification-overflow-<ts>.json` and `notification-attention-overflow-<digest8>.json` spill files; compacted copy; message-id preservation; marker-only degradation | this section (`Block size cap (persistent and attention lanes)`) |
 | External-hook registration; `.notification/hooks.json`; `add`/`drop`/`edit`/`list`; whitelist gate; warn-and-flag on blocked channels | this section (`Hooks & whitelist`) + `reference/channel-model/SKILL.md` (effective allowlist) |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |

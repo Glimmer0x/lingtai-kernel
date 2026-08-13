@@ -5,7 +5,7 @@ description: >
   into _meta.agent_meta.notifications.attention and _meta.agent_meta.notifications.persistent.
 status: active
 contract_version: 2
-last_changed_at: "2026-08-02"
+last_changed_at: "2026-08-13"
 related_files:
   - docs/references/licc-notification-wake-runbook.md
   - src/lingtai/tools/mcp/ANATOMY.md
@@ -111,12 +111,13 @@ where they share the `.notification/` filesystem protocol.
    `instructions`, and producer-owned `data`) and `notifications.publish` writes
    it atomically (`src/lingtai/kernel/notifications.py:260-275`,
    `src/lingtai/kernel/notifications.py:1054-1087`).
-4. **Model-visible transient hook.** `_meta.agent_meta.notifications.attention` is sparse and
-   update-driven. `attach_active_notifications` attaches or moves the canonical
-   payload only on first appearance, material change, or deliberate
-   `notification(action="check")` (`src/lingtai/kernel/meta_block.py:2939`).
-   For IM channels with a persistent lane (Telegram, WeChat, Feishu, WhatsApp),
-   the shared
+4. **Model-visible transient hook.** `_meta.agent_meta.notifications.attention`
+   is re-stamped on every eligible tool batch and every IDLE/ASLEEP
+   synthesized pair: `attach_active_notifications` copies UNCHANGED ACTIVE
+   attention payloads to every eligible final carrier (it does not move them
+   only on change), so the transient lane must stay small by construction
+   (`src/lingtai/kernel/meta_block.py:3873`). For IM channels with a persistent
+   lane (Telegram, WeChat, Feishu, WhatsApp), the shared
    `_sanitize_im_notification_after_persistent` (via the per-channel
    `sanitize_telegram_notification_after_persistent` /
    `sanitize_wechat_notification_after_persistent` /
@@ -124,20 +125,26 @@ where they share the `.notification/` filesystem protocol.
    `sanitize_whatsapp_notification_after_persistent` wrappers) reduces
    `_meta.agent_meta.notifications.attention.mcp.<channel>.data` to stable `message_ids` only; content,
    sender/subject, routing details, counts, and summaries must not remain in the
-   transient lane (`src/lingtai/kernel/meta_block.py:2589-2655`). The whole attention
-   lane is bounded by the same `LINGTAI_NOTIFICATION_MAX_CHARS` env bar as the
+   transient lane (`src/lingtai/kernel/meta_block.py:3547`). The whole attention
+   lane is bounded by the SAME `LINGTAI_NOTIFICATION_MAX_CHARS` env bar as the
    persistent lane (`NOTIFICATION_ATTENTION_MAX_CHARS` in `meta_block.py`,
-   default/clamp 10,000): over the cap the FULL lane is spilled once to
+   default 10,000; a positive configured value clamps to [2048, 10,000] — the
+   2048 floor guarantees the terminal marker-only recovery envelope ALWAYS
+   fits, and the cap remains a strict upper bound on the model-visible
+   envelope): over the cap the FULL lane is spilled once to
    `<agent workdir>/logs/notification-attention-overflow-<digest8>.json`
    (content-addressed sha256, so an unchanged oversized lane reuses the same
    file; exclusive create never overwrites an existing recovery handle), the
    model-visible copy is compacted (heavy fields truncated, routing ids
    including `message_ids` preserved), and the block carries
    `attention.overflow = {path, full_chars, truncated}` as the recovery handle
-   (`meta_block.py:3135-3177`). `message_ids` survive compaction and are
-   dropped only under a pathological stub that cannot fit, which degrades
-   deterministically to a marker-only envelope (or producer-tool guidance when
-   the spill failed).
+   (`src/lingtai/kernel/meta_block.py:3374`). `message_ids` survive compaction
+   and are dropped only under a pathological stub that cannot fit, which
+   degrades deterministically to a marker-only envelope that is capped BY
+   CONSTRUCTION: a pathologically long absolute spill path is stripped from
+   the marker (`path = None`, `path_omitted`, content digest retained) so the
+   envelope always satisfies the cap (`src/lingtai/kernel/meta_block.py:3266`),
+   or the block carries producer-tool guidance when the spill failed.
 5. **Model-visible persistent communication context.** When structured IM metadata is available, `build_notification_persistent_payload` emits `_meta.agent_meta.notifications.persistent.mcp.<channel>` with `messages`, `events`, and comments through the shared `_ImPersistentLane` machinery. Delta lanes (Telegram, WeChat, Feishu) also carry `previous_block`; WhatsApp is snapshot/no-previous-block because the producer sends the current bounded conversation window per event. Telegram additionally carries full out-of-window reply targets under `referenced_messages`. For built-in email it emits `_meta.agent_meta.notifications.persistent.email` with `email_ids` plus full unread email bodies for the current unread snapshot (ordinary sends are capped at 50,000 characters so the notification layer does not truncate) The whole persistent envelope is capped at 10,000 serialized characters by default (`NOTIFICATION_PERSISTENT_MAX_CHARS` in `meta_block.py`; live-configurable via the `LINGTAI_NOTIFICATION_MAX_CHARS` environment variable, a positive integer clamped to at most 10,000): when a busy hub exceeds the cap, the full block is spilled to `<agent workdir>/logs/notification-overflow-<ts>.json`, the model-visible copy is compacted (heavy message bodies truncated, message ids always preserved so delivery tracking still records every message), and the block carries `persistent.overflow = {path, full_chars, truncated}` as the recovery handle. The attention lane shares the same env bar and spills content-addressed (see item 4).
    (`src/lingtai/kernel/meta_block.py:1857-2489`). The Telegram MCP supplies the
    structured `recent_messages`, `latest_incoming`, and `referenced_messages`

@@ -11,18 +11,22 @@ it spills the full attention lane to ``logs/notification-attention-overflow-<dig
 returns a compacted copy with an ``overflow`` marker that points the agent at
 the file (or the producer tool when the spill failed).  The terminal routing
 stub is capped strictly and preserves ``message_ids`` (the stable IM routing
-identifier) for as long as any routing remains.
+identifier) for as long as any routing remains.  Round 3 (P1-3): the
+configured cap is clamped to [2048, 10,000] — values below 2048 clamp UP to
+2048 so the terminal marker-only recovery envelope always fits, and a final
+guard strips a pathologically long absolute spill path (``path_omitted``) so
+the returned envelope ALWAYS satisfies the cap.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
-import os
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 import lingtai.kernel.meta_block as meta_block
 
@@ -139,11 +143,15 @@ def test_attention_cap_shares_persistent_env_bar(tmp_path, monkeypatch):
     agent = _cap_agent(tmp_path)
     messages = [_telegram_message(i, text="T" * 500) for i in range(1, 41)]
     attention = _attention_payload(messages)
-    # Tighten the shared env bar below the default; both lanes honor it.
+    # Tighten the shared env bar below the default; both lanes honor it (the
+    # attention lane clamps to the 2048 floor, so assert against the effective
+    # cap, not the raw configured value).
     monkeypatch.setenv(ENV, "1500")
+    effective = meta_block._notification_attention_max_chars()
+    assert effective == meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
 
     capped = meta_block._cap_notification_attention(agent, attention)
-    assert _attention_chars(capped) <= 1500
+    assert _attention_chars(capped) <= effective
     assert capped.get("overflow", {}).get("truncated") is True
 
     # The persistent lane honors the same tightened bar.
@@ -258,67 +266,123 @@ def _real_sanitized_telegram_attention() -> tuple[dict, str]:
     return payload["notifications"], messages[-1]["id"]
 
 
-def _short_workdir() -> Path:
-    """A short absolute workdir so the marker path stays small under low caps.
-
-    The content-addressed spill marker carries the absolute spill path, and a
-    long pytest ``tmp_path`` would dominate a 200-char cap; a short dedicated
-    dir keeps the routing stub (with ``message_ids``) measurable against it.
-    """
-    workdir = Path("/tmp") / f"n{os.getpid()}x{os.urandom(2).hex()}"
-    workdir.mkdir(parents=True, exist_ok=True)
-    return workdir
-
-
-def test_real_sanitized_telegram_low_cap_is_strict_and_keeps_message_ids(
+def test_real_sanitized_telegram_low_cap_clamps_to_floor_with_long_workdir(
     tmp_path, monkeypatch
 ):
-    """P1-1: real sanitized Telegram under a 200-char cap fits STRICTLY.
+    """P1-3: a REPRESENTATIVE long workdir cannot break the cap under cap 200.
 
-    The old fallback returned a 430-char stub with the IM ``message_ids``
-    dropped; the fixed degradation keeps ``message_ids`` (the routing
-    identifier) for as long as any routing remains and enforces the cap on the
-    serialized stub.
+    The committed test faked a short workdir so the marker path stayed small
+    under a 200-char cap.  With the 2048 floor, configured cap 200 is clamped
+    UP to the floor, so the real sanitized Telegram lane
+    (``message_ids=["main:123:..."]``, ~228 chars) fits WITHOUT compaction
+    even with a realistic long absolute workdir (>= 120 chars) — the routing
+    ids survive and the serialized envelope stays at or under the effective
+    cap.
     """
-    workdir = _short_workdir()
-    try:
-        agent = SimpleNamespace(_working_dir=str(workdir))
-        attention, message_id = _real_sanitized_telegram_attention()
-        monkeypatch.setenv(ENV, "200")
+    workdir = str(tmp_path / ("d" * 60) / ("e" * 60))
+    assert len(workdir) >= 120
+    agent = SimpleNamespace(_working_dir=workdir)
+    attention, message_id = _real_sanitized_telegram_attention()
+    monkeypatch.setenv(ENV, "200")
 
-        capped = meta_block._cap_notification_attention(agent, copy.deepcopy(attention))
+    effective = meta_block._notification_attention_max_chars()
+    assert effective == meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
 
-        serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True)
-        assert len(serialized) <= 200
-        assert capped["mcp.telegram"]["data"]["message_ids"] == [message_id]
-        assert capped["overflow"]["truncated"] is True
-        assert capped["overflow"]["full_chars"] > 200
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+    capped = meta_block._cap_notification_attention(agent, copy.deepcopy(attention))
+
+    serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True, default=str)
+    assert len(serialized) <= effective
+    assert capped["mcp.telegram"]["data"]["message_ids"] == [message_id]
 
 
 def test_real_sanitized_telegram_pathological_cap_degrades_to_marker_only(
     tmp_path, monkeypatch
 ):
-    """P1-1: cap 1 cannot fit anything but the bounded minimal envelope.
+    """P1-3: env cap 1 clamps UP to the 2048 floor, still a strict bound.
 
-    No JSON value serializes to a single character, so the documented terminal
-    guard returns the overflow-marker-only envelope: deterministic, bounded,
-    and far below the old 434-char over-cap stub.
+    The old test asserted a marker-only envelope under 250 chars against cap
+    1; with the floor the effective cap is 2048, the sanitized lane fits under
+    it without compaction, and the envelope is asserted against the EFFECTIVE
+    cap (never ``< 250``).
     """
     agent = _cap_agent(tmp_path)
     attention, _ = _real_sanitized_telegram_attention()
     monkeypatch.setenv(ENV, "1")
 
+    effective = meta_block._notification_attention_max_chars()
+    assert effective == meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
+
     capped = meta_block._cap_notification_attention(agent, copy.deepcopy(attention))
 
-    assert set(capped) == {"overflow"}
-    assert capped["overflow"]["truncated"] is True
-    assert "comment" not in capped
-    assert "mcp.telegram" not in capped
-    serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True)
-    # Bounded: strictly smaller than the un-capped routing stub (434 chars).
-    assert len(serialized) < 250
+    serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True, default=str)
+    assert len(serialized) <= effective
+    assert capped["mcp.telegram"]["data"]["message_ids"]
+
+
+@pytest.mark.parametrize("configured", [1, 2, 50, 200, 300, 500, 1024])
+def test_low_configured_caps_clamp_to_floor_and_keep_sanitized_lane(
+    tmp_path, monkeypatch, configured
+):
+    """P1-3: every low configured cap maps to ``max(value, 2048)``.
+
+    For each low config the effective cap is the 2048 floor and the real
+    sanitizer-shaped Telegram lane stays at or under it with ``message_ids``
+    retained (2048 comfortably fits the ~228-char lane, so no compaction is
+    needed and no routing id is ever dropped).
+    """
+    agent = _cap_agent(tmp_path)
+    attention, message_id = _real_sanitized_telegram_attention()
+    monkeypatch.setenv(ENV, str(configured))
+
+    effective = meta_block._notification_attention_max_chars()
+    assert effective == max(configured, meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN)
+
+    capped = meta_block._cap_notification_attention(agent, copy.deepcopy(attention))
+
+    serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True, default=str)
+    assert len(serialized) <= effective
+    assert capped["mcp.telegram"]["data"]["message_ids"] == [message_id]
+
+
+def test_marker_only_envelope_strips_pathologically_long_spill_path(
+    tmp_path, monkeypatch
+):
+    """P1-3: a pathologically long absolute spill path never breaks the cap.
+
+    The marker-only envelope carries the absolute spill path; when even that
+    envelope exceeds the cap (an absolute path long enough to dominate the
+    2048 floor), the final guard strips the path (``path=None``,
+    ``path_omitted=True``), records the content digest, and returns a compact
+    envelope that ALWAYS satisfies ``len(json.dumps(...)) <= max_chars``.  The
+    spill file remains on disk under the deterministic content-addressed name.
+    """
+    attention, _ = _real_sanitized_telegram_attention()
+    monkeypatch.setenv(ENV, "1")
+    max_chars = meta_block._notification_attention_max_chars()
+    assert max_chars == meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
+
+    # White-box: a marker whose absolute path cannot fit the floor.  (Real
+    # near-PATH_MAX workdirs are platform-limited; the guard is exercised
+    # deterministically with a synthetic path.)
+    long_path = "/" + "x" * 3000
+    marker = {"path": long_path, "full_chars": 228, "truncated": True}
+    result = meta_block._drop_notification_attention_records(
+        copy.deepcopy(attention), marker, "recovery comment", max_chars
+    )
+
+    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+    assert len(serialized) <= max_chars
+    overflow = result["overflow"]
+    assert overflow["path"] is None
+    assert overflow["path_omitted"] is True
+    assert overflow["digest"]
+    assert overflow["digest"] in result["comment"]
+
+    # The same payload's deterministic digest appears in the recovery comment.
+    assert (
+        overflow["digest"]
+        == meta_block._attention_spill_digest8(copy.deepcopy(attention))
+    )
 
 
 def test_many_source_structural_overflow_stays_under_default_cap(tmp_path):
@@ -362,11 +426,13 @@ def test_adversarial_structural_values_stay_under_cap(tmp_path, monkeypatch):
         }
     }
     monkeypatch.setenv(ENV, "2000")
+    effective = meta_block._notification_attention_max_chars()
+    assert effective == meta_block.NOTIFICATION_ATTENTION_MAX_CHARS_MIN
 
     capped = meta_block._cap_notification_attention(agent, attention)
 
     serialized = json.dumps(capped, ensure_ascii=False, sort_keys=True, default=str)
-    assert len(serialized) <= 2000
+    assert len(serialized) <= effective
     assert capped["overflow"]["truncated"] is True
     # The id lists degrade to the bounded head, keeping the routing identifier.
     assert (

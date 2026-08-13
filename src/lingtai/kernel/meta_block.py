@@ -320,6 +320,15 @@ NOTIFICATION_PERSISTENT_OVERFLOW_NO_SPILL_COMMENT = (
 # fall back to this default.
 NOTIFICATION_ATTENTION_MAX_CHARS = 10_000
 NOTIFICATION_ATTENTION_MAX_CHARS_CEILING = 10_000
+# Documented floor for the attention lane: a positive configured value below
+# this is clamped UP to it so the terminal marker-only recovery envelope
+# (which carries an absolute spill path) can always fit inside the cap.  The
+# cap remains a strict upper bound on the model-visible envelope; the floor
+# only guarantees the deterministic degradation can always express the
+# recovery handle.  When even this floor cannot fit an absolute spill path
+# (pathologically long workdir), the final guard strips the marker path and
+# the deterministic content-addressed spill name still identifies the file.
+NOTIFICATION_ATTENTION_MAX_CHARS_MIN = 2048
 NOTIFICATION_ATTENTION_MAX_CHARS_ENV = "LINGTAI_NOTIFICATION_MAX_CHARS"
 NOTIFICATION_ATTENTION_OVERFLOW_KEY = "overflow"
 NOTIFICATION_ATTENTION_OVERFLOW_FILE_PREFIX = "notification-attention-overflow-"
@@ -347,6 +356,16 @@ NOTIFICATION_ATTENTION_OVERFLOW_NO_SPILL_COMMENT = (
     "Full notification content exceeds the attention block size cap and the "
     "overflow file could not be written — use the producer tool for the full "
     "content."
+)
+# Recovery comment for the terminal guard: the spill SUCCEEDED but the
+# absolute spill path is too long to fit the capped envelope, so the marker
+# path is stripped (``path_omitted``) and the deterministic content-addressed
+# name still locates the file on disk.
+NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT = (
+    "Full notification content exceeds the attention block size cap; the spill "
+    "path is omitted (too long for the cap) - read the content-addressed "
+    "logs/notification-attention-overflow-{digest}.json in the agent workdir "
+    "logs/ for the complete payload, or use the producer tool."
 )
 # The attention spill identity is CONTENT-ADDRESSED: the file name embeds a
 # short sha256 digest of the lane's canonical serialization, so an unchanged
@@ -3022,8 +3041,13 @@ def _notification_attention_max_chars() -> int:
     Shares the ``LINGTAI_NOTIFICATION_MAX_CHARS`` env bar with the persistent
     lane so one operator control enforces the upper limit across all
     notification channels (Jason 2026-08-13).  A positive integer is used,
-    clamped to the 10,000 ceiling so the context-size fix cannot be silently
-    disabled; missing, blank, non-numeric, zero, or negative values fall back
+    clamped to [``NOTIFICATION_ATTENTION_MAX_CHARS_MIN`` (2048),
+    ``NOTIFICATION_ATTENTION_MAX_CHARS_CEILING`` (10,000)]: configured values
+    below 2048 are clamped UP to 2048 so the terminal marker-only recovery
+    envelope (which carries an absolute spill path) ALWAYS fits, and values
+    above 10,000 clamp down so the context-size fix cannot be silently
+    disabled.  The cap is still a strict upper bound on the model-visible
+    envelope.  Missing, blank, non-numeric, zero, or negative values fall back
     to the default 10,000.
     """
     raw = os.environ.get(NOTIFICATION_ATTENTION_MAX_CHARS_ENV, "").strip()
@@ -3033,7 +3057,10 @@ def _notification_attention_max_chars() -> int:
         except (TypeError, ValueError):
             value = 0
         if not isinstance(value, bool) and value > 0:
-            return min(value, NOTIFICATION_ATTENTION_MAX_CHARS_CEILING)
+            return min(
+                max(value, NOTIFICATION_ATTENTION_MAX_CHARS_MIN),
+                NOTIFICATION_ATTENTION_MAX_CHARS_CEILING,
+            )
     return NOTIFICATION_ATTENTION_MAX_CHARS
 
 
@@ -3260,10 +3287,14 @@ def _drop_notification_attention_records(
     ``message_ids`` is kept as long as possible (it is the IM routing
     identifier).  Under a pathologically small cap the recovery comment (long
     relative to a tiny cap) is dropped before any routing id, then the per-
-    source routing itself, ending at the minimal marker-only envelope; that
-    envelope is returned even if it cannot fit (nothing smaller can carry the
-    recovery handle, and the cap is clamped to a positive integer so this
-    regime is reachable only through a deliberately pathological env value).
+    source routing itself, ending at the minimal marker-only envelope.  A final
+    guard makes the terminal envelope capped BY CONSTRUCTION: when even the
+    marker-only envelope exceeds the cap (pathologically long absolute spill
+    path), the marker path is stripped (``path=None``, ``path_omitted=True``)
+    and the compact envelope is returned with the content digest in a short
+    recovery comment.  With the 2048 floor, that compact envelope ALWAYS
+    satisfies ``len(json.dumps(..., default=str)) <= max_chars``; the spill
+    file remains on disk, findable by its deterministic content-addressed name.
     """
     stub: dict = {}
     for source, payload in attention.items():
@@ -3314,10 +3345,29 @@ def _drop_notification_attention_records(
     stub.pop("comment", None)
     if fits(stub):
         return stub
-    return {
+    marker_only = {
         NOTIFICATION_ATTENTION_OVERFLOW_KEY: stub.get(
             NOTIFICATION_ATTENTION_OVERFLOW_KEY, dict(marker)
         )
+    }
+    if fits(marker_only):
+        return marker_only
+
+    # FINAL GUARD: even the marker-only envelope exceeds the cap because the
+    # absolute spill path is pathologically long.  Strip the path, record the
+    # omission and the content digest (the deterministic content-addressed
+    # spill name still locates the full payload on disk), and re-attach the
+    # short recovery comment.  With the 2048 floor this compact envelope
+    # ALWAYS satisfies ``len(json.dumps(..., default=str)) <= max_chars``.
+    compact_marker = dict(marker)
+    compact_marker["path"] = None
+    compact_marker["path_omitted"] = True
+    compact_marker["digest"] = _attention_spill_digest8(attention)
+    return {
+        NOTIFICATION_ATTENTION_OVERFLOW_KEY: compact_marker,
+        "comment": NOTIFICATION_ATTENTION_OVERFLOW_PATH_OMITTED_COMMENT.format(
+            digest=compact_marker["digest"]
+        ),
     }
 
 
