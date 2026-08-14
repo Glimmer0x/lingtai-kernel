@@ -1764,9 +1764,17 @@ class TelegramManager:
             media = message["media"] or {}
             item["media"] = {
                 key: media[key]
-                for key in ("type", "filename", "size", "duration", "mime_type")
+                for key in ("type", "filename", "path", "size", "duration", "mime_type")
                 if key in media and media[key] is not None
             }
+            # Inbound photo/document attachments carry an absolute local path
+            # (from _download_media). Surface an explicit hint so the agent
+            # knows to open the image with the vision capability instead of
+            # treating it as an opaque filename.
+            media_path = item["media"].get("path")
+            media_type = item["media"].get("type")
+            if media_path and media_type in ("photo", "document", "image"):
+                item["media"]["view_with_vision"] = True
         reply_id_raw = message.get("reply_to_message_id")
         if reply_id_raw:
             item["reply_to_message_id"] = reply_id_raw
