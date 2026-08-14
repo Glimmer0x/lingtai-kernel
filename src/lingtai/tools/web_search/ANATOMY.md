@@ -52,6 +52,8 @@ maintenance: |
   tool_family is generic optional infrastructure this package composes onto;
   web's own instance-bound diagnostics and dispatch wrapper remain here.
   Update this map with structural code changes and verify citations.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Unified web capability Anatomy
 

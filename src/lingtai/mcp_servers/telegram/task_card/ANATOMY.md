@@ -23,6 +23,8 @@ maintenance: |
   Keep this Anatomy reciprocal with its paired CONTRACT.md and packaged manual.
   Update it when resident ownership, programmable projection, or the relation to
   the intrinsic producer changes.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Telegram Task Card Projection Anatomy
 

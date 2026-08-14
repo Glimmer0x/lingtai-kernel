@@ -17,6 +17,8 @@ maintenance: |
   validators after edits. tool_family is generic optional infrastructure this
   package composes onto; vision's own provider routing and result shapes stay
   here.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # src/lingtai/tools/vision/
 

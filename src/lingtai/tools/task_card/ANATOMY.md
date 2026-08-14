@@ -23,6 +23,8 @@ maintenance: |
   Keep this Anatomy reciprocal with its paired CONTRACT.md and manual. Update
   this file in the same change as any ownership, file-path, lifecycle, or
   projection-boundary change.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Intrinsic Task Card Anatomy
 

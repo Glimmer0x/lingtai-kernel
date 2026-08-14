@@ -56,6 +56,8 @@ maintenance: |
   future family migration may adopt, not a second registry. context is its
   thirteenth consumer and the fifth migrated intrinsic. Update
   structural claims with code and keep reciprocal graph edges valid.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # src/lingtai/tools/
 

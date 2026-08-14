@@ -22,6 +22,8 @@ maintenance: |
   This map describes only the internal browse subcomponent of unified web.
   Keep its Contract edge and parent/child links reciprocal. Browser files are
   retained implementation truth, not a public capability or manual owner.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Internal browse subcomponent Anatomy
 

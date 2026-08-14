@@ -14,6 +14,8 @@ maintenance: |
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
   anatomy links must be bidirectional. If code or citations drift, update this
   map with the code change and run the architecture/document checks.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # src/lingtai/services/vision/
 

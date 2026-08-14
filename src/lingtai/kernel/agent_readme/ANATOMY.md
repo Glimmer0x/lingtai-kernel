@@ -11,6 +11,8 @@ maintenance: |
   the idempotent writer and pure renderer, and the behavior-test loop. When
   CONTRACT or BEHAVIORS change, update this anatomy together and revalidate
   the architecture-document graph before merge.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # agent_readme ANATOMY
 

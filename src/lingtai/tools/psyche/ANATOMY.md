@@ -15,6 +15,8 @@ maintenance: |
   truth: update this graph when symbols, connections, state ownership, or
   composition move.
   Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # tools/psyche
 

@@ -15,6 +15,8 @@ maintenance: |
   Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
   Contract and parent/neighbor anatomies. Update this graph when symbols,
   connections, state ownership, or composition move.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # tools/pad
 

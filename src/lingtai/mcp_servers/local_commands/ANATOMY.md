@@ -16,6 +16,8 @@ maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Update this Anatomy with changes to command ownership, workdir reads, signal
   semantics, or the boundary between shared command results and channel UI.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Local Messaging Command Core Anatomy
 

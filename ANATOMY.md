@@ -63,6 +63,8 @@ maintenance: |
   stale navigation in the same change that moves files, symbols, connections,
   composition, or state. Preserve the child template and its maintenance rule;
   validate the distributed graph before merge.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see ## Maintenance).
   Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # LingTai Distributed Code Navigation Convention
@@ -319,6 +321,15 @@ Maintenance is part of reading:
 - Keep parent/child and Anatomy/Contract pair or owner links reciprocal. Update
   the root convention, its validator, root development skill, README entry,
   and bundled anatomy router together when this system changes.
+- **Capability mentions require explicit related files.** Whenever any
+  repository document (README, guides, skills, release notes, blogs, or this
+  anatomy's own prose) names a capability, behavior, or feature, the owning
+  component anatomy MUST list in `related_files` the repo-relative code files
+  that implement it, and the link MUST be bidirectional: the anatomy entry
+  maps the mention to code, and the owning anatomy is reachable from that
+  mention's document via the navigation graph. A prose mention without a
+  `related_files` mapping is drift, not documentation; repair it in the same
+  change that introduces the mention.
 - Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 
 ## Template
@@ -337,6 +348,8 @@ maintenance: |
   truth: update this anatomy in the same change that moves files, symbols,
   connections, composition, or state. Verify every changed citation and run the
   architecture-document validation before merge.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
   Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
 ---
 # <Component Name> Anatomy

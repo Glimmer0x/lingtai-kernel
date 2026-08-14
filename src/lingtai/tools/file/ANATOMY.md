@@ -25,6 +25,8 @@ maintenance: |
   when the five pre-migration packages were deleted. tool_family is generic
   optional infrastructure this package composes onto. Update this map with
   structural code changes and verify citations.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Unified file capability Anatomy
 

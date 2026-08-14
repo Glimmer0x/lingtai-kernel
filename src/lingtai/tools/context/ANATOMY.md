@@ -24,6 +24,8 @@ maintenance: |
   Keep paths real, repo-relative, duplicate-free, and reciprocal with the paired
   Contract and connected anatomies. Update this graph with schema, lifecycle,
   composition-path, summary-engine, or state-ownership changes.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # tools/context
 
