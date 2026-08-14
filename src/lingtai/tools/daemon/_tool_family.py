@@ -74,6 +74,33 @@ DAEMON_ACTIONS: tuple[str, ...] = (
 )
 
 
+def _backend_option_env_schema() -> dict[str, Any]:
+    """JSON schema for the reserved ``backend_options.env`` overlay.
+
+    Matches the runtime validator: an object whose keys are env-var names
+    (``[A-Za-z_][A-Za-z0-9_]*``) and whose values are plain strings.  It is
+    declared explicitly so validating tool wires can submit the overlay even
+    though ``backend_options``' generic ``additionalProperties`` only accepts
+    scalar/array flag values.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": {
+            "type": "string",
+        },
+        "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+        },
+        "description": (
+            "Reserved: a JSON object of env-var-name -> string injected into "
+            "the spawned CLI subprocess environment (never an argv flag); e.g. "
+            "{\"CLAUDE_CONFIG_DIR\": \"...\"} for claude-p/claude-code profile "
+            "selection. Names must match [A-Za-z_][A-Za-z0-9_]* and values must "
+            "be strings."
+        ),
+    }
+
+
 def _backend_option_value_schema() -> dict[str, Any]:
     """Return a fresh JSON schema for one generic CLI option value.
 
@@ -141,6 +168,7 @@ def _emanate_task_schema() -> dict[str, Any]:
             "backend_options": {
                 "type": "object",
                 "properties": {
+                    "env": _backend_option_env_schema(),
                     "config": {
                         **_backend_option_value_schema(),
                         "description": (
@@ -152,7 +180,7 @@ def _emanate_task_schema() -> dict[str, Any]:
                     },
                 },
                 "additionalProperties": _backend_option_value_schema(),
-                "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; nested objects and unsafe keys are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
+                "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; unsafe keys are rejected. One reserved key is not a flag: `env` (a JSON object of string->string) injects environment variables into the spawned CLI subprocess (e.g. {"env": {"CLAUDE_CONFIG_DIR": "..."}} for claude-p/claude-code profile selection); its names must match [A-Za-z_][A-Za-z0-9_]* and its values must be strings. All other nested objects are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
             },
             "prompt": {
                 "type": "string",

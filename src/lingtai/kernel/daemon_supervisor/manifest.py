@@ -223,6 +223,26 @@ def secret_argv_values(argv: list[str] | None) -> list[str]:
     return [value for value in values if value]
 
 
+def backend_env_redaction_values(capsule: dict | None) -> list[str]:
+    """Return the secret-capable values of the reserved ``backend_options.env``
+    overlay for ephemeral runtime scrubbing.
+
+    A CLI may echo an env value (an invalid ``CLAUDE_CONFIG_DIR`` or an
+    explicitly overlaid API key) into stdout/stderr/results, so every non-empty
+    string value of the capsule's ``backend_env`` container is added to the
+    execution child's runtime redaction set on both platforms.
+    """
+    if not isinstance(capsule, dict):
+        return []
+    backend_env = capsule.get("backend_env")
+    if not isinstance(backend_env, dict):
+        return []
+    return [
+        value for value in backend_env.values()
+        if isinstance(value, str) and value
+    ]
+
+
 def _safe_mcp(mcp: list[dict] | None) -> list[dict]:
     if mcp is None:
         return []

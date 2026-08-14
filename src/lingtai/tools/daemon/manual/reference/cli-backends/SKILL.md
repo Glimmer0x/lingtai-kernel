@@ -6,8 +6,8 @@ description: >
   backend_options flag passing, preset/capability inheritance, and nested
   per-backend references (Codex, OpenCode, claude-p, MiMo Code, Qwen Code,
   Kimi Code, Cursor, and Oh-My-Pi flag discovery, built-in LingTai knowledge entrypoint).
-version: 1.16.0
-last_changed_at: 2026-08-07T00:00:00Z
+version: 1.17.0
+last_changed_at: 2026-08-13T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/SKILL.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -315,7 +315,17 @@ spec refuses the whole batch with a clear `ValueError`):
 | `false` / `null` | flag omitted entirely |
 | string / int / float | `--flag <value>` |
 | list of scalars | repeated: `--flag v1 --flag v2 ...` |
-| nested object / array of objects | **rejected** with `ValueError` |
+| nested object / array of objects | **rejected** with `ValueError` (except the reserved `env` key) |
+
+**Reserved `env` overlay.** `backend_options.env` is the one key that is not a
+flag: a JSON object of string → string injected into the spawned CLI
+subprocess's environment (names must match `[A-Za-z_][A-Za-z0-9_]*`, values must
+be strings). It emits no argv token and applies to every CLI backend; the
+overlay is merged last, so it wins over both the inherited environment and the
+harness-owned per-backend env. For `claude-p` / `claude-code` this is how you
+select a Claude profile — `{"env": {"CLAUDE_CONFIG_DIR": "..."}}`; see
+`reference/backends/claude-p/SKILL.md`. Like the rest of `backend_options`, it
+applies only to `emanate`, not to `ask`.
 
 **Key safety:** keys must look like CLI flag names (letters/digits with `-` or
 `_` separators, no leading `-`, no spaces). Underscores in keys are converted to

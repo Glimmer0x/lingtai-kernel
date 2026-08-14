@@ -60,6 +60,89 @@ def test_composite_logging_redacts_before_jsonl_write_and_sqlite_index(tmp_path)
     assert record["tool_args"]["password"] == "<REDACTED:secret>"
 
 
+def test_redact_for_trajectory_redacts_backend_options_env_values_wholesale():
+    """Daemon backend_options.env values must never persist, even when the value
+    does not look like a known credential shape (e.g. a profile directory path)."""
+    secret_path = "/private/PROFILE_PATH_SHOULD_NOT_PERSIST"
+    event = {
+        "type": "tool_call",
+        "tool_name": "daemon",
+        "tool_args": {
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "run the build",
+                        "tools": ["shell"],
+                        "backend_options": {
+                            "env": {"CLAUDE_CONFIG_DIR": secret_path},
+                            "model": "sonnet",
+                        },
+                    }
+                ]
+            },
+        },
+    }
+    redacted = redact_for_trajectory(event)
+    dumped = json.dumps(redacted)
+    assert secret_path not in dumped
+    # The env container keeps its shape and key name but the value is gone.
+    env = redacted["tool_args"]["input"]["tasks"][0]["backend_options"]["env"]
+    assert env == {"CLAUDE_CONFIG_DIR": "<REDACTED:secret>"}
+    # Non-secret siblings remain untouched.
+    assert redacted["tool_args"]["input"]["tasks"][0]["backend_options"]["model"] == "sonnet"
+    assert redacted["tool_args"]["input"]["tasks"][0]["task"] == "run the build"
+
+
+def test_redact_for_trajectory_does_not_overredact_ordinary_env_keys():
+    """Ordinary env-like keys outside a backend_options container stay intact."""
+    event = {
+        "tool_args": {
+            "env": "production",
+            "environment": "staging",
+            "backend_options": {"timeout": 30},
+        }
+    }
+    redacted = redact_for_trajectory(event)
+    assert redacted["tool_args"]["env"] == "production"
+    assert redacted["tool_args"]["environment"] == "staging"
+    assert redacted["tool_args"]["backend_options"] == {"timeout": 30}
+
+
+def test_composite_logging_redacts_backend_env_before_jsonl_write(tmp_path):
+    """End-to-end: a daemon emanate tool_call with backend_options.env values must
+    not appear in the durable JSONL even when the value is a plain path string."""
+    secret_path = "/private/PROFILE_PATH_SHOULD_NOT_PERSIST"
+    jsonl = JSONLLoggingService(tmp_path / "events.jsonl")
+    service = CompositeLoggingService(jsonl)
+    service.log({
+        "type": "tool_call",
+        "ts": 1.0,
+        "tool_name": "daemon",
+        "tool_args": {
+            "action": "emanate",
+            "input": {
+                "tasks": [
+                    {
+                        "task": "run the build",
+                        "tools": ["shell"],
+                        "backend_options": {
+                            "env": {"CLAUDE_CONFIG_DIR": secret_path},
+                        },
+                    }
+                ]
+            },
+        },
+    })
+    service.close()
+
+    line = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    assert secret_path not in line
+    record = json.loads(line)
+    env = record["tool_args"]["input"]["tasks"][0]["backend_options"]["env"]
+    assert env == {"CLAUDE_CONFIG_DIR": "<REDACTED:secret>"}
+
+
 def test_bearer_redaction_avoids_plain_prose_false_positive():
     prose = "Bearer responsibility-for-this-is-yours and continue."
     assert redact_text(prose) == prose

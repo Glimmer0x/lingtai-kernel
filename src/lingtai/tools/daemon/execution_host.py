@@ -517,7 +517,26 @@ class DetachedDaemonExecutionHost:
             self._cancel_event,
             self._timeout_event,
             list(self._manifest.get("backend_argv") or []),
+            self._runtime_backend_env(),
         )
+
+    def _runtime_backend_env(self) -> dict[str, str]:
+        """Return the reserved ``backend_options.env`` overlay for this run.
+
+        The overlay never enters the manifest — durable state redacts every
+        ``env`` container's values — so it travels in the one-shot capsule and
+        is re-validated here before reaching a spawn environment.
+        """
+        source = self._capsule.get("backend_env")
+        if not isinstance(source, dict):
+            return {}
+        import re as _re
+        name_pattern = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        return {
+            key: value for key, value in source.items()
+            if isinstance(key, str) and isinstance(value, str)
+            and name_pattern.match(key)
+        }
 
     def run_with_events(self, cancel_event, timeout_event) -> str | None:
         self._cancel_event = cancel_event
