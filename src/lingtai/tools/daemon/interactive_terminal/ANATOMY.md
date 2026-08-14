@@ -16,6 +16,8 @@ maintenance: |
   Keep related_files repo-relative and bidirectional with the capability
   Contract and neighboring adapter/daemon Anatomy files. This document maps
   local ownership; behavioral promises live in CONTRACT.md.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # Interactive terminal capability Anatomy
 

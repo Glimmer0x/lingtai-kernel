@@ -10,6 +10,8 @@ maintenance: |
   anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
   maintenance field. If you notice drift between this anatomy and the code,
   report it. See lingtai-dev-guide for details.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # src/lingtai/llm/openrouter
 

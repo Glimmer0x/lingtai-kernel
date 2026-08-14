@@ -452,6 +452,8 @@ maintenance: |
   under tests/ must appear above, so adding or deleting a test file updates
   this list in the same change; test_architecture_documents.py enforces that.
   Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # tests/
 

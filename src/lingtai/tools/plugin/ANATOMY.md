@@ -31,6 +31,8 @@ maintenance: |
   family composition, manual adaptation, or unknown-action envelope changes,
   re-check this one; when its addon decompression changes, re-check the
   registration half here, which mirrors it. See lingtai-dev-guide for details.
+  Capability mentions in any document require explicit bidirectional
+  related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # lingtai/tools/plugin + lingtai/services/plugin_registry (split)
 
