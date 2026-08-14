@@ -9,8 +9,8 @@ description: >
   mechanism. Also owns Claude Code's operational core: the `env -u` auth
   hygiene wrapper, weekly-limit smoke test, stale-token diagnosis, and the
   budget/timeout/print-mode background caveats. It is not a flag catalog.
-version: 0.4.0
-last_changed_at: 2026-08-07T00:00:00Z
+version: 0.5.0
+last_changed_at: 2026-08-13T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
 maintenance: |
@@ -72,6 +72,25 @@ Through `backend_options`, an underscore key becomes a dashed long flag:
 
 The model-name vocabulary belongs to the installed CLI and the provider account —
 LingTai does not validate, enumerate, or simulate model names.
+
+## Profile selection via `backend_options.env`
+
+`backend_options` reserves one non-flag key, `env` (string → string), injected
+into the spawned CLI subprocess. Here it picks which Claude profile the run
+authenticates as, via `CLAUDE_CONFIG_DIR`:
+
+```jsonc
+"backend_options": {
+  "env": {"CLAUDE_CONFIG_DIR": "/Users/me/.claude-profiles/phai-labs/config"}
+}
+// emits no argv token; the variable is set on the spawn instead
+```
+
+Applied after the daemon's env stripping, so it wins over the inherited
+environment. The value is used verbatim (`$HOME`/`~` are not expanded — pass an
+absolute path). Verified profiles live under `~/.claude-profiles/`; inspect one
+with read-only `claude auth status` or `claude -p '/usage'` only — never logout,
+re-authenticate, or copy credential files between profiles.
 
 ## Subscription & auth
 

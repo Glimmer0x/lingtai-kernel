@@ -24,7 +24,7 @@ import time
 import yaml
 from lingtai.services import plugin_registry as _plugin_registry
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
@@ -846,9 +846,53 @@ def _dev_pythonpath_with_source_root() -> str:
 # look like a real CLI flag to keep error messages early and obvious.
 _BACKEND_OPTION_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
+# The single reserved backend_options key. It is a nested object of
+# environment variables to inject into the spawned CLI subprocess (e.g.
+# ``CLAUDE_CONFIG_DIR`` to pick a Claude profile) rather than an argv flag,
+# so it is carved out before flag conversion and never reaches argv.
+_BACKEND_OPTION_ENV_KEY = "env"
+_ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-def _backend_options_to_argv(options: dict | None) -> list[str]:
-    """Convert a free-form backend_options dict into a list of argv tokens.
+
+def _backend_options_env(value) -> dict[str, str]:
+    """Validate the reserved ``backend_options.env`` object.
+
+    Names must look like real environment variables
+    (``[A-Za-z_][A-Za-z0-9_]*``) and values must be strings — an int/bool
+    would silently stringify differently across platforms, and a nested
+    object has no environment representation at all.
+    """
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"backend_options[{_BACKEND_OPTION_ENV_KEY!r}] must be a JSON object "
+            f"of environment variable name -> string value, got "
+            f"{type(value).__name__}"
+        )
+    env: dict[str, str] = {}
+    for name, item in value.items():
+        if not isinstance(name, str) or not _ENV_VAR_NAME_RE.match(name):
+            raise ValueError(
+                f"backend_options[{_BACKEND_OPTION_ENV_KEY!r}] key {name!r} is not a "
+                "valid environment variable name ([A-Za-z_][A-Za-z0-9_]*)"
+            )
+        if not isinstance(item, str):
+            raise ValueError(
+                f"backend_options[{_BACKEND_OPTION_ENV_KEY!r}][{name!r}] must be a "
+                f"string (got {type(item).__name__})"
+            )
+        env[name] = item
+    return env
+
+
+def _backend_options_to_argv_and_env(
+    options: dict | None,
+) -> tuple[list[str], dict[str, str]]:
+    """Split a free-form backend_options dict into argv tokens + env overlay.
+
+    The reserved key ``env`` is carved out first: its value must be a JSON
+    object mapping environment variable names to string values, and it is
+    returned as the second element instead of being converted to a flag. It
+    is never emitted as argv. Every other key follows the flag rules below.
 
     Conversion rules:
       - key must match ``[A-Za-z0-9][A-Za-z0-9_-]*`` (no leading '-', no
@@ -863,17 +907,22 @@ def _backend_options_to_argv(options: dict | None) -> list[str]:
         ``ValueError`` with a clear message.
 
     Returns argv tokens ready to be appended to a subprocess command list
-    (never a shell string). Empty / falsy input returns ``[]``.
+    (never a shell string) plus the env overlay. Empty / falsy input returns
+    ``([], {})``.
     """
     if not options:
-        return []
+        return [], {}
     if not isinstance(options, dict):
         raise ValueError(
             f"backend_options must be a JSON object, got {type(options).__name__}"
         )
 
     argv: list[str] = []
+    env: dict[str, str] = {}
     for key, value in options.items():
+        if key == _BACKEND_OPTION_ENV_KEY:
+            env = _backend_options_env(value)
+            continue
         if not isinstance(key, str) or not _BACKEND_OPTION_KEY_RE.match(key):
             raise ValueError(
                 f"backend_options key {key!r} is not a safe CLI flag name "
@@ -902,7 +951,16 @@ def _backend_options_to_argv(options: dict | None) -> list[str]:
             f"backend_options[{key!r}] has unsupported value type "
             f"{type(value).__name__}; expected bool/str/int/float/list of scalars/null"
         )
-    return argv
+    return argv, env
+
+
+def _backend_options_to_argv(options: dict | None) -> list[str]:
+    """Argv-only view of :func:`_backend_options_to_argv_and_env`.
+
+    The reserved ``env`` key is still validated here; it simply never
+    contributes an argv token.
+    """
+    return _backend_options_to_argv_and_env(options)[0]
 
 
 _CLAUDE_COMMON_RESERVED_BACKEND_FLAGS = {
@@ -1030,6 +1088,8 @@ class _CliTaskContext:
     mcp_catalog: str | None
     mcp_regs: list[dict]
     plugin_catalog: str | None = None
+    # Reserved ``backend_options.env`` overlay for the spawned CLI subprocess.
+    backend_env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3757,6 +3817,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a Claude Code CLI session as the emanation backend.
 
@@ -3814,6 +3875,13 @@ class DaemonManager:
         if len(spawn_env) != len(os.environ):
             self._log("daemon_claude_code_env_stripped", em_id=em_id,
                       stripped=[k for k in _CLAUDE_CODE_STRIP_ENV if k in os.environ])
+        # The caller-supplied ``backend_options.env`` overlay is applied last so
+        # a profile selector such as CLAUDE_CONFIG_DIR wins over the inherited
+        # environment. It is an explicit operator choice, so it can also
+        # re-introduce a name the strip list removed; the strip list defends
+        # against accidental inheritance, not against a deliberate override.
+        if backend_env:
+            spawn_env.update(backend_env)
 
         command = DaemonProcessCommand(
             tuple(cmd), self._agent._working_dir, tuple(spawn_env.items()),
@@ -4074,6 +4142,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run an interactive Claude Code session through a PTY.
 
@@ -4086,6 +4155,9 @@ class DaemonManager:
         if cancel_event.is_set():
             return _mark_cancelled_or_timeout(run_dir, timeout_event)
 
+        interactive_env = _claude_code_env()
+        if backend_env:
+            interactive_env.update(backend_env)
         try:
             result = run_claude_interactive(
                 em_id=em_id,
@@ -4095,7 +4167,7 @@ class DaemonManager:
                 cancel_event=cancel_event,
                 timeout_event=timeout_event,
                 backend_argv=backend_argv,
-                env=_claude_code_env(),
+                env=interactive_env,
                 log_callback=self._log,
                 terminal_port=self._interactive_terminal_port,
             )
@@ -4121,6 +4193,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a Codex CLI session as the emanation backend.
 
@@ -4172,10 +4245,19 @@ class DaemonManager:
             cmd.append(task)
         self._log("daemon_codex_start", em_id=em_id, cmd=" ".join(cmd))
 
+        # Codex normally inherits the parent environment untouched; an explicit
+        # env is materialized only when the caller supplied a
+        # ``backend_options.env`` overlay.
+        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        if backend_env:
+            env = os.environ.copy()
+            env.update(backend_env)
+            command = DaemonProcessCommand(
+                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+            )
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
-                group_id=run_dir.group_id,
+                command, group_id=run_dir.group_id,
             )
         except FileNotFoundError:
             exc = RuntimeError("'codex' CLI not found on PATH")
@@ -4951,11 +5033,14 @@ class DaemonManager:
             # backend alone injects the ``## Parent-selected plugins`` section.
             task_plugin_catalog = None
             raw_opts = spec.get("backend_options")
+            backend_env: dict[str, str] = {}
             if raw_opts is None:
                 backend_argv = []
             else:
                 try:
-                    backend_argv = _backend_options_to_argv(raw_opts)
+                    backend_argv, backend_env = _backend_options_to_argv_and_env(
+                        raw_opts
+                    )
                     _validate_claude_backend_argv(backend, backend_argv)
                 except ValueError as e:
                     return {"status": "error",
@@ -4966,6 +5051,7 @@ class DaemonManager:
                 skill_catalog=task_skill_catalog,
                 mcp_catalog=task_mcp_catalog,
                 mcp_regs=task_mcp_regs,
+                backend_env=backend_env,
             ))
 
         ids = []
@@ -5140,14 +5226,19 @@ class DaemonManager:
                     manifest_path=str(manifest_path_for(run_dir.path)),
                     python_executable=sys.executable,
                 )
+                capsule = {
+                    "task": cli_task,
+                    "mcp": list(mcp_regs),
+                    "backend_argv": list(backend_argv),
+                    "credential_env": selected_credential_environment(backend),
+                }
+                # The reserved ``backend_options.env`` overlay travels in the
+                # one-shot capsule only: durable state redacts every ``env``
+                # container's values, so the manifest cannot carry it.
+                if context.backend_env:
+                    capsule["backend_env"] = dict(context.backend_env)
                 select_daemon_supervisor_adapter().spawn_detached(
-                    request,
-                    capsule={
-                        "task": cli_task,
-                        "mcp": list(mcp_regs),
-                        "backend_argv": list(backend_argv),
-                        "credential_env": selected_credential_environment(backend),
-                    },
+                    request, capsule=capsule,
                 )
                 self._await_supervisor_startup(run_dir)
             except Exception as e:
@@ -6600,6 +6691,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
         *,
         executable: str = "opencode",
         backend_name: str = "opencode",
@@ -6664,6 +6756,10 @@ class DaemonManager:
         env = os.environ.copy()
         if env_extra:
             env.update(env_extra)
+        # The caller's ``backend_options.env`` overlay is applied last: it wins
+        # over both the inherited environment and the harness-owned env_extra.
+        if backend_env:
+            env.update(backend_env)
         command = DaemonProcessCommand(
             tuple(cmd), self._agent._working_dir, tuple(env.items()),
         )
@@ -6822,6 +6918,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a MiMo Code CLI session as the emanation backend.
 
@@ -6840,6 +6937,7 @@ class DaemonManager:
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
+            backend_env,
             executable="mimo",
             backend_name="mimocode",
             session_state_key="mimocode_session_id",
@@ -6856,6 +6954,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run an Oh-My-Pi (``omp``) CLI session as the emanation backend.
 
@@ -6871,6 +6970,7 @@ class DaemonManager:
         """
         return self._run_opencode_emanation(
             em_id, run_dir, task, cancel_event, timeout_event, backend_argv,
+            backend_env,
             executable="omp",
             backend_name="oh-my-pi",
             session_state_key="oh_my_pi_session_id",
@@ -6889,6 +6989,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a Qwen Code CLI session as the emanation backend.
 
@@ -6926,6 +7027,9 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(qwen_env)
+            # Caller overlay last: it wins over the harness-owned qwen env.
+            if backend_env:
+                env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
                     tuple(cmd), self._agent._working_dir, tuple(env.items()),
@@ -7061,6 +7165,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a Kimi Code (``kimi``) CLI session as the emanation backend.
 
@@ -7099,6 +7204,9 @@ class DaemonManager:
         try:
             env = os.environ.copy()
             env.update(kimi_env)
+            # Caller overlay last: it wins over the run-private kimi env.
+            if backend_env:
+                env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
                     tuple(cmd), self._agent._working_dir, tuple(env.items()),
@@ -7544,6 +7652,7 @@ class DaemonManager:
         cancel_event: threading.Event,
         timeout_event: threading.Event | None = None,
         backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
     ) -> str:
         """Run a Cursor Agent CLI session as the emanation backend.
 
@@ -7574,7 +7683,15 @@ class DaemonManager:
         cmd.append(prompt)
         self._log("daemon_cursor_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
 
+        # Cursor normally inherits the parent environment untouched; an explicit
+        # env is materialized only for a ``backend_options.env`` overlay.
         command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        if backend_env:
+            env = os.environ.copy()
+            env.update(backend_env)
+            command = DaemonProcessCommand(
+                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+            )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
         except FileNotFoundError:

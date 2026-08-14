@@ -12,6 +12,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -21,6 +22,7 @@ import pytest
 from lingtai.tools.daemon import (
     _BACKEND_ALIASES,
     _backend_options_to_argv,
+    _backend_options_to_argv_and_env,
     _BACKEND_SCHEMA_ENUM,
     _BACKEND_SPECS,
     _cli_backend_loads_common_mcp as _source_cli_backend_loads_common_mcp,
@@ -183,6 +185,55 @@ def test_argv_rejects_non_dict_root():
 
 
 # ---------------------------------------------------------------------------
+# Reserved `env` key: carved out of argv, returned as a spawn-env overlay
+# ---------------------------------------------------------------------------
+
+
+def test_env_key_is_carved_out_of_argv_and_returned_as_overlay():
+    argv, env = _backend_options_to_argv_and_env({
+        "env": {"CLAUDE_CONFIG_DIR": "/tmp/profile/config"},
+        "model": "opus",
+    })
+    assert argv == ["--model", "opus"]
+    assert env == {"CLAUDE_CONFIG_DIR": "/tmp/profile/config"}
+    # The reserved key must never leak into the flag conversion.
+    assert "--env" not in argv
+
+
+def test_env_key_absent_returns_empty_overlay():
+    assert _backend_options_to_argv_and_env(None) == ([], {})
+    assert _backend_options_to_argv_and_env({"model": "opus"}) == (
+        ["--model", "opus"], {},
+    )
+
+
+def test_argv_only_wrapper_drops_the_env_overlay():
+    """The legacy helper keeps its argv-only contract; `env` emits no flag."""
+    assert _backend_options_to_argv(
+        {"env": {"CLAUDE_CONFIG_DIR": "/tmp/p"}, "search": True}
+    ) == ["--search"]
+
+
+def test_env_rejects_non_dict_value():
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        _backend_options_to_argv_and_env({"env": "CLAUDE_CONFIG_DIR=/tmp/p"})
+
+
+def test_env_rejects_invalid_variable_name():
+    with pytest.raises(ValueError, match="valid environment variable name"):
+        _backend_options_to_argv_and_env({"env": {"9BAD": "x"}})
+    with pytest.raises(ValueError, match="valid environment variable name"):
+        _backend_options_to_argv_and_env({"env": {"HAS-DASH": "x"}})
+
+
+def test_env_rejects_non_string_value():
+    with pytest.raises(ValueError, match="must be a string"):
+        _backend_options_to_argv_and_env({"env": {"RETRIES": 3}})
+    with pytest.raises(ValueError, match="must be a string"):
+        _backend_options_to_argv_and_env({"env": {"NESTED": {"a": "b"}}})
+
+
+# ---------------------------------------------------------------------------
 # Integration: _handle_emanate_cli validation + persistence
 # ---------------------------------------------------------------------------
 
@@ -269,6 +320,97 @@ def test_emanate_cli_no_options_omits_fields(tmp_path, monkeypatch):
     assert "backend_argv" not in state
     assert "--mcp-config" in state["backend_harness_argv"]
     assert "--strict-mcp-config" in state["backend_harness_argv"]
+
+
+def test_emanate_cli_persists_and_hands_off_env_overlay(tmp_path, monkeypatch):
+    """The `env` overlay survives to durable state and reaches the detached
+    owner through the one-shot capsule — never as an argv token."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-p",
+        "tasks": [{
+            "task": "Refactor auth.",
+            "tools": [],
+            "backend_options": {
+                "env": {"CLAUDE_CONFIG_DIR": "/tmp/profile/config"},
+                "model": "opus",
+            },
+        }],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+
+    # The env overlay is a spawn-time value, not a flag.
+    manifest = records[0]["manifest"]
+    assert manifest["backend_argv"][:2] == ["--model", "opus"]
+    assert "--env" not in manifest["backend_argv"]
+    assert "/tmp/profile/config" not in manifest["backend_argv"]
+    assert records[0]["capsule"]["backend_env"] == {
+        "CLAUDE_CONFIG_DIR": "/tmp/profile/config",
+    }
+    # Durable state retains the resolved options including the `env` key. Its
+    # values stay redacted there — every durable `env` container is redacted,
+    # and this one is no exception.
+    assert state["backend_options"] == {
+        "env": {"CLAUDE_CONFIG_DIR": "<redacted>"},
+        "model": "opus",
+    }
+    assert state["backend_argv"] == ["--model", "opus"]
+    # call_parameters goes through the stricter run-record pass (every scalar
+    # under backend_options is redacted there already); the `env` key and its
+    # variable names still survive as structure.
+    call_options = state["call_parameters"]["backend_options"]
+    assert set(call_options) == {"env", "model"}
+    assert set(call_options["env"]) == {"CLAUDE_CONFIG_DIR"}
+
+
+def test_emanate_cli_rejects_bad_env_overlay(tmp_path):
+    """A malformed `env` object refuses the whole batch before any spawn."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    result = mgr.handle({
+        "action": "emanate",
+        "backend": "claude-p",
+        "tasks": [{
+            "task": "bad env",
+            "tools": [],
+            "backend_options": {"env": {"CLAUDE_CONFIG_DIR": 7}},
+        }],
+    })
+    assert result["status"] == "error"
+    assert "tasks[0].backend_options" in result["message"]
+    assert "must be a string" in result["message"]
+    assert mgr._emanations == {}
+
+
+def test_lingtai_backend_ignores_env_overlay(tmp_path):
+    """The lingtai backend spawns no CLI, so an `env` overlay is ignored
+    rather than validated — matching today's backend_options behavior."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "task done"
+    mock_resp.tool_calls = []
+    mock_resp.usage = MagicMock(input_tokens=0, output_tokens=0,
+                                thinking_tokens=0, cached_tokens=0)
+    mock_session.send = MagicMock(return_value=mock_resp)
+    agent.service.create_session = MagicMock(return_value=mock_session)
+
+    result = mgr.handle({
+        "action": "emanate",
+        "tasks": [{
+            "task": "lingtai task",
+            "tools": ["file"],
+            # Invalid for a CLI backend; the lingtai backend never reads it.
+            "backend_options": {"env": {"9BAD": 7}},
+        }],
+    })
+    assert result["status"] == "dispatched"
 
 
 def test_lingtai_backend_ignores_backend_options(tmp_path):
@@ -377,6 +519,66 @@ def test_claude_code_cmd_appends_backend_argv_before_task(tmp_path):
     assert name_idx < model_idx < task_idx
     # The task itself is the very last token
     assert cmd[-1] == "Refactor auth."
+
+
+def test_claude_code_spawn_env_carries_backend_env_overlay(tmp_path):
+    """`backend_options.env` reaches the spawned Claude subprocess as an
+    environment variable, never as an argv token."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=(
+        '{"type":"system","subtype":"init","session_id":"sess-env"}\n',
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"done"}\n',
+    ))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend="claude-code")
+
+    mgr._run_claude_code_emanation(
+        "em-claude-env", run_dir, "Refactor auth.",
+        threading.Event(), threading.Event(),
+        backend_argv=["--model", "opus"],
+        backend_env={"CLAUDE_CONFIG_DIR": "/tmp/profile/config"},
+    )
+
+    command, group_id = port.commands[0]
+    env = dict(command.environment or ())
+    assert env["CLAUDE_CONFIG_DIR"] == "/tmp/profile/config"
+    # The overlay wins over whatever the parent process inherited.
+    assert env["PATH"] == os.environ["PATH"]
+    # The reserved key never becomes a flag, and no env value rides on argv.
+    assert "--env" not in command.argv
+    assert "CLAUDE_CONFIG_DIR" not in " ".join(command.argv)
+    assert command.argv[:2] == ("claude", "--print")
+    assert command.argv[-1] == "Refactor auth."
+    assert group_id == run_dir.group_id
+
+
+def test_claude_code_spawn_env_unchanged_without_overlay(tmp_path):
+    """No `env` overlay leaves the sanitized Claude spawn env untouched."""
+    agent = make_daemon_agent(tmp_path)
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=(
+        '{"type":"result","subtype":"success","is_error":false,'
+        '"result":"done"}\n',
+    ))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend="claude-code")
+
+    mgr._run_claude_code_emanation(
+        "em-claude-noenv", run_dir, "Refactor auth.",
+        threading.Event(), threading.Event(),
+    )
+
+    command, _ = port.commands[0]
+    env = dict(command.environment or ())
+    # Whatever the parent inherited is passed through untouched — the runner
+    # adds nothing of its own when no overlay is supplied.
+    assert env.get("CLAUDE_CONFIG_DIR") == os.environ.get("CLAUDE_CONFIG_DIR")
+    # The pre-existing credential strip list is unaffected by the env plumbing.
+    for stripped in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                     "CLAUDE_CODE_OAUTH_TOKEN"):
+        assert stripped not in env
 
 
 def test_codex_cmd_appends_backend_argv_before_task(tmp_path):
