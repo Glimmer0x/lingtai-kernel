@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpcore
 import httpx
@@ -23,6 +23,22 @@ from .types import (
     CDNMedia, UploadMediaType, MessageItemType,
     ImageItem, VoiceItem, FileItem, VideoItem, MessageItem,
 )
+
+
+CDN_UPLOAD_TIMEOUT_SECONDS = 120.0
+CDN_UPLOAD_MAX_ATTEMPTS = 3
+
+
+def _official_cdn_upload_url(
+    cdn_base_url: str, upload_param: str, filekey: str,
+) -> str:
+    """Build the official Tencent v1.0.3 static CDN upload URL."""
+    encode_uri_component_safe = "-_.!~*'()"
+    return (
+        f"{cdn_base_url.rstrip('/')}/upload?encrypted_query_param="
+        f"{quote(upload_param, safe=encode_uri_component_safe)}&filekey="
+        f"{quote(filekey, safe=encode_uri_component_safe)}"
+    )
 
 
 @dataclass
@@ -460,6 +476,8 @@ async def upload_media(
     base_url: str,
     token: str,
     to_user_id: str,
+    *,
+    cdn_base_url: str = api.CDN_BASE_URL,
 ) -> UploadedMediaInfo:
     """Upload a file to WeChat CDN.
 
@@ -514,8 +532,18 @@ async def upload_media(
     except Exception as exc:
         raise media_upload_error("get_upload_url_failed", base_url, exc) from exc
 
-    upload_url = upload_resp.upload_full_url
-    if not upload_url:
+    # Official Tencent v1.0.3 constructs the upload URL from upload_param + a
+    # configured CDN base. Keep the dynamic upload_full_url only as fallback
+    # when upload_param is absent.
+    raw_upload_param = getattr(upload_resp, "upload_param", None)
+    upload_full_url = getattr(upload_resp, "upload_full_url", "")
+    if raw_upload_param:
+        upload_url = _official_cdn_upload_url(
+            cdn_base_url, str(raw_upload_param), filekey,
+        )
+    elif upload_full_url:
+        upload_url = upload_full_url
+    else:
         raise media_upload_error(
             "get_upload_url_failed",
             base_url,
@@ -525,47 +553,71 @@ async def upload_media(
     # Upload encrypted bytes to CDN. OpenClaw uses POST (not PUT) and reads
     # the final download encrypted_query_param from the x-encrypted-param
     # response header. Some CDN responses also embed it in a JSON body.
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                upload_url,
-                content=ciphertext,
-                headers={"Content-Type": "application/octet-stream"},
-                timeout=120.0,
-            )
-            resp.raise_for_status()
-            raw = resp.text
-    except Exception as exc:
-        error = media_upload_error("cdn_upload_http_failed", upload_url, exc)
-        if error.diagnostic.error_kind == "tls_handshake":
-            error = media_upload_error("cdn_tls_handshake_failed", upload_url, exc)
-        raise error from exc
-
-    header_param = resp.headers.get("x-encrypted-param")
-    json_param: str | None = None
-    if raw and raw.strip().startswith("{"):
+    # Retry only this encrypted CDN POST (transport/HTTP 429/5xx/HTTP 200
+    # missing metadata), at most three immediate attempts, never the whole
+    # surrounding text+media send.
+    download_param: str | None = None
+    last_error: BaseException | None = None
+    for attempt in range(1, CDN_UPLOAD_MAX_ATTEMPTS + 1):
         try:
-            body = resp.json()
-            json_param = (
-                body.get("encrypt_query_param")
-                or body.get("download_param")
-            )
-        except Exception:
-            json_param = None
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    upload_url,
+                    content=ciphertext,
+                    headers={"Content-Type": "application/octet-stream"},
+                    timeout=CDN_UPLOAD_TIMEOUT_SECONDS,
+                )
+                resp.raise_for_status()
+                raw = resp.text
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code == 429 or exc.response.status_code >= 500
+            if attempt < CDN_UPLOAD_MAX_ATTEMPTS and retryable:
+                last_error = exc
+                continue
+            error = media_upload_error("cdn_upload_http_failed", upload_url, exc)
+            if error.diagnostic.error_kind == "tls_handshake":
+                error = media_upload_error("cdn_tls_handshake_failed", upload_url, exc)
+            raise error from exc
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            if attempt < CDN_UPLOAD_MAX_ATTEMPTS:
+                last_error = exc
+                continue
+            error = media_upload_error("cdn_upload_http_failed", upload_url, exc)
+            if error.diagnostic.error_kind == "tls_handshake":
+                error = media_upload_error("cdn_tls_handshake_failed", upload_url, exc)
+            raise error from exc
+        except Exception as exc:
+            error = media_upload_error("cdn_upload_http_failed", upload_url, exc)
+            if error.diagnostic.error_kind == "tls_handshake":
+                error = media_upload_error("cdn_tls_handshake_failed", upload_url, exc)
+            raise error from exc
 
-    download_param = header_param or json_param
+        header_param = resp.headers.get("x-encrypted-param")
+        json_param: str | None = None
+        if raw and raw.strip().startswith("{"):
+            try:
+                body = resp.json()
+                json_param = (
+                    body.get("encrypt_query_param")
+                    or body.get("download_param")
+                )
+            except Exception:
+                json_param = None
+
+        download_param = header_param or json_param
+        if download_param:
+            break
+        # HTTP 200 without usable metadata: not a usable completion; retry.
+        last_error = RuntimeError(
+            "response missing x-encrypted-param header and "
+            "encrypt_query_param / download_param JSON field"
+        )
+
     if not download_param:
-        # Be strict here. The prior code fell back to upload_param/filekey,
-        # which made the function appear to succeed while producing media
-        # the WeChat client could not open. Better to raise loudly, while
-        # preserving the stage in the structured result.
         raise media_upload_error(
             "cdn_response_metadata_missing",
             upload_url,
-            RuntimeError(
-                "response missing x-encrypted-param header and "
-                "encrypt_query_param / download_param JSON field"
-            ),
+            last_error or RuntimeError("no usable CDN response"),
         )
 
     cdn_media = CDNMedia(
