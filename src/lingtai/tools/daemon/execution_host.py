@@ -530,9 +530,12 @@ class DetachedDaemonExecutionHost:
         source = self._capsule.get("backend_env")
         if not isinstance(source, dict):
             return {}
+        import re as _re
+        name_pattern = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
         return {
             key: value for key, value in source.items()
             if isinstance(key, str) and isinstance(value, str)
+            and name_pattern.match(key)
         }
 
     def run_with_events(self, cancel_event, timeout_event) -> str | None:

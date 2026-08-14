@@ -649,7 +649,11 @@ def test_schema_includes_backend_options():
     backend_options = task_props["backend_options"]
     assert backend_options["type"] == "object"
     passthrough = backend_options["additionalProperties"]
-    assert set(backend_options["properties"]) == {"config"}
+    assert set(backend_options["properties"]) == {"config", "env"}
+    env_schema = backend_options["properties"]["env"]
+    assert env_schema["type"] == "object"
+    assert env_schema["additionalProperties"] == {"type": "string"}
+    assert env_schema["propertyNames"]["pattern"] == "^[A-Za-z_][A-Za-z0-9_]*$"
     config = backend_options["properties"]["config"]
     assert config is not passthrough
     assert config["anyOf"] == passthrough["anyOf"]
@@ -1608,3 +1612,41 @@ def test_oh_my_pi_rejects_harness_owned_backend_options(tmp_path):
         assert result["status"] == "error", flag
         assert f"{flag} is reserved by the oh-my-pi daemon backend" in result["message"], flag
         assert mgr._emanations == {}, flag
+
+
+def test_backend_options_env_schema_validates_payload():
+    """The provider-facing schema accepts the reserved env overlay."""
+    import jsonschema
+    from tests._daemon_helpers import daemon_emanate_task_schema
+    schema = daemon_emanate_task_schema("en")
+    backend_options = schema["properties"]["backend_options"]
+    payload = {"env": {"CLAUDE_CONFIG_DIR": "/tmp/profile"}, "model": "haiku"}
+    # Valid: nested env object with string values and legal names.
+    jsonschema.validate(payload, backend_options)
+    # Invalid env name must fail the propertyNames pattern.
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"env": {"9BAD": "x"}}, backend_options)
+    # Invalid non-string env value must fail additionalProperties type.
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"env": {"PATH": 7}}, backend_options)
+
+
+def test_backend_env_redaction_values_extracts_strings():
+    """backend_env_redaction_values returns non-empty string values only."""
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        backend_env_redaction_values,
+    )
+    assert backend_env_redaction_values(None) == []
+    assert backend_env_redaction_values({}) == []
+    assert backend_env_redaction_values({"backend_env": "nope"}) == []
+    assert backend_env_redaction_values({"backend_env": {"A": "secret-1"}}) == ["secret-1"]
+    # Empty and non-string values are excluded; ordering is preserved.
+    got = backend_env_redaction_values({
+        "backend_env": {
+            "A": "secret-1",
+            "B": "",
+            "C": 7,
+            "D": "secret-2",
+        },
+    })
+    assert got == ["secret-1", "secret-2"]

@@ -53,9 +53,13 @@ def main(argv: list[str]) -> int:
         }
     else:
         credential_env = {}
-    from lingtai.kernel.daemon_supervisor.manifest import secret_argv_values
+    from lingtai.kernel.daemon_supervisor.manifest import (
+        backend_env_redaction_values,
+        secret_argv_values,
+    )
     runtime_redactions = list(credential_env.values())
     runtime_redactions.extend(secret_argv_values(capsule.get("backend_argv")))
+    runtime_redactions.extend(backend_env_redaction_values(capsule))
     run_dir.set_ephemeral_redactions(runtime_redactions)
     # This interpreter is the dedicated execution child.  The long-lived
     # supervisor never receives these values; runners below copy them only when
