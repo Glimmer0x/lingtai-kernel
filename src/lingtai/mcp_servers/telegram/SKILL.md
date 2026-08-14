@@ -81,6 +81,21 @@ setup readiness checklist are **not** here — they belong to `mcp-manual`
 - Do not paste a local file path into message text as a substitute for
   attaching the file; attach it with `media={type, path}`.
 
+## INBOUND MEDIA: reading what the user sends you
+
+- When a user sends a photo or document, the message's `media` object includes
+  an absolute local `path` to the downloaded attachment (under the agent's
+  `telegram/<account>/inbox/<uuid>/attachments/` directory) plus
+  `type`, `filename`, and `size`.
+- Use the `vision` capability to read images: `vision(action='analyze',
+  image_path=<absolute path>)`. Do not try to infer image content from the
+  filename or size alone.
+- If `media.view_with_vision` is present, the attachment is an image-like
+  file and the manager explicitly suggests the vision route.
+- If `media.download_error` is present, the download failed; the metadata is
+  preserved without a path, so read the message text and ask the user to
+  resend if the attachment matters.
+
 ## PLACEHOLDER / LIVE-STATUS
 
 - For responses that take more than ~5s, send `action='send'` with

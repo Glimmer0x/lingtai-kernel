@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -291,6 +292,45 @@ def test_account_uses_send_rich_message_and_reply_parameters():
         "reply_markup": {"inline_keyboard": []},
         "reply_parameters": {"message_id": 456},
     }
+
+
+def test_structured_message_carries_media_path_and_vision_hint():
+    manager, _ = _manager(Path("/tmp/telegram-media-vision-test"))
+    item = manager._structured_message(
+        {
+            "id": "acct:chat:1",
+            "date": "2026-08-14T00:00:00Z",
+            "media": {
+                "type": "photo",
+                "filename": "shot.jpg",
+                "path": "/abs/path/telegram/bot/inbox/uuid/attachments/shot.jpg",
+                "size": 2048,
+            },
+        },
+        now=datetime(2026, 8, 14, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    assert item["media"]["path"] == (
+        "/abs/path/telegram/bot/inbox/uuid/attachments/shot.jpg"
+    )
+    assert item["media"]["view_with_vision"] is True
+
+
+def test_structured_message_omits_path_when_media_has_none():
+    manager, _ = _manager(Path("/tmp/telegram-media-vision-test"))
+    item = manager._structured_message(
+        {
+            "id": "acct:chat:2",
+            "date": "2026-08-14T00:00:00Z",
+            "media": {
+                "type": "document",
+                "filename": "doc.pdf",
+                "download_error": "failed",
+            },
+        },
+        now=datetime(2026, 8, 14, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    assert "path" not in item["media"]
+    assert "view_with_vision" not in item["media"]
 
 
 def test_account_edits_rich_message_without_text():
