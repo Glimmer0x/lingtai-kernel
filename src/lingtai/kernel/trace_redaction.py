@@ -77,20 +77,40 @@ def redact_text(text: str) -> str:
     return redacted
 
 
-def _redact_value(value: Any, *, key_hint: str | None = None) -> Any:
+def _redact_value(
+    value: Any,
+    *,
+    key_hint: str | None = None,
+    key_path: tuple[str, ...] = (),
+) -> Any:
+    # Values nested under a daemon ``backend_options`` -> ``env`` container are
+    # opaque secrets (for example CLAUDE_CONFIG_DIR profile paths or auth env
+    # variables) and must never persist even when the value does not look like a
+    # known credential shape. Redact every scalar leaf under that container
+    # wholesale; the container's own key names (``backend_options``/``env``) stay
+    # visible so the record remains interpretable. ``key_path`` includes the
+    # scalar's own key, so an env var value sits at [..., "backend_options",
+    # "env", "<VAR>"] and the check looks two levels up.
+    in_backend_env = (
+        len(key_path) >= 3
+        and key_path[-3] == "backend_options"
+        and key_path[-2] == "env"
+    )
     if isinstance(value, str):
+        if in_backend_env:
+            return _SECRET_PLACEHOLDER if value else value
         if key_hint and _SECRET_KEY_RE.match(key_hint):
             return _SECRET_PLACEHOLDER if len(value) >= 4 else value
         return redact_text(value)
     if isinstance(value, Mapping):
         return {
-            key: _redact_value(item, key_hint=str(key))
+            key: _redact_value(item, key_hint=str(key), key_path=key_path + (str(key),))
             for key, item in value.items()
         }
     if isinstance(value, tuple):
-        return tuple(_redact_value(item) for item in value)
+        return tuple(_redact_value(item, key_path=key_path) for item in value)
     if isinstance(value, list):
-        return [_redact_value(item) for item in value]
+        return [_redact_value(item, key_path=key_path) for item in value]
     # Avoid treating bytes as a sequence of integers. Durable logs should rarely
     # carry bytes, but if they do, stringify through repr and redact the text.
     if isinstance(value, (bytes, bytearray)):
