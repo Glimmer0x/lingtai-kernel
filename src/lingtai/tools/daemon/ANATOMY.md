@@ -67,6 +67,7 @@ related_files:
   - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/opencode/SKILL.md
   - src/lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/qwen-code/SKILL.md
   - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/tools/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

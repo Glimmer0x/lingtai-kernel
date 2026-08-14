@@ -49,6 +49,10 @@ related_files:
   - src/lingtai/tools/i18n/en.json
   - src/lingtai/tools/i18n/wen.json
   - src/lingtai/tools/i18n/zh.json
+  - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
 maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
   Browser is an internal browse child, not a second public capability. The

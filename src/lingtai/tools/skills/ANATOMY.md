@@ -19,6 +19,7 @@ related_files:
   - src/lingtai/tools/skills/manual/assets/skill-template.md
   - src/lingtai/tools/skills/manual/reference/cleanup-footprint-contract.md
   - src/lingtai/tools/skills/manual/scripts/validate.py
+  - src/lingtai/tools/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
