@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/__init__.py
   - src/lingtai/__main__.py
   - src/lingtai/agent.py
+  - src/lingtai/adapters/__init__.py
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/windows/ANATOMY.md
   - src/lingtai/adapters/shell.py
@@ -14,16 +15,18 @@ related_files:
   - src/lingtai/adapters/process_scan.py
   - src/lingtai/adapters/lifecycle_clock.py
   - src/lingtai/adapters/browser_transport.py
+  - src/lingtai/adapters/avatar_launcher.py
+  - src/lingtai/adapters/workdir_lease.py
   - src/lingtai/auth/ANATOMY.md
   - src/lingtai/cli.py
   - src/lingtai/cli_daemon.py
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/system/preset.py
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/registry.py
   - src/lingtai/CONTRACT.md
   - src/lingtai/init.jsonc
   - src/lingtai/init_reader.py
-  - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/init_schema.py
   - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/intrinsic_skills/__init__.py
@@ -31,6 +34,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
   - src/lingtai/llm/ANATOMY.md
+  - src/lingtai/llm/service.py
   - src/lingtai/mcp_catalog.json
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/wechat/manager.py
@@ -38,9 +42,16 @@ related_files:
   - src/lingtai/presets.py
   - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
+  - src/lingtai/services/mcp.py
+  - src/lingtai/services/mcp_inbox.py
+  - src/lingtai/services/mcp_registry.py
   - src/lingtai/venv_resolve.py
   - src/lingtai/kernel/ANATOMY.md
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/kernel/nudge/init_config.py
+  - src/lingtai/kernel/presets.py
   - src/lingtai/kernel/snapshot/ANATOMY.md
+  - src/lingtai/kernel/workdir.py
   - tests/test_agent_preset_manifest.py
   - tests/test_agent_config_hydration.py
   - tests/test_cli.py
@@ -51,8 +62,6 @@ related_files:
   - tests/test_preset_materialization.py
   - tests/test_presets.py
   - tests/test_venv_resolve.py
-  - src/lingtai/adapters/__init__.py
-  - src/lingtai/adapters/workdir_lease.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;

@@ -29,6 +29,7 @@ related_files:
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/mcp_servers/daemon_common/server.py
   - tests/test_daemon.py
+  - tests/test_daemon_central_manager.py
   - tests/test_tool_family_daemon_migration.py
   - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py

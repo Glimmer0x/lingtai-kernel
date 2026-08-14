@@ -28,13 +28,22 @@ related_files:
   - crates/lingtai-search-sidecar/ANATOMY.md
   - dev-guide-skill/SKILL.md
   - discussions/headless-runtime-contract.md
+  - IMPLEMENTATION_REPORT.md
+  - docs/examples/agent-plugins/hello-lingtai/mcp.json
+  - docs/examples/agent-plugins/hello-lingtai/plugin.json
+  - docs/examples/agent-plugins/hello-lingtai/server.py
+  - docs/examples/agent-plugins/hello-lingtai/skills/hello-lingtai/SKILL.md
   - docs/plans/2026-06-25-fsutil-migration.md
   - docs/plans/2026-07-14-powershell-adapter-readiness.md
   - docs/readmes/README.wen.md
   - docs/readmes/README.zh.md
   - docs/references/acknowledgements.md
   - docs/references/claude-code-guide.md
+  - docs/references/codex-http-anatomy-investigation.md
+  - docs/references/licc-notification-wake-runbook.md
+  - docs/references/lifecycle-clock.md
   - docs/references/runtime-vs-agent-session-objects.md
+  - docs/references/windows-support.md
   - migration/migration.md
   - pyproject.toml
   - reports/ANATOMY.md
@@ -49,7 +58,6 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/init.jsonc
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
-  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - tests/ANATOMY.md
   - tests/CONTRACT.md
@@ -221,10 +229,13 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   search sidecar packaged with the Python runtime; descend through
   [`crates/lingtai-search-sidecar/ANATOMY.md`](crates/lingtai-search-sidecar/ANATOMY.md).
 - [`docs/`](docs/) — durable documentation, plans, language-specific readmes,
-  and long-form references: `plans/` holds dated migration plans, `readmes/`
-  the translated `README.{zh,wen}.md`, and `references/` the long-form guides
-  (`claude-code-guide.md`, `runtime-vs-agent-session-objects.md`,
-  `acknowledgements.md`).
+  long-form references, and example plugins: `plans/` holds dated migration
+  plans, `readmes/` the translated `README.{zh,wen}.md`, `references/` the
+  long-form guides (`claude-code-guide.md`,
+  `codex-http-anatomy-investigation.md`, `lifecycle-clock.md`,
+  `licc-notification-wake-runbook.md`, `runtime-vs-agent-session-objects.md`,
+  `windows-support.md`, `acknowledgements.md`), and `examples/` the
+  `agent-plugins/hello-lingtai` sample plugin.
 - [`discussions/`](discussions/) and [`migration/`](migration/) — narrative
   design records kept beside the code they argue about:
   `discussions/headless-runtime-contract.md` and `migration/migration.md`.
@@ -233,7 +244,9 @@ disclosure, and fail-loud mismatch reports; do not duplicate that rule here.
   [`reports/ANATOMY.md`](reports/ANATOMY.md).
 - [`src/lingtai/`](src/lingtai/) — public package, compatibility surfaces,
   services, and the kernel implementation; descend through
-  [`src/lingtai/ANATOMY.md`](src/lingtai/ANATOMY.md).
+  [`src/lingtai/ANATOMY.md`](src/lingtai/ANATOMY.md). Kernel sub-components
+  descend one level further through
+  [`src/lingtai/kernel/ANATOMY.md`](src/lingtai/kernel/ANATOMY.md).
 - [`tests/`](tests/) — pytest suite for runtime, services, tools, packaging, and
   architecture-document validation; descend through
   [`tests/ANATOMY.md`](tests/ANATOMY.md). Its
