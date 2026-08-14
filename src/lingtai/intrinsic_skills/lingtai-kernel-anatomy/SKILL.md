@@ -15,7 +15,7 @@ related_files:
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
 - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/reference/mcp-protocol.md
 maintenance: |
-  Tracks the ANATOMY.md/CONTRACT.md convention it routes into; update when the root anatomy-of-anatomy or the pairing/link rules it summarizes change.
+  Tracks the ANATOMY.md/CONTRACT.md convention it routes into; update when the root anatomy-of-anatomy or the pairing/link rules it summarizes change. Capability mentions in any repository document require explicit bidirectional related_files mapping to the implementing code (root ANATOMY.md ## Maintenance); update this router when that rule or its summary changes.
 ---
 
 # LingTai Kernel Anatomy — Navigation Router
@@ -56,8 +56,11 @@ Who repairs drift depends on which agent you are:
   silently fix.
 
 Root `ANATOMY.md` → "## Maintenance" owns the repair rules for code-vs-anatomy
-and code-vs-contract, and the requirement to verify every touched citation. Run
-the repository's architecture-document validator and the drift checker below.
+and code-vs-contract, and the requirement to verify every touched citation. It
+also requires that any capability mention in any repository document be mapped
+to implementing code via explicit bidirectional `related_files` entries in the
+owning anatomy — a prose mention without a mapping is drift, not documentation.
+Run the repository's architecture-document validator and the drift checker below.
 
 ## Drift checker
 
