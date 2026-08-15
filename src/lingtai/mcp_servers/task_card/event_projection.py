@@ -39,6 +39,7 @@ class TaskCardEventProjection:
         "en": {
             "header": "📋 ACTIVITIES",
             "time_prefix": "Last Updated: ",
+            "ask_agent": "Ask agent for \"Task Card\"",
             "footer_prefix": (
                 "Don't reply to this Task Card. Use /taskcard on|off to toggle; "
                 "/taskcard N sets normal rows (1-10"
@@ -61,6 +62,7 @@ class TaskCardEventProjection:
         "zh": {
             "header": "📋 活动",
             "time_prefix": "最后更新: ",
+            "ask_agent": "向 agent 询问 \"Task Card\"",
             "footer_prefix": (
                 "请勿回复此任务卡片。使用 /taskcard on|off 切换；"
                 "/taskcard N 设置显示组数 (1-10"
@@ -1047,6 +1049,7 @@ class TaskCardEventProjection:
             lines = [cls.header(locale), "", footer, cls.METADATA_DIVIDER]
             lines.extend(metadata_lines)
             lines.append(time_line)
+            lines.append(cls._locale_text("ask_agent", locale))
             return "\n".join(lines)
 
         api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
@@ -1104,6 +1107,7 @@ class TaskCardEventProjection:
         lines.append(cls.METADATA_DIVIDER)
         lines.extend(metadata_lines)
         lines.append(time_line)
+        lines.append(cls._locale_text("ask_agent", locale))
         return "\n".join(lines)
 
     @classmethod
