@@ -160,12 +160,15 @@ def test_default_engine_kwarg_rejects_gated_engines_at_composition(tmp_path, eng
 
 @pytest.mark.parametrize("engine", ["anthropic", "gemini"])
 def test_provider_kwarg_rejects_gated_engines_at_composition(tmp_path, engine):
-    with pytest.raises(SettingsOnlyProviderError):
+    with (
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
+        pytest.raises(SettingsOnlyProviderError),
+    ):
         setup(_agent(tmp_path, engine), provider=engine, api_key="x", browser_port=_Port())
+    mock_factory.assert_not_called()
 
 
-@pytest.mark.parametrize("engine", ["anthropic", "gemini"])
-def test_settings_only_provider_error_is_not_a_retired_provider_error(tmp_path, engine):
+def test_settings_only_provider_error_is_not_a_retired_provider_error():
     # The two error classes must stay distinct types -- a caller catching
     # only RetiredProviderError must not accidentally swallow a
     # SettingsOnlyProviderError for an active canonical provider.
@@ -333,8 +336,12 @@ def test_error_hierarchy_openai_anthropic_gemini_share_search_provider_error_bas
 
 @pytest.mark.parametrize("retired", ["minimax", "zhipu"])
 def test_provider_kwarg_rejects_retired_providers_explicitly(tmp_path, retired):
-    with pytest.raises(RetiredProviderError):
+    with (
+        patch("lingtai.services.websearch.create_search_service") as mock_factory,
+        pytest.raises(RetiredProviderError),
+    ):
         setup(_agent(tmp_path, "openai"), provider=retired, api_key="x", browser_port=_Port())
+    mock_factory.assert_not_called()
 
 
 @pytest.mark.parametrize("retired", ["minimax", "zhipu"])
