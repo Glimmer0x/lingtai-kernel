@@ -115,6 +115,7 @@ _TELEGRAM_API_ERROR_PREFIX = "Telegram API error: "
 _TASK_CARD_EDIT_OK = TaskCardResident.EDIT_OK
 _TASK_CARD_EDIT_IMPOSSIBLE = TaskCardResident.EDIT_IMPOSSIBLE
 _TASK_CARD_EDIT_FAILED = TaskCardResident.EDIT_FAILED
+_TASK_CARD_EDIT_THROTTLED = TaskCardResident.EDIT_THROTTLED
 _TASK_CARD_EDIT_UNCHANGED = "bad request: message is not modified"
 _TASK_CARD_EDIT_IMPOSSIBLE_DESCRIPTIONS = frozenset({
     "bad request: message to edit not found",
@@ -762,7 +763,27 @@ class TelegramManager:
         # one Bot API edit during a poll interval.
         self._task_card_last_edit_at: dict[tuple[str, int], float] = {}
         self._task_card_edit_gate_lock = threading.Lock()
+        self._task_card_edit_gate_condition = threading.Condition(
+            self._task_card_edit_gate_lock
+        )
         self._task_card_edit_clock: Callable[[], float] = time.monotonic
+        # A throttled edit is an accepted logical projection, not a transport
+        # failure.  Keep only the newest channel transaction for each target;
+        # because throttled slots are committed by TaskCardResident, retrying the
+        # newest proposal recomposes every intervening automatic/programmable
+        # change rather than dropping one producer's intent.
+        self._task_card_pending_edits: dict[
+            tuple[str, int],
+            tuple[str, str | None, str, str | None, str | None],
+        ] = {}
+        # Retry backoff for failures that happen before an edit can claim the
+        # provider gate (for example a temporarily unreadable resident route).
+        # Without this separate deadline, such a retained pending intent would
+        # spin the worker because ``last_edit_at`` correctly remains unchanged.
+        self._task_card_pending_retry_at: dict[tuple[str, int], float] = {}
+        self._task_card_pending_force: set[tuple[str, int]] = set()
+        self._task_card_pending_edit_thread: threading.Thread | None = None
+        self._task_card_pending_edit_stop = threading.Event()
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
             transport=TaskCardResidentTransport(
@@ -848,7 +869,11 @@ class TelegramManager:
 
     def _on_taskcard_changed(self, enabled: bool) -> None:
         """Apply one durable setting transition; reproject once when enabled."""
-        if self._resident.set_enabled(enabled) and enabled:
+        changed = self._resident.set_enabled(enabled)
+        if changed:
+            with self._task_card_edit_gate_condition:
+                self._task_card_edit_gate_condition.notify_all()
+        if changed and enabled:
             self._broadcast_task_card_event_window()
             self._broadcast_programmable_task_card_file()
 
@@ -913,12 +938,14 @@ class TelegramManager:
 
     def start(self) -> None:
         self._service.start()
+        self._start_pending_task_card_edit_worker()
         self._start_task_card_tail()
         self._start_programmable_task_card_poller()
 
     def stop(self) -> None:
         self._stop_programmable_task_card_poller()
         self._stop_task_card_tail()
+        self._stop_pending_task_card_edit_worker()
         # lingtai#672: quiesce the producers FIRST (service.stop() signals and
         # joins every account poll thread, so no in-flight callback can start
         # a new typing lease), then stop_all() signals and boundedly joins
@@ -2254,7 +2281,7 @@ class TelegramManager:
                     last_edit_at is not None
                     and now - last_edit_at < self._TASK_CARD_EVENT_POLL_INTERVAL
                 ):
-                    return _TASK_CARD_EDIT_FAILED, "Task card edit throttled"
+                    return _TASK_CARD_EDIT_THROTTLED, None
                 self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
             acct.edit_message(chat_id, tg_msg_id, text)
@@ -2282,7 +2309,7 @@ class TelegramManager:
         compound_id: str,
         text: str,
     ) -> bool:
-        """Compatibility bool: true for an applied edit or identical-content no-op."""
+        """Compatibility bool: true only when the provider edit was applied."""
         outcome, _reason = self._try_update_progress_message(compound_id, text)
         return outcome == _TASK_CARD_EDIT_OK
 
@@ -2338,19 +2365,69 @@ class TelegramManager:
         *, error: str, resident_id: str | None = None,
         empty_fallback: str | None = None,
     ) -> dict:
-        """Project via the single resident owner."""
-        return self._resident.project(
-            account, chat_id, channel, frame, error=error,
-            resident_id=resident_id, empty_fallback=empty_fallback,
-        )
+        """Project once and retain a throttled projection as pending-latest.
+
+        The route lock intentionally spans both the shared resident transaction
+        and pending bookkeeping.  Without that outer acquisition, an older
+        caller could return from ``project`` after a newer caller and overwrite
+        the newer pending record.
+        """
+        key = (account, chat_id)
+        with self._task_card_delivery_lock(account, chat_id):
+            with self._task_card_edit_gate_lock:
+                had_pending = key in self._task_card_pending_edits
+            result = self._resident.project_locked(
+                account, chat_id, channel, frame, error=error,
+                resident_id=resident_id, empty_fallback=empty_fallback,
+            )
+            result = dict(result)
+            pending = bool(result.pop("pending", False))
+            # A hidden programmable finalize is the one suppressed transition
+            # that still commits logical state.  It must supersede any older
+            # queued body, otherwise re-enable could resurrect a stopped watch.
+            accepted_pending = pending or (
+                had_pending
+                and result.get("suppressed")
+                and channel == "programmable"
+                and frame is None
+            )
+            with self._task_card_edit_gate_condition:
+                if accepted_pending:
+                    self._task_card_pending_edits[key] = (
+                        channel,
+                        frame,
+                        error,
+                        resident_id,
+                        empty_fallback,
+                    )
+                    # A newer accepted intent gets the earliest legal gate slot;
+                    # any prior non-provider failure backoff belonged to the old
+                    # transaction.
+                    self._task_card_pending_retry_at.pop(key, None)
+                elif result.get("status") == "ok" and not result.get("suppressed"):
+                    # Any successful projection sends the current composition,
+                    # including all logically committed slots, so it supersedes
+                    # an older pending transaction for this target.
+                    self._task_card_pending_edits.pop(key, None)
+                    self._task_card_pending_retry_at.pop(key, None)
+                self._task_card_edit_gate_condition.notify_all()
+
+            if (
+                had_pending
+                and not accepted_pending
+                and result.get("status") == "ok"
+                and not result.get("suppressed")
+            ):
+                self._sync_task_card_fingerprint_after_delivery(account, chat_id)
+            return result
 
     def _deliver_channel_frame_locked(
         self, account: str, chat_id: int, channel: str, frame: str | None,
         *, error: str, resident_id: str | None = None,
         empty_fallback: str | None = None,
     ) -> dict:
-        """Compatibility wrapper around the shared serialized state machine."""
-        return self._resident.deliver_locked(
+        """Compatibility wrapper around the pending-aware serialized path."""
+        return self._deliver_channel_frame(
             account,
             chat_id,
             channel,
@@ -2359,6 +2436,147 @@ class TelegramManager:
             resident_id=resident_id,
             empty_fallback=empty_fallback,
         )
+
+    def _sync_task_card_fingerprint_after_delivery(
+        self, account: str, chat_id: int,
+    ) -> None:
+        """Record the automatic slot that the latest real projection composed."""
+        key = (account, chat_id)
+        automatic = self._task_card_channels.get(
+            self._channel_key(account, chat_id), {}
+        ).get("automatic")
+        if automatic is not None:
+            self._task_card_automatic_fingerprints[key] = (
+                self._task_card_automatic_fingerprint(automatic)
+            )
+            # A real composed edit also delivers any forced rehydrated automatic
+            # slot, even when a programmable transaction happened to be the
+            # latest coalesced producer.
+            self._task_card_pending_force.discard(key)
+
+    def _task_card_edit_is_pending(self, account: str, chat_id: int) -> bool:
+        with self._task_card_edit_gate_lock:
+            return (account, chat_id) in self._task_card_pending_edits
+
+    def _pending_task_card_edit_is_eligible(
+        self, key: tuple[str, int], *, now: float | None = None,
+    ) -> bool:
+        """Check one target's hard interval; caller holds the gate lock."""
+        if key not in self._task_card_pending_edits:
+            return False
+        last_edit_at = self._task_card_last_edit_at.get(key)
+        if now is None:
+            now = self._task_card_edit_clock()
+        retry_at = self._task_card_pending_retry_at.get(key)
+        if retry_at is not None and now < retry_at:
+            return False
+        if last_edit_at is None:
+            return True
+        return now - last_edit_at >= self._TASK_CARD_EVENT_POLL_INTERVAL
+
+    def _flush_pending_task_card_edit(self, key: tuple[str, int]) -> bool:
+        """Retry one eligible pending-latest projection through full recovery."""
+        account, chat_id = key
+        with self._task_card_delivery_lock(account, chat_id):
+            with self._task_card_edit_gate_lock:
+                if not self._pending_task_card_edit_is_eligible(key):
+                    return False
+                pending = self._task_card_pending_edits.get(key)
+            if pending is None:
+                return False
+            channel, frame, error, resident_id, empty_fallback = pending
+            result = self._deliver_channel_frame(
+                account,
+                chat_id,
+                channel,
+                frame,
+                error=error,
+                resident_id=resident_id,
+                empty_fallback=empty_fallback,
+            )
+            delivered = (
+                result.get("status") == "ok"
+                and not self._task_card_edit_is_pending(account, chat_id)
+            )
+            if not delivered:
+                with self._task_card_edit_gate_condition:
+                    if key in self._task_card_pending_edits:
+                        self._task_card_pending_retry_at[key] = (
+                            self._task_card_edit_clock()
+                            + max(self._TASK_CARD_EVENT_POLL_INTERVAL, 0.1)
+                        )
+                        self._task_card_edit_gate_condition.notify_all()
+            return delivered
+
+    def _flush_pending_task_card_edits(self) -> None:
+        """Opportunistically drain every currently eligible target.
+
+        Blanket callers use this deterministic hook too, so fake-monotonic tests
+        and a manager that has not started its worker exercise the same retry path.
+        """
+        with self._task_card_edit_gate_lock:
+            keys = list(self._task_card_pending_edits)
+        for key in keys:
+            self._flush_pending_task_card_edit(key)
+
+    def _start_pending_task_card_edit_worker(self) -> None:
+        """Start the one manager-owned pending-latest retry worker."""
+        thread = self._task_card_pending_edit_thread
+        if thread is not None and thread.is_alive():
+            return
+        self._task_card_pending_edit_stop.clear()
+
+        def _loop() -> None:
+            while not self._task_card_pending_edit_stop.is_set():
+                if not self._resident.enabled():
+                    # Keep accepted intent while hidden; re-enable notifies the
+                    # condition and reprojects the current logical composition.
+                    with self._task_card_edit_gate_condition:
+                        self._task_card_edit_gate_condition.wait(timeout=1.0)
+                    continue
+                key: tuple[str, int] | None = None
+                with self._task_card_edit_gate_condition:
+                    if self._task_card_pending_edit_stop.is_set():
+                        return
+                    now = self._task_card_edit_clock()
+                    wait_for: float | None = None
+                    for candidate in self._task_card_pending_edits:
+                        last_edit_at = self._task_card_last_edit_at.get(candidate)
+                        due_at = (
+                            now
+                            if last_edit_at is None
+                            else last_edit_at + self._TASK_CARD_EVENT_POLL_INTERVAL
+                        )
+                        retry_at = self._task_card_pending_retry_at.get(candidate)
+                        if retry_at is not None:
+                            due_at = max(due_at, retry_at)
+                        remaining = due_at - now
+                        if remaining <= 0:
+                            key = candidate
+                            break
+                        if wait_for is None or remaining < wait_for:
+                            wait_for = remaining
+                    if key is None:
+                        self._task_card_edit_gate_condition.wait(timeout=wait_for)
+                        continue
+                self._flush_pending_task_card_edit(key)
+
+        thread = threading.Thread(
+            target=_loop,
+            name="telegram-task-card-pending-edit",
+            daemon=True,
+        )
+        self._task_card_pending_edit_thread = thread
+        thread.start()
+
+    def _stop_pending_task_card_edit_worker(self) -> None:
+        self._task_card_pending_edit_stop.set()
+        with self._task_card_edit_gate_condition:
+            self._task_card_edit_gate_condition.notify_all()
+        thread = self._task_card_pending_edit_thread
+        if thread is not None:
+            thread.join(timeout=5.0)
+        self._task_card_pending_edit_thread = None
 
     @classmethod
     def _format_programmable_card_text(
@@ -3315,6 +3533,12 @@ class TelegramManager:
         """
         if not self._taskcard_enabled():
             return
+        # A normal blanket tick is also the deterministic retry point for tests
+        # and for callers racing just before the background worker wakes.  An
+        # explicit force call itself supersedes the queued automatic proposal, so
+        # let that one projection consume the newly eligible gate instead.
+        if not force:
+            self._flush_pending_task_card_edits()
         normal_rows = self._taskcard_normal_rows()
         automatic = TaskCardEventProjection.render_event_groups(
             self._task_card_event_groups_snapshot(),
@@ -3326,12 +3550,16 @@ class TelegramManager:
         for account, chat_id in self._resident_task_card_targets():
             key = (account, chat_id)
             # Check + deliver + store are atomic per route (RLock is reentrant,
-            # so the nested acquisition inside project() is free). This keeps the
-            # fingerprint cache consistent with the actually-delivered frame even
+            # so the nested pending-aware delivery wrapper is free). This keeps
+            # the fingerprint cache consistent with the delivered frame even
             # when the 5s blanket loop, the re-enable listener, and a rehydrate
             # race on the same route.
             with self._task_card_delivery_lock(account, chat_id):
-                if not force and self._task_card_automatic_fingerprints.get(key) == fingerprint:
+                effective_force = force or key in self._task_card_pending_force
+                if (
+                    not effective_force
+                    and self._task_card_automatic_fingerprints.get(key) == fingerprint
+                ):
                     # Skip only when the tracked resident still exists. This guard
                     # catches tracked-map clears (e.g. a peer process rotating the
                     # resident in state.json); it does NOT probe whether a user
@@ -3341,17 +3569,29 @@ class TelegramManager:
                     resident_id = self._get_resident_task_card(account, chat_id)
                     if resident_id is not None:
                         continue
+                if effective_force:
+                    # Persist the one-shot force contract until a real composed
+                    # transport succeeds.  A throttled projection leaves this set,
+                    # so the next ordinary eligible blanket bypasses the old
+                    # fingerprint without requiring its caller to repeat force=True.
+                    self._task_card_pending_force.add(key)
                 try:
                     result = self._deliver_channel_frame(
                         account, chat_id, "automatic", automatic,
                         error="Failed to broadcast task card",
                     )
                     # Cache only when a frame was actually delivered. A suppressed
-                    # project (toggle flipped off mid-broadcast) delivers nothing,
-                    # so caching its fingerprint would pin a stale frame once the
-                    # card is re-enabled.
-                    if result.get("status") == "ok" and not result.get("suppressed"):
+                    # or pending project has not touched Telegram, so caching its
+                    # fingerprint would pin stale content.  The delivery wrapper
+                    # clears pending force and syncs this same fingerprint after a
+                    # real success (including a background retry).
+                    if (
+                        result.get("status") == "ok"
+                        and not result.get("suppressed")
+                        and not self._task_card_edit_is_pending(account, chat_id)
+                    ):
                         self._task_card_automatic_fingerprints[key] = fingerprint
+                        self._task_card_pending_force.discard(key)
                 except Exception as e:
                     log.debug(
                         "Automatic task card broadcast failed for %s:%s: %s",
@@ -3484,8 +3724,12 @@ class TelegramManager:
             normal_rows=self._taskcard_normal_rows(),
             locale=self._taskcard_locale(),
         )
-        return self._resident.ensure(
-            account, chat_id, automatic, error="Failed to ensure task card resident",
+        return self._deliver_channel_frame(
+            account,
+            chat_id,
+            "automatic",
+            automatic,
+            error="Failed to ensure task card resident",
         )
 
     def _task_card_create(self, args: dict) -> dict:

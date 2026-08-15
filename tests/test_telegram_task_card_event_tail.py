@@ -1364,6 +1364,53 @@ def test_blanket_force_bypasses_fingerprint_but_not_edit_gate(tmp_path):
     assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
 
 
+def test_replacement_force_throttled_retries_on_next_ordinary_blanket(tmp_path):
+    """A one-shot replacement force survives the gate until real delivery.
+
+    The replacement has byte-identical semantic content, so its normalized
+    fingerprint equals the previously delivered frame.  The subsequent call is
+    deliberately an ordinary blanket (no caller repeats ``force=True``).
+    """
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    line = _tool_call_line()
+    _write_lines(events_path, [line])
+    manager._poll_event_tail()
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+    delivered_fingerprint = manager._task_card_automatic_fingerprints[("mybot", 555)]
+    acct.calls.clear()
+
+    # Atomic same-content replacement changes file identity and takes the sole
+    # production force=True branch while the target gate remains closed.
+    replacement = events_path.with_suffix(".replacement")
+    _write_lines(replacement, [line])
+    replacement.replace(events_path)
+    manager._poll_event_tail()
+
+    assert acct.calls == []
+    assert manager._task_card_automatic_fingerprints[("mybot", 555)] == (
+        delivered_fingerprint
+    )
+    assert ("mybot", 555) in manager._task_card_pending_force
+
+    # Once eligible, a plain blanket drains the retained force before unchanged
+    # fingerprint dedupe and performs the required re-render exactly once.
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._broadcast_task_card_event_window()
+
+    edits = [c for c in acct.calls if c[0] == "edit_message"]
+    assert len(edits) == 1
+    assert "bash" in edits[0][3]
+    assert ("mybot", 555) not in manager._task_card_pending_force
+    assert not manager._task_card_edit_is_pending("mybot", 555)
+
+
 def test_blanket_resends_when_resident_lost_on_same_frame(tmp_path, monkeypatch):
     """Fingerprint match plus a missing tracked resident must still re-send.
 
