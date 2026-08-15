@@ -754,9 +754,15 @@ class TelegramManager:
         # target per account+chat, composed from two fully independent channels —
         # "automatic" (the agent-event-tail broadcast) and "programmable" (the
         # intrinsic taskcard/ artifact projected read-only by Telegram).
-        # ``TaskCardResident`` owns the
-        # frames, per-route locks, and atomic enablement. Updating one channel
-        # never reads, advances, or overrides the other's frame.
+        # ``TaskCardResident`` owns the frames, per-route locks, and atomic
+        # enablement. Telegram adds one resident-scoped edit gate at its transport
+        # boundary: every path (tail broadcasts, inbound ensure, enablement
+        # callbacks, and programmable recomposition) shares the same per-target
+        # last-attempt timestamp, so concurrent producers cannot issue more than
+        # one Bot API edit during a poll interval.
+        self._task_card_last_edit_at: dict[tuple[str, int], float] = {}
+        self._task_card_edit_gate_lock = threading.Lock()
+        self._task_card_edit_clock: Callable[[], float] = time.monotonic
         self._resident = TaskCardResident(
             enabled=self._raw_taskcard_enabled(),
             transport=TaskCardResidentTransport(
@@ -815,10 +821,9 @@ class TelegramManager:
         self._task_card_event_metadata: dict | None = None
         self._task_card_event_lock = threading.Lock()
         # Blanket-delivery dedupe: the last automatic frame fingerprint seen per
-        # resident target. A 5s blanket rebuild only edits Telegram when the
-        # frame actually changed (excluding the volatile ``Last Updated`` line),
-        # so bursty event tails coalesce into at most one edit every 5s
-        # instead of hammering the per-chat edit rate limit.
+        # resident target. It excludes wall-clock-only Last Updated/active-seconds
+        # ticks; the transport gate above independently enforces the hard minimum
+        # interval when meaningful content does change.
         self._task_card_automatic_fingerprints: dict[tuple[str, int], str] = {}
         self._task_card_tail_thread: threading.Thread | None = None
         self._task_card_tail_stop = threading.Event()
@@ -2229,9 +2234,28 @@ class TelegramManager:
         compound_id: str,
         text: str,
     ) -> tuple[str, str | None]:
-        """Edit once; return its semantic outcome and a safe failure reason."""
+        """Gate and attempt one resident edit; return its semantic outcome.
+
+        The gate is keyed by resident target, not message id, so replacement or
+        peer-process rotation cannot reset it. The timestamp is claimed before
+        calling Telegram: failed/unchanged edit requests still consume provider
+        edit capacity and therefore count toward the hard interval.
+        """
         try:
             account, chat_id, tg_msg_id = self._parse_compound_id(compound_id)
+            # Resident projections are route-serialized already. The narrow gate
+            # lock also covers direct compatibility callers without re-entering or
+            # extending the provider request under the resident delivery lock.
+            with self._task_card_edit_gate_lock:
+                now = self._task_card_edit_clock()
+                key = (account, chat_id)
+                last_edit_at = self._task_card_last_edit_at.get(key)
+                if (
+                    last_edit_at is not None
+                    and now - last_edit_at < self._TASK_CARD_EVENT_POLL_INTERVAL
+                ):
+                    return _TASK_CARD_EDIT_FAILED, "Task card edit throttled"
+                self._task_card_last_edit_at[key] = now
             acct = self._service.get_account(account)
             acct.edit_message(chat_id, tg_msg_id, text)
             return _TASK_CARD_EDIT_OK, None
@@ -2991,10 +3015,9 @@ class TelegramManager:
 
         Detects truncation/replacement (current size smaller than the tracked
         offset, or a changed inode) and reinitializes from the new tail rather
-        than seeking into now-invalid byte positions. The blanket 1s loop also
-        re-renders every tick; this method only fires when the file itself
-        changed, so bursty appends still coalesce through the fingerprint
-        dedupe in ``_broadcast_task_card_event_window``.
+        than seeking into now-invalid byte positions. The blanket loop also
+        re-renders every tick; if both paths broadcast, the shared resident edit
+        gate admits at most one request for each target during the interval.
         """
         with self._task_card_event_lock:
             path = self._task_card_event_path
@@ -3251,22 +3274,31 @@ class TelegramManager:
                 )
 
     def _task_card_automatic_fingerprint(self, automatic: str) -> str:
-        """Stable fingerprint of an automatic frame for edit dedupe.
+        """Stable fingerprint of meaningful automatic-frame content.
 
-        The volatile ``Last Updated:`` line is excluded — it changes on every
-        render and must not force a Telegram edit when the actual content
-        (events, footer, metadata) is unchanged. Every supported locale prefix
-        is excluded so the dedupe stays correct after ``/taskcard lang`` flips.
+        ``Last Updated:`` (in every locale) and the numeric seconds in the
+        structured ``agent active (Ns)`` session field advance solely because
+        time passed. Exclude those ticks while retaining the active lifecycle
+        itself and every other event/footer/metadata change.
         """
-        prefixes = tuple(
+        time_prefixes = tuple(
             TaskCardEventProjection.time_prefix(locale)
             for locale in sorted(TaskCardEventProjection.SUPPORTED_LOCALES)
         )
-        stable = "\n".join(
-            line
-            for line in automatic.splitlines()
-            if not line.startswith(prefixes)
-        )
+        session_prefixes = ("Session · ", "会话 · ")
+        stable_lines: list[str] = []
+        for line in automatic.splitlines():
+            if line.startswith(time_prefixes):
+                continue
+            if line.startswith(session_prefixes):
+                line = re.sub(
+                    r"(?<= · )active \(\d+s\)(?= · |$)",
+                    "active",
+                    line,
+                    count=1,
+                )
+            stable_lines.append(line)
+        stable = "\n".join(stable_lines)
         return hashlib.sha256(stable.encode("utf-8", "replace")).hexdigest()
 
     def _broadcast_task_card_event_window(self, *, force: bool = False) -> None:
@@ -3344,10 +3376,10 @@ class TelegramManager:
                     self._poll_event_tail()
                 except Exception as e:
                     log.debug("Automatic task card event tail poll failed: %s", e)
-                # Blanket rebuild: every tick re-renders the current window and
-                # the fingerprint dedupe inside the broadcast decides whether a
-                # Telegram edit is actually needed. This coalesces bursty event
-                # tails into at most one edit every 5 seconds.
+                # Blanket rebuild: every tick re-renders the current window.
+                # Fingerprints reject time-only/unchanged renders; the resident
+                # transport gate enforces the hard per-target edit interval when
+                # this follows a changed-tail broadcast in the same tick.
                 try:
                     self._broadcast_task_card_event_window()
                 except Exception as e:
