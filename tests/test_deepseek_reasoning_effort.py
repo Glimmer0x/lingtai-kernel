@@ -265,6 +265,58 @@ def test_llm_call_record_omits_reasoning_fields_without_an_application():
 
 
 # ---------------------------------------------------------------------------
+# SessionManager integration — explicit ``None`` must survive to the wire
+# ---------------------------------------------------------------------------
+
+
+def _session_thinking_passed(config: AgentConfig):
+    """Return the ``thinking`` arg SessionManager passes to ``create_session``."""
+    svc = MagicMock()
+    svc.model = "test-model"
+    svc.create_session.return_value = MagicMock(
+        context_window=lambda: 100_000,
+        interface=MagicMock(
+            estimate_context_tokens=lambda: 1_000,
+            has_pending_tool_calls=lambda: False,
+        ),
+        reasoning_effort_capability=lambda: None,
+    )
+    SessionManager(
+        llm_service=svc,
+        config=config,
+        agent_name="test",
+        streaming=False,
+        build_system_prompt_fn=lambda: "sys",
+        build_tool_schemas_fn=lambda: [],
+        logger_fn=lambda event, **fields: None,
+    ).ensure_session()
+    return svc.create_session.call_args.kwargs["thinking"]
+
+
+def test_session_keeps_explicit_none_on_deepseek_owned_route():
+    """Provider-owned DeepSeek ``thinking: null`` stays omission, not "high"."""
+    passed = _session_thinking_passed(
+        AgentConfig(model="deepseek-v4-flash", provider="deepseek", thinking=None)
+    )
+    assert passed is None
+
+
+def test_session_promotes_none_for_non_owned_providers():
+    """Legacy behavior unchanged: programmatic None -> "high" elsewhere."""
+    passed = _session_thinking_passed(
+        AgentConfig(model="some-model", provider="openai", thinking=None)
+    )
+    assert passed == "high"
+
+
+def test_session_keeps_explicit_value_for_non_owned_providers():
+    passed = _session_thinking_passed(
+        AgentConfig(model="some-model", provider="openai", thinking="low")
+    )
+    assert passed == "low"
+
+
+# ---------------------------------------------------------------------------
 # Configuration entry — init manifest and the shared preset loader
 # ---------------------------------------------------------------------------
 

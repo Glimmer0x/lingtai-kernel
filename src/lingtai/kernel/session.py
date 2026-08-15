@@ -13,6 +13,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     AgentConfig,
+    THINKING_OWNED_PROVIDERS,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
     # ``from lingtai.kernel.session import CONTEXT_PRESSURE_*`` remains a public
@@ -350,7 +351,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=self._session_thinking(),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -368,7 +369,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=self._session_thinking(),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -376,6 +377,20 @@ class SessionManager:
         )
         self._attach_tool_result_recovery_lookup(self._chat)
         self._bind_reasoning_effort(self._chat)
+
+    def _session_thinking(self) -> str | None:
+        """Resolve the session-level ``thinking`` argument.
+
+        Provider-owned routes (``THINKING_OWNED_PROVIDERS``, e.g. DeepSeek)
+        keep an explicitly configured ``None`` so their provider policy can
+        honor omission (no reasoning field on the wire); promoting it to the
+        legacy cross-provider ``"high"`` default would change the payload and
+        corrupt the ``llm_call`` observation record. Every other provider keeps
+        the historical programmatic-``None`` -> ``"high"`` fallback.
+        """
+        if str(self._config.provider or "").lower() in THINKING_OWNED_PROVIDERS:
+            return self._config.thinking
+        return self._config.thinking or "high"
 
     # ------------------------------------------------------------------
     # Runtime reasoning effort (process-local, self-facing)

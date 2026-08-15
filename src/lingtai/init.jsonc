@@ -56,7 +56,10 @@
       // explicit reasoning effort.
       // Allowed values are none/minimal/low/medium/high/xhigh/max. Omit
       // thinking for "default"; non-Codex providers then keep the existing
-      // high default.
+      // high default. DeepSeek is provider-owned: its accepted values and
+      // their meaning are defined per model and wire by its own policy
+      // (src/lingtai/llm/deepseek/policy.py) — omission sends no reasoning
+      // field so DeepSeek's own default applies.
       // "api_compat": "openai",
       // "wire_api": "responses",
       // "thinking": "minimal",
