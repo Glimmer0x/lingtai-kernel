@@ -133,7 +133,8 @@ def test_shared_render_is_byte_identical_to_telegram_golden_surface() -> None:
         "/taskcard N sets normal rows (1-10, current: 1).\n"
         "────────\n"
         "Session · active · calls 2\n"
-        "Last Updated: 02:30:00 U+8"
+        "Last Updated: 02:30:00 U+8\n"
+        "Ask agent for \"Task Card\""
     )
 
 
