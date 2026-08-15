@@ -169,7 +169,8 @@ def test_kernel_import_only_loads_parent_and_kernel():
     )
     assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     assert "CLEAN" in result.stdout, (
-        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai.kernel.\n"
+        f"The 'lingtai' or 'tools' package leaked into sys.modules after importing lingtai.kernel; "
+        f"lingtai.kernel must not eagerly load lingtai.tools.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
@@ -209,24 +210,4 @@ def test_import_lingtai_tools_does_not_pull_high_level_lingtai():
         f"Importing lingtai.tools.registry eagerly pulled high-level 'lingtai.*' modules.\n"
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
-    )
-
-
-def test_import_kernel_does_not_load_lingtai_tools():
-    """``import lingtai.kernel`` must not pull in ``lingtai.tools`` (kernel isolation)."""
-    result = subprocess.run(
-        [
-            sys.executable, "-c",
-            "import sys; import lingtai.kernel; "
-            "leaked = [k for k in sys.modules if k == 'lingtai.tools' or k.startswith('lingtai.tools.')]; "
-            "print('LEAKED:', leaked) if leaked else print('CLEAN')"
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(_repo_root()),
-        env=_env_with_src_path(),
-    )
-    assert result.returncode == 0, f"Subprocess error:\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    assert "CLEAN" in result.stdout, (
-        f"lingtai.kernel eagerly loaded lingtai.tools:\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )

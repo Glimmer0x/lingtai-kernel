@@ -80,16 +80,18 @@ def test_intrinsics_enabled_by_default(tmp_path):
 
 def test_add_remove_tool(tmp_path):
     agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.add_tool("custom", schema={"type": "object"}, handler=lambda args: {"ok": True})
+    # Preserve the MCP registration argument shape here: an empty schema plus
+    # an explicit description must still register a callable tool.
+    agent.add_tool(
+        "custom",
+        schema={},
+        description="test tool",
+        handler=lambda args: {"ok": True},
+    )
     assert "custom" in agent._tool_handlers
     agent.remove_tool("custom")
     assert "custom" not in agent._tool_handlers
 
-
-def test_mcp_tools_registered(tmp_path):
-    agent = BaseAgent(intrinsics=_TEST_INTRINSICS, service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test", workdir_lease=make_test_lease(), agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"))
-    agent.add_tool("domain_tool", schema={}, description="test", handler=lambda a: {"r": 1})
-    assert "domain_tool" in agent._tool_handlers
 
 
 def test_add_tool_replaces_existing(tmp_path):

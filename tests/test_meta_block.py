@@ -255,16 +255,7 @@ def test_current_tool_result_chars_tail_omits_readme_and_resident_readme_describ
     assert "top_results" in readme
     assert "no preview" in readme
     assert "top 5" not in readme
-
-def test_current_tool_result_chars_readme_is_resident_not_tail_state():
-    agent = SimpleNamespace(_conversation=[])
-
-    current = current_tool_result_chars(agent)
-
-    assert "_readme" not in current
-    readme = json.dumps(build_meta_readme())
     assert "proactive summarization" in readme
-    assert "top_results" in readme
     assert "ids/previews" not in readme
 
 def test_build_meta_readme_mentions_tool_result_char_count_and_summarize():
@@ -487,17 +478,6 @@ def test_slim_adapter_comment_for_tail_trims_ledger_without_static_key_guessing(
     assert "reason" not in slim["maintenance_hint"]
     # A hook points at the resident meta_guidance section.
     assert "meta_guidance_ref" not in slim
-
-def test_attach_active_runtime_tail_guidance_is_ref_not_full_sections():
-    agent = _runtime_agent(total_calls=1)
-    block = _stamped_result({"current_time": "T"}, 12)
-
-    attach_active_runtime(agent, [block], prior_holder=None)
-
-    guidance = block.metadata["agent_meta"]["guidance"]["persistent"]
-    # Tail guidance is a lightweight ref/hook, not the full ordered sections.
-    assert "sections" not in guidance
-    assert "meta_guidance" in guidance.get("ref", "") + json.dumps(guidance)
 
 
 def test_attach_active_runtime_tail_adapter_comment_has_no_ledger_rows():
@@ -733,17 +713,6 @@ def _fake_agent_with_session(
         ),
     )
 
-
-def test_build_meta_omits_numeric_context_fields_when_decomp_ran():
-    agent = _fake_agent_with_session(
-        system_prompt_tokens=5000,
-        tools_tokens=500,
-        history_tokens=200,
-        context_limit=100000,
-    )
-    meta = build_meta(agent)
-    assert "context" not in meta
-    assert meta_block._current_context_usage(agent) == pytest.approx(0.057)
 
 
 def test_build_meta_carries_latest_token_usage_for_tool_meta_only():
@@ -1565,25 +1534,6 @@ def test_build_meta_omits_context_before_decomp_runs():
     assert meta_block._current_context_usage(agent) == -1.0
 
 
-def test_build_meta_history_falls_back_to_interface_estimate_after_restore():
-    """After start() rehydrates the wire ChatInterface from chat_history.jsonl,
-    _latest_input_tokens is still 0 until the first LLM call completes. The
-    meta-line must fall back to interface.estimate_context_tokens() so the
-    first post-refresh text_input shows the restored history, not '对话 0'."""
-    agent = _fake_agent_with_session(
-        system_prompt_tokens=5000,
-        tools_tokens=500,
-        history_tokens=50000,  # restored from JSONL
-    )
-    # Simulate pre-first-LLM-call state: interface has history but server
-    # has not reported an input count yet.
-    agent._session._latest_input_tokens = 0
-    meta = build_meta(agent)
-    # The local usage helper still falls back to interface.estimate_context_tokens(),
-    # but the numeric breakdown is no longer duplicated in agent_meta.
-    assert "context" not in meta
-    assert meta_block._current_context_usage(agent) == pytest.approx(0.555)
-
 
 def test_build_meta_time_blind_still_omits_numeric_context_fields():
     agent = _fake_agent_with_session(
@@ -1616,10 +1566,14 @@ def test_render_meta_time_blind_with_context_present_emits_empty_time_slot():
 
 
 def test_build_meta_history_tokens_does_not_double_count_system_and_tools():
-    """Regression: history_tokens must NOT include the system prompt or tool
-    schema tokens (they belong to system_tokens). Computed from the server's
+    """Regression: after decomposition has run, numeric context stays absent
+    from ``build_meta`` while the local usage estimate remains correct.
+
+    ``history_tokens`` must NOT include the system prompt or tool schema tokens
+    (they belong to ``system_tokens``). It is computed from the server's
     authoritative input count minus system + tools, mirroring
-    SessionManager.get_token_usage's ctx_history_tokens."""
+    ``SessionManager.get_token_usage``'s ``ctx_history_tokens``.
+    """
     agent = _fake_agent_with_session(
         system_prompt_tokens=5000,
         tools_tokens=500,
@@ -1634,8 +1588,9 @@ def test_build_meta_history_tokens_does_not_double_count_system_and_tools():
 
 
 def test_build_meta_usage_matches_get_context_pressure_after_restore():
-    """Regression: on the very first turn after a restore (before the first
-    LLM call returns), the meta-prefix usage% must match what
+    """Regression: on the first post-refresh ``text_input`` after restoring
+    the wire conversation from ``chat_history.jsonl`` (before the first LLM call
+    returns), the meta-prefix usage% must match what
     SessionManager.get_context_pressure() would report for the same state.
     Otherwise the molt warning and the injected '[... | context: X%]'
     prefix show different numbers on the same turn, confusing the agent.
@@ -3853,18 +3808,6 @@ def test_attach_active_runtime_empty_meta_keeps_prior_snapshot():
 # onto every latest tool result when unchanged.
 # ---------------------------------------------------------------------------
 
-
-def test_attach_active_runtime_first_snapshot_is_attached():
-    # The very first material snapshot always attaches — there is no prior
-    # signature to compare against.
-    agent = _runtime_agent(total_calls=1)
-    block = _stamped_result({"current_time": "T1"}, 5)
-
-    holder = attach_active_runtime(agent, [block], prior_holder=None)
-
-    assert holder is block
-    assert "agent_meta" in block.metadata
-    assert "guidance" in block.metadata["agent_meta"]
 
 
 def test_attach_active_runtime_unchanged_snapshot_not_restamped_on_latest():
