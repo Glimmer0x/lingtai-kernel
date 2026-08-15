@@ -80,6 +80,15 @@ def test_is_spill_manifest_detects_dict_shape():
     # Two-field "spilled" + spill_path business dict — refused without the
     # marker AND without the structural quadruple.
     assert not is_spill_manifest({"status": "spilled", "spill_path": "/x"})
+    # Keep a realistic business payload in this refusal matrix: unknown keys
+    # do not turn a lookalike into a spill manifest.
+    business_dict = {
+        "status": "spilled",
+        "spill_path": "/data/business/spilled-2026-05-23.csv",
+        "rows": 1234,
+        "notes": "user dumped overflow to disk during ETL",
+    }
+    assert not is_spill_manifest(business_dict)
     # Has marker but missing required structural fields — refused so the
     # marker alone can't be forged into a manifest by a misconfigured
     # caller.  Actually the marker is owner-stamped, so we accept it as
@@ -646,18 +655,6 @@ def test_manifest_carries_namespaced_artifact_marker(tmp_path):
     assert out["artifact"] == ARTIFACT_MARKER
 
 
-def test_is_spill_manifest_refuses_arbitrary_business_dict():
-    """A business dict that uses status='spilled' and spill_path keys for
-    its own unrelated purpose must NOT be classified as a manifest."""
-    # No artifact marker, no cap_chars, no original_char_count — looks
-    # superficially similar but is not a real manifest.
-    business_dict = {
-        "status": "spilled",
-        "spill_path": "/data/business/spilled-2026-05-23.csv",
-        "rows": 1234,
-        "notes": "user dumped overflow to disk during ETL",
-    }
-    assert not is_spill_manifest(business_dict)
 
 
 # -- Refinement 4: over-window classifier + AED integration -----------------
