@@ -169,13 +169,20 @@ def test_eigen_schema_has_molt(tmp_path):
     assert {"action", "input", "reasoning"} == set(s["required"])
 
 
-def test_context_rejects_invalid_action(tmp_path):
-    """A former valid-object/invalid-action pair is now an unknown action.
+@pytest.mark.parametrize(
+    "invalid_action",
+    [
+        pytest.param("context_load", id="former-context-action"),
+        pytest.param("bogus_edit", id="invalid-object-action"),
+        pytest.param("pad_bogus", id="invalid-pad-action"),
+    ],
+)
+def test_context_rejects_invalid_action(tmp_path, invalid_action):
+    """Former valid-object/invalid-action pairs are now unknown actions.
 
-    Pre-migration `(object='context', action='load')` was a real object with
-    an out-of-set action. Under the flat LTP v2 enum there is no such pair:
-    `context_load` was never a registered operation, so dispatch rejects it
-    as an unknown action before any handler runs.
+    Under the flat LTP v2 enum there are no object/action pairs, and none of
+    these pre-migration-shaped action names is registered. Dispatch rejects
+    each as an unknown action before any handler runs.
     """
     agent = BaseAgent(
         intrinsics=_TEST_INTRINSICS,
@@ -183,7 +190,7 @@ def test_context_rejects_invalid_action(tmp_path):
         workdir_lease=make_test_lease(),
         agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
     )
-    result = agent._intrinsics["context"]({"action": "context_load", "input": {}})
+    result = agent._intrinsics["context"]({"action": invalid_action, "input": {}})
     assert "error" in result
     assert "Unknown context action" in result["error"]
     # The error names the real surface, including the molt operation.
@@ -237,30 +244,6 @@ def test_eigen_forget_wipes_context(tmp_path):
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
-
-
-def test_eigen_unknown_object(tmp_path):
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    result = agent._intrinsics["context"]({"action": "bogus_edit", "input": {}})
-    assert "error" in result
-    agent.stop(timeout=1.0)
-
-
-def test_eigen_unknown_action(tmp_path):
-    agent = BaseAgent(
-        intrinsics=_TEST_INTRINSICS,
-        service=make_mock_service(), agent_name="test", working_dir=tmp_path / "test",
-        workdir_lease=make_test_lease(),
-        agent_presence=make_test_presence_store(), snapshot_port=make_test_snapshot_port(), lifecycle_clock=make_test_lifecycle_clock(), source_revision_port=make_test_source_revision_port(), notification_store=notification_store_for(tmp_path / "test"),
-    )
-    result = agent._intrinsics["context"]({"action": "pad_bogus", "input": {}})
-    assert "error" in result
-    agent.stop(timeout=1.0)
 
 
 def test_eigen_is_gone_and_psyche_is_the_durable_domain_root(tmp_path):

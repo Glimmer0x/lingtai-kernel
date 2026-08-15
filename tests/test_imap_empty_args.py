@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from lingtai.mcp_servers.imap.manager import IMAPMailManager
 
 
@@ -66,49 +68,47 @@ def _manager(account: FakeAccount) -> IMAPMailManager:
 
 # --- empty/whitespace account treated like omitted -------------------------
 
-def test_empty_account_uses_default_account():
+@pytest.mark.parametrize(
+    "account_arg",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_empty_account_uses_default_account(account_arg):
     account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "account": ""})
-    assert result["status"] == "ok"
-    assert result["account"] == "me@example.com"
-
-
-def test_whitespace_account_uses_default_account():
-    account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "account": "   "})
+    result = _manager(account).handle({"action": "check", "account": account_arg})
     assert result["status"] == "ok"
     assert result["account"] == "me@example.com"
 
 
 # --- empty/whitespace folder treated like omitted (INBOX) ------------------
 
-def test_empty_folder_for_check_uses_inbox():
+@pytest.mark.parametrize(
+    "folder_arg",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("  \t ", id="whitespace"),
+    ],
+)
+def test_empty_folder_for_check_uses_inbox(folder_arg):
     account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "folder": ""})
+    result = _manager(account).handle({"action": "check", "folder": folder_arg})
     assert result["status"] == "ok"
     assert account.checked_folders == ["INBOX"]
 
 
-def test_whitespace_folder_for_check_uses_inbox():
-    account = FakeAccount()
-    result = _manager(account).handle({"action": "check", "folder": "  \t "})
-    assert result["status"] == "ok"
-    assert account.checked_folders == ["INBOX"]
-
-
-def test_empty_folder_for_search_uses_inbox():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "search", "query": "unseen", "folder": "",
-    })
-    assert result["status"] == "ok"
-    assert account.searched == [("INBOX", "unseen")]
-
-
-def test_whitespace_folder_for_search_uses_inbox():
+@pytest.mark.parametrize(
+    "folder_arg",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_empty_folder_for_search_uses_inbox(folder_arg):
     account = FakeAccount()
     result = _manager(account).handle({
-        "action": "search", "query": "unseen", "folder": "   ",
+        "action": "search", "query": "unseen", "folder": folder_arg,
     })
     assert result["status"] == "ok"
     assert account.searched == [("INBOX", "unseen")]
@@ -116,23 +116,19 @@ def test_whitespace_folder_for_search_uses_inbox():
 
 # --- move destination must NOT be normalized away --------------------------
 
-def test_move_empty_destination_still_errors():
+@pytest.mark.parametrize(
+    "folder_arg",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_move_empty_destination_still_errors(folder_arg):
     account = FakeAccount()
     result = _manager(account).handle({
         "action": "move",
         "email_id": "me@example.com:INBOX:42",
-        "folder": "",
-    })
-    assert "error" in result
-    assert account.moved == []
-
-
-def test_move_whitespace_destination_still_errors():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "move",
-        "email_id": "me@example.com:INBOX:42",
-        "folder": "   ",
+        "folder": folder_arg,
     })
     assert "error" in result
     assert account.moved == []
@@ -140,27 +136,23 @@ def test_move_whitespace_destination_still_errors():
 
 # --- flag error ergonomics --------------------------------------------------
 
-def test_flag_missing_flags_returns_helpful_error():
+@pytest.mark.parametrize(
+    "flag_args",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"flags": {}}, id="empty"),
+    ],
+)
+def test_flag_missing_flags_returns_helpful_error(flag_args):
     account = FakeAccount()
     result = _manager(account).handle({
         "action": "flag",
         "email_id": "me@example.com:INBOX:42",
+        **flag_args,
     })
     assert result.get("status") == "error"
     assert "flags is required" in result.get("error", "")
     assert "flags={'seen': true}" in result.get("error", "")
-    assert account.flag_calls == []
-
-
-def test_flag_empty_flags_returns_helpful_error():
-    account = FakeAccount()
-    result = _manager(account).handle({
-        "action": "flag",
-        "email_id": "me@example.com:INBOX:42",
-        "flags": {},
-    })
-    assert result.get("status") == "error"
-    assert "flags is required" in result.get("error", "")
     assert account.flag_calls == []
 
 
