@@ -303,6 +303,11 @@ def test_unknown_root_field_is_rejected(tmp_path: Path) -> None:
 
 def test_non_boolean_summarize_is_rejected(tmp_path: Path) -> None:
     agent = _StubAgent(tmp_path)
+    envelope = {"action": "presets", "input": {}, "reasoning": "list them"}
+    assert system_tool.handle(agent, dict(envelope, summarize=False)) == (
+        system_tool.handle(agent, dict(envelope))
+    )
+
     result = system_tool.handle(
         agent, {"action": "presets", "input": {}, "summarize": "yes"}
     )
@@ -372,15 +377,6 @@ def test_root_allof_correlation_survives_both_provider_wires() -> None:
             assert set(constrained["properties"]) == set(
                 INPUT_SCHEMAS[action]["properties"]
             ), action
-
-
-def test_dispatch_is_identical_regardless_of_originating_wire(tmp_path: Path) -> None:
-    """Dispatch keys off the normalized args dict, not the provider wire."""
-    agent = _StubAgent(tmp_path)
-    envelope = {"action": "presets", "input": {}, "reasoning": "list them"}
-    first = system_tool.handle(agent, dict(envelope))
-    second = system_tool.handle(agent, dict(envelope, summarize=False))
-    assert first == second
 
 
 # ---------------------------------------------------------------------------

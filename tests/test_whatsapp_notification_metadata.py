@@ -58,6 +58,7 @@ def _collected_metadata(manager: WhatsAppManager, message: dict) -> dict:
 
 
 def test_incoming_attaches_routing_and_structured_context(manager: WhatsAppManager):
+    """B4: ``type: 'chat'`` is the producer's vocabulary for plain text."""
     captured = _collected_metadata(manager, _bridge_message("wamid.A", "hello"))
     meta = captured["metadata"]
     # event_id components are sanitized: a peer chooses the message id, and
@@ -71,18 +72,6 @@ def test_incoming_attaches_routing_and_structured_context(manager: WhatsAppManag
     # newest message — the same shape telegram/feishu/wechat emit.
     assert captured["body"].startswith("**How to read this WhatsApp conversation preview")
     assert captured["body"].endswith("**Newest WhatsApp message**\nhello")
-
-
-def test_whatsapp_web_chat_type_is_treated_as_text_not_media(manager: WhatsAppManager):
-    """B4: `type: 'chat'` is the producer's vocabulary for plain text."""
-    captured = _collected_metadata(manager, {
-        "id": "wamid.chat", "from": "15551234567@c.us", "type": "chat",
-        "body": "a real text message", "timestamp": 1700000000,
-    })
-    meta = captured["metadata"]
-    assert meta["latest_incoming"]["text"] == "a real text message"
-    assert meta["recent_messages"][-1]["text"] == "a real text message"
-    assert captured["body"].endswith("**Newest WhatsApp message**\na real text message")
 
 
 def test_unknown_non_media_type_is_treated_as_text(manager: WhatsAppManager):

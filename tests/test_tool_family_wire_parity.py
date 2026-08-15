@@ -69,17 +69,9 @@ def test_generic_family_schema_survives_chat_and_responses_wires():
             assert "_reasoning" not in branch["properties"]
             assert "summarize" not in branch["properties"]
 
-
-def test_generic_family_handler_parity_across_dispatch_and_child_registry():
-    """The same family instance dispatches identically regardless of which
-    provider wire the call arrived from — dispatch does not depend on wire
-    shape, only on the normalized ``{action, input, ...}`` args dict every
-    provider adapter converges to before ``ToolExecutor`` dispatch."""
-    fam = _widget_family()
-    result = fam.handle({"action": "spin", "input": {"speed": 4}, "reasoning": "chat-wire-call"})
-    assert result == {"status": "ok", "action": "spin", "speed": 4}
-    result2 = fam.handle({"action": "spin", "input": {"speed": 4}, "reasoning": "responses-wire-call"})
-    assert result2 == {"status": "ok", "action": "spin", "speed": 4}
+    assert fam.handle(
+        {"action": "spin", "input": {"speed": 4}, "reasoning": "r"}
+    ) == {"status": "ok", "action": "spin", "speed": 4}
 
 
 def test_real_agent_startup_builds_web_family_schema_on_both_wires(tmp_path):
