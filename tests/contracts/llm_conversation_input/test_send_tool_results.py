@@ -5,9 +5,10 @@ This is the heart of the characterization: the kernel builds tool results via
 canonical ``ToolResultBlock``) and hands the list to ``ChatSession.send``. For
 each *conforming* production regime this test proves the canonical block is
 converted into the exact provider wire form the regime declares, AND that the
-``send`` returns a real ``LLMResponse`` with concrete usage. The concrete
-OpenAI-compatible subclasses (DeepSeek / MiMo / Zhipu), Codex, and a
-``_GatedSession``-wrapped session are all built as their real classes.
+``send`` returns a real ``LLMResponse`` with concrete usage. The DeepSeek
+configured shared session, the concrete MiMo / Zhipu subclasses, Codex, and a
+``_GatedSession``-wrapped session all exercise their concrete production session
+implementations with mocked transports.
 
 The dormant ``gemini_chat`` path is handled separately: it is asserted for its
 actual (broken) forwarding behavior, never as a MUST.
@@ -85,16 +86,20 @@ def test_no_regime_forwards_unconverted_dataclass() -> None:
 
 
 def test_deepseek_and_mimo_inject_reasoning_content_on_paired_turn() -> None:
-    """DeepSeek/MiMo's ``_build_messages`` must inject ``reasoning_content`` on
-    the assistant tool-call turn of a paired continuation, and the base
-    ``OpenAIChatSession`` must NOT — proving the subclasses are exercised as
-    their real classes, not generic stand-ins.
+    """The DeepSeek-configured shared session and MiMo subclass must inject
+    ``reasoning_content`` on the assistant tool-call turn of a paired
+    continuation, while the unconfigured base ``OpenAIChatSession`` must NOT —
+    proving the provider-specific constructions are exercised.
     """
-    subclass_names = {"deepseek_chat", "mimo_chat"}
-    subclasses = [r for r in regimes.CONFORMING_BUILDABLE if r.name in subclass_names]
-    assert {r.name for r in subclasses} == subclass_names, "subclass regimes missing"
+    provider_specific_names = {"deepseek_chat", "mimo_chat"}
+    provider_specific = [
+        r for r in regimes.CONFORMING_BUILDABLE if r.name in provider_specific_names
+    ]
+    assert {r.name for r in provider_specific} == provider_specific_names, (
+        "provider-specific regimes missing"
+    )
 
-    for regime in subclasses:
+    for regime in provider_specific:
         session, transport = regime.build()
         regimes.seed_matching_tool_call(session)
         session.send([regimes.canonical_tool_result()])

@@ -27,6 +27,15 @@ THINKING_PROVIDERS = ("codex", "codex-pool", "codex_pool")
 # ``api_compat="openai"``.
 THINKING_NATIVE_PROVIDERS = ("anthropic", "openai", "deepseek", "claude-code", "claude_code")
 
+# Providers that own their reasoning-effort contract in their own module: the
+# accepted vocabulary is per model and per wire, and so is what an OMITTED
+# value means. This is a coarse SCOPE name only — the kernel deliberately holds
+# no level vocabulary, model list, alias table, or default for these routes,
+# and cannot import them (see tests/test_kernel_isolation.py). The exact
+# validation is applied by the lingtai-layer ingress (``lingtai/init_schema.py``
+# and ``lingtai/agent.py``) against the provider's own module.
+THINKING_OWNED_PROVIDERS = ("deepseek",)
+
 
 def llm_supports_thinking(llm: dict) -> bool:
     """Return whether a manifest LLM block accepts explicit thinking effort.

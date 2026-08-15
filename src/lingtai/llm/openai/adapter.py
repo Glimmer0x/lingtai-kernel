@@ -998,6 +998,19 @@ def _responses_reasoning_kwargs(thinking: str | None) -> dict[str, dict[str, str
     return {"reasoning": {"effort": thinking}}
 
 
+def _capture_reasoning_application(session: Any, applied: Any) -> Any:
+    """Attach the one resolved reasoning decision to the session, if any.
+
+    Observation (``lingtai.kernel.session``) reads this exact object, so what
+    gets recorded is the decision the request really carries rather than a
+    recomputation from raw config. Sessions on a route with no provider-local
+    reasoning policy are left untouched.
+    """
+    if applied is not None:
+        session.reasoning_application = applied
+    return session
+
+
 def _codex_responses_trace_path() -> Path | None:
     """Return the opt-in Codex Responses stream trace path, if enabled."""
     enabled = os.environ.get(_CODEX_RESPONSES_TRACE_ENV, "")
@@ -2725,9 +2738,9 @@ class OpenAIResponsesSession(ChatSession):
 class OpenAIAdapter(LLMAdapter):
     """Adapter that wraps the ``openai`` SDK for OpenAI and compatible APIs."""
 
-    # Session class for the Chat Completions path. Subclasses override
-    # this to inject provider-specific behavior (e.g. DeepSeek preserves
-    # ``reasoning_content`` on tool-call turns for thinking-mode replay).
+    # Session class for the Chat Completions path. MiMo and Zhipu subclasses
+    # override this to inject provider-specific behavior. Shared-adapter routes
+    # such as DeepSeek configure behavior through constructor hooks instead.
     # Responses-API sessions use OpenAIResponsesSession unconditionally
     # since that path is OpenAI-only.
     _session_class: type = OpenAIChatSession
@@ -2749,6 +2762,7 @@ class OpenAIAdapter(LLMAdapter):
         inject_reasoning_fallback: bool | None = None,
         reasoning_effort_vocab: str = "openai",
         prompt_cache_namespace: str | None = None,
+        reasoning_policy: Callable[..., Any] | None = None,
     ):
         self.base_url = base_url
         self._use_responses = use_responses
@@ -2800,9 +2814,18 @@ class OpenAIAdapter(LLMAdapter):
             )
         self._inject_reasoning_fallback = bool(inject_reasoning_fallback)
         # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (default)
-        # maps kernel levels onto OpenAI's high/low surface; ``seven_tier``
-        # passes the kernel THINKING_LEVELS through unchanged (DeepSeek wire).
+        # maps kernel levels onto OpenAI's high/low surface; ``seven_tier`` is
+        # the retained compatibility path that passes THINKING_LEVELS through.
         self._reasoning_effort_vocab = reasoning_effort_vocab
+        # Optional provider-local reasoning owner. A route may install a
+        # callable ``policy(model=..., wire=..., thinking=...)`` that returns
+        # the reasoning decision for that request; when it is installed it
+        # decides the reasoning fields for BOTH wires and the generic
+        # vocabulary projections below are never consulted. When it is absent
+        # — every route except deepseek — this adapter behaves exactly as
+        # before. This transport holds no provider's models, levels, aliases,
+        # or defaults; see ``lingtai/llm/deepseek/policy.py``.
+        self._reasoning_policy = reasoning_policy
         # Optional fixed provider namespace for the auto-derived
         # ``prompt_cache_key`` (e.g. ``deepseek`` -> ``lingtai-deepseek:{model}:v1``).
         self._prompt_cache_namespace = prompt_cache_namespace
@@ -2943,9 +2966,17 @@ class OpenAIAdapter(LLMAdapter):
         # Completions SDK's flat `reasoning_effort`. Sending the wrong shape
         # silently drops the field on the OpenAI Responses endpoint and 400s
         # on Codex's `/backend-api/codex/responses`.
-        extra_kwargs.update(_responses_reasoning_kwargs(thinking))
+        #
+        # A route with a provider-local reasoning policy owns this decision
+        # entirely — including whether any field is sent at all — and may raise
+        # before the SDK is ever touched.
+        applied = self._apply_reasoning_policy(
+            model=model, wire="responses", thinking=thinking, extra_kwargs=extra_kwargs
+        )
+        if applied is None:
+            extra_kwargs.update(_responses_reasoning_kwargs(thinking))
 
-        return OpenAIResponsesSession(
+        session = OpenAIResponsesSession(
             client=self._client,
             model=model,
             instructions=system_prompt,
@@ -2960,6 +2991,39 @@ class OpenAIAdapter(LLMAdapter):
             stateless_replay=self._responses_stateless_replay,
             inject_reasoning_fallback=self._inject_reasoning_fallback,
         )
+        return _capture_reasoning_application(session, applied)
+
+    def _apply_reasoning_policy(
+        self,
+        *,
+        model: str,
+        wire: str,
+        thinking: Any,
+        extra_kwargs: dict[str, Any],
+    ) -> Any:
+        """Let an installed provider-local policy own the reasoning fields.
+
+        Returns the resolved application (for capture on the session), or
+        ``None`` when no policy is installed so the caller keeps the generic
+        OpenAI projection. Transport-neutral: nothing here knows any provider's
+        models, levels, aliases, or defaults.
+        """
+        policy = self._reasoning_policy
+        if policy is None:
+            return None
+        applied = policy(model=model, wire=wire, thinking=thinking)
+        payload = applied.request_kwargs()
+        # ``extra_body`` is a shared channel — a provider extension, a subclass
+        # contribution and a caller override can all want a key in it — so it
+        # composes instead of overwriting; unrelated existing keys survive.
+        extra_body = payload.pop("extra_body", None)
+        extra_kwargs.update(payload)
+        if extra_body:
+            extra_kwargs["extra_body"] = {
+                **(extra_kwargs.get("extra_body") or {}),
+                **extra_body,
+            }
+        return applied
 
     def _create_completions_session(
         self,
@@ -2996,16 +3060,25 @@ class OpenAIAdapter(LLMAdapter):
                 },
             }
 
-        # Reasoning effort for o-series models: the v1 projection of the
-        # Responses semantics. Subclasses override ``_chat_reasoning_effort``
-        # to map the kernel thinking levels to their Chat Completions wire
-        # value (e.g. DeepSeek passes the seven-tier value through unchanged;
-        # the default ``openai`` vocab clamps ``xhigh``/``max`` to ``high`` and
-        # omits the field for the omitted/``default`` sentinel so the upstream
-        # v1 default applies).
-        effort = self._chat_reasoning_effort(thinking)
-        if effort is not None:
-            extra_kwargs["reasoning_effort"] = effort
+        # Generic Chat Completions reasoning projection. The retained
+        # ``seven_tier`` compatibility vocabulary passes kernel levels through
+        # unchanged, while the default ``openai`` vocabulary clamps
+        # ``xhigh``/``max`` to ``high`` and omits the field for the
+        # omitted/``default`` sentinel so the upstream v1 default applies.
+        # A route with a provider-local reasoning policy owns this decision
+        # entirely (DeepSeek, for instance, also emits its own ``thinking``
+        # switch and rejects levels its model does not really have); the
+        # generic vocabulary projection is then never consulted.
+        applied = self._apply_reasoning_policy(
+            model=model,
+            wire="chat_completions",
+            thinking=thinking,
+            extra_kwargs=extra_kwargs,
+        )
+        if applied is None:
+            effort = self._chat_reasoning_effort(thinking)
+            if effort is not None:
+                extra_kwargs["reasoning_effort"] = effort
 
         # Subclass-provided extra_body (e.g. OpenRouter's reasoning include).
         # Merge rather than overwrite so callers adding their own extra_body
@@ -3015,7 +3088,7 @@ class OpenAIAdapter(LLMAdapter):
             existing = extra_kwargs.get("extra_body") or {}
             extra_kwargs["extra_body"] = {**sub_extra_body, **existing}
 
-        return self._session_class(
+        session = self._session_class(
             client=self._client,
             model=model,
             interface=interface,
@@ -3028,6 +3101,7 @@ class OpenAIAdapter(LLMAdapter):
             inject_reasoning_fallback=self._inject_reasoning_fallback,
             base_url=self.base_url,
         )
+        return _capture_reasoning_application(session, applied)
 
     def _adapter_extra_body(self) -> dict:
         """Return extra_body JSON fields to include on every request.
@@ -3054,10 +3128,10 @@ class OpenAIAdapter(LLMAdapter):
             omitted/``default`` sentinel maps to ``None`` so the upstream v1
             default applies (OpenAI v1 has no ``xhigh``; omission is the
             graceful v1 projection of the Responses xhigh default).
-          * ``seven_tier`` passes the kernel THINKING_LEVELS through unchanged
-            (the DeepSeek wire accepts ``none | minimal | low | medium | high |
-            xhigh | max``) and projects the omitted/``default`` sentinel to the
-            explicit ``xhigh`` default, matching the Responses wire.
+          * ``seven_tier`` is the retained compatibility projection: it passes
+            the kernel THINKING_LEVELS through unchanged and maps the omitted/
+            ``default`` sentinel to explicit ``xhigh``. Provider-specific routes
+            with a different model/wire contract use a provider-local policy.
 
         Returns ``None`` so the field is not sent.
         """

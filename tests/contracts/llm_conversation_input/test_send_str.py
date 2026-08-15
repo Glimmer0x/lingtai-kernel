@@ -3,8 +3,8 @@
 The kernel ``ChatSession`` ABC declares ``send(str)`` as one of exactly two
 input shapes. This test proves that a plain user-text turn is serialized into
 the expected provider wire form for every *conforming* production session
-regime — including the concrete OpenAI-compatible subclasses (DeepSeek / MiMo /
-Zhipu), Codex, and a ``_GatedSession``-wrapped session — using a mocked
+regime — including the DeepSeek configured shared session, the concrete MiMo /
+Zhipu subclasses, Codex, and a ``_GatedSession``-wrapped session — using a mocked
 transport (no network). It also asserts each ``send`` returns a real
 ``LLMResponse`` with concrete ``UsageMetadata``.
 """

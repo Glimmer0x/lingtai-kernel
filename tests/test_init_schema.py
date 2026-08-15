@@ -416,13 +416,21 @@ def test_llm_thinking_valid_for_custom_openai_responses(value):
     validate_init(data)
 
 
-@pytest.mark.parametrize("value", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+@pytest.mark.parametrize("value", ["low", "high", "max"])
 def test_llm_thinking_valid_for_deepseek_responses(value):
-    # DeepSeek is OpenAI-compatible; Responses wire accepts thinking by default.
+    """DeepSeek owns its effort surface: Responses serves exactly low|high|max.
+
+    This route previously inherited the generic "any kernel level on an
+    OpenAI-compatible Responses wire" rule, which advertised tiers DeepSeek's
+    Responses guide does not document (and which that endpoint may silently
+    ignore). The exact per-model/per-wire set is pinned in
+    tests/test_deepseek_reasoning_effort.py.
+    """
     data = _valid_init()
     data["manifest"]["llm"].update(
         {
             "provider": "deepseek",
+            "model": "deepseek-v4-flash",
             "api_compat": "openai",
             "wire_api": "responses",
             "thinking": value,
@@ -487,7 +495,10 @@ def test_llm_thinking_invalid_for_anthropic(value):
         # Built-in OpenAI-wire providers, with api_compat left implicit.
         {"provider": "openai", "wire_api": "responses"},
         {"provider": "openai"},
-        {"provider": "deepseek"},
+        # DeepSeek owns its effort contract; a real served model is required
+        # (policy fail-closed per model/wire; covered deeply in
+        # test_deepseek_reasoning_effort.py).
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
     ],
 )
 def test_llm_thinking_accepted_for_openai_compatible(llm_patch):

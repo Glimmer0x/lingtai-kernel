@@ -13,6 +13,7 @@ from typing import Any, Callable, TYPE_CHECKING
 from .config import (
     CONTEXT_PRESSURE_HIGH_RATIO,
     AgentConfig,
+    THINKING_OWNED_PROVIDERS,
     # Re-exported for backward compatibility: the streak logic now lives in
     # ``ContextPressureReminder`` and reads these off ``config`` directly, but
     # ``from lingtai.kernel.session import CONTEXT_PRESSURE_*`` remains a public
@@ -63,6 +64,38 @@ if TYPE_CHECKING:
 def _elapsed_ms(start: float) -> int:
     """Return non-negative elapsed milliseconds from a monotonic start."""
     return max(0, int((time.monotonic() - start) * 1000))
+
+
+#: Allowlisted ``llm_call`` reasoning-observation fields. Bounded plain strings
+#: only — never payloads, prompts, credentials, or arbitrary provider scalars.
+_REASONING_OBSERVATION_KEYS = (
+    "provider",
+    "wire",
+    "effort_requested",
+    "effort_normalized",
+    "effort_emitted",
+    "effort_provenance",
+)
+
+
+def _reasoning_observation_fields(chat: object) -> dict[str, str]:
+    """Return the reasoning observation for an ``llm_call``, if there is one.
+
+    Read from the one decision the adapter resolved when the session was
+    constructed, so an alias can never be reported as if the requested and
+    emitted values were identical, and an omitted level stays distinguishable
+    from explicitly disabled reasoning. A session on a route that applies no
+    reasoning control contributes no fields at all.
+    """
+    applied = getattr(chat, "reasoning_application", None)
+    if applied is None:
+        return {}
+    fields = applied.observation_fields()
+    return {
+        key: str(fields[key])
+        for key in _REASONING_OBSERVATION_KEYS
+        if key in fields
+    }
 
 
 _SAFE_USAGE_EXTRA_EVENT_KEYS = {
@@ -318,7 +351,7 @@ class SessionManager:
                 system_prompt=self._build_system_prompt_fn(),
                 tools=self._build_tool_schemas_fn() or None,
                 model=self._config.model or self._llm_service.model,
-                thinking=self._config.thinking or "high",
+                thinking=self._session_thinking(),
                 agent_type=self._display_name,
                 tracked=True,
                 interaction_id=self._interaction_id,
@@ -336,7 +369,7 @@ class SessionManager:
             system_prompt=self._build_system_prompt_fn(),
             tools=self._build_tool_schemas_fn() or None,
             model=self._config.model or self._llm_service.model,
-            thinking=self._config.thinking or "high",
+            thinking=self._session_thinking(),
             agent_type=self._display_name,
             tracked=tracked,
             provider=self._config.provider,
@@ -344,6 +377,20 @@ class SessionManager:
         )
         self._attach_tool_result_recovery_lookup(self._chat)
         self._bind_reasoning_effort(self._chat)
+
+    def _session_thinking(self) -> str | None:
+        """Resolve the session-level ``thinking`` argument.
+
+        Provider-owned routes (``THINKING_OWNED_PROVIDERS``, e.g. DeepSeek)
+        keep an explicitly configured ``None`` so their provider policy can
+        honor omission (no reasoning field on the wire); promoting it to the
+        legacy cross-provider ``"high"`` default would change the payload and
+        corrupt the ``llm_call`` observation record. Every other provider keeps
+        the historical programmatic-``None`` -> ``"high"`` fallback.
+        """
+        if str(self._config.provider or "").lower() in THINKING_OWNED_PROVIDERS:
+            return self._config.thinking
+        return self._config.thinking or "high"
 
     # ------------------------------------------------------------------
     # Runtime reasoning effort (process-local, self-facing)
@@ -460,6 +507,7 @@ class SessionManager:
             "model": self._config.model or self._llm_service.model or "unknown",
             "api_call_id": api_call_id,
         }
+        llm_call_fields.update(_reasoning_observation_fields(self._chat))
         self._log("llm_call", **llm_call_fields)
 
         retry_timeout = self._config.retry_timeout

@@ -146,8 +146,13 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    providers: the Codex family, `anthropic`, `openai`, `deepseek`, and any
    block with `api_compat="openai"` (either `wire_api`). Non-Codex omission
    keeps the existing `high` runtime default; Codex omission keeps its
-   existing adapter-owned `xhigh` default. Invalid values or scopes fail
-   validation rather than being normalized silently.
+   existing adapter-owned `xhigh` default. DeepSeek is provider-owned: its
+   accepted values are validated per model and wire by its own policy
+   (`src/lingtai/llm/deepseek/policy.py`) rather than against the global
+   seven-level vocabulary, aliases such as `medium`/`xhigh` may normalize,
+   and omission sends no reasoning field so DeepSeek's own default applies.
+   Invalid values or scopes fail validation rather than being normalized
+   silently.
 
 ## Contract tests
 

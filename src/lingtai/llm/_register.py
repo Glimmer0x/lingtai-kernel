@@ -239,6 +239,7 @@ def register_all_adapters() -> None:
 
     def _deepseek(*, model=None, defaults=None, **kw):
         from .openai.adapter import OpenAIAdapter
+        from .deepseek.policy import apply_reasoning
         kw.pop("model", None)
         adapter_kw = {k: v for k, v in kw.items() if v is not None}
         d = defaults or {}
@@ -255,6 +256,9 @@ def register_all_adapters() -> None:
         # Lift the generic reasoning knobs from manifest defaults so DeepSeek
         # users get the manifest-level off switch too (fable R2 M); the
         # setdefaults below then only fill gaps for programmatic callers.
+        # ``reasoning_effort_vocab`` is still carried for schema compatibility
+        # but is not consulted on this route — see the reasoning_policy note
+        # below.
         for _k in ("inject_reasoning_fallback", "reasoning_effort_vocab", "prompt_cache_namespace"):
             if _k in d:
                 adapter_kw[_k] = d[_k]
@@ -263,8 +267,17 @@ def register_all_adapters() -> None:
         # matching the neighbouring wire_api/compact_threshold lines (fable F3).
         adapter_kw.setdefault("base_url", "https://api.deepseek.com")
         adapter_kw.setdefault("inject_reasoning_fallback", True)
-        adapter_kw.setdefault("reasoning_effort_vocab", "seven_tier")
         adapter_kw.setdefault("prompt_cache_namespace", "deepseek")
+        # DeepSeek's reasoning-effort surface is genuinely provider-specific
+        # (per-model canonical levels per wire, a ``thinking`` enable/disable
+        # switch, documented compatibility aliases, and an omitted-means-
+        # provider-default rule), so DeepSeek owns it in its own module and
+        # installs it here. The shared transport stays neutral and no adapter
+        # subclass is involved. This supersedes the generic
+        # ``reasoning_effort_vocab`` projection on this route — the former
+        # ``seven_tier`` default was a fabricated cross-provider vocabulary
+        # that DeepSeek never actually served.
+        adapter_kw.setdefault("reasoning_policy", apply_reasoning)
         # Preserve the old DeepSeekAdapter Responses-wire fidelity: stateless
         # replay (no server-side response storage) and no generic
         # context_management unless explicitly configured (MiMo/Codex
