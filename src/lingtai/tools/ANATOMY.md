@@ -1,6 +1,7 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/feishu/BEHAVIORS.md
@@ -8,6 +9,7 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/telegram/BEHAVIORS.md
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -49,6 +51,10 @@ related_files:
   - src/lingtai/tools/i18n/en.json
   - src/lingtai/tools/i18n/wen.json
   - src/lingtai/tools/i18n/zh.json
+  - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
 maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
   Browser is an internal browse child, not a second public capability. The

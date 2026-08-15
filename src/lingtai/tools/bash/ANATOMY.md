@@ -2,6 +2,8 @@
 related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/adapters/windows/ANATOMY.md
+  - src/lingtai/tools/ANATOMY.md
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/tools/bash/BEHAVIORS.md
   - src/lingtai/tools/bash/__init__.py

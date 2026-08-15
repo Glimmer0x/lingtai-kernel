@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/migrate/BEHAVIORS.md
   - src/lingtai/kernel/migrate/CONTRACT.md

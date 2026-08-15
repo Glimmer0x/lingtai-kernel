@@ -499,13 +499,13 @@ complete, not to pair with a governed contract.
   `integration_test_kimi_code.py`, named off the `test_*` collection pattern so
   the default run does not drive a real local CLI.
 - `contracts/llm_conversation_input/` — the contract-conformance sub-package for
-  provider conversation input. `regimes.py` holds the executable
+  provider conversation input. `tests/contracts/llm_conversation_input/regimes.py` holds the executable
   session-return matrix (`REGISTRY_EDGES`) that builds every registered
-  provider through the real `LLMService`, and `test_regime_inventory.py` asserts
+  provider through the real `LLMService`, and `tests/contracts/llm_conversation_input/test_regime_inventory.py` asserts
   that matrix equals the live registry key set, so adding a provider or
   rebinding a factory fails here rather than silently.
 - `unit/` and `unit/auth/` — the one explicitly-layered unit sub-package,
-  currently holding `test_codex_auth.py`.
+  currently holding `tests/unit/auth/test_codex_auth.py`.
 - `test_*.py` (~380 modules at the top level) — the bulk of the suite, named
   after the surface each covers rather than organized into directories.
   `test_architecture_documents.py`, `test_docs_governance.py`,

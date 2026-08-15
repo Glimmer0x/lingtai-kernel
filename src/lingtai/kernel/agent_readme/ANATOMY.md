@@ -28,5 +28,5 @@ maintenance: |
 
 - Template loaded via `importlib.resources.files(__package__).joinpath("README.md.tpl")`; package-data ships `.tpl` files (pyproject).
 - Mount points (each fail-soft): `_perform_refresh` (lifecycle), agent molt (`tools/context/_molt.py`), `BaseAgent` construction — README regeneration must never break lifecycle flow.
-- Reciprocal link: `prompts/substrate/substrate.md` frontmatter `related_files` lists `agent_readme/CONTRACT.md` and `agent_readme/README.md.tpl`.
+- Reciprocal link: `src/lingtai/prompts/substrate/substrate.md` frontmatter `related_files` lists `agent_readme/CONTRACT.md` and `agent_readme/README.md.tpl`.
 - Contract: `CONTRACT.md` next to this module fixes README/substrate role split and maintenance boundary.

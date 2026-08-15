@@ -2,6 +2,8 @@
 related_files:
   - src/lingtai/kernel/BEHAVIORS.md
   - src/lingtai/kernel/agent_readme/ANATOMY.md
+  - src/lingtai/kernel/agent_readme/CONTRACT.md
+  - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - ANATOMY.md
   - MANIFEST.in
@@ -18,6 +20,7 @@ related_files:
   - src/lingtai/kernel/lifecycle_clock/ANATOMY.md
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/base_agent/messaging.py
@@ -27,9 +30,12 @@ related_files:
   - src/lingtai/kernel/config.py
   - src/lingtai/kernel/config_resolve.py
   - src/lingtai/kernel/event_journal/ANATOMY.md
+  - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/handshake.py
   - src/lingtai/kernel/mail_transport/ANATOMY.md
+  - src/lingtai/kernel/mail_transport/CONTRACT.md
   - src/lingtai/kernel/workdir_lease/ANATOMY.md
+  - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
   - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
@@ -50,6 +56,7 @@ related_files:
   - src/lingtai/kernel/migrate/CONTRACT.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/kernel/notification_store/ANATOMY.md
+  - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/kernel/nudge/ANATOMY.md
   - src/lingtai/kernel/release_manifest.py
   - src/lingtai/kernel/preset_connectivity.py

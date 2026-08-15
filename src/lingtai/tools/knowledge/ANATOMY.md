@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/ANATOMY.md
+  - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/_catalog.py
   - src/lingtai/tools/knowledge/BEHAVIORS.md
   - src/lingtai/tools/knowledge/CONTRACT.md
@@ -38,11 +39,11 @@ the regular `read` tool.
   migration, `_reconcile`, `_knowledge_manual`, the `ToolFamily` composition
   (`_EMPTY_INPUT_SCHEMA`, `_CHILD_SPECS`, one `_build_family(agent | None)`),
   `get_description`, `get_schema`, `handle`, and `setup`, and imports shared
-  Markdown-catalog scanning/rendering from `core/_catalog.py`.
+  Markdown-catalog scanning/rendering from `src/lingtai/tools/_catalog.py`.
 - `tools/tool_family/` — the generic, optional LTP v2 composition/dispatch
   infrastructure this capability adopts for its schema and dispatch
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
-- `core/_catalog.py` — shared frontmatter parser, recursive Markdown catalog
+- `src/lingtai/tools/_catalog.py` — shared frontmatter parser, recursive Markdown catalog
   scanner, and YAML catalog renderer used by both `knowledge` and `skills`.
 - `knowledge/CONTRACT.md` — public behavior contract: tool surface, on-disk
   layout, prompt injection, knowledge/skill directionality, anchored claims,

@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/kernel/nudge/kernel_version.py
   - src/lingtai/kernel/release_manifest.py
   - scripts/lib/release_manifest.py
+  - src/lingtai/kernel/snapshot/ANATOMY.md
   - src/lingtai/kernel/nudge/source_drift.py
   - src/lingtai/kernel/nudge/prompts.py
   - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
@@ -86,7 +87,7 @@ the ordinary Notification Store channel; it does not create a second transport.
 
 ## Connections
 
-`base_agent/lifecycle.py:_heartbeat_loop` calls `run_checks` once per heartbeat
+`../base_agent/lifecycle.py` calls `run_checks` once per heartbeat
 (checks must never block on the network — long work goes to a background
 thread, see `kernel_version.py`);
 protected goal reminders are dispatched separately by

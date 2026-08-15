@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/kernel/daemon_supervisor/agent_stub.py
   - src/lingtai/adapters/posix/daemon_supervisor.py
   - src/lingtai/adapters/windows/daemon_supervisor.py
+  - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/execution_host.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
   - src/lingtai/adapters/posix/process_identity.py

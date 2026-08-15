@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/services/ANATOMY.md
   - src/lingtai/kernel/services/mail.py
   - src/lingtai/services/ANATOMY.md
 maintenance: |
