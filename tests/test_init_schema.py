@@ -495,7 +495,10 @@ def test_llm_thinking_invalid_for_anthropic(value):
         # Built-in OpenAI-wire providers, with api_compat left implicit.
         {"provider": "openai", "wire_api": "responses"},
         {"provider": "openai"},
-        {"provider": "deepseek"},
+        # DeepSeek owns its effort contract; a real served model is required
+        # (policy fail-closed per model/wire; covered deeply in
+        # test_deepseek_reasoning_effort.py).
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
     ],
 )
 def test_llm_thinking_accepted_for_openai_compatible(llm_patch):
