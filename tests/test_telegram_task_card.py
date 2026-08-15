@@ -379,6 +379,8 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     manager = TelegramManager(service, working_dir=Path(tmp_path),
                               on_inbound=lambda _: None, notification_store=notification_store_for(Path(tmp_path)))
     account = service.default_account
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
 
     # — Create via manager.handle (real dispatch) —
     create_args = {
@@ -431,6 +433,10 @@ def test_full_routing_chain_create_update_finalize(tmp_path):
     }
     r3 = manager.handle(finalize_args)
     assert r3["status"] == "ok"
+    # Finalize is the pending-latest transition while the update edit owns the
+    # interval.  It must be accepted synchronously and delivered once eligible.
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._flush_pending_task_card_edits()
     final_edit_calls = [c for c in account.calls if c[0] == "edit_message"]
     assert any("✅ TASK CARD · DONE" in c[3] for c in final_edit_calls)
 

@@ -154,6 +154,8 @@ def test_many_repeated_creates_never_send_or_delete_again(tmp_path):
     ever edit — one send total, zero deletes, id stable throughout."""
     manager, service = _manager(tmp_path)
     acct = service.default_account
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
 
     r = _create(manager, reasoning="r0")
     resident = r["message_id"]
@@ -163,7 +165,12 @@ def test_many_repeated_creates_never_send_or_delete_again(tmp_path):
 
     assert len(_sends(acct)) == 1
     assert not _deletes(acct)
-    assert len(_edits(acct)) == 5  # one edit per repeated create
+    # r1 consumes this interval; r2..r5 coalesce to the newest accepted intent.
+    assert len(_edits(acct)) == 1
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._flush_pending_task_card_edits()
+    assert len(_edits(acct)) == 2
+    assert "r5" in _edits(acct)[-1][3]
     assert acct.get_task_card(999) == resident
 
 

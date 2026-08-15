@@ -49,6 +49,17 @@ def _manager(workdir: Path, service: TelegramService, inbound=None) -> TelegramM
     )
 
 
+def _controlled_gate(manager: TelegramManager):
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+
+    def drain():
+        now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+        manager._flush_pending_task_card_edits()
+
+    return drain
+
+
 def _incoming_message(message_id: int = 53, *, text: str = "hello") -> dict[str, Any]:
     return {
         "id": f"main:123:{message_id}",
@@ -97,11 +108,21 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
     service = _service(tmp_path, "main")
     service.set_taskcard_enabled(False)
     state_path = tmp_path / "telegram" / "taskcard.json"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": False, "normal_rows": 1, "max_refreshes": 1000}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "taskcard": False,
+        "normal_rows": 1,
+        "max_refreshes": 1000,
+        "locale": "en",
+    }
     assert _service(tmp_path, "main").taskcard_enabled() is False
 
     service.set_taskcard_enabled(True)
-    assert json.loads(state_path.read_text(encoding="utf-8")) == {"taskcard": True, "normal_rows": 1, "max_refreshes": 1000}
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {
+        "taskcard": True,
+        "normal_rows": 1,
+        "max_refreshes": 1000,
+        "locale": "en",
+    }
     assert _service(tmp_path, "main").taskcard_enabled() is True
 
 
@@ -246,7 +267,7 @@ def test_taskcard_invalid_help_and_unauthorized_forms_do_not_mutate(
             "update_id": update_id,
             "message": {"from": {"id": 7}, "chat": {"id": 10}, "text": text},
         })
-        assert replies[-1] == "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
+        assert replies[-1] == "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10) | /taskcard lang zh|en"
         assert service.taskcard_enabled() is True
 
     account._process_update({
@@ -441,6 +462,7 @@ def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reen
 ) -> None:
     service = _service(tmp_path, "main")
     manager = _manager(tmp_path, service)
+    drain = _controlled_gate(manager)
     account = service.get_account("main")
     sends: list[str] = []
     monkeypatch.setattr(
@@ -466,6 +488,7 @@ def test_programmable_watch_keeps_rendering_while_hidden_and_projects_after_reen
     service.set_taskcard_enabled(True)
     (taskcard_dir / "taskcard.md").write_text("visible latest", encoding="utf-8")
     manager._broadcast_programmable_task_card_file()
+    drain()
     assert any("visible latest" in text for text in sends)
 
 
@@ -477,6 +500,7 @@ def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
     /taskcard is turned back on. Ordinary hidden create/update stay untouched."""
     service = _service(tmp_path, "main")
     manager = _manager(tmp_path, service)
+    drain = _controlled_gate(manager)
     account = service.get_account("main")
     rendered: dict[int, str] = {}
 
@@ -503,8 +527,12 @@ def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
             args["card"] = card
         return manager._handle_task_card_update(args)
 
-    # A visible programmable resident is created and committed.
+    # A visible programmable resident is created and committed.  Leave a newer
+    # programmable body pending so hidden finalize must supersede it too.
     assert prog("create", {"lines": ["live watch"]})["status"] == "ok"
+    assert prog("update", {"lines": ["visible update"]})["status"] == "ok"
+    assert prog("update", {"lines": ["stale pending watch"]})["status"] == "ok"
+    assert manager._task_card_edit_is_pending("main", 123)
     assert manager._task_card_channels["main:123"].get("programmable")
 
     # Hide delivery, then STOP (finalize) the hidden watch: no transport occurs,
@@ -515,6 +543,7 @@ def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
     assert result.get("suppressed") is True
     assert len(rendered) == sends_before  # no transport while suppressed
     assert "programmable" not in manager._task_card_channels.get("main:123", {})
+    assert manager._task_card_pending_edits[("main", 123)][1] is None
 
     # Re-enable and drive an automatic update: the stale watch frame is gone.
     service.set_taskcard_enabled(True)
@@ -527,9 +556,11 @@ def test_stopping_a_hidden_programmable_watch_does_not_resurface_after_reenable(
             "reasoning": "after reenable",
         }
     )
+    drain()
     latest = rendered[max(rendered)]
     assert "after reenable" in latest
     assert "live watch" not in latest
+    assert "stale pending watch" not in latest
     assert "— TASK CARD —" not in latest
 
 
@@ -705,6 +736,7 @@ def test_taskcard_normal_rows_persist_and_are_shared_across_accounts(tmp_path: P
         "taskcard": True,
         "normal_rows": 7,
         "max_refreshes": 1000,
+        "locale": "en",
     }
     restored = _service(tmp_path, "one")
     assert restored.taskcard_enabled() is True
@@ -762,7 +794,7 @@ def test_taskcard_numeric_command_is_strict_and_does_not_toggle(
     assert service.taskcard_normal_rows() == 7
     assert "normal rows: 7" in replies[-1]
 
-    usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10)"
+    usage = "❌ Usage: /taskcard on | /taskcard off | /taskcard N (1-10) | /taskcard lang zh|en"
     for update_id, value in enumerate(
         ("0", "11", "-1", "1.5", "seven", "٧", "7 extra"), 2
     ):

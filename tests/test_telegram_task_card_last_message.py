@@ -495,6 +495,8 @@ def test_persistence_failure_keeps_only_new_visible_card_and_fails_loud(tmp_path
 # ---------------------------------------------------------------------------
 def test_concurrent_channels_serialize_one_rotation(tmp_path):
     manager, account = _manager(tmp_path)
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
     _automatic(manager, "create", reasoning="first")  # mybot:55:100
     account.observe_incoming(55, 200)
 
@@ -548,6 +550,16 @@ def test_concurrent_channels_serialize_one_rotation(tmp_path):
     assert _calls(account, "delete") == [("delete", 55, 100)]
     assert account.resident[55] == "mybot:55:201"
     assert all(result["message_id"] == "mybot:55:201" for result in results)
+
+    # Whichever producer lost the rotation race remains pending.  Replace the
+    # barrier-only test lock, advance one real interval, and prove the eventual
+    # resident composition retains both producers' latest logical slots.
+    manager._task_card_delivery_locks["mybot:55"] = threading.RLock()
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._flush_pending_task_card_edits()
+    assert "auto" in account.messages[201]
+    assert "steady" in account.messages[201]
+    assert not manager._task_card_edit_is_pending("mybot", 55)
 
 
 # ---------------------------------------------------------------------------

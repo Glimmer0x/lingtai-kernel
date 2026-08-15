@@ -111,6 +111,10 @@ def _manager(tmp_path, *accounts):
         on_inbound=lambda _: None,
         notification_store=FakeNotificationStore(),
     )
+    # Most projection tests intentionally perform several semantic transitions
+    # synchronously; disable wall-clock throttling unless a test explicitly opts
+    # into the production interval with a deterministic fake clock.
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 0.0
     return manager, service
 
 
@@ -1333,12 +1337,17 @@ def test_blanket_rebuild_skips_unchanged_frame(tmp_path):
     assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
 
 
-def test_blanket_force_bypasses_fingerprint_dedupe(tmp_path):
-    """Truncation/replacement uses force=True so identical rehydrated frames
-    still re-edit rather than being suppressed by the unchanged-fingerprint
-    fast path."""
+def test_blanket_force_bypasses_fingerprint_but_not_edit_gate(tmp_path):
+    """Truncation/replacement remains a legal forced re-render after the gate.
+
+    ``force=True`` bypasses only unchanged-fingerprint dedupe; it cannot violate
+    the per-target hard edit interval.
+    """
     acct = FakeAccount()
     manager, service = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
     _pre_resident(acct, 555, manager)
 
     events_path = _events_path(tmp_path)
@@ -1347,10 +1356,59 @@ def test_blanket_force_bypasses_fingerprint_dedupe(tmp_path):
     assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
     acct.calls.clear()
 
-    # Force broadcast (the truncation path) must edit even though the frame
-    # fingerprint is unchanged.
+    manager._broadcast_task_card_event_window(force=True)
+    assert acct.calls == []
+
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
     manager._broadcast_task_card_event_window(force=True)
     assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+
+
+def test_replacement_force_throttled_retries_on_next_ordinary_blanket(tmp_path):
+    """A one-shot replacement force survives the gate until real delivery.
+
+    The replacement has byte-identical semantic content, so its normalized
+    fingerprint equals the previously delivered frame.  The subsequent call is
+    deliberately an ordinary blanket (no caller repeats ``force=True``).
+    """
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+    _pre_resident(acct, 555, manager)
+
+    events_path = _events_path(tmp_path)
+    line = _tool_call_line()
+    _write_lines(events_path, [line])
+    manager._poll_event_tail()
+    assert len([c for c in acct.calls if c[0] == "edit_message"]) == 1
+    delivered_fingerprint = manager._task_card_automatic_fingerprints[("mybot", 555)]
+    acct.calls.clear()
+
+    # Atomic same-content replacement changes file identity and takes the sole
+    # production force=True branch while the target gate remains closed.
+    replacement = events_path.with_suffix(".replacement")
+    _write_lines(replacement, [line])
+    replacement.replace(events_path)
+    manager._poll_event_tail()
+
+    assert acct.calls == []
+    assert manager._task_card_automatic_fingerprints[("mybot", 555)] == (
+        delivered_fingerprint
+    )
+    assert ("mybot", 555) in manager._task_card_pending_force
+
+    # Once eligible, a plain blanket drains the retained force before unchanged
+    # fingerprint dedupe and performs the required re-render exactly once.
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._broadcast_task_card_event_window()
+
+    edits = [c for c in acct.calls if c[0] == "edit_message"]
+    assert len(edits) == 1
+    assert "bash" in edits[0][3]
+    assert ("mybot", 555) not in manager._task_card_pending_force
+    assert not manager._task_card_edit_is_pending("mybot", 555)
 
 
 def test_blanket_resends_when_resident_lost_on_same_frame(tmp_path, monkeypatch):
@@ -1419,14 +1477,161 @@ def test_pure_tool_turn_renders_api_usage_from_llm_response_group(tmp_path):
     assert "85.0%" in rendered
 
 
-def test_fingerprint_ignores_last_updated_line_only(tmp_path):
-    """The volatile Last Updated line must not change the fingerprint; any
-    other content change must."""
+def test_changed_poll_and_blanket_share_per_target_edit_gate(
+    tmp_path, monkeypatch,
+):
+    """A changed poll plus its same-tick blanket may issue one edit per target.
+
+    The metadata mutation between renders models async state changing in the
+    narrow gap that used to make both broadcasts perform real Telegram edits.
+    """
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+    _pre_resident(acct, 111, manager)
+    _pre_resident(acct, 222, manager)
+    live_metadata = {"api_calls": 1}
+    monkeypatch.setattr(
+        manager,
+        "_task_card_event_metadata_snapshot",
+        lambda: dict(live_metadata),
+    )
+
+    _write_lines(_events_path(tmp_path), [_tool_call_line()])
+    manager._poll_event_tail()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert [call[1] for call in edits] == [111, 222]
+
+    # The blanket sees genuinely different content, not a fingerprint no-op,
+    # but both target-local gates are still closed in this tick.
+    live_metadata["api_calls"] = 2
+    manager._broadcast_task_card_event_window()
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 2
+
+    now[0] += 4.999
+    manager._broadcast_task_card_event_window()
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 2
+
+    now[0] += 0.001
+    manager._broadcast_task_card_event_window()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert [call[1] for call in edits] == [111, 222, 111, 222]
+    assert all("calls 2" in call[3] for call in edits[-2:])
+
+
+def test_inbound_ensure_and_enable_callback_use_same_resident_gate(
+    tmp_path, monkeypatch,
+):
+    """Both loop-external automatic update paths share the edit timestamp."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [200.0]
+    manager._task_card_edit_clock = lambda: now[0]
+    _pre_resident(acct, 555, manager)
+    live_metadata = {"api_calls": 1}
+    monkeypatch.setattr(
+        manager,
+        "_task_card_event_metadata_snapshot",
+        lambda: dict(live_metadata),
+    )
+
+    manager._broadcast_task_card_event_window()
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 1
+
+    # Real inbound handling calls _ensure_task_card_resident outside the tail
+    # loop. It must not edit the same resident again inside the interval.
+    manager.on_incoming("mybot", {"message": {
+        "message_id": 8,
+        "date": 1781600000,
+        "from": {"username": "alice"},
+        "chat": {"id": 555, "type": "private"},
+        "text": "hello",
+    }})
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 1
+
+    # Re-enable sees changed automatic content and therefore reaches delivery;
+    # the same resident gate, rather than fingerprint dedupe, suppresses it.
+    live_metadata["api_calls"] = 2
+    manager._on_taskcard_changed(False)
+    manager._on_taskcard_changed(True)
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 1
+
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    manager._on_taskcard_changed(False)
+    manager._on_taskcard_changed(True)
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert len(edits) == 2
+    assert "calls 2" in edits[-1][3]
+
+
+def test_active_seconds_tick_does_not_edit_after_interval(
+    tmp_path, monkeypatch,
+):
+    """An eligible blanket tick still dedupes a pure active-seconds change."""
+    acct = FakeAccount()
+    manager, _ = _manager(tmp_path, acct)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 5.0
+    now = [300.0]
+    manager._task_card_edit_clock = lambda: now[0]
+    _pre_resident(acct, 555, manager)
+    live_metadata = {
+        "agent_lifecycle": "active",
+        "agent_active_seconds": 1.0,
+    }
+    monkeypatch.setattr(
+        manager,
+        "_task_card_event_metadata_snapshot",
+        lambda: dict(live_metadata),
+    )
+
+    manager._broadcast_task_card_event_window()
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 1
+
+    now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+    live_metadata["agent_active_seconds"] = 6.0
+    manager._broadcast_task_card_event_window()
+    assert len([call for call in acct.calls if call[0] == "edit_message"]) == 1
+
+    live_metadata.clear()
+    live_metadata["agent_lifecycle"] = "idle"
+    manager._broadcast_task_card_event_window()
+    edits = [call for call in acct.calls if call[0] == "edit_message"]
+    assert len(edits) == 2
+    assert "agent · idle" in edits[-1][3]
+
+
+def test_fingerprint_ignores_only_wall_clock_ticks(tmp_path):
+    """Last Updated and active seconds are volatile; lifecycle/content are not."""
     manager, _ = _manager(tmp_path, FakeAccount())
-    a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 U+8"
-    b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 U+8"
-    c = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 U+8"
-    assert manager._task_card_automatic_fingerprint(a) == \
-        manager._task_card_automatic_fingerprint(b)
-    assert manager._task_card_automatic_fingerprint(a) != \
-        manager._task_card_automatic_fingerprint(c)
+    timestamp_a = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:00 U+8"
+    timestamp_b = "\u2699 WORKING\n\u2022 row\n\nfooter\nLast Updated: 10:00:01 U+8"
+    other_row = "\u2699 WORKING\n\u2022 other\n\nfooter\nLast Updated: 10:00:00 U+8"
+    assert manager._task_card_automatic_fingerprint(timestamp_a) == \
+        manager._task_card_automatic_fingerprint(timestamp_b)
+    assert manager._task_card_automatic_fingerprint(timestamp_a) != \
+        manager._task_card_automatic_fingerprint(other_row)
+
+    def render(metadata):
+        return TaskCardEventProjection.render_event_groups(
+            [], metadata=metadata, normal_rows=1,
+        )
+
+    active_12 = render({
+        "agent_lifecycle": "active", "agent_active_seconds": 12.0,
+    })
+    active_13 = render({
+        "agent_lifecycle": "active", "agent_active_seconds": 13.0,
+    })
+    idle = render({"agent_lifecycle": "idle"})
+    active_with_usage = render({
+        "agent_lifecycle": "active",
+        "agent_active_seconds": 13.0,
+        "api_calls": 1,
+    })
+    fingerprint = manager._task_card_automatic_fingerprint
+    assert fingerprint(active_12) == fingerprint(active_13)
+    assert fingerprint(active_12) != fingerprint(idle)
+    assert fingerprint(active_13) != fingerprint(active_with_usage)
