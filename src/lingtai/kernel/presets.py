@@ -42,6 +42,7 @@ from typing import Callable
 from .config import (
     THINKING_LEVELS,
     THINKING_NATIVE_PROVIDERS,
+    THINKING_OWNED_PROVIDERS,
     THINKING_PROVIDERS,
     llm_supports_thinking,
 )
@@ -372,7 +373,13 @@ def load_preset(
                 "OpenAI-compatible block (api_compat=openai)"
             )
         thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+        # A provider that owns its own effort contract is validated against the
+        # exact selected model and wire by the lingtai-layer preset loader
+        # (``lingtai.agent.load_preset``); the kernel must not second-guess it
+        # with a cross-provider level tuple it does not own.
+        if str(llm.get("provider") or "").lower() not in THINKING_OWNED_PROVIDERS and (
+            not isinstance(thinking, str) or thinking not in THINKING_LEVELS
+        ):
             raise ValueError(
                 f"preset {name!r} ({p}): manifest.llm.thinking must be one of "
                 f"{', '.join(THINKING_LEVELS)}"

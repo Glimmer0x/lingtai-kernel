@@ -18,7 +18,11 @@ from typing import Any
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
-from lingtai.kernel.config import AgentConfig, THINKING_PROVIDERS
+from lingtai.kernel.config import (
+    AgentConfig,
+    THINKING_OWNED_PROVIDERS,
+    THINKING_PROVIDERS,
+)
 from lingtai.kernel.llm.base import ToolCall
 from lingtai.llm.service import (
     CONSERVATIVE_CONTEXT_WINDOW,
@@ -63,9 +67,33 @@ def load_preset(name: str, working_dir: "Path | None" = None) -> dict:
     """
     from lingtai.kernel.presets import load_preset as _core_load_preset
 
-    return _core_load_preset(
+    preset = _core_load_preset(
         name, working_dir=working_dir, run_migrations=_run_preset_library_migrations
     )
+    _validate_provider_owned_thinking(preset, name)
+    return preset
+
+
+def _validate_provider_owned_thinking(preset: dict, name: str) -> None:
+    """Apply a provider-owned effort contract to a loaded preset.
+
+    The kernel validator only decides whether ``manifest.llm.thinking`` is in
+    scope; it must not import provider modules (the DAG is
+    lingtai -> tools -> lingtai.kernel, enforced by
+    tests/test_kernel_isolation.py). The exact per-model/per-wire accepted set
+    is owned by the provider and applied here, on the shared preset-loading
+    path the CLI, each ``Agent``'s ``_preset_loader`` hook, and ``Agent``'s own
+    preset paths all use.
+    """
+    from lingtai.llm.deepseek.policy import owns_provider, validate_llm_block
+
+    llm = (preset or {}).get("manifest", {}).get("llm")
+    if not isinstance(llm, dict) or not owns_provider(llm.get("provider")):
+        return
+    try:
+        validate_llm_block(llm)
+    except ValueError as exc:
+        raise ValueError(f"preset {name!r}: {exc}") from exc
 
 
 def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig:
@@ -94,14 +122,17 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         cache_miss_budget=manifest.get(
             "cache_miss_budget", defaults.cache_miss_budget
         ),
-        # Codex-family providers own their omitted-thinking default at the
-        # adapter (omitted -> reasoning.effort "xhigh"), so an omitted manifest
-        # value stays the "default" sentinel for them instead of being promoted
-        # to the legacy cross-provider "high" main-session default.
+        # Providers that own their omitted-thinking default keep the "default"
+        # sentinel instead of being promoted to the legacy cross-provider
+        # "high" main-session default: the Codex family (omitted ->
+        # reasoning.effort "xhigh") and the provider-owned routes such as
+        # DeepSeek (omitted -> no reasoning field at all, so the provider's own
+        # default applies). Every other provider hydrates exactly as before.
         thinking=llm.get(
             "thinking",
             "default"
-            if str(llm.get("provider") or "").lower() in THINKING_PROVIDERS
+            if str(llm.get("provider") or "").lower()
+            in THINKING_PROVIDERS + THINKING_OWNED_PROVIDERS
             else defaults.thinking,
         ),
         # Molt thresholds and the context.molt message are kernel-fixed runtime

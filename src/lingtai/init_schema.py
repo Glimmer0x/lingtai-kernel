@@ -205,7 +205,7 @@ LLM_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # currently ignore these manifest keys.
     "inject_reasoning_fallback": (bool, NoneType),
     # Chat Completions ``reasoning_effort`` vocabulary: ``openai`` (high/low
-    # mapping) or ``seven_tier`` (kernel THINKING_LEVELS passthrough, DeepSeek).
+    # mapping) or retained ``seven_tier`` kernel-level passthrough compatibility.
     "reasoning_effort_vocab": (str, NoneType),
     # Fixed provider namespace for the auto-derived ``prompt_cache_key``.
     "prompt_cache_namespace": (str, NoneType),
@@ -484,7 +484,15 @@ def validate_init(data: dict) -> list[str]:
                     + (f" api_compat={llm.get('api_compat')!r}" if llm.get("api_compat") else "")
                 )
     if "thinking" in llm:
-        if not llm_supports_thinking(llm):
+        # DeepSeek owns its own effort surface: what a manifest may carry
+        # depends on the exact model and wire, so validation delegates to the
+        # DeepSeek module rather than to the kernel-global level tuple. That
+        # tuple is deliberately NOT extended with DeepSeek vocabulary.
+        from lingtai.llm.deepseek.policy import owns_provider, validate_llm_block
+
+        if owns_provider(llm.get("provider")):
+            validate_llm_block(llm)
+        elif not llm_supports_thinking(llm):
             raise ValueError(
                 "manifest.llm.thinking is supported only for "
                 "thinking-capable providers — the Codex providers "
@@ -492,12 +500,13 @@ def validate_init(data: dict) -> list[str]:
                 f"{', '.join(THINKING_NATIVE_PROVIDERS)}, or any "
                 "OpenAI-compatible block (api_compat=openai)"
             )
-        thinking = llm["thinking"]
-        if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
-            raise ValueError(
-                "manifest.llm.thinking: expected one of "
-                f"{', '.join(THINKING_LEVELS)}"
-            )
+        else:
+            thinking = llm["thinking"]
+            if not isinstance(thinking, str) or thinking not in THINKING_LEVELS:
+                raise ValueError(
+                    "manifest.llm.thinking: expected one of "
+                    f"{', '.join(THINKING_LEVELS)}"
+                )
     for key in llm:
         if key not in LLM_KNOWN:
             warnings.append(f"unknown field in manifest.llm: {key}")

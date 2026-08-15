@@ -38,10 +38,11 @@ and no lower-level helper standing in for the real factory:
    builds a *real* session with a *mocked transport*; the parametrized tests drive
    the two inputs the kernel ``ChatSession`` ABC declares (``send(str)`` /
    ``send(list[ToolResultBlock])``), assert the exact provider wire, AND assert
-   the returned ``LLMResponse`` + concrete ``UsageMetadata``. The subclasses that
-   override ``_build_messages`` (DeepSeek / MiMo / Zhipu) are built as their real
-   classes, Codex runs both inputs through its own REST machinery, and
-   ``_GatedSession`` is characterized wrapping a real concrete session. This layer
+   the returned ``LLMResponse`` + concrete ``UsageMetadata``. The
+   DeepSeek-configured shared session and the concrete MiMo / Zhipu subclasses
+   are built with their provider-specific construction, Codex runs both inputs
+   through its own REST machinery, and ``_GatedSession`` is characterized
+   wrapping a real concrete session. This layer
    is keyed by session *class* on a single common-input turn; the stateful vs
    stateless **mode** split within ``OpenAIResponsesSession`` — which shares one
    class — is NOT a distinct row here. That #861 boundary is owned by Layer 1's
@@ -235,8 +236,9 @@ class Regime:
     conforms: bool = True
     expected_text_wire: Any = None
     expected_tool_result_wire: Any = None
-    # For subclasses whose wire transform only shows on the paired continuation
-    # (DeepSeek/MiMo inject reasoning_content; asserted via this extra check).
+    # For provider-specific constructions whose wire transform only shows on the
+    # paired continuation (the DeepSeek-configured shared session and MiMo
+    # subclass inject reasoning_content; asserted via this extra check).
     extra_tool_result_assert: Callable[[Any], None] | None = None
 
 
@@ -272,8 +274,8 @@ def _build_openai_chat() -> tuple[Any, Any]:
 
 
 def _build_openai_compatible_subclass(session_class) -> tuple[Any, Any]:
-    """Build one of the OpenAI-Chat subclasses (DeepSeek/MiMo/Zhipu) as its real
-    class with a mocked Chat Completions client."""
+    """Build one of the OpenAI-Chat subclasses (MiMo/Zhipu) as its real class
+    with a mocked Chat Completions client."""
     client = _mock_openai_completions_client()
     session = session_class(
         client=client,
@@ -316,8 +318,9 @@ def _build_zhipu_chat() -> tuple[Any, Any]:
 
 
 def _assert_reasoning_content_injected(wire) -> None:
-    """DeepSeek/MiMo inject ``reasoning_content`` on the assistant tool-call turn;
-    the base ``OpenAIChatSession`` never does. Proves the subclass wire transform
+    """The DeepSeek-configured shared session and MiMo subclass inject
+    ``reasoning_content`` on the assistant tool-call turn; the unconfigured base
+    ``OpenAIChatSession`` never does. Proves the provider-specific construction
     coexists with the canonical tool-result rendering."""
     assistant_msgs = [
         m for m in wire if isinstance(m, dict) and m.get("role") == "assistant"

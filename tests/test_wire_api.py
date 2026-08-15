@@ -323,9 +323,8 @@ def test_chat_completions_rejects_invalid_thinking():
 
 
 def test_chat_completions_seven_tier_projects_xhigh_default():
-    """Endpoints whose v1 wire accepts the full seven-tier set (e.g. DeepSeek,
-    ``reasoning_effort_vocab="seven_tier"``) project the Responses xhigh
-    default explicitly instead of omitting it."""
+    """The retained generic ``seven_tier`` compatibility vocabulary projects
+    the Responses xhigh default explicitly instead of omitting it."""
     kwargs = _chat_session_kwargs(
         thinking="default", reasoning_effort_vocab="seven_tier"
     )
