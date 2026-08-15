@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/telegram/BEHAVIORS.md
   - src/lingtai/tools/web_search/ANATOMY.md

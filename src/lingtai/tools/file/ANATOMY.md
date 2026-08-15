@@ -1,5 +1,6 @@
 ---
 related_files:
+  - crates/lingtai-search-sidecar/ANATOMY.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/file/BEHAVIORS.md

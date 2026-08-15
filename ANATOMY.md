@@ -58,6 +58,7 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/init.jsonc
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/snapshot/ANATOMY.md
   - tests/ANATOMY.md
   - tests/CONTRACT.md

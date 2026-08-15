@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/kernel/agent_presence/CONTRACT.md
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/agent_presence/__init__.py
+  - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/agent_presence.py
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py

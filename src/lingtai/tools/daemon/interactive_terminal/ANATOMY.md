@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md
   - src/lingtai/adapters/posix/interactive_terminal.py
   - src/lingtai/adapters/posix/ANATOMY.md
+  - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/daemon/claude_interactive.py
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/ANATOMY.md

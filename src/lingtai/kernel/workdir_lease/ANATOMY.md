@@ -76,7 +76,7 @@ This is a navigation-only Port anatomy; the concrete `flock` mechanism, its
 ordering, and its recovery semantics are normative in the paired `CONTRACT.md`.
 There is no second concrete lease mechanism in the kernel — the old
 `WorkingDir.acquire_lock`/`release_lock` methods and their module-level
-`msvcrt`/`fcntl` branch were retired from `kernel/workdir.py`, leaving a single
+`msvcrt`/`fcntl` branch were retired from `../workdir.py`, leaving a single
 lock authority behind this Port. Read-only lock observers (maintenance retention,
 doctor diagnostics) inspect lock state without acquiring this lease and are not
 authority-bearing consumers.

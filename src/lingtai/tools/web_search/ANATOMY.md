@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/tools/registry.py
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/web_search/CONTRACT.md
@@ -148,7 +149,7 @@ action implementations, settings, and diagnostics.
 
 ## Connections
 
-`registry.py` maps public `web` to this package and maps legacy input
+`src/lingtai/tools/registry.py` maps public `web` to this package and maps legacy input
 `web_search` one-way to `web`. `WebManager` calls only `SearchService` for
 search and only `BrowserEngine` for browse; neither path crosses into the other
 transport. Agent manual installation maps this retained package's `manual/` to

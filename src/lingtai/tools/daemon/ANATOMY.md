@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/services/mcp.py
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
+  - src/lingtai/llm/openai/ANATOMY.md
   - src/lingtai/tools/daemon/process_port.py
   - src/lingtai/tools/daemon/interactive_terminal/__init__.py
   - src/lingtai/tools/daemon/interactive_terminal/CONTRACT.md

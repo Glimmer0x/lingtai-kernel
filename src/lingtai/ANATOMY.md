@@ -142,7 +142,7 @@ unsupported platforms fail loudly.
 
 ## Composition
 
-Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai/kernel/` (kernel package) and the `lingtai/tools/` package (concrete built-in tools; see `tools/ANATOMY.md`). Siblings: `llm/`, `services/`, `auth/`. See `../ANATOMY.md`.
+Parent: `src/lingtai/` under `lingtai-kernel/src/` alongside `lingtai/kernel/` (kernel package) and the `lingtai/tools/` package (concrete built-in tools; see `tools/ANATOMY.md`). Siblings: `llm/`, `services/`, `auth/`. See `../../ANATOMY.md`.
 
 ## State
 
