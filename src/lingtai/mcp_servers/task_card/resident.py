@@ -44,6 +44,10 @@ class TaskCardResident:
     EDIT_OK = "ok"
     EDIT_IMPOSSIBLE = "edit_impossible"
     EDIT_FAILED = "failed"
+    # The provider accepted the logical projection, but its hard edit interval
+    # deferred transport.  The provider adapter owns the pending-latest retry;
+    # resident commits the channel slot so later compositions cannot lose it.
+    EDIT_THROTTLED = "throttled"
 
     DELETE_OK = "ok"
     DELETE_MISSING = "missing"
@@ -187,31 +191,8 @@ class TaskCardResident:
         empty_fallback: str | None = None,
         thread_id: str | int | None = None,
     ) -> dict[str, Any]:
-        if channel not in self.CHANNELS:
-            return {"status": "error", "error": f"Unknown channel: {channel}"}
         with self.delivery_lock(account, chat_id, thread_id):
-            if not self.enabled():
-                if channel == "programmable" and frame is None:
-                    self.set_frame(
-                        account,
-                        chat_id,
-                        channel,
-                        None,
-                        thread_id=thread_id,
-                    )
-                return {"status": "ok", "suppressed": True, "taskcard": False}
-            if self._transport is None:
-                assert self._legacy_deliver is not None
-                return self._legacy_deliver(
-                    account,
-                    chat_id,
-                    channel,
-                    frame,
-                    error=error,
-                    resident_id=resident_id,
-                    empty_fallback=empty_fallback,
-                )
-            return self.deliver_locked(
+            return self.project_locked(
                 account,
                 chat_id,
                 channel,
@@ -221,6 +202,53 @@ class TaskCardResident:
                 empty_fallback=empty_fallback,
                 thread_id=thread_id,
             )
+
+    def project_locked(
+        self,
+        account: str,
+        chat_id: str | int,
+        channel: str,
+        frame: str | None,
+        *,
+        error: str,
+        resident_id: str | None = None,
+        empty_fallback: str | None = None,
+        thread_id: str | int | None = None,
+    ) -> dict[str, Any]:
+        """Project while the caller already owns this route's delivery lock."""
+        if channel not in self.CHANNELS:
+            return {"status": "error", "error": f"Unknown channel: {channel}"}
+        if not self.enabled():
+            if channel == "programmable" and frame is None:
+                self.set_frame(
+                    account,
+                    chat_id,
+                    channel,
+                    None,
+                    thread_id=thread_id,
+                )
+            return {"status": "ok", "suppressed": True, "taskcard": False}
+        if self._transport is None:
+            assert self._legacy_deliver is not None
+            return self._legacy_deliver(
+                account,
+                chat_id,
+                channel,
+                frame,
+                error=error,
+                resident_id=resident_id,
+                empty_fallback=empty_fallback,
+            )
+        return self.deliver_locked(
+            account,
+            chat_id,
+            channel,
+            frame,
+            error=error,
+            resident_id=resident_id,
+            empty_fallback=empty_fallback,
+            thread_id=thread_id,
+        )
 
     def deliver_locked(
         self,
@@ -272,7 +300,7 @@ class TaskCardResident:
                 return outcome
 
             edit_outcome, edit_error = transport.edit(resident_id, text)
-            if edit_outcome == self.EDIT_OK:
+            if edit_outcome in (self.EDIT_OK, self.EDIT_THROTTLED):
                 self.set_frame(
                     account,
                     chat_id,
@@ -280,7 +308,13 @@ class TaskCardResident:
                     frame,
                     thread_id=thread_id,
                 )
-                return {"status": "ok", "message_id": resident_id}
+                outcome: dict[str, Any] = {
+                    "status": "ok",
+                    "message_id": resident_id,
+                }
+                if edit_outcome == self.EDIT_THROTTLED:
+                    outcome["pending"] = True
+                return outcome
             if edit_outcome == self.EDIT_FAILED:
                 return {"status": "error", "error": edit_error or error}
 
@@ -340,6 +374,14 @@ class TaskCardResident:
             probe_outcome, probe_error = transport.edit(stale_id, committed_text)
             if probe_outcome == self.EDIT_FAILED:
                 return {"status": "error", "error": probe_error or error}
+            if probe_outcome == self.EDIT_THROTTLED:
+                # The provider adapter retries the whole latest projection, not
+                # this existence-probe text, once the route becomes eligible.
+                return {
+                    "status": "ok",
+                    "message_id": stale_id,
+                    "pending": True,
+                }
         return self.replace_after_probe(route, stale_id, text, error=error)
 
     def replace_after_probe(
@@ -363,12 +405,15 @@ class TaskCardResident:
         current = transport.get_resident(route)
         if current and current != stale_id:
             adopt_outcome, adopt_error = transport.edit(current, text)
-            if adopt_outcome == self.EDIT_OK:
-                return {
+            if adopt_outcome in (self.EDIT_OK, self.EDIT_THROTTLED):
+                outcome = {
                     "status": "ok",
                     "message_id": current,
                     "adopted_resident": True,
                 }
+                if adopt_outcome == self.EDIT_THROTTLED:
+                    outcome["pending"] = True
+                return outcome
             if adopt_outcome == self.EDIT_FAILED:
                 return {"status": "error", "error": adopt_error or error}
 

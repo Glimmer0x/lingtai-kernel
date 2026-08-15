@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
 
 from lingtai.mcp_servers.telegram.manager import TelegramManager
 from tests._notification_store_helpers import FakeNotificationStore
@@ -99,8 +101,21 @@ def _calls(account, kind):
     return [call for call in account.calls if call[0] == kind]
 
 
+def _controlled_gate(manager):
+    """Keep the production interval while advancing monotonic deterministically."""
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+
+    def drain():
+        now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+        manager._flush_pending_task_card_edits()
+
+    return drain
+
+
 def test_repeated_automatic_and_programmable_updates_keep_one_message_id(tmp_path):
     manager, account = _manager(tmp_path)
+    drain = _controlled_gate(manager)
 
     created = _automatic(manager, "create", reasoning="first")
     resident_id = created["message_id"]
@@ -112,13 +127,51 @@ def test_repeated_automatic_and_programmable_updates_keep_one_message_id(tmp_pat
 
     assert len(_calls(account, "send")) == 1
     assert not _calls(account, "delete")
+    # The final programmable update coalesces every logical slot transition.
+    drain()
     final_text = account.messages[100]
     assert "second" in final_text
     assert "watch-v2" in final_text
 
 
+def test_pending_latest_worker_delivers_without_caller_retry(tmp_path):
+    manager, account = _manager(tmp_path)
+    manager._TASK_CARD_EVENT_POLL_INTERVAL = 0.02
+    delivered = threading.Event()
+    edit_times: list[float] = []
+    original_edit = account.edit_message
+
+    def edit_message(chat_id, message_id, text, **kwargs):
+        edit_times.append(time.monotonic())
+        result = original_edit(chat_id, message_id, text, **kwargs)
+        if "latest intent" in text:
+            delivered.set()
+        return result
+
+    account.edit_message = edit_message
+    resident_id = _automatic(manager, "create", reasoning="created")["message_id"]
+    _automatic(manager, "update", card_message_id=resident_id, reasoning="first edit")
+    queued = _automatic(
+        manager, "update", card_message_id=resident_id, reasoning="latest intent"
+    )
+    assert queued == {"status": "ok", "message_id": resident_id}
+    assert manager._task_card_edit_is_pending("mybot", 55)
+
+    manager._start_pending_task_card_edit_worker()
+    try:
+        assert delivered.wait(timeout=1.0)
+    finally:
+        manager._stop_pending_task_card_edit_worker()
+
+    assert "latest intent" in account.messages[100]
+    assert len(edit_times) == 2
+    assert edit_times[1] - edit_times[0] >= manager._TASK_CARD_EVENT_POLL_INTERVAL
+    assert not manager._task_card_edit_is_pending("mybot", 55)
+
+
 def test_unchanged_heartbeat_and_final_are_successful_noop_edits(tmp_path):
     manager, account = _manager(tmp_path)
+    drain = _controlled_gate(manager)
     created = _automatic(manager, "create", reasoning="steady")
     resident_id = created["message_id"]
 
@@ -138,6 +191,8 @@ def test_unchanged_heartbeat_and_final_are_successful_noop_edits(tmp_path):
 
     assert heartbeat == {"status": "ok", "message_id": resident_id}
     assert final == {"status": "ok", "message_id": resident_id}
+    drain()
+    assert not manager._task_card_edit_is_pending("mybot", 55)
     assert len(_calls(account, "send")) == 1
     assert not _calls(account, "delete")
     assert account.get_task_card(55) == resident_id
@@ -187,6 +242,7 @@ def test_exact_nondeletable_resident_self_heals_once_per_chat(tmp_path):
     )
     for index, description in enumerate(descriptions):
         manager, account = _manager(tmp_path / str(index))
+        drain = _controlled_gate(manager)
         stale_id = _automatic(manager, "create", reasoning="first")["message_id"]
         account.set_task_card(77, "mybot:77:88")
         account.edit_error = RuntimeError(
@@ -214,4 +270,8 @@ def test_exact_nondeletable_resident_self_heals_once_per_chat(tmp_path):
         )["message_id"] == replacement_id
         assert len(_calls(account, "send")) == 2
         assert len(_calls(account, "delete")) == 1
-        assert [call[2] for call in _calls(account, "edit")[-2:]] == [101, 101]
+        drain()
+        # Both post-rotation producers land in one edit of the newest resident.
+        assert [call[2] for call in _calls(account, "edit")] == [100, 101]
+        assert "later" in account.messages[101]
+        assert "watch" in account.messages[101]

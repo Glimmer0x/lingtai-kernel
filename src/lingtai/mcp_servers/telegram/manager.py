@@ -2575,7 +2575,7 @@ class TelegramManager:
             self._task_card_edit_gate_condition.notify_all()
         thread = self._task_card_pending_edit_thread
         if thread is not None:
-            thread.join(timeout=5.0)
+            thread.join()
         self._task_card_pending_edit_thread = None
 
     @classmethod

@@ -103,6 +103,17 @@ def _current(account: FakeAccount) -> str:
     return account.sent[max(account.sent)]
 
 
+def _controlled_gate(manager):
+    now = [100.0]
+    manager._task_card_edit_clock = lambda: now[0]
+
+    def drain():
+        now[0] += manager._TASK_CARD_EVENT_POLL_INTERVAL
+        manager._flush_pending_task_card_edits()
+
+    return drain
+
+
 def test_active_intrinsic_body_projects_onto_existing_resident(tmp_path):
     manager, acct, _service = _manager(tmp_path)
     _auto(manager, reasoning="compiling")
@@ -162,6 +173,7 @@ def test_missing_body_after_active_status_is_noop_and_keeps_last_good_projection
 
 def test_existing_automatic_channel_behavior_is_preserved_by_programmable_file_updates(tmp_path):
     manager, acct, _service = _manager(tmp_path)
+    drain = _controlled_gate(manager)
     _auto(manager, reasoning="stay put")
     automatic_only = _current(acct)
     _write_intrinsic_taskcard(tmp_path, status="active", body="watch body\n")
@@ -179,6 +191,7 @@ def test_existing_automatic_channel_behavior_is_preserved_by_programmable_file_u
             "reasoning": "next step",
         }
     )
+    drain()
     assert "next step" in _current(acct)
     assert "watch body" in _current(acct)
     assert automatic_only != _current(acct)
@@ -195,6 +208,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     body file either.
     """
     manager, acct, _service = _manager(tmp_path)
+    drain = _controlled_gate(manager)
     _auto(manager, reasoning="stay put")
     _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
     manager._broadcast_programmable_task_card_file()
@@ -209,6 +223,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
     calls_before_inactive = list(acct.calls)
     _write_intrinsic_taskcard(tmp_path, status="inactive", body="v2 (must not render)\n")
     manager._broadcast_programmable_task_card_file()
+    drain()
 
     new_calls = acct.calls[len(calls_before_inactive):]
     assert not any(call[0] in ("send", "delete") for call in new_calls)
@@ -239,6 +254,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
             "reasoning": "still going",
         }
     )
+    drain()
     assert "still going" in _current(acct)
     assert acct.get_task_card(55) == resident_before
 
@@ -254,6 +270,7 @@ def test_inactive_clears_programmable_frame_but_preserves_resident_and_automatic
 def test_new_active_watch_after_inactive_renders_without_stale_state_corruption(tmp_path):
     """A fresh watch after `stop`/`remove` must render cleanly, not resurface old content."""
     manager, acct, _service = _manager(tmp_path)
+    drain = _controlled_gate(manager)
     _auto(manager)
     _write_intrinsic_taskcard(tmp_path, status="active", body="v1\n")
     manager._broadcast_programmable_task_card_file()
@@ -263,12 +280,14 @@ def test_new_active_watch_after_inactive_renders_without_stale_state_corruption(
     # Old watch retires and its body is removed, exactly as `task_card.remove` does.
     _write_intrinsic_taskcard(tmp_path, status="inactive", body=None)
     manager._broadcast_programmable_task_card_file()
+    drain()
     assert manager._task_card_channels["mybot:55"].get("programmable") is None
     assert "v1" not in _current(acct)
 
     # A brand-new watch starts: body written first, then status flips to active.
     _write_intrinsic_taskcard(tmp_path, status="active", body="v2 fresh\n")
     manager._broadcast_programmable_task_card_file()
+    drain()
 
     text = _current(acct)
     assert "v2 fresh" in text

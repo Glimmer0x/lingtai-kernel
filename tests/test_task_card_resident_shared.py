@@ -128,6 +128,34 @@ def test_initial_send_and_in_place_slot_compose_commit_after_success() -> None:
     ) in harness.calls
 
 
+def test_throttled_edit_commits_logical_frame_for_provider_retry() -> None:
+    harness = _Harness(
+        resident_id="main:chat#1",
+        edit_results=[(TaskCardResident.EDIT_THROTTLED, None)],
+    )
+    resident = _resident(harness)
+    resident.set_frame("main", "chat", "automatic", "automatic-v1")
+
+    outcome = resident.project(
+        "main",
+        "chat",
+        "programmable",
+        "watch-v2",
+        error="failed",
+    )
+
+    assert outcome == {
+        "status": "ok",
+        "message_id": "main:chat#1",
+        "pending": True,
+    }
+    assert resident.frames["main:chat"] == {
+        "automatic": "automatic-v1",
+        "programmable": "watch-v2",
+    }
+    assert not any(call[0] in {"delete", "send", "persist"} for call in harness.calls)
+
+
 def test_failed_edit_preserves_committed_frame_and_never_sends() -> None:
     harness = _Harness(
         resident_id="main:chat#1",
