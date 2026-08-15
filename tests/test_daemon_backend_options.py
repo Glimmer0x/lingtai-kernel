@@ -706,6 +706,32 @@ def test_backend_schema_enum_matches_ordered_contract():
     )
 
 
+@pytest.mark.parametrize(
+    ("backend_label", "expected"),
+    [
+        ("MiMo Code", True),
+        ("Qwen Code", True),
+        ("Kimi Code", True),
+        ("Oh-My-Pi", True),
+        ("cursor", True),
+        ("opencode", True),
+        ("claude-p", True),
+        ("claude-code", True),
+        ("claude-interactive", False),
+        ("interactive", False),
+    ],
+)
+def test_backend_schema_description_matches_supported_surface(
+    backend_label, expected,
+):
+    from tests._daemon_helpers import daemon_action_input_schema
+
+    description = daemon_action_input_schema(
+        "emanate", "en"
+    )["properties"]["backend"]["description"]
+    assert (backend_label.lower() in description.lower()) is expected
+
+
 def test_backend_metadata_consistency_keeps_hidden_legacy_claude():
     hidden = {"claude", "claude-interactive"}
     assert set(_BACKEND_SCHEMA_ENUM) == (
@@ -732,16 +758,6 @@ def test_normalize_backend_aliases_only_true_aliases():
     assert _normalize_backend("") == "lingtai"
     assert _normalize_backend("claude-code") == "claude-code"
     assert _normalize_backend("not-real") == "not-real"
-
-
-def test_schema_includes_mimocode_and_qwen_code_backends():
-    from tests._daemon_helpers import daemon_action_input_schema
-
-    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
-    for name in ("mimocode", "mimo", "qwen-code", "qwen"):
-        assert name in backend["enum"]
-    assert "MiMo Code" in backend["description"]
-    assert "Qwen Code" in backend["description"]
 
 
 def test_mimocode_alias_dispatches_to_canonical_backend(tmp_path, monkeypatch):
@@ -1028,15 +1044,6 @@ def test_qwen_code_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Kimi Code backend
 # ---------------------------------------------------------------------------
-
-
-def test_schema_includes_kimicode_backend():
-    from tests._daemon_helpers import daemon_action_input_schema
-
-    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
-    for name in ("kimicode", "kimi"):
-        assert name in backend["enum"]
-    assert "Kimi Code" in backend["description"]
 
 
 @pytest.mark.parametrize("backend", ["kimi", "kimicode"])
@@ -1422,15 +1429,6 @@ def test_kimicode_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Oh-My-Pi backend
 # ---------------------------------------------------------------------------
-
-
-def test_schema_includes_oh_my_pi_backend():
-    from tests._daemon_helpers import daemon_action_input_schema
-
-    backend = daemon_action_input_schema("emanate", "en")["properties"]["backend"]
-    for name in ("oh-my-pi", "omp"):
-        assert name in backend["enum"]
-    assert "Oh-My-Pi" in backend["description"]
 
 
 @pytest.mark.parametrize("backend", ["omp", "oh-my-pi"])

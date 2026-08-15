@@ -57,6 +57,7 @@ def test_missing_finish_result_discoverable_at_the_advertised_physical_route(
 
     message = str(excinfo.value)
     assert _GUIDANCE in message
+    assert "inspect the run's trace/result" in message
     assert _ROUTE in _normalized(message)
     # The guidance must name the physical file, not the result_path field —
     # daemon.json/artifacts.json/check all persist result_path=null here.
@@ -126,6 +127,7 @@ def test_daemon_context_carries_guidance_with_truthful_modal_wording():
 def test_manual_and_contract_name_the_physical_result_route():
     manual = _MANUAL.read_text(encoding="utf-8")
     assert "missing-finish failure" in manual
+    assert "inspect the run's trace/result" in manual
     assert _ROUTE in _normalized(manual)
     # The old route claim (`check`, `result_path`) advertised a field that is
     # null in the exact missing-finish state; it must not come back.
@@ -134,53 +136,3 @@ def test_manual_and_contract_name_the_physical_result_route():
     contract = _CONTRACT.read_text(encoding="utf-8")
     assert "missing-finish failure is a contract failure" in _normalized(contract)
     assert _ROUTE in _normalized(contract)
-
-
-def test_missing_finish_still_fails_and_message_directs_trace_inspection(tmp_path):
-    agent = make_daemon_agent(tmp_path)
-    mgr = agent.get_capability("daemon")
-    run_dir = make_daemon_run_dir(
-        agent,
-        handle="em-missing-finish-guidance",
-        call_parameters={"mcp": [{"name": "daemon_common", "transport": "stdio"}]},
-    )
-
-    with pytest.raises(RuntimeError, match="missing completion") as excinfo:
-        mgr._require_done_completion(run_dir, "final text without finish")
-
-    message = str(excinfo.value)
-    assert _GUIDANCE in message
-    assert "inspect the run's trace/result" in message
-
-    state = json.loads(run_dir.daemon_json_path.read_text())
-    assert state["state"] == "failed"
-
-    # An explicit finish(failed) is the agent's own verdict — the
-    # trace-inspection wording is reserved for the missing-finish case.
-    (run_dir.path / "daemon_completion.json").write_text(
-        json.dumps(
-            {
-                "schema": "lingtai.daemon_completion.v1",
-                "status": "failed",
-                "run_id": run_dir.run_id,
-                "reason": "blocked",
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError) as explicit:
-        mgr._require_done_completion(run_dir, "final text")
-    assert _GUIDANCE not in str(explicit.value)
-
-
-def test_daemon_context_and_manual_carry_missing_finish_guidance():
-    context = DaemonManager._daemon_common_context()
-    assert "missing-finish" in context
-    assert "not proof of failure" in context
-
-    manual = (
-        Path(__file__).resolve().parents[1]
-        / "src/lingtai/tools/daemon/manual/SKILL.md"
-    ).read_text(encoding="utf-8")
-    assert "missing-finish failure" in manual
-    assert "inspect the run's trace/result" in manual
