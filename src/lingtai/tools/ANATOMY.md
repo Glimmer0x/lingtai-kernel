@@ -1,6 +1,7 @@
 ---
 related_files:
   - ANATOMY.md
+  - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/feishu/BEHAVIORS.md

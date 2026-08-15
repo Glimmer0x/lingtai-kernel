@@ -21,6 +21,12 @@ related_files:
   - src/lingtai/cli.py
   - src/lingtai/cli_daemon.py
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/tools/avatar/ANATOMY.md
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/knowledge/ANATOMY.md
+  - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/tools/skills/ANATOMY.md
   - src/lingtai/tools/system/preset.py
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/registry.py

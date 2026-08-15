@@ -1,11 +1,15 @@
 ---
 related_files:
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/tool_family/BEHAVIORS.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/plugin/ANATOMY.md

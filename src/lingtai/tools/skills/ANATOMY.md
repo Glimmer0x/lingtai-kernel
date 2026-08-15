@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/agent.py
+  - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/skills/BEHAVIORS.md
   - src/lingtai/tools/skills/__init__.py

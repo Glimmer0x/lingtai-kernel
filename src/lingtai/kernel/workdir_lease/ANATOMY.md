@@ -1,5 +1,6 @@
 ---
 related_files:
+  - src/lingtai/adapters/windows/ANATOMY.md
   - src/lingtai/kernel/workdir_lease/BEHAVIORS.md
   - src/lingtai/kernel/workdir_lease/CONTRACT.md
   - src/lingtai/kernel/workdir_lease/__init__.py

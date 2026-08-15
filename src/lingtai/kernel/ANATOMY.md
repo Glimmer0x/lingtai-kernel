@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/kernel/BEHAVIORS.md
   - src/lingtai/kernel/agent_readme/ANATOMY.md
   - src/lingtai/kernel/agent_readme/CONTRACT.md
+  - src/lingtai/prompts/ANATOMY.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - ANATOMY.md
   - MANIFEST.in

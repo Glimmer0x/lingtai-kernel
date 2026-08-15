@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/kernel/event_journal/ANATOMY.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
   - src/lingtai/kernel/mail_transport/ANATOMY.md
+  - src/lingtai/kernel/refresh_watcher/ANATOMY.md
   - src/lingtai/kernel/services/ANATOMY.md
   - src/lingtai/services/ANATOMY.md
   - src/lingtai/adapters/posix/__init__.py
