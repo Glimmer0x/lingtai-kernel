@@ -694,7 +694,7 @@ def test_metadata_renders_daemon_status_and_stats():
         "Async Work · running 3 · done 2 · failed 1",
         "Daemons · running 3 · done 2 · failed 1",
         "Backends · claude-p 1 · lingtai 2",
-        "Daemon stats · in 1.2M · out 340.0k · cache 85.0% · calls 12",
+        "Daemon stats · in 1.2M · out 340.0k · cache 85.0% · api calls 12",
     ]
 
 
