@@ -854,7 +854,7 @@ class TaskCardEventProjection:
                         f"cache {min(cached_tokens / input_tokens, 1.0):.1%}"
                     )
                 if cli_calls is not None and cli_calls > 0:
-                    stats_parts.append(f"calls {cli_calls}")
+                    stats_parts.append(f"api calls {cli_calls}")
 
             # All rows belong to one Async Work section. The priority value is
             # used only by the whole-line 500-character budget below.
