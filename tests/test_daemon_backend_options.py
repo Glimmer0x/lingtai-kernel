@@ -695,6 +695,7 @@ def test_backend_schema_enum_matches_ordered_contract():
         "kimicode",
         "kimi",
         "cursor",
+        "deepseek",
     ]
     assert list(_BACKEND_SCHEMA_ENUM) == expected
     from tests._daemon_helpers import daemon_action_input_schema
@@ -713,6 +714,7 @@ def test_backend_schema_enum_matches_ordered_contract():
         ("Qwen Code", True),
         ("Kimi Code", True),
         ("Oh-My-Pi", True),
+        ("DeepSeek Harness", True),
         ("cursor", True),
         ("opencode", True),
         ("claude-p", True),
@@ -968,6 +970,7 @@ def test_kimicode_initial_run_uses_injected_port_and_private_environment(tmp_pat
     [
         ("_run_qwen_code_emanation", "qwen-code", "qwen-code"),
         ("_run_kimicode_emanation", "kimicode", "kimicode"),
+        ("_run_deepseek_emanation", "deepseek", "deepseek"),
     ],
 )
 def test_one_shot_cancellation_uses_port_termination_attribution(
@@ -1648,3 +1651,101 @@ def test_backend_env_redaction_values_extracts_strings():
         },
     })
     assert got == ["secret-1", "secret-2"]
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek Harness backend
+# ---------------------------------------------------------------------------
+
+
+def test_deepseek_cmd_appends_backend_argv_before_profile_lock(tmp_path):
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    port = _OneShotRecordingPort(lines=("deepseek done\n",))
+    mgr._process_port = port
+    run_dir = make_daemon_run_dir(agent, backend="deepseek")
+
+    mgr._run_deepseek_emanation(
+        "em-deepseek-port", run_dir, "Refactor with DeepSeek.",
+        threading.Event(), threading.Event(),
+        backend_argv=["--patch", "./dsh-model.yml"],
+    )
+
+    command, group_id = port.commands[0]
+    env = dict(command.environment or ())
+    assert command.argv[:3] == ("dsh", "--patch", "./dsh-model.yml")
+    # Harness-owned launcher flags lock the headless one-shot profile, and the
+    # prompt is the headless app's trailing positional argument.
+    assert command.argv[3:5] == ("--profile", "headless")
+    assert "Refactor with DeepSeek." in command.argv[5]
+    assert command.cwd == agent._working_dir
+    # Run-private DSH_HOME keeps the first-use profile auto-initialization
+    # inside the run dir; telemetry is hard-disabled for the headless run.
+    assert env["DSH_HOME"].startswith(str(run_dir.path))
+    assert env["DSH_TELEMETRY_DISABLED"] == "1"
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert group_id == run_dir.group_id
+    assert port.released == [port.handle]
+    assert run_dir._state["last_output"] == "deepseek done"
+
+
+def test_deepseek_rejects_harness_owned_backend_options(tmp_path):
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+
+    for flag, key, value in (
+        ("--profile", "profile", "tui"),
+        ("--dump-default-config", "dump_default_config", True),
+        ("--dump-config", "dump_config", True),
+        ("--version", "version", True),
+        ("--help", "help", True),
+    ):
+        result = mgr.handle({
+            "action": "emanate",
+            "backend": "deepseek",
+            "tasks": [{"task": "bad", "tools": [],
+                       "backend_options": {key: value}}],
+        })
+        assert result["status"] == "error", flag
+        assert f"{flag} is reserved by the deepseek daemon backend" in result["message"], flag
+        assert mgr._emanations == {}, flag
+
+
+def test_deepseek_patch_overlay_survives_validation(tmp_path, monkeypatch):
+    # ``--patch`` is deliberately NOT reserved: it is the official launcher
+    # overlay for model/provider selection on a one-shot run.
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    records = install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "deepseek",
+        "tasks": [{"task": "Use DeepSeek Harness.", "tools": [],
+                   "backend_options": {"patch": "./dsh-model.yml"}}],
+    })
+    assert result["status"] == "dispatched"
+    state = wait_daemon_terminal(mgr._emanations[result["ids"][0]]["run_dir"])
+    assert records[0]["manifest"]["backend"] == "deepseek"
+    assert state["model"] == "deepseek"
+    assert records[0]["manifest"]["backend_argv"] == ["--patch", "./dsh-model.yml"]
+
+
+def test_deepseek_ask_is_explicitly_unsupported(tmp_path, monkeypatch):
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    install_fake_detached_owner(monkeypatch)
+    result = mgr.handle({
+        "action": "emanate", "backend": "deepseek",
+        "tasks": [{"task": "DeepSeek once.", "tools": []}],
+    })
+    assert result["status"] == "dispatched"
+    em_id = result["ids"][0]
+    wait_daemon_terminal(mgr._emanations[em_id]["run_dir"])
+
+    ask = mgr.handle({"action": "ask", "id": em_id, "message": "follow up"})
+
+    assert ask["status"] == "error"
+    assert ask["message"] == (
+        "deepseek daemon backend does not support daemon(action='ask') yet; "
+        "start a new deepseek emanation instead."
+    )

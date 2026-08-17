@@ -8,8 +8,8 @@ description: >
   Shell depth beyond the tool schema: async + poll discipline for long-running
   children, host-scheduler setup, LingTai wake-by-mailbox-drop, async
   last-resort reminders, script hygiene, one-shot `.notification/cron.json`
-  reminders, debugging silent jobs, and safe cleanup. The eight CLIs with
-  daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi)
+  reminders, debugging silent jobs, and safe cleanup. The nine CLIs with
+  daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi/deepseek)
   are supported both as daemon backends and via `shell`; their per-backend
   operational details (command shapes, flags, env contracts, caveats) are owned
   by `daemon-manual` → `reference/cli-backends/SKILL.md` and its per-backend
@@ -69,7 +69,7 @@ files, not standalone top-level skills.
 Coding-CLI reference pages have moved to `daemon-manual` (ownership change,
 not a prohibition — `shell` remains a supported way to run them).
 
-These coding CLIs (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi) are supported — as **daemon
+These coding CLIs (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi/deepseek) are supported — as **daemon
 backends** (see `daemon-manual`) and via `shell`. The per-backend operational
 details (flags, env, caveats) are owned by `daemon-manual`'s corresponding
 submanuals — `reference/cli-backends/SKILL.md` and its per-backend pages under
@@ -83,7 +83,7 @@ applies no matter which CLI you run: the async + poll supervision rules in
 
 | Need / keywords | Read |
 |---|---|
-| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | Supported via `shell` (run with `input.async=true` and poll — keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` resident). The eight with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi) can also be dispatched as daemon backends; per-CLI operational detail (flags, env, caveats): `daemon-manual` → `reference/cli-backends/SKILL.md`. Gemini CLI, Aider, Goose, OpenHands, Crush are shell-only harnesses — no LingTai backend id |
+| Running a long-running agent/coding CLI as a sub-process: `claude -p`, `codex exec`, `opencode run`, Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider, Goose, OpenHands, Crush; "run an agent in the background"; avoid blocking the turn | Supported via `shell` (run with `input.async=true` and poll — keep `## Core rules to keep resident` and `## Coding-CLI harness baseline` resident). The nine with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/oh-my-pi/deepseek) can also be dispatched as daemon backends; per-CLI operational detail (flags, env, caveats): `daemon-manual` → `reference/cli-backends/SKILL.md`. Gemini CLI, Aider, Goose, OpenHands, Crush are shell-only harnesses — no LingTai backend id |
 | Human asks for time-driven recurring work: "every hour", "daily", "weekdays at 9", "write/check/send on a schedule"; choose cron vs event watcher; create launchd/systemd/crontab wiring; understand wake-by-mailbox-drop; write scheduler prompt/script hygiene | `reference/scheduled-work/SKILL.md` |
 | Need a one-shot reminder or wakeup nudge while work is pending; `.notification/cron.json`; atomic reminder writer; rest checklist | `reference/notification-reminders/SKILL.md` |
 | Scheduled job is silent, fires twice, exits immediately, gets killed by launchd, fails to deliver mail, or must be retired/cleaned up | `reference/debugging-cleanup/SKILL.md` |
@@ -97,9 +97,9 @@ applies no matter which CLI you run: the async + poll supervision rules in
    Cursor Agent, MiMo Code, Qwen Code, Oh-My-Pi, Kimi Code, Gemini CLI, Aider,
    Goose, OpenHands, Crush, or any sub-agent that may think/run tools for minutes)?
    **Never run it synchronously.** Use `input.async=true` and poll — see the
-   resident rule below. Running these CLIs via `shell` is supported; the eight
+   resident rule below. Running these CLIs via `shell` is supported; the nine
    with daemon backends (claude/codex/opencode/cursor/mimocode/qwen/kimi/
-   oh-my-pi) can also be dispatched as daemon backends — Gemini CLI, Aider,
+   oh-my-pi/deepseek) can also be dispatched as daemon backends — Gemini CLI, Aider,
    Goose, OpenHands, and Crush have no LingTai backend id. Per-CLI detail
    (flags, env, ask/resume status): `daemon-manual` →
    `reference/cli-backends/SKILL.md`.

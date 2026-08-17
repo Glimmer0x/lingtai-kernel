@@ -180,7 +180,7 @@ def _emanate_task_schema() -> dict[str, Any]:
                     },
                 },
                 "additionalProperties": _backend_option_value_schema(),
-                "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; unsafe keys are rejected. One reserved key is not a flag: `env` (a JSON object of string->string) injects environment variables into the spawned CLI subprocess (e.g. {"env": {"CLAUDE_CONFIG_DIR": "..."}} for claude-p/claude-code profile selection); its names must match [A-Za-z_][A-Za-z0-9_]* and its values must be strings. All other nested objects are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
+                "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'deepseek\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; unsafe keys are rejected. One reserved key is not a flag: `env` (a JSON object of string->string) injects environment variables into the spawned CLI subprocess (e.g. {"env": {"CLAUDE_CONFIG_DIR": "..."}} for claude-p/claude-code profile selection); its names must match [A-Za-z_][A-Za-z0-9_]* and its values must be strings. All other nested objects are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', \'dsh --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
             },
             "prompt": {
                 "type": "string",
@@ -229,6 +229,7 @@ def _emanate_input_schema(backend_enum: list[str]) -> dict[str, Any]:
                     "'qwen-code' / 'qwen' (Qwen Code CLI), "
                     "'oh-my-pi' / 'omp' (Oh-My-Pi pi-coding-agent CLI), "
                     "'kimicode' / 'kimi' (MoonshotAI Kimi Code CLI; ask/resume not supported yet), "
+                    "'deepseek' (DeepSeek Harness dsh CLI; ask/resume not supported yet), "
                     "'cursor' (coding tasks via Cursor Agent CLI). "
                     "CLI backends use external tools with no LLM overhead from the parent. "
                     "Null for the default 'lingtai'."

@@ -219,7 +219,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
         assert (web_root / "reference" / "tier-quick-refs" / "SKILL.md").is_file()
         # The bash manual routes coding-CLI detail to daemon-manual, but must
         # never resurrect a retired bash-* page or re-claim a non-backend CLI
-        # as a daemon backend (only the eight real backends have backend ids).
+        # as a daemon backend (only the ten real backends have backend ids).
         assert "daemon-manual" in bash_body
         assert "reference/cli-backends/SKILL.md" in bash_body
         for gone in (
@@ -269,6 +269,7 @@ def test_skills_setup_hard_copies_intrinsics(tmp_path):
             "qwen-code",
             "kimicode",
             "cursor",
+            "deepseek",
             "oh-my-pi",
             "lingtai",
         ):

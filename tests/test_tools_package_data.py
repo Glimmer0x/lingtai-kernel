@@ -62,11 +62,12 @@ _BUILTIN_TOOLS = [
     "tool_family",
 ]
 
-# The nine daemon CLI-backend manuals that must continue to ship unchanged.
+# The ten daemon CLI-backend manuals that must continue to ship unchanged.
 _DAEMON_BACKENDS = [
     "claude-p",
     "codex",
     "cursor",
+    "deepseek",
     "kimicode",
     "lingtai",
     "mimocode",

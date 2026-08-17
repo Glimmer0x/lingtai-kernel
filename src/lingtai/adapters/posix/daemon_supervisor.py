@@ -43,6 +43,7 @@ _CLI_CREDENTIAL_ENV_NAMES = {
     "oh-my-pi": {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"},
     "qwen-code": {"DASHSCOPE_API_KEY", "QWEN_API_KEY", "OPENAI_API_KEY"},
     "kimicode": {"KIMI_API_KEY", "KIMICODE_API_KEY", "MOONSHOT_API_KEY"},
+    "deepseek": {"DEEPSEEK_API_KEY"},
     "cursor": {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CURSOR_API_KEY"},
 }
 

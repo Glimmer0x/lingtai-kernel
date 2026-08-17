@@ -1042,6 +1042,29 @@ _KIMICODE_RESERVED_BACKEND_FLAGS = {
     "-c",
 }
 
+# DeepSeek Harness (`dsh`) owns the launcher-level flags that drive LingTai's
+# non-interactive headless harness: ``--profile headless`` locks the one-shot
+# profile (overriding it could boot a different, interactive profile, or
+# change the run shape entirely), while ``--dump-default-config`` /
+# ``--dump-config`` and ``--version`` / ``--help`` are inspection-only exits
+# that would fake a completed run without doing the task. ``--patch`` is
+# deliberately NOT reserved: it is the official, documented way to overlay a
+# config tree on a one-shot run (model/provider selection), the launcher
+# accepts it before the app-argument boundary, and its trust level equals the
+# ``backend_options.env`` overlay (which can already set ``DSH_PERMISSION_MODE``
+# etc.). The headless profile's only app argument is the task text, so any
+# non-launcher flag in ``backend_options`` ends up as an app argument after the
+# boundary and is rejected by the headless app as a usage error. (``-V`` cannot
+# be emitted by backend_options, which only creates long ``--flag`` tokens, but
+# is listed for clarity.)
+_DEEPSEEK_RESERVED_BACKEND_FLAGS = {
+    "--profile",
+    "--dump-default-config",
+    "--dump-config",
+    "--version",
+    "--help",
+}
+
 # Oh-My-Pi owns the mode/headless/approval/session flags that drive LingTai's
 # non-interactive JSON harness; overriding them via backend_options would break
 # JSON event capture, re-enable interactive prompting, or hijack the session.
@@ -1078,6 +1101,11 @@ _QWEN_CODE_ASK_UNSUPPORTED_MESSAGE = (
 _KIMICODE_ASK_UNSUPPORTED_MESSAGE = (
     "kimicode daemon backend does not support daemon(action='ask') yet; "
     "start a new kimicode emanation instead."
+)
+
+_DEEPSEEK_ASK_UNSUPPORTED_MESSAGE = (
+    "deepseek daemon backend does not support daemon(action='ask') yet; "
+    "start a new deepseek emanation instead."
 )
 
 
@@ -1214,6 +1242,14 @@ _BACKEND_SPECS: dict[str, _BackendSpec] = {
         ask_unsupported_msg=_KIMICODE_ASK_UNSUPPORTED_MESSAGE,
         reserved_flags=frozenset(_KIMICODE_RESERVED_BACKEND_FLAGS),
     ),
+    "deepseek": _BackendSpec(
+        id="deepseek",
+        is_cli=True,
+        runner_attr="_run_deepseek_emanation",
+        ask_handler_attr=None,
+        ask_unsupported_msg=_DEEPSEEK_ASK_UNSUPPORTED_MESSAGE,
+        reserved_flags=frozenset(_DEEPSEEK_RESERVED_BACKEND_FLAGS),
+    ),
     "cursor": _BackendSpec(
         id="cursor",
         is_cli=True,
@@ -1239,6 +1275,7 @@ _BACKEND_SCHEMA_ENUM = [
     "kimicode",
     "kimi",
     "cursor",
+    "deepseek",
 ]
 
 _HIDDEN_SCHEMA_BACKENDS = frozenset({"claude", "claude-interactive"})
@@ -7437,6 +7474,173 @@ class DaemonManager:
             exc = RuntimeError(
                 attributed
                 or f"kimicode CLI exited with code {exit_receipt.returncode}: "
+                f"{detail[-500:]}"
+            )
+            run_dir.mark_failed(exc)
+            raise exc
+
+        text = output or (f"[no stdout; stderr tail follows]\n{stderr_tail[-500:]}" if stderr_tail else "[no output]")
+        self._require_done_completion(run_dir, text)
+        run_dir.mark_done(text)
+        return text
+
+    def _build_deepseek_prompt(self, task: str) -> str:
+        """Compose the prompt sent to DeepSeek Harness headless mode."""
+        return self._build_opencode_prompt(task)
+
+    @staticmethod
+    def _deepseek_run_env(run_dir: DaemonRunDir) -> dict[str, str]:
+        """Build the per-run environment overlay for a ``dsh`` invocation.
+
+        Returns only the keys to *add/override* on top of ``os.environ`` (the
+        caller merges them). Contract sourced from the official DeepSeek
+        Harness CLI reference (see ``apps/cli/reference/README.md``, no
+        secrets):
+
+        * ``DSH_HOME`` — pinned to a run-private directory so the headless
+          profile's first-use auto-initialization (shipped templates) and any
+          per-profile settings stay inside the run, and concurrent daemon
+          emanations never share DeepSeek Harness's on-disk state. The
+          operator's machine-local ``$DSH_HOME/cordis.patch.yml`` and
+          ``$DSH_HOME/.credentials.yaml`` are deliberately not honored;
+          credentials must come from the inherited environment (e.g.
+          ``DEEPSEEK_API_KEY``) or the invoking project's ``.env``.
+        * ``DSH_TELEMETRY_DISABLED`` — any non-empty value is the official
+          hard opt-out for session telemetry.
+        """
+        env: dict[str, str] = {}
+        dsh_home = run_dir.path / "dsh-home"
+        try:
+            dsh_home.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # Fall back to the run dir itself; dsh will create subdirs it needs.
+            dsh_home = run_dir.path
+        env["DSH_HOME"] = str(dsh_home)
+        env["DSH_TELEMETRY_DISABLED"] = "1"
+        return env
+
+    def _run_deepseek_emanation(
+        self,
+        em_id: str,
+        run_dir: DaemonRunDir,
+        task: str,
+        cancel_event: threading.Event,
+        timeout_event: threading.Event | None = None,
+        backend_argv: list[str] | None = None,
+        backend_env: dict[str, str] | None = None,
+    ) -> str:
+        """Run a DeepSeek Harness (``dsh``) CLI session as the emanation backend.
+
+        DeepSeek AI's official ``dsh`` CLI (npm package ``@deepseek-ai/dsh``)
+        runs one-shot via ``dsh --profile headless <task>``: one fresh
+        persisted session, the last non-empty assistant text on stdout, and
+        exit 0 for completed / nonzero otherwise. LingTai owns the
+        ``--profile headless`` launcher flags (the shipped headless app takes
+        only the task text as its positional argument). ``--patch`` overlays
+        remain available through free-form ``backend_options`` (the documented
+        way to select models/providers for a one-shot run); every other
+        launcher flag is reserved, and non-launcher flags would end up as app
+        arguments and be rejected by the headless app as a usage error.
+        DeepSeek Harness is a developer preview with no verified stable
+        machine-readable session-id / resume contract for the headless profile
+        here, so ``daemon(action='ask')`` is intentionally unsupported for
+        this backend.
+
+        The per-run environment (see ``_deepseek_run_env``) pins a run-private
+        ``DSH_HOME`` so first-use profile auto-initialization never touches the
+        operator's real home, and hard-disables session telemetry. Secret
+        values are never logged.
+        """
+        if cancel_event.is_set():
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        dsh_env = self._deepseek_run_env(run_dir)
+        backend_argv = list(backend_argv or [])
+
+        prompt = self._build_deepseek_prompt(task)
+        # Launcher flags come first (boundary: first unrecognized token ends
+        # launcher parsing and starts the app arguments); the harness-owned
+        # ``--profile headless`` pair sits before the task, which is the
+        # headless app's trailing positional argument.
+        cmd = ["dsh"]
+        if backend_argv:
+            cmd.extend(backend_argv)
+        cmd.extend(["--profile", "headless", prompt])
+        self._log("daemon_deepseek_start", em_id=em_id, cmd_head=" ".join(cmd[:5]))
+
+        try:
+            env = os.environ.copy()
+            env.update(dsh_env)
+            # Caller overlay last: it wins over the run-private dsh env.
+            if backend_env:
+                env.update(backend_env)
+            handle = self._process_port.spawn(
+                DaemonProcessCommand(
+                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                ),
+                group_id=run_dir.group_id,
+            )
+        except FileNotFoundError:
+            exc = RuntimeError("'dsh' CLI not found on PATH")
+            run_dir.mark_failed(exc)
+            raise exc
+        except OSError as e:
+            exc = RuntimeError(f"Failed to start deepseek CLI: {e}")
+            run_dir.mark_failed(exc)
+            raise exc
+
+        stdout_lines: list[str] = []
+        stderr_thread = self._process_port.drain_stderr(
+            handle, on_line=lambda line: run_dir.record_cli_output(line, stream="stderr"),
+            thread_name=f"daemon-deepseek-stderr-{em_id}",
+        )
+        stderr_lines = stderr_thread.lines
+
+        try:
+            for raw_line in self._process_port.iter_stdout(handle):
+                if cancel_event.is_set():
+                    self._process_port.terminate(
+                        handle, reason=("timeout" if timeout_event and timeout_event.is_set()
+                                        else "reclaim"),
+                    )
+                    return _mark_cancelled_or_timeout(run_dir, timeout_event)
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                stdout_lines.append(line)
+                try:
+                    run_dir.record_cli_output(line, stream="stdout")
+                except Exception:
+                    pass
+            exit_receipt = self._process_port.wait(handle)
+        except Exception as e:
+            self._process_port.terminate(handle)
+            run_dir.mark_failed(e)
+            raise
+        finally:
+            stderr_thread.join(timeout=2.0)
+            self._process_port.release(handle)
+
+        stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+        output = "\n".join(stdout_lines).strip()
+
+        # ``dsh --profile headless`` exits 0 only when the session completed;
+        # exit 1 covers usage errors, configuration/boot failures, and
+        # non-completed sessions, so any nonzero receipt fails the run while
+        # the printed text stays in the run dir for inspection.
+        if exit_receipt.returncode != 0:
+            detail = stderr_tail or output
+            if cancel_event.is_set():
+                self._attributed_process_exit(
+                    exit_receipt, "deepseek", detail[-500:], run_dir,
+                )
+                return _mark_cancelled_or_timeout(run_dir, timeout_event)
+            attributed = self._attributed_process_exit(
+                exit_receipt, "deepseek", detail[-500:], run_dir,
+            )
+            exc = RuntimeError(
+                attributed
+                or f"deepseek CLI exited with code {exit_receipt.returncode}: "
                 f"{detail[-500:]}"
             )
             run_dir.mark_failed(exc)
