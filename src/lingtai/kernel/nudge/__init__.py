@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from . import folder_size, init_config, kernel_version, goal, source_drift
+from . import event_journal_count, folder_size, init_config, kernel_version, goal, source_drift
 
 
 DEFAULT_ENABLED = True
@@ -62,6 +62,7 @@ _ENTRY_CHANNEL_BY_KIND = {
     "source_drift": ENTRY_CHANNEL_SOURCE_INTEGRITY,
     "init_config_shape": ENTRY_CHANNEL_CONFIG_STALENESS,
     "folder_size": ENTRY_CHANNEL_STORAGE_SIZE,
+    "event_journal_line_count": ENTRY_CHANNEL_STORAGE_SIZE,
 }
 
 # Hard maximum for one nudge entry's inline, model-visible JSON serialization.
@@ -224,6 +225,7 @@ def run_checks(agent) -> None:
     _run_one(agent, "source_drift", source_drift.check)
     _run_one(agent, "init_config_shape", init_config.check)
     _run_one(agent, "folder_size", folder_size.check)
+    _run_one(agent, "event_journal_line_count", event_journal_count.check)
 
 
 def run_system_notifications(agent) -> None:
