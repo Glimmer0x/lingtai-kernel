@@ -773,6 +773,30 @@ def test_metadata_daemon_stats_require_positive_counts():
     assert lines == ["Async Work · running 1", "Daemons · running 1"]
 
 
+def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically():
+    single = TelegramManager._format_task_card_metadata({
+        "async_work": {"daemon": {
+            "running": 1,
+            "model_counts": {"gpt-5.6": 1},
+        }},
+    })
+    assert single == [
+        "Async Work · running 1",
+        "Daemons · running 1 · gpt-5.6",
+    ]
+
+    multiple = TelegramManager._format_task_card_metadata({
+        "async_work": {"daemon": {
+            "running": 3,
+            "model_counts": {"zeta-2": 1, "alpha-1": 2, "unsafe model": 99},
+        }},
+    })
+    assert multiple == [
+        "Async Work · running 3",
+        "Daemons · running 3 · alpha-1 × 2 · zeta-2 × 1",
+    ]
+
+
 def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     import json as _json
     from datetime import datetime, timedelta, timezone
@@ -786,9 +810,9 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     recent = (now - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     old = (now - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for name, state in [
-        ("em-1", {"state": "running", "backend": "lingtai", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
-        ("em-2", {"state": "done", "backend": "claude-p", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
-        ("em-3", {"state": "failed", "finished_at": recent, "cli_tokens": {"input": 3000, "output": 100, "cached": 0, "calls": 1}}),
+        ("em-1", {"state": "running", "backend": "lingtai", "model": "gpt-5.6", "tokens": {"input": 1000, "output": 500, "cached": 800, "calls": 3}}),
+        ("em-2", {"state": "done", "backend": "claude-p", "model": "claude-external", "finished_at": recent, "tokens": {"input": 2000, "output": 700, "cached": 1500, "calls": 4}}),
+        ("em-3", {"state": "failed", "finished_at": recent, "model": "external-unknown", "cli_tokens": {"input": 3000, "output": 100, "cached": 0, "calls": 1}}),
         ("em-4", {"state": "done", "backend": "codex", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
     ]:
         (daemons / name / "daemon.json").write_text(_json.dumps(state), encoding="utf-8")
@@ -803,6 +827,10 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     assert snap["output_tokens"] == 500 + 700 + 100
     assert snap["cached_tokens"] == 800 + 1500 + 0
     assert snap["cli_calls"] == 1
+    # Only actual LingTai backend model values are eligible; external and
+    # backend-less records remain visible in their existing lanes but are not
+    # misrepresented as LingTai model statistics.
+    assert snap["model_counts"] == {"gpt-5.6": 1}
     # Backend distribution counts only in-window runs; em-3 without a backend
     # falls back to "unknown".
     assert snap["backend_counts"] == {"lingtai": 1, "claude-p": 1, "unknown": 1}
