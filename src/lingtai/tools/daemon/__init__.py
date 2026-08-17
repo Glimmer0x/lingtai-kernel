@@ -40,6 +40,9 @@ from lingtai.kernel.i18n import t as _t
 from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.message import MSG_REQUEST, _make_message
+from lingtai.kernel.notifications import (
+    DAEMON_CHANNEL as DAEMON_NOTIFICATION_CHANNEL,
+)
 from lingtai.kernel.tool_executor import ToolExecutor
 from lingtai.kernel.tool_result_artifacts import compact_oversized_history
 from lingtai.kernel.meta_block import (
@@ -4797,11 +4800,15 @@ class DaemonManager:
         run_path: Path | None = None,
         idempotency_key: str | None = None,
     ) -> bool:
-        """Publish a compact daemon terminal event via .notification/system.json.
+        """Publish a compact daemon terminal event via .notification/daemon.json.
 
         Fired on every terminal status (done / failed / cancelled / timeout) so
         the parent agent can dispatch a daemon and safely go idle: the kernel
-        notification sync wakes it when the run ends, no polling required. Full
+        notification sync wakes it when the run ends, no polling required. When
+        ``notification.json`` configures ``channels.daemon.alarm_threshold``,
+        the kernel's attention mask keeps sub-threshold arrivals readable
+        without waking; the strict ``count > N`` crossing wakes exactly once,
+        and clearing the channel starts a new batch. Full
         daemon output belongs in the run directory and is inspectable via
         ``daemon(action="check", id=...)``.  The parent notification is only a
         wake signal with provenance, bounded preview, and the inspection path.
@@ -4857,6 +4864,7 @@ class DaemonManager:
                 body=body,
                 idempotency_key=idempotency_key,
                 skip_if_idempotency_key_exists=bool(idempotency_key),
+                channel=DAEMON_NOTIFICATION_CHANNEL,
             )
         except Exception as e:
             self._log(

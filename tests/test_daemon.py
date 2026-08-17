@@ -2236,7 +2236,7 @@ def test_handle_emanate_dispatches_and_returns_ids(tmp_path, monkeypatch):
     notification_deadline = time.monotonic() + 5.0
     events = []
     while time.monotonic() < notification_deadline:
-        system = snapshot_notifications(agent._working_dir).get("system", {})
+        system = snapshot_notifications(agent._working_dir).get("daemon", {})
         events = system.get("data", {}).get("events", [])
         if {e.get("ref_id") for e in events} == set(ids):
             break
@@ -2615,7 +2615,7 @@ def test_end_to_end_emanate_list_ask_reclaim(tmp_path, monkeypatch):
     notification_deadline = time.monotonic() + 5.0
     events = []
     while time.monotonic() < notification_deadline:
-        system = snapshot_notifications(agent._working_dir).get("system", {})
+        system = snapshot_notifications(agent._working_dir).get("daemon", {})
         events = system.get("data", {}).get("events", [])
         if any(e.get("source") == "daemon" and e.get("ref_id") == em_id for e in events):
             break
@@ -2665,7 +2665,7 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is False
     assert state["terminal_notification_claim"] is None
-    assert "system" not in snapshot_notifications(agent._working_dir)
+    assert "daemon" not in snapshot_notifications(agent._working_dir)
 
     agent._enqueue_system_notification = original_enqueue
     idempotency_key = rd.claim_terminal_notification("done")
@@ -2682,7 +2682,7 @@ def test_terminal_notification_enqueue_failure_leaves_retryable_state(tmp_path):
     assert state["terminal_notification_receipt"]["idempotency_key"] == (
         f"daemon-terminal:{rd.run_id}"
     )
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-retry"]
     assert len(daemon_events) == 1
 
@@ -2708,7 +2708,7 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
     state = json.loads(daemon_json.read_text(encoding="utf-8"))
     assert state["terminal_notified"] is True
     assert state["terminal_notification_claim"] is None
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-restart"]
     assert len(daemon_events) == 1
     assert daemon_events[0]["idempotency_key"] == "daemon-terminal:em-restart"
@@ -2753,7 +2753,7 @@ def test_concurrent_terminal_callbacks_publish_once(tmp_path):
         thread.join(timeout=5)
         assert not thread.is_alive()
 
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     daemon_events = [e for e in events if e["ref_id"] == "em-race"]
     assert len(daemon_events) == 1
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
@@ -2775,8 +2775,8 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
     workdir = tmp_path / "daemon-agent"
     submit(
         store_agent_for(workdir),
-        "system",
-        header="1 system notification",
+        "daemon",
+        header="1 daemon notification",
         icon="🔔",
         priority="normal",
         data={
@@ -2793,7 +2793,7 @@ def test_crash_after_publish_before_receipt_retry_is_idempotent(tmp_path):
 
     agent = _make_agent(tmp_path, ["daemon"])
 
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     daemon_events = [e for e in events if e.get("idempotency_key") == "daemon-terminal:em-crash"]
     assert len(daemon_events) == 1
     assert daemon_events[0]["event_id"] == "evt_existing"
@@ -2818,7 +2818,7 @@ def test_legacy_terminal_notified_true_is_not_republished(tmp_path):
 
     agent = _make_agent(tmp_path, ["daemon"])
 
-    assert "system" not in snapshot_notifications(agent._working_dir)
+    assert "daemon" not in snapshot_notifications(agent._working_dir)
 
 
 def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_path):
@@ -2837,7 +2837,7 @@ def test_legacy_missing_terminal_notified_key_is_not_republished_or_mutated(tmp_
     agent = _make_agent(tmp_path, ["daemon"])
 
     after = json.loads(daemon_json.read_text(encoding="utf-8"))
-    assert "system" not in snapshot_notifications(agent._working_dir)
+    assert "daemon" not in snapshot_notifications(agent._working_dir)
     assert "terminal_notified" not in after
     assert "terminal_notification_receipt" not in after
 
@@ -2910,7 +2910,7 @@ def test_on_emanation_done_notification_includes_task_summary(tmp_path):
     assert published is True
     rd.mark_terminal_notification_published(idempotency_key)
 
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     body = next(e["body"] for e in events if e["ref_id"] == "em-task")
     assert "payment retry logic" in body
 
@@ -2946,7 +2946,7 @@ def test_terminal_notification_not_blocked_by_prior_followup(tmp_path):
     assert published is True
     rd.mark_terminal_notification_published(idempotency_key)
 
-    events = snapshot_notifications(agent._working_dir)["system"]["data"]["events"]
+    events = snapshot_notifications(agent._working_dir)["daemon"]["data"]["events"]
     bodies = [e["body"] for e in events if e["ref_id"] == "em-ask"]
     assert any("Daemon em-ask done" in b for b in bodies), bodies
 

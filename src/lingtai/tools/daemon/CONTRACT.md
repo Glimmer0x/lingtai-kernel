@@ -459,8 +459,10 @@ path is implemented and tested.
 ### 6. Terminal notifications use published receipts, not attempted claims
 
 Every terminal daemon outcome (`done`, `failed`, `cancelled`, `timeout`) must
-surface through `.notification/system.json` rather than ordinary parent request
-text. The run directory may write a temporary
+surface through `.notification/daemon.json` rather than ordinary parent request
+text. `daemon` is a built-in notification channel; both the in-process manager
+and the detached supervisor publish the identical event shape there. The run
+directory may write a temporary
 `daemon.json.terminal_notification_claim` before publication to suppress
 concurrent callbacks, but `daemon.json.terminal_notified=true` is a receipt and
 may be written only after `_publish_daemon_notification` succeeds or an
@@ -471,12 +473,23 @@ retryable. Startup reconciliation retries only new-schema terminal run dirs that
 explicitly carry `terminal_notified=false`, including stale pending claims left
 by a crash. Legacy records with `terminal_notified=true` or with the key absent
 are treated conservatively as already handled, not retroactively replayed. The
-system event idempotency key is stable per terminal run, so a crash after
+event idempotency key is stable per terminal run, so a crash after
 publication but before receipt persistence does not create a duplicate event on
-restart while the original event remains in the capped 20-event `system.json`
+restart while the original event remains in the capped 20-event `daemon.json`
 window. If that event is dismissed or evicted before recovery records the
 receipt, startup may safely republish: the contract is at-least-once delivery
 without false durable success.
+
+Delivery is separate from attention. `daemon.json` carries durable batch state
+under `data.daemon` (`count` since the last clear, plus a latched
+`alarm_fired`). When `<agent>/notification.json` sets
+`channels.daemon.alarm_threshold`, arrivals at or below the threshold remain
+readable through notification snapshot/check but do not move the attention
+fingerprint, so they neither wake nor inject; the strict first `count > N`
+crossing produces exactly one alarm edge, and clearing the channel resets the
+batch so a later crossing can alarm again. Absent a valid threshold, every
+terminal notice wakes the parent as before. Run-local `daemon.json` and result
+files remain the terminal source of truth regardless of attention state.
 
 ### 7. LingTai task mapping and self-compact are separate from provider compaction
 

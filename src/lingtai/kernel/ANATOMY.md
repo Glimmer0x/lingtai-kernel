@@ -206,6 +206,7 @@ Producers write a JSON file per channel into `<workdir>/.notification/`:
 | `email.json` | `lingtai/tools/email` (unread email notification, `_rerender_unread_digest`) | bare intrinsic name |
 | `soul.json` | `lingtai/tools/soul/flow.py` (consultation fire) | bare intrinsic name |
 | `system.json` | `base_agent/messaging.py:_enqueue_system_notification` (events list, max 20 newest; supports per-event dismiss by `event_id`/`ref_id`) | bare intrinsic name |
+| `daemon.json` | `lingtai/tools/daemon` terminal notices — same event shape as `system.json`, published by the in-process manager (`base_agent/messaging.py:_enqueue_system_notification(channel="daemon")`) and by the detached supervisor (`daemon/supervisor_runtime.py`). Also carries durable batch state under `data.daemon` (`count`, `alarm_fired`) for the alarm-threshold attention policy below | bare intrinsic name |
 | `goal.json` | active-goal source of truth (protected from generic dismiss) | bare intrinsic name |
 | `mcp.<server>.json` | external MCP server adapter (e.g. `mcp.imap.json`, `mcp.telegram.json`) | dotted prefix |
 
@@ -255,7 +256,7 @@ External producers (MCP servers over SSH, separate processes) bypass the helper 
 ### Sync mechanism — `BaseAgent._sync_notifications`
 
 Four pieces of state on `BaseAgent` (`base_agent/__init__.py:457-489`):
-- `_notification_fp: tuple` — last successfully observed Store fingerprint; updated only after a successful snapshot/sync decision.
+- `_notification_fp: tuple` — last successfully observed **attention** fingerprint; updated only after a successful snapshot/sync decision. This is the Store fingerprint passed through `notifications.mask_daemon_attention_fingerprint`: when `<agent>/notification.json` sets `channels.daemon.alarm_threshold`, the `daemon.json` entry's content hash is replaced by a token derived only from `data.daemon` alarm state, so below-threshold daemon arrivals stay readable through snapshot/check without moving this value (no wake, no injection) while the strict `count > N` crossing moves it exactly once. Absent a valid threshold the raw hash passes through. Every comparison against this field — `_sync_notifications_locked`, `meta_block._commit_notification_fp`, the IDLE boundary check in `turn.py`, `soul/flow.py`, and the `karma.py` sleep guard — must use the same masked value, or a raw/masked mismatch would wake the agent the mask exists to keep quiet.
 - `_notification_block_id: str | None` — informational `call_id` of the latest injected synthesized pair; retained for molt/reset telemetry, no longer used to delete pairs.
 - `_notification_inject_seq: int` — monotonic injection counter so repeated notification payloads still produce unique synthetic pairs.
 - `_notification_live_holder: dict | None` — the single current dict tracked as the live notification payload; released whenever payload moves, both for a synthesized pair and a normal result — release never mutates the holder, so it keeps its recorded payload as a historical trace.

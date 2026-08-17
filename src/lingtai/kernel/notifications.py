@@ -39,6 +39,7 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "bash",
     "btw",
     "cron",
+    "daemon",
     "email",
     "goal",
     "molt",
@@ -222,6 +223,198 @@ def register_notification_channel(channel: str) -> None:
     validate_channel_name(channel)
     _NOTIFICATION_CHANNEL_ALLOWLIST.add(channel)
     _invalidate_allow_predicates()
+
+
+# ---------------------------------------------------------------------------
+# Daemon channel — batch counting + alarm-threshold attention policy
+# ---------------------------------------------------------------------------
+#
+# Daemon terminal notices land in `.notification/daemon.json` (not `system`), so
+# a batch of emanations reports terminal state without each arrival waking the
+# parent. The channel payload carries durable batch state under `data.daemon`:
+#
+#   {"count": <events appended since the last clear>, "alarm_fired": <bool>}
+#
+# `count` is the batch odometer; `alarm_fired` records that the strict
+# `count > alarm_threshold` crossing already produced its single wake edge.
+# Clearing the channel drops the file, so the next append starts a new batch and
+# can alarm again.
+#
+# Wake policy is expressed by masking the *attention* fingerprint rather than by
+# hiding state: snapshot/check always show the true payload, but sub-threshold
+# writes collapse to a constant token so the compared fingerprint does not move
+# and no wake/injection fires. Absent a valid configured threshold the raw
+# content hash passes through unchanged — usual per-terminal wake behaviour,
+# now carried by the daemon channel.
+
+DAEMON_CHANNEL = "daemon"
+
+# `<agent working dir>/notification.json` → channels.daemon.alarm_threshold.
+NOTIFICATION_CONFIG_FILENAME = "notification.json"
+
+
+def daemon_alarm_threshold(workdir: str | None) -> int | None:
+    """Return the configured daemon alarm threshold, or ``None`` when unset.
+
+    The threshold is read at this Core policy boundary (never in the Store or
+    in the daemon tool) from ``<workdir>/notification.json``:
+
+        {"channels": {"daemon": {"alarm_threshold": 5}}}
+
+    ``None`` means "no threshold configured" and preserves the usual
+    per-terminal wake behaviour. A malformed file, a non-integer, a bool, or a
+    negative value are all treated as unset — this gate may only ever suppress
+    wakes when an operator deliberately asked for it.
+    """
+    if not workdir:
+        return None
+    import os
+
+    path = os.path.join(str(workdir), NOTIFICATION_CONFIG_FILENAME)
+    try:
+        with open(path, encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(config, dict):
+        return None
+    channels = config.get("channels")
+    if not isinstance(channels, dict):
+        return None
+    daemon_config = channels.get(DAEMON_CHANNEL)
+    if not isinstance(daemon_config, dict):
+        return None
+    threshold = daemon_config.get("alarm_threshold")
+    if isinstance(threshold, bool) or not isinstance(threshold, int):
+        return None
+    if threshold < 0:
+        return None
+    return threshold
+
+
+def daemon_batch_state(payload: object) -> tuple[int, bool]:
+    """Return ``(count, alarm_fired)`` from a daemon channel payload.
+
+    Missing / malformed state reads as a fresh batch, so a hand-written or
+    legacy payload degrades to "not yet alarmed" rather than silently
+    suppressing a wake.
+    """
+    if not isinstance(payload, dict):
+        return 0, False
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return 0, False
+    state = data.get(DAEMON_CHANNEL)
+    if not isinstance(state, dict):
+        return 0, False
+    count = state.get("count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        count = 0
+    return count, state.get("alarm_fired") is True
+
+
+def next_daemon_batch_state(
+    current_payload: object, threshold: int | None
+) -> dict:
+    """Return the ``data.daemon`` state after appending one event.
+
+    ``count`` is the odometer for this batch (events since the last clear).
+    ``alarm_fired`` latches on the strict ``count > threshold`` crossing so the
+    edge produces exactly one wake no matter how many further events arrive;
+    it stays False while no threshold is configured, where every event wakes
+    through the unmasked fingerprint anyway.
+    """
+    count, alarm_fired = daemon_batch_state(current_payload)
+    count += 1
+    if threshold is not None and count > threshold:
+        alarm_fired = True
+    return {"count": count, "alarm_fired": bool(alarm_fired)}
+
+
+def daemon_attention_token(payload: object, threshold: int | None) -> str | None:
+    """Return the attention token for a daemon payload, or ``None`` to pass through.
+
+    ``None`` (no configured threshold) keeps the raw content hash, so every
+    terminal notice wakes exactly as it did before this channel existed.
+
+    With a threshold, the token depends only on whether the strict
+    ``count > threshold`` alarm edge has been crossed — never on the event
+    bodies. Sub-threshold appends therefore leave the attention fingerprint
+    identical (readable, but no wake); the crossing flips the token exactly
+    once, and a clear drops the file so the next batch starts over.
+    """
+    if threshold is None:
+        return None
+    count, alarm_fired = daemon_batch_state(payload)
+    alarmed = alarm_fired or count > threshold
+    return f"daemon:alarm={'1' if alarmed else '0'}"
+
+
+def apply_daemon_attention_mask(
+    fingerprint: tuple, snapshot_payload: object, threshold: int | None
+) -> tuple:
+    """Replace the daemon entry's content hash with its attention token.
+
+    ``fingerprint`` is the Store's ``(name, size, sha256)`` tuple sequence. Only
+    the ``daemon.json`` entry is rewritten, and only when a threshold is
+    configured; every other channel keeps byte-exact change detection.
+    """
+    token = daemon_attention_token(snapshot_payload, threshold)
+    if token is None:
+        return tuple(fingerprint)
+    name = f"{DAEMON_CHANNEL}.json"
+    masked = [
+        (entry[0], 0, token) if entry and entry[0] == name else entry
+        for entry in fingerprint
+    ]
+    # Keep the quiet daemon token present even before the channel file exists.
+    # Otherwise creating the first sub-threshold daemon.json would change the
+    # tuple's shape and spuriously wake the agent.
+    if not any(entry and entry[0] == name for entry in masked):
+        masked.append((name, 0, token))
+    return tuple(sorted(masked, key=lambda entry: entry[0]))
+
+
+def mask_daemon_attention_fingerprint(
+    store, fingerprint: tuple, workdir: str | None
+) -> tuple:
+    """Apply the daemon attention mask to an already-computed ``fingerprint``.
+
+    This is the single seam every wake/delivery comparison goes through, so the
+    daemon channel's below-threshold silence is decided in exactly one place.
+    Costs nothing on the default path: with no configured threshold the
+    fingerprint is returned untouched. With a configured threshold, a virtual
+    quiet token exists even before daemon.json, preventing the first sub-threshold
+    append from changing tuple shape and waking. Falls back to raw if a payload
+    cannot be read — failing toward waking, never toward silence.
+    """
+    threshold = daemon_alarm_threshold(workdir)
+    if threshold is None:
+        return tuple(fingerprint)
+    try:
+        payload = store.snapshot(lambda ch: ch == DAEMON_CHANNEL).get(
+            DAEMON_CHANNEL
+        )
+    except Exception:
+        return tuple(fingerprint)
+    return apply_daemon_attention_mask(fingerprint, payload, threshold)
+
+
+def attention_fingerprint(store, allow_channel, workdir: str | None) -> tuple:
+    """Compute and mask the wake-deciding fingerprint for ``store``."""
+    return mask_daemon_attention_fingerprint(
+        store, store.fingerprint(allow_channel), workdir
+    )
+
+
+def agent_attention_fingerprint(agent) -> tuple:
+    """``attention_fingerprint`` bound to an agent's store / allowlist scope."""
+    workdir = _workdir_key(agent)
+    return attention_fingerprint(
+        agent._notification_store,
+        lambda ch: is_channel_allowed(ch, workdir=workdir),
+        workdir,
+    )
 
 
 # ---------------------------------------------------------------------------

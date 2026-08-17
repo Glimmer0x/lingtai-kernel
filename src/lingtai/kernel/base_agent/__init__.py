@@ -1134,6 +1134,7 @@ class BaseAgent:
         skip_if_idempotency_key_exists: bool = False,
         priority: str = "normal",
         extra: dict | None = None,
+        channel: str = "system",
     ) -> str:
         from .messaging import _enqueue_system_notification
         return _enqueue_system_notification(
@@ -1146,6 +1147,7 @@ class BaseAgent:
             skip_if_idempotency_key_exists=skip_if_idempotency_key_exists,
             priority=priority,
             extra=extra,
+            channel=channel,
         )
 
     def notify(self, sender: str, text: str) -> None:
@@ -1369,6 +1371,7 @@ class BaseAgent:
             flag_unregistered_channel,
             is_channel_allowed,
             is_present_channel_flagable,
+            mask_daemon_attention_fingerprint,
             sync_hook_registry,
         )
         from ..meta_block import skeletonize_notification_holder
@@ -1408,6 +1411,13 @@ class BaseAgent:
         # from it so the steady-state sync does a single hash pass, not two.
         present_fp = store.fingerprint(lambda ch: True)
         fp = tuple(e for e in present_fp if _allow(e[0][: -len(".json")]))
+        # Daemon-channel attention masking: below the configured alarm
+        # threshold the daemon entry collapses to a constant token, so
+        # ordinary terminal notices stay readable through snapshot/check
+        # without moving this fingerprint and waking the agent. The strict
+        # count > N crossing flips the token once. No configured threshold
+        # leaves the raw hash in place (usual per-terminal wake).
+        fp = mask_daemon_attention_fingerprint(store, fp, _workdir_key(self))
 
         # Warn-and-flag (D2): detect present-but-unregistered channel files.
         # Iterates only when the allow-all view changed (cache), and skips

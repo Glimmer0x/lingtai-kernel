@@ -3944,11 +3944,17 @@ def _commit_notification_fp(agent) -> None:
     forever-retry against the IDLE sync path.
     """
     try:
-        from .notifications import is_channel_allowed, _workdir_key
+        from .notifications import attention_fingerprint, is_channel_allowed, _workdir_key
 
         workdir = _workdir_key(agent)
-        agent._notification_fp = agent._notification_store.fingerprint(
-            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        # Must be the *masked* attention fingerprint: the sync path compares
+        # against this value, so committing a raw hash for a below-threshold
+        # daemon channel would read as a change on the next tick and wake the
+        # agent the mask exists to keep quiet.
+        agent._notification_fp = attention_fingerprint(
+            agent._notification_store,
+            lambda ch: is_channel_allowed(ch, workdir=workdir),
+            workdir,
         )
     except Exception:
         pass

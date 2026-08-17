@@ -46,9 +46,9 @@ def _checkpoint_events(run_dir: DaemonRunDir) -> list[dict]:
 
 def _system_events(parent_workdir: Path) -> list[dict]:
     snapshot = PosixNotificationStoreAdapter(parent_workdir).snapshot(
-        lambda channel: channel == "system"
+        lambda channel: channel == "daemon"
     )
-    return snapshot.get("system", {}).get("data", {}).get("events", [])
+    return snapshot.get("daemon", {}).get("data", {}).get("events", [])
 
 
 async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_mutation(

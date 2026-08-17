@@ -227,8 +227,8 @@ def test_detached_lingtai_run_survives_agent_stop_shutdown_and_reaches_done(tmp_
         # wait for the receipt rather than asserting across that tiny race.
         store = PosixNotificationStoreAdapter(run_dir.path.parent.parent)
         def _terminal_event():
-            snap = store.snapshot(lambda ch: ch == "system")
-            events = snap.get("system", {}).get("data", {}).get("events", [])
+            snap = store.snapshot(lambda ch: ch == "daemon")
+            events = snap.get("daemon", {}).get("data", {}).get("events", [])
             return next((ev for ev in events if ev.get("ref_id") == "em-test"), None)
         assert _poll_until(_terminal_event, timeout=5.0)
     finally:
@@ -367,8 +367,8 @@ def test_terminal_notification_published_once_across_supervisor_and_reconcile(tm
         proc.wait(timeout=5)
 
         store = PosixNotificationStoreAdapter(run_dir.path.parent.parent)
-        snap_before = store.snapshot(lambda ch: ch == "system")
-        events_before = snap_before.get("system", {}).get("data", {}).get("events", [])
+        snap_before = store.snapshot(lambda ch: ch == "daemon")
+        events_before = snap_before.get("daemon", {}).get("data", {}).get("events", [])
         matching_before = [e for e in events_before if e.get("ref_id") == "em-test"]
         assert len(matching_before) == 1
 
@@ -380,8 +380,8 @@ def test_terminal_notification_published_once_across_supervisor_and_reconcile(tm
         )
         daemon_module.DaemonManager(agent)  # runs _reconcile_terminal_notifications in __init__
 
-        snap_after = store.snapshot(lambda ch: ch == "system")
-        events_after = snap_after.get("system", {}).get("data", {}).get("events", [])
+        snap_after = store.snapshot(lambda ch: ch == "daemon")
+        events_after = snap_after.get("daemon", {}).get("data", {}).get("events", [])
         matching_after = [e for e in events_after if e.get("ref_id") == "em-test"]
         assert len(matching_after) == 1
     finally:
@@ -819,7 +819,7 @@ def test_real_manager_handle_emanate_capsule_and_fresh_active_control(tmp_path, 
             assert raw not in path.read_text(encoding="utf-8", errors="replace")
     assert raw not in json.dumps(
         PosixNotificationStoreAdapter(run_dir.path.parent.parent)
-        .snapshot(lambda ch: ch == "system")
+        .snapshot(lambda ch: ch == "daemon")
     )
 
 
