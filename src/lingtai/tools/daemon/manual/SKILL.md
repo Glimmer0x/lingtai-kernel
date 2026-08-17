@@ -141,7 +141,7 @@ Behavior worth knowing before wiring it into a job:
   replaying pending terminal notifications) *and* never lazily repair a
   `daemon.json` that is missing, unreadable, or written by an older
   `data_version`. Such runs are still listed — reconstructed in memory — with a
-  stderr note naming them; run `daemon(action="list")` as the owning agent to
+  stderr note naming them; run `daemon(action="list", input={"contains": null, "status": null, "include_done": null, "last": null})` as the owning agent to
   actually repair them.
 - **Terminal notifications stay with the owning agent.** Runs dispatched from
   the CLI are detached and still notify the agent that owns the working
@@ -285,6 +285,20 @@ Behavior notes:
     cannot mount plugins yet receive the plugin's skills and mcp.json servers
     separately as normal skill/mcp oneshot context until the whole-plugin
     injection matures.
+  - `task_files` answers **which local text files this daemon should read**. It
+    is optional and is an array of `{path, label?, role?}` objects; `path` is a
+    UTF-8 text file under the parent agent working directory (absolute or
+    relative; relative paths resolve against the parent working directory). At
+    dispatch the parent resolves every path, validates UTF-8 and size limits,
+    and snapshots the bytes content-addressed into an immutable read-only input
+    store (`daemons/_task_files/` under the parent working directory); the
+    daemon receives only a compact `## Parent-provided task files` manifest
+    listing label/role/sha256/size and the snapshot path for each file — never
+    the file contents and never the mutable original paths, so the run keeps
+    working (and can be re-checked or relaunched) even if the original file
+    changes or is deleted. Malformed, out-of-root, missing, non-UTF-8, or
+    oversize entries refuse the whole batch before any run starts. Up to
+    `TASK_FILES_MAX_PER_TASK` files per task, `TASK_FILE_MAX_BYTES` per file.
   - `preset`: optional body/model/tool-shape override for this daemon — an
     explicit `.json`/`.jsonc` path. On the LingTai backend it must already be
     a member of the parent agent's resolved `manifest.preset.allowed` set

@@ -182,6 +182,20 @@ def _emanate_task_schema() -> dict[str, Any]:
                 "additionalProperties": _backend_option_value_schema(),
                 "description": 'Optional free-form CLI options for \'claude-code\' / \'codex\' / \'opencode\' / \'mimocode\' / \'qwen-code\' / \'oh-my-pi\' / \'kimicode\' / \'deepseek\' / \'cursor\' backends ONLY (ignored by lingtai). JSON object mapping flag names to values: true → flag only (e.g. {"search": true} → --search); string/int/float → \'--flag <value>\'; list of scalars → \'--flag <v1> --flag <v2>\'; false/null omits the flag. Underscores in keys become dashes; unsafe keys are rejected. One reserved key is not a flag: `env` (a JSON object of string->string) injects environment variables into the spawned CLI subprocess (e.g. {"env": {"CLAUDE_CONFIG_DIR": "..."}} for claude-p/claude-code profile selection); its names must match [A-Za-z_][A-Za-z0-9_]* and its values must be strings. All other nested objects are rejected. Applies only when starting the emanation (not to `ask`). Discover supported flags by running \'claude --help\', \'codex exec --help\', \'opencode run --help\', \'mimo run --help\', \'qwen --help\', \'omp --help\', \'kimi --help\', \'dsh --help\', or \'agent --help\' in bash — the CLI\'s flag list changes between versions; this field is intentionally a passthrough rather than a fixed list. See daemon-manual.',
             },
+            "task_files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "label": {"type": "string"},
+                        "role": {"type": "string"},
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+                "description": 'Optional per-task input files for this daemon run. Array of {path, label?, role?}: path is a UTF-8 text file under the parent agent working directory (absolute or relative; relative paths resolve against the parent working directory). At dispatch the parent resolves every path, validates UTF-8 text and size limits, snapshots the bytes content-addressed into an immutable read-only input store, and the daemon receives only a compact manifest pointing at the snapshot paths \u2014 never the file contents and never the mutable original paths. Malformed, out-of-root, missing, non-UTF-8, or oversize entries refuse the whole batch before any run starts.',
+            },
             "prompt": {
                 "type": "string",
                 "description": 'Optional first ordinary user message for a LingTai daemon. Blank or omitted uses exactly "Begin the assigned daemon task.". Unsupported by external CLI backends.',
