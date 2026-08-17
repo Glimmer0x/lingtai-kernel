@@ -20,6 +20,7 @@ class StubAgent:
     _working_dir: Path
     _logs: list[tuple[str, dict]] = field(default_factory=list)
     _notification_fp: tuple = ()
+    _notification_raw_fp: tuple = ()
     _notification_store: NotificationStorePort = field(init=False)
 
     def __post_init__(self) -> None:
@@ -35,8 +36,17 @@ def events(agent: StubAgent, name: str) -> list[dict]:
 
 
 def mark_delivered(agent: StubAgent) -> None:
-    """Stamp the agent's notification fingerprint as current (delivered)."""
-    agent._notification_fp = fingerprint_notifications(agent)
+    """Stamp the agent's notification fingerprint as current (delivered).
+
+    Stamps both the wake-deciding (masked) and raw fingerprints. For every
+    channel this helper's callers exercise (non-``daemon``), the two are
+    always identical — the daemon-attention mask only ever rewrites the
+    ``daemon.json`` entry — so this stays a faithful "agent has read current
+    state" stamp for both the wake and dismiss-CAS seams.
+    """
+    fp = fingerprint_notifications(agent)
+    agent._notification_fp = fp
+    agent._notification_raw_fp = fp
 
 
 def publish_large_result_reminder(

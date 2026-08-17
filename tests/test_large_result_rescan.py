@@ -288,6 +288,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         _working_dir: Path
         _logs: list = field(default_factory=list)
         _notification_fp: tuple = ()
+        _notification_raw_fp: tuple = ()
         _notification_store: object = field(init=False)
 
         def __post_init__(self) -> None:
@@ -319,7 +320,9 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
             },
         },
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    fp = fingerprint_notifications(tmp_path)
+    agent._notification_fp = fp
+    agent._notification_raw_fp = fp
 
     res = notif_intrinsic.handle(
         agent,

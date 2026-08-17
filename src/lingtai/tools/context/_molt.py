@@ -443,6 +443,8 @@ def _context_molt(agent, args: dict) -> dict:
     # the next sync re-reads from disk cleanly.
     if hasattr(agent, "_notification_fp"):
         agent._notification_fp = ()
+    if hasattr(agent, "_notification_raw_fp"):
+        agent._notification_raw_fp = ()
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):
@@ -716,6 +718,8 @@ def context_forget(agent, *, source: str = "warning_ladder", attempts: int = 0,
     # the next sync re-reads from disk cleanly.
     if hasattr(agent, "_notification_fp"):
         agent._notification_fp = ()
+    if hasattr(agent, "_notification_raw_fp"):
+        agent._notification_raw_fp = ()
     if hasattr(agent, "_notification_block_id"):
         agent._notification_block_id = None
     if hasattr(agent, "_notification_live_holder"):

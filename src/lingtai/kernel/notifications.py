@@ -28,6 +28,7 @@ import json
 import re
 import threading
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -402,9 +403,128 @@ def mask_daemon_attention_fingerprint(
 
 def attention_fingerprint(store, allow_channel, workdir: str | None) -> tuple:
     """Compute and mask the wake-deciding fingerprint for ``store``."""
-    return mask_daemon_attention_fingerprint(
-        store, store.fingerprint(allow_channel), workdir
+    return coherent_attention_read(store, allow_channel, workdir).masked_fp
+
+
+# How many times a coherent read re-tries before accepting the last observation.
+# A producer that keeps rewriting the directory faster than two fingerprint
+# passes cannot be waited out; giving up after a bounded number of attempts and
+# returning the last (fingerprint, payload) pair keeps the tick O(1) and never
+# blocks the heartbeat. The accepted pair is always internally consistent for
+# the wake decision — only its freshness, never its coherence, is sacrificed.
+_COHERENT_READ_ATTEMPTS = 3
+
+
+class CoherentAttentionRead(NamedTuple):
+    """One internally consistent observation of the notification directory.
+
+    ``raw_fp``, ``masked_fp`` and ``payloads`` all describe the *same* instant:
+    ``raw_fp`` is the byte-exact Store fingerprint of the bytes in ``payloads``,
+    and ``masked_fp`` is the daemon-attention mask applied to that same
+    observation. Holding the three together is what makes them usable as a
+    delivered-version token: a caller may deliver ``payloads`` to the model and
+    later compare-and-swap against ``raw_fp``, knowing the version describes the
+    bytes the model actually saw.
+
+    ``stable`` records whether the observation was confirmed unchanged by a
+    verifying re-read. ``False`` means a producer was writing throughout the
+    read and the pair is the last attempt rather than a confirmed-quiet one;
+    callers that must not lose an alarm edge treat an unstable read as "state is
+    moving", never as evidence of quiet.
+    """
+
+    raw_fp: tuple
+    masked_fp: tuple
+    payloads: dict
+    stable: bool
+
+
+def coherent_attention_read(
+    store, allow_channel, workdir: str | None
+) -> CoherentAttentionRead:
+    """Read fingerprint and payloads as one coherent observation.
+
+    The Store Port deliberately exposes no atomic snapshot-plus-version
+    primitive: ``fingerprint()`` and ``snapshot()`` are independent unlocked
+    reads (see ``notification_store/CONTRACT.md``). Composing them naively tears
+    under a concurrent producer, and every consumer of this module needs the
+    pair to agree:
+
+    * **Delivery / CAS.** ``meta_block`` hands ``payloads`` to the model and
+      commits ``raw_fp`` as the delivered version. If the version came from a
+      *later* independent read, a publish landing in between would let a
+      non-forced ``dismiss_channel`` clear bytes the agent never saw.
+    * **Daemon attention masking.** The mask needs the daemon payload that
+      matches the fingerprint it is rewriting. Reading the payload separately
+      lets an alarmed write be observed by the fingerprint pass and a clear by
+      the payload pass, rewriting the alarmed entry to the quiet token — the
+      alarm edge would vanish with no file left to replay it.
+
+    Verify-and-retry supplies the missing atomicity without a Port change and
+    without a lock on the read path: fingerprint, snapshot, then fingerprint
+    again. Matching bookend fingerprints prove nothing was rewritten in between,
+    so the observation is coherent. A mismatch means a producer wrote during the
+    read; retry on the fresher fingerprint. After ``_COHERENT_READ_ATTEMPTS``
+    the last observation is returned with ``stable=False`` rather than looping.
+
+    Store errors degrade the way the rest of this module does — toward waking,
+    never toward silence: a failed snapshot yields the raw fingerprint unmasked
+    (so a below-threshold daemon entry reads as a change and wakes) and an empty
+    payload map marked unstable, so no caller mistakes the failure for "the
+    channels are quiet".
+    """
+    threshold = daemon_alarm_threshold(workdir)
+    raw_fp: tuple = ()
+    payloads: dict = {}
+    stable = False
+
+    for _ in range(_COHERENT_READ_ATTEMPTS):
+        try:
+            before = tuple(store.fingerprint(allow_channel))
+            payloads = store.snapshot(allow_channel)
+            after = tuple(store.fingerprint(allow_channel))
+        except Exception:
+            # Read failure: report the last known fingerprint with no payloads
+            # and unstable, so masking is skipped and quiet is never inferred.
+            return CoherentAttentionRead(raw_fp, raw_fp, {}, False)
+        raw_fp = after
+        if before == after:
+            stable = True
+            break
+
+    # When `stable` is False the directory was still moving; the pair below is
+    # the last attempt rather than a confirmed one, and callers are told so.
+    masked_fp = (
+        tuple(raw_fp)
+        if threshold is None
+        else apply_daemon_attention_mask(
+            raw_fp, payloads.get(DAEMON_CHANNEL), threshold
+        )
     )
+    return CoherentAttentionRead(tuple(raw_fp), masked_fp, payloads, stable)
+
+
+def masked_empty_attention_fp(workdir: str | None) -> tuple:
+    """Return the masked fingerprint of an *empty* notification directory.
+
+    With a daemon alarm threshold configured, ``apply_daemon_attention_mask``
+    keeps a virtual quiet ``daemon.json`` token present whether or not the file
+    exists, so the masked fingerprint of "no channels at all" is not ``()`` but
+    that single quiet entry. An agent that has never synced starts at ``()``,
+    which would read as a change the first time a sub-threshold ``daemon.json``
+    appears — injecting and waking for exactly the arrival the threshold exists
+    to keep quiet.
+
+    Seeding the baseline with this value makes first-sight-of-a-quiet-channel a
+    no-op while leaving every alarmed arrival (threshold ``0``, or a payload
+    already past ``count > N``) a genuine change, because its token is
+    ``daemon:alarm=1``. Absent a configured threshold there is no virtual entry
+    and the empty baseline stays ``()``.
+    """
+    threshold = daemon_alarm_threshold(workdir)
+    if threshold is None:
+        return ()
+    return apply_daemon_attention_mask((), None, threshold)
 
 
 def agent_attention_fingerprint(agent) -> tuple:
@@ -1237,8 +1357,16 @@ def dismiss_channel(
     from .notification_store import UNCONDITIONAL
 
     store = agent._notification_store
+    # The optimistic-concurrency token must be the RAW delivered fingerprint,
+    # never the daemon-attention-masked one: compare_update_channel always
+    # compares against the real on-disk (name, size, sha256) triple, and the
+    # masked entry (e.g. `("daemon.json", 0, "daemon:alarm=0")`) can never
+    # equal that, which would make every non-forced dismiss of a
+    # threshold-masked channel refuse as stale regardless of how current the
+    # agent's read was. See notifications.py's daemon-channel docstring and
+    # meta_block._commit_notification_fp.
     delivered = _channel_fingerprint_entry(
-        getattr(agent, "_notification_fp", ()), channel
+        getattr(agent, "_notification_raw_fp", ()), channel
     )
     expected = UNCONDITIONAL if force else delivered
     published_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

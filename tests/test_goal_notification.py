@@ -149,7 +149,9 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     publish_test_payload(tmp_path, "goal", {"data": {"id": "demo", "status": "active", "reminder_delay_seconds": 1}})
     check_goal(agent)
     assert "system" in snapshot_notifications(tmp_path)
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    fp = fingerprint_notifications(tmp_path)
+    agent._notification_fp = fp
+    agent._notification_raw_fp = fp
 
     result = notif_intrinsic.handle(
         agent,

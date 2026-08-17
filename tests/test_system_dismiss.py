@@ -386,7 +386,7 @@ def test_system_event_dismiss_by_event_id_preserves_other_events(tmp_path: Path)
             },
         },
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    _mark_delivered(agent)
 
     result = _dismiss_event(agent, event_id="evt_b")
 
@@ -407,7 +407,7 @@ def test_system_event_dismiss_by_ref_id_clears_file_when_last_event(tmp_path: Pa
         "system",
         {"data": {"events": [{"event_id": "evt_a", "source": "goal.reminder", "ref_id": "goal:current"}]}},
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    _mark_delivered(agent)
 
     result = _dismiss_ref(agent, ref_id="goal:current")
 
@@ -558,7 +558,7 @@ def test_system_event_dismiss_with_malformed_data_is_noop(tmp_path: Path) -> Non
             "data": ["not", "a", "dict"],
         },
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    _mark_delivered(agent)
 
     result = _dismiss_event(agent, event_id="evt_a")
 
@@ -577,7 +577,7 @@ def test_system_event_dismiss_unknown_event_id_reports_cause(tmp_path: Path) -> 
         "system",
         {"data": {"events": [{"event_id": "evt_a", "source": "daemon", "ref_id": "a"}]}},
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    _mark_delivered(agent)
 
     result = _dismiss_event(agent, event_id="evt_missing")
 
@@ -876,7 +876,7 @@ def test_real_event_dismiss_signals_chat_for_ws_full_epoch(tmp_path: Path) -> No
             "data": {"events": [{"event_id": "evt_a", "source": "btw"}]},
         },
     )
-    agent._notification_fp = fingerprint_notifications(tmp_path)
+    _mark_delivered(agent)
 
     res = _dismiss_event(agent, event_id="evt_a")
 
