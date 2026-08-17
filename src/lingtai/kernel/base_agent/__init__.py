@@ -630,6 +630,14 @@ class BaseAgent:
         #   skeletonized in-place, not deleted).
         # See notifications.py and notification-filesystem-redesign.md.
         self._notification_fp: tuple = ()
+        # _notification_raw_fp: the same fingerprint BEFORE daemon-attention
+        # masking is applied. `_notification_fp` is the wake-deciding value
+        # (masked, so a sub-threshold daemon channel never moves it); the raw
+        # value is the true byte-exact directory fingerprint and is what a
+        # non-forced dismiss's optimistic-concurrency check must compare
+        # against (the Store's compare_update_channel always reads raw bytes
+        # off disk, never the masked token). See notifications.dismiss_channel.
+        self._notification_raw_fp: tuple = ()
         # Serializes ``_sync_notifications()`` check-then-act between the
         # run-loop IDLE boundary and the heartbeat thread (issue #659).
         # The store's flock guards on-disk mutations only; it does NOT
@@ -1134,6 +1142,7 @@ class BaseAgent:
         skip_if_idempotency_key_exists: bool = False,
         priority: str = "normal",
         extra: dict | None = None,
+        channel: str = "system",
     ) -> str:
         from .messaging import _enqueue_system_notification
         return _enqueue_system_notification(
@@ -1146,6 +1155,7 @@ class BaseAgent:
             skip_if_idempotency_key_exists=skip_if_idempotency_key_exists,
             priority=priority,
             extra=extra,
+            channel=channel,
         )
 
     def notify(self, sender: str, text: str) -> None:
@@ -1329,7 +1339,18 @@ class BaseAgent:
     def _sync_notifications_locked(self) -> None:
         """Sync `.notification/` state into the wire.
 
-        Computes the current fingerprint; if unchanged, no-op.  On change:
+        Takes one coherent observation of `.notification/` (fingerprint,
+        daemon-attention mask, and payloads describing a single instant) and
+        compares its masked fingerprint against ``_notification_fp``; if
+        unchanged, no wake-worthy delta exists. But the mask keeps a virtual
+        quiet daemon entry present whether or not `daemon.json` exists, so a
+        masked-unchanged tick can still hide a real on-disk change (a
+        sub-threshold daemon clear). That case is detected via the raw
+        (unmasked) fingerprint: if it moved, a live holder still advertising
+        the removed state is skeletonized — without injecting or waking, since
+        the wake-deciding fingerprint itself did not change.
+
+        On an actual (masked) fingerprint change:
         1. Skeletonize the current live holder (if any) in-place — does NOT
            remove synthesized pairs from history.  Synthesized pairs are kept
            as placeholder skeletons; only normal tool-result dicts have their
@@ -1365,10 +1386,13 @@ class BaseAgent:
         tick retries.
         """
         from ..notifications import (
+            DAEMON_CHANNEL,
             _workdir_key,
+            coherent_attention_read,
             flag_unregistered_channel,
             is_channel_allowed,
             is_present_channel_flagable,
+            masked_empty_attention_fp,
             sync_hook_registry,
         )
         from ..meta_block import skeletonize_notification_holder
@@ -1404,10 +1428,43 @@ class BaseAgent:
         def _allow(channel: str) -> bool:
             return is_channel_allowed(channel, workdir=_workdir_key(self))
 
-        # One allow-all fingerprint pass; the allow-filtered view is derived
-        # from it so the steady-state sync does a single hash pass, not two.
+        # One coherent observation: the fingerprint, the daemon-attention mask
+        # derived from it, and the payloads all describe the same instant
+        # (verify-and-retry inside `coherent_attention_read`). Reading them
+        # independently tears — an alarmed daemon write seen by the fingerprint
+        # pass plus a clear seen by the payload pass would rewrite the alarmed
+        # entry to the quiet token and lose the alarm edge with no file left to
+        # replay it. Below the configured threshold the daemon entry collapses
+        # to a constant token, so ordinary terminal notices stay readable
+        # through snapshot/check without moving `fp` and waking the agent; the
+        # strict count > N crossing flips the token once. No configured
+        # threshold leaves the raw hash in place (usual per-terminal wake).
+        observed = coherent_attention_read(store, _allow, _workdir_key(self))
+        # An unstable read pairs a snapshot with a later fingerprint while a
+        # producer is still writing. It is not authoritative notification state:
+        # do not inject, skeletonize, or commit either version; retry next tick.
+        if not observed.stable:
+            return
+        raw_fp = observed.raw_fp
+        fp = observed.masked_fp
+
+        # Resolve the "never synced yet" baseline through the same mask. An
+        # agent starts at `()`, but with a threshold configured the masked
+        # fingerprint of an empty directory is not `()` — it is the virtual
+        # quiet daemon token. Without this, the first sub-threshold daemon.json
+        # an agent ever sees reads as a change and injects/wakes, which is
+        # exactly what the threshold exists to prevent. An alarmed first write
+        # (threshold 0, or a payload already past count > N) still differs from
+        # this baseline, because its token is `daemon:alarm=1`, so it wakes.
+        baseline = self._notification_fp
+        if not baseline:
+            baseline = masked_empty_attention_fp(_workdir_key(self))
+
+        # The unregistered-channel scan needs the allow-*all* view, which the
+        # coherent read (allow-filtered, and the value every wake comparison
+        # uses) does not carry. It is best-effort diagnostics only, so a plain
+        # extra pass is correct here — it never feeds a wake decision.
         present_fp = store.fingerprint(lambda ch: True)
-        fp = tuple(e for e in present_fp if _allow(e[0][: -len(".json")]))
 
         # Warn-and-flag (D2): detect present-but-unregistered channel files.
         # Iterates only when the allow-all view changed (cache), and skips
@@ -1426,13 +1483,62 @@ class BaseAgent:
                 ):
                     flag_unregistered_channel(self, stem)
 
-        if fp == self._notification_fp:
+        if fp == baseline:
+            # The wake-deciding (masked) fingerprint is unchanged, so no
+            # injection and no wake are warranted. But the daemon attention
+            # mask keeps a virtual quiet entry present in `fp` whether or not
+            # `daemon.json` actually exists (see apply_daemon_attention_mask),
+            # so a quiet clear — a sub-threshold daemon.json being removed —
+            # is invisible in this comparison even though real on-disk state
+            # changed. The raw (unmasked) fingerprint does see it.
+            if raw_fp == getattr(self, "_notification_raw_fp", ()):
+                return
+            # An unstable observation is not evidence of anything: a producer
+            # was writing throughout the read, so `payloads` may not pair with
+            # `raw_fp`. Leave the raw fingerprint uncommitted and retry on the
+            # next tick rather than retiring a holder on a torn read.
+            if not observed.stable:
+                return
+            if _skip_poisoned_sync(phase="before_quiet_clear_check"):
+                return
+            # A hidden raw change is not necessarily a clear: a below-threshold
+            # daemon arrival or count update must not retire an unrelated email
+            # holder. Release only when the live holder actually advertises
+            # daemon data and the stable current payload no longer has daemon.
+            holder = getattr(self, "_notification_live_holder", None)
+            holder_metadata = getattr(holder, "metadata", None)
+            holder_agent_meta = (
+                holder_metadata.get("agent_meta", {})
+                if isinstance(holder_metadata, dict)
+                else {}
+            )
+            holder_notifications = (
+                holder_agent_meta.get("notifications", {}).get("attention", {})
+                if isinstance(holder_agent_meta, dict)
+                else {}
+            )
+            if (
+                isinstance(holder_notifications, dict)
+                and DAEMON_CHANNEL in holder_notifications
+                and DAEMON_CHANNEL not in observed.payloads
+            ):
+                skeletonize_notification_holder(self)
+            # Commit raw only after the quiet-clear action actually completed.
+            # Committing before the poison check or the holder release would
+            # let the next healthy tick see matching raw state and return
+            # early, permanently skipping the release.
+            self._notification_raw_fp = raw_fp
             return
 
         if _skip_poisoned_sync(phase="before_collect"):
             return
 
-        notifications = store.snapshot(_allow)
+        # Reuse the payloads from the coherent observation `fp`/`raw_fp` were
+        # derived from. A fresh snapshot here would reintroduce the tear the
+        # coherent read exists to close: it could return state that does not
+        # match the fingerprint about to be committed, so the committed version
+        # would describe bytes the agent never delivered.
+        notifications = observed.payloads
 
         if not notifications:
             if _skip_poisoned_sync(phase="before_empty_skeletonize"):
@@ -1444,6 +1550,7 @@ class BaseAgent:
             # history as placeholders; they are never deleted.
             skeletonize_notification_holder(self)
             self._notification_fp = fp
+            self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
             return
 
@@ -1534,6 +1641,7 @@ class BaseAgent:
                     sources=sources,
                 )
                 self._notification_fp = fp
+                self._notification_raw_fp = raw_fp
 
         elif self._state == AgentState.IDLE:
             if _skip_poisoned_sync(phase="idle_before_inject"):
@@ -1596,9 +1704,11 @@ class BaseAgent:
             return
         if inject_ok:
             self._notification_fp = fp
+            self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
         elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
+            self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
 
     def _heal_pending_tool_calls(self, *, reason: str) -> bool:
@@ -1675,6 +1785,7 @@ class BaseAgent:
             # producer reconciliation"). Best-effort — must never break heal.
             try:
                 self._notification_fp = ()
+                self._notification_raw_fp = ()
                 self._notification_deferred_log_fp = ()
                 self._log(
                     "notification_redacted_replay_resync",

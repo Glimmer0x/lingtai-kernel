@@ -495,13 +495,19 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
 
     Mirrors ``DaemonManager._publish_daemon_notification``'s body/text
     shape and ``_enqueue_system_notification``'s payload mutator so
-    ``.notification/system.json`` looks identical regardless of whether the
+    ``.notification/daemon.json`` looks identical regardless of whether the
     in-process callback or this detached supervisor produced it — the
     fresh-manager reconciliation path and the wire's rendering both already
-    depend on that shape.
+    depend on that shape, and the parent's alarm-threshold attention mask
+    reads the same ``data.daemon`` batch state either way.
     """
     from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
     from lingtai.kernel.notification_store import UNCONDITIONAL
+    from lingtai.kernel.notifications import (
+        DAEMON_CHANNEL,
+        daemon_alarm_threshold,
+        next_daemon_batch_state,
+    )
 
     result_path = (
         state.get("followup_result_path")
@@ -547,7 +553,8 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
         parts.append(f"Preview:\n{preview}")
     body = "\n".join(parts)
 
-    store = PosixNotificationStoreAdapter(Path(manifest["parent_working_dir"]))
+    parent_working_dir = manifest["parent_working_dir"]
+    store = PosixNotificationStoreAdapter(Path(parent_working_dir))
 
     import secrets
     from datetime import datetime, timezone
@@ -581,16 +588,24 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
             ) else "normal"
         )
         payload = {
-            "header": f"{len(events)} system notification{'s' if len(events) != 1 else ''}",
+            "header": f"{len(events)} daemon notification{'s' if len(events) != 1 else ''}",
             "icon": "\U0001f514",
             "priority": envelope_priority,
             "published_at": received_at,
-            "data": {"events": events},
+            "data": {
+                "events": events,
+                # Same durable batch state the in-process publisher stamps, so
+                # the parent's attention mask behaves identically regardless of
+                # which process produced the terminal notice.
+                DAEMON_CHANNEL: next_daemon_batch_state(
+                    current, daemon_alarm_threshold(parent_working_dir)
+                ),
+            },
         }
         return payload, True, event_id
 
     try:
-        result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+        result = store.compare_update_channel(DAEMON_CHANNEL, UNCONDITIONAL, _mutator)
     except Exception:
         return False
     applied_event_id = result.value if isinstance(result.value, str) else ""

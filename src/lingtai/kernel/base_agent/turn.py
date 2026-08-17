@@ -1420,11 +1420,17 @@ def _run_loop(agent) -> None:
             # synthetic notification pair + MSG_TC_WAKE path.
             if sleep_state == AgentState.IDLE and not agent._asleep.is_set():
                 try:
-                    from ..notifications import _workdir_key, is_channel_allowed
+                    from ..notifications import (
+                        _workdir_key,
+                        attention_fingerprint,
+                        is_channel_allowed,
+                    )
                     store = agent._notification_store
                     workdir = _workdir_key(agent)
-                    fp = store.fingerprint(
-                        lambda ch: is_channel_allowed(ch, workdir=workdir)
+                    fp = attention_fingerprint(
+                        store,
+                        lambda ch: is_channel_allowed(ch, workdir=workdir),
+                        workdir,
                     )
                     if fp != agent._notification_fp:
                         notifications = store.snapshot(

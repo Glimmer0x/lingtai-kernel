@@ -84,14 +84,22 @@ def _sleep(agent, args: dict) -> dict:
     """
     from lingtai.kernel.i18n import t
     from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import _workdir_key, is_channel_allowed
+    from lingtai.kernel.notifications import (
+        _workdir_key,
+        attention_fingerprint,
+        is_channel_allowed,
+    )
 
     reason = args.get("reason", "")
     force = bool(args.get("force", False))
 
     store = agent._notification_store
-    pending_fp = store.fingerprint(
-        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent))
+    # Masked, like the committed fingerprint: a below-threshold daemon batch is
+    # readable state, not pending attention, so it must not refuse sleep.
+    pending_fp = attention_fingerprint(
+        store,
+        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent)),
+        _workdir_key(agent),
     )
     has_pending = pending_fp != agent._notification_fp
 

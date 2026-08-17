@@ -74,8 +74,9 @@ def _enqueue_system_notification(
     skip_if_idempotency_key_exists: bool = False,
     priority: str = "normal",
     extra: dict | None = None,
+    channel: str = "system",
 ) -> str:
-    """Append a system event to ``.notification/system.json``.
+    """Append a system event to ``.notification/<channel>.json``.
 
     The system intrinsic owns this single file and multiplexes its
     event types inside (mail bounces, daemon notices, MCP-bridged
@@ -111,6 +112,12 @@ def _enqueue_system_notification(
             the published envelope high priority so frontends surface it.
         extra: Optional structured event fields merged into this event only
             (e.g. severity, artifact path, recommended_action).
+        channel: Target notification channel. Defaults to ``"system"``. The
+            daemon tool passes ``"daemon"`` so terminal notices land on their
+            own channel, where the alarm-threshold attention policy applies;
+            that channel additionally carries durable batch state under
+            ``data.daemon``. Event shape, capping and idempotency are
+            identical on every channel.
 
     Returns:
         An identifier for the event (for logging and back-compat with
@@ -121,6 +128,12 @@ def _enqueue_system_notification(
     import secrets
     from datetime import datetime, timezone
     from ..notification_store import UNCONDITIONAL
+    from ..notifications import (
+        DAEMON_CHANNEL,
+        _workdir_key,
+        daemon_alarm_threshold,
+        next_daemon_batch_state,
+    )
 
     event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
     received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -168,19 +181,29 @@ def _enqueue_system_notification(
             else "normal"
         )
 
+        data: dict = {"events": events}
+        if channel == DAEMON_CHANNEL:
+            # Durable batch state for the alarm-threshold attention policy.
+            # Counted inside the compare-and-update mutator so concurrent
+            # terminal arrivals cannot lose an increment.
+            data[DAEMON_CHANNEL] = next_daemon_batch_state(
+                current, daemon_alarm_threshold(_workdir_key(agent))
+            )
+
+        label = "daemon" if channel == DAEMON_CHANNEL else "system"
         payload = {
             "header": (
-                f"{len(events)} system notification"
+                f"{len(events)} {label} notification"
                 f"{'s' if len(events) != 1 else ''}"
             ),
             "icon": "🔔",
             "priority": envelope_priority,
             "published_at": received_at,
-            "data": {"events": events},
+            "data": data,
         }
         return payload, True, event_id
 
-    result = store.compare_update_channel("system", UNCONDITIONAL, _mutator)
+    result = store.compare_update_channel(channel, UNCONDITIONAL, _mutator)
     applied_event_id = result.value if isinstance(result.value, str) else ""
     if not applied_event_id:
         return ""

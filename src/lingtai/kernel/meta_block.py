@@ -3797,17 +3797,25 @@ def build_synthetic_meta_envelope(
     return envelope
 
 
-def _collect_active_notifications_payload(agent) -> dict | None:
-    """Return the canonical active notification payload.
+def _collect_active_notifications(agent):
+    """Return ``(payload, versions)`` for the current active notifications.
 
-    Reads ``.notification/*.json`` via the agent's notification store and wraps
-    it with the same guidance fields used by the synthesized notification pair.
-    Returns ``None`` when there are no active channels (or anything goes wrong);
-    callers treat ``None`` as "do not stamp."
+    ``versions`` is the ``CoherentAttentionRead`` the payload was built from, so
+    the caller can commit the fingerprint **of the bytes it is about to
+    deliver** instead of re-reading the store afterwards. That distinction is
+    load-bearing: ``dismiss_channel`` uses the committed raw fingerprint as its
+    compare-and-swap token, so a version taken from a later independent read
+    could describe a payload published *after* delivery — letting a non-forced
+    dismiss clear bytes the model never saw.
 
+    ``payload`` is ``None`` when there are no active channels (or anything goes
+    wrong); callers treat ``None`` as "do not stamp". ``versions`` is ``None``
+    only when the read itself failed, which leaves the fingerprint uncommitted
+    for a later retry rather than committing an unverified version.
     """
     try:
         from .notifications import (
+            coherent_attention_read,
             is_channel_allowed,
             sync_hook_registry,
             _workdir_key,
@@ -3818,14 +3826,20 @@ def _collect_active_notifications_payload(agent) -> dict | None:
         sync_hook_registry(agent)
         workdir = _workdir_key(agent)
 
-        notifications = agent._notification_store.snapshot(
-            lambda ch: is_channel_allowed(ch, workdir=workdir)
+        observed = coherent_attention_read(
+            agent._notification_store,
+            lambda ch: is_channel_allowed(ch, workdir=workdir),
+            workdir,
         )
-        if not notifications:
-            return None
-        return build_notification_payload(notifications)
+        # A moving directory observation has no authoritative payload/version
+        # pair. Leave any live holder and fingerprints intact for a later retry.
+        if not observed.stable:
+            return None, None
+        if not observed.payloads:
+            return None, observed
+        return build_notification_payload(observed.payloads), observed
     except Exception:
-        return None
+        return None, None
 
 
 def _final_tool_result_block(tool_results: list):
@@ -3934,22 +3948,49 @@ def _is_notification_check_placeholder(content) -> bool:
     return isinstance(content, dict) and content.get("_notification_placeholder") is True
 
 
-def _commit_notification_fp(agent) -> None:
-    """Commit the current filesystem notification fingerprint onto the agent.
+def _commit_notification_fp(agent, delivered=None) -> None:
+    """Commit the fingerprint of the delivered notification state.
 
-    Best-effort: a fingerprint failure must never break the caller.  Committing
+    ``delivered`` is the ``CoherentAttentionRead`` the payload just stamped onto
+    the wire was built from. It MUST be supplied by any caller that actually
+    delivered bytes to the model: committing a version read *after* delivery is
+    the B1 TOCTOU. Between the delivery snapshot and a later fingerprint call a
+    producer can publish ``P2``; the model received ``P1``, but the committed
+    raw version would describe ``P2``, and ``dismiss_channel`` — which uses that
+    value as its non-forced compare-and-swap token — would happily clear ``P2``
+    without it ever having been seen.
+
+    Best-effort: a fingerprint failure must never break the caller. Committing
     ``_notification_fp`` is the bridge that stops the IDLE-path synthesized pair
     from re-delivering state already represented by a tool-result holder — so
     even an unchanged / equivalently-rewritten payload commits it, preventing a
     forever-retry against the IDLE sync path.
+
+    ``_notification_fp`` is the *masked* attention fingerprint (the sync path
+    compares against it, so committing a raw hash for a below-threshold daemon
+    channel would read as a change on the next tick and wake the agent the mask
+    exists to keep quiet). ``_notification_raw_fp`` is its byte-exact companion,
+    the value a non-forced dismiss compares against — never the masked token,
+    which ``compare_update_channel`` could never match.
     """
     try:
-        from .notifications import is_channel_allowed, _workdir_key
+        if delivered is None:
+            from .notifications import (
+                coherent_attention_read,
+                is_channel_allowed,
+                _workdir_key,
+            )
 
-        workdir = _workdir_key(agent)
-        agent._notification_fp = agent._notification_store.fingerprint(
-            lambda ch: is_channel_allowed(ch, workdir=workdir)
-        )
+            workdir = _workdir_key(agent)
+            delivered = coherent_attention_read(
+                agent._notification_store,
+                lambda ch: is_channel_allowed(ch, workdir=workdir),
+                workdir,
+            )
+        if not delivered.stable:
+            return
+        agent._notification_fp = delivered.masked_fp
+        agent._notification_raw_fp = delivered.raw_fp
     except Exception:
         pass
 
@@ -4013,8 +4054,12 @@ def attach_active_notifications(
     the same notification state from being delivered twice (once via tool-result
     meta, again via the synthesized pair).
     """
-    payload = _collect_active_notifications_payload(agent)
+    payload, delivered_versions = _collect_active_notifications(agent)
     target = _final_tool_result_block(tool_results)
+    # A failed or unstable store read is not an authoritative empty state.
+    # Preserve the existing live holder and leave fingerprints uncommitted.
+    if delivered_versions is None:
+        return prior_holder
     if not payload:
         # Explicitly clear the current axis on the newest final carrier. Older
         # blocks remain untouched historical traces.
@@ -4107,8 +4152,10 @@ def attach_active_notifications(
 
     # Commit the fingerprint so the IDLE-path `_sync_notifications` will
     # see fp == agent._notification_fp and skip the synthesized pair for
-    # this same unchanged state.
-    _commit_notification_fp(agent)
+    # this same unchanged state. The version committed is the one the payload
+    # above was read from, so the raw fingerprint a later non-forced dismiss
+    # compares against describes exactly the bytes just delivered.
+    _commit_notification_fp(agent, delivered_versions)
 
     return target
 
