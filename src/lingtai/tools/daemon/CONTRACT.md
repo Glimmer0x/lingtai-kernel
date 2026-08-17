@@ -241,6 +241,30 @@ task; a non-list value fails preflight before run-dir creation. External CLI
 backends receive the plugin's skills and MCP registrations through the normal
 skill/mcp oneshot context and mount no plugin-native surface.
 
+Optional `tasks[].task_files` is an array of `{path, label?, role?}` objects
+naming UTF-8 text input files under the parent agent working directory.
+Preflight (before any run-dir creation, preset work, or scheduling) resolves
+each path relative to that working directory, enforces containment inside it
+(fully-resolved, symlinks followed), validates UTF-8 text and the practical
+limits (`TASK_FILES_MAX_PER_TASK` files per task, `TASK_FILE_MAX_BYTES` per
+file), and snapshots the bytes content-addressed into the immutable read-only
+input store `daemons/_task_files/` (one blob per SHA-256 across the whole
+dispatch/group, published atomically via `os.replace`). Any malformed,
+out-of-root, missing, oversize, or non-UTF-8 entry refuses the whole batch
+with a `tasks[i].task_files[j]`-context error — task input never silently
+falls back to the mutable original path. Each run's durable
+`daemon.json.call_parameters.task_files` records `{manifest, files}` pointing
+at the compact per-dispatch manifest (`daemons/_task_files/manifest-<group>.json`)
+and that run's snapshot rows (`path`, `label`, `role`, `sha256`, `size`,
+`snapshot`), so `check`, retry, and relaunch never need the original file.
+Every backend receives only a compact `## Parent-provided task files`
+oneshot-context section with the snapshot paths — never file contents —
+keeping the daemon system prompt within its 20,000-character budget
+regardless of input size. The `_task_files` store is internal-only: its
+leading underscore excludes it from every run-dir scan
+(`_looks_like_daemon_run_dir`), so `list`/recovery/`check` never surface it
+as a run.
+
 LingTai-backend daemon LLM construction uses one effective context window:
 an explicit daemon preset's canonical `manifest.llm.context_limit` wins,
 otherwise an implicit/no-preset daemon inherits the parent service's valid
@@ -272,7 +296,7 @@ continues on full history and never falls back to a different wire).
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
+| `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin`/`task_files` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
 | `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
@@ -639,6 +663,18 @@ stale `running`/`active` `daemon.json` records whose `parent_pid` is dead are
 reaped to `failed`.
 
 ## Process and Terminal Boundaries
+
+### 10. Task input files are snapshot-only, never live-path reads
+
+Optional `tasks[].task_files` input is copied once, content-addressed, into the
+immutable `daemons/_task_files/` store before any run starts; the daemon prompt
+and every backend receive only the compact manifest rows (`label`, `role`,
+`sha256`, `size`, `snapshot` path). A worker must read the snapshot paths, and
+no backend may embed file contents into the prompt/JSONL or point the worker at
+the mutable original path — the original may change or disappear after dispatch
+without affecting the run, its `check` inspection, or a relaunch. Preflight
+fails the whole batch loudly for any malformed, out-of-root, missing, oversize,
+or non-UTF-8 entry; there is no silent fallback to the original path.
 
 ### External CLI process boundary
 

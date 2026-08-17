@@ -13,6 +13,7 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -508,6 +509,25 @@ _DAEMON_COMPLETION_FILE = "daemon_completion.json"
 _DAEMON_CLAUDE_MCP_CONFIG_FILE = "claude-mcp-config.json"
 _DAEMON_COMPLETION_STATUSES = {"done", "failed", "incomplete"}
 _SOURCE_ROOT = Path(__file__).resolve().parents[3]
+
+#: Optional per-task input files (``tasks[].task_files``): the parent resolves
+#: every path under the agent working directory, validates UTF-8 text and the
+#: practical limits below, and snapshots the bytes content-addressed into an
+#: immutable read-only input store BEFORE any run-dir creation or scheduling.
+#: Workers receive only a compact manifest pointing at the snapshot paths —
+#: never the file contents and never the mutable original paths — so retry and
+#: relaunch never need the original file. The store lives under the daemons
+#: root as ``daemons/_task_files/``; the leading underscore is the run-dir
+#: scan's marker that the store is internal and never a run (see
+#: ``_looks_like_daemon_run_dir``).
+_TASK_FILES_STORE_DIR_NAME = "_task_files"
+_TASK_FILES_MANIFEST_VERSION = 1
+#: Per-task cap on task_files entries; bounds the compact manifest/prompt rows.
+TASK_FILES_MAX_PER_TASK = 50
+#: Per-file byte cap for one task input file; bounds the immutable blob store.
+TASK_FILE_MAX_BYTES = 1_000_000
+#: Cap on a task_files label/role string; keeps the prompt manifest compact.
+_TASK_FILES_ANNOTATION_MAX_CHARS = 200
 # Tools emanations can never use (no recursion, no spawning, no identity mutation)
 EMANATION_BLACKLIST = {
     "daemon",
@@ -2617,11 +2637,213 @@ class DaemonManager:
         return self._render_task_skill_catalog(rows)
 
     @staticmethod
+    def _resolve_task_file_path(raw_path: str, working_dir: Path) -> Path:
+        """Resolve one daemon task file path to a contained absolute file.
+
+        Relative paths resolve against the agent working directory; ``~`` is
+        expanded. The fully-resolved path (symlinks followed) must stay inside
+        the working directory, so a symlink escaping the root is out-of-root.
+        """
+        p = Path(raw_path).expanduser()
+        if not p.is_absolute():
+            p = working_dir / p
+        p = p.resolve(strict=False)
+        if not p.is_file():
+            raise ValueError(f"task file path does not resolve to a file: {raw_path}")
+        root = working_dir.resolve(strict=False)
+        try:
+            p.relative_to(root)
+        except ValueError:
+            raise ValueError(
+                f"task file path is outside the agent working directory: {raw_path}"
+            ) from None
+        return p
+
+    @staticmethod
+    def _store_task_file_blob(store_dir: Path, sha256: str, data: bytes) -> Path:
+        """Write one immutable content-addressed blob; return its path.
+
+        The blob is named by its SHA-256 so identical bytes across tasks and
+        dispatches share one file. ``os.replace`` makes the publish atomic: a
+        torn write never leaves a trusted corrupt blob behind.
+        """
+        blob = store_dir / sha256
+        if blob.exists():
+            return blob
+        store_dir.mkdir(parents=True, exist_ok=True)
+        tmp = store_dir / f".{sha256}.tmp"
+        tmp.write_bytes(data)
+        try:
+            os.replace(tmp, blob)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
+        return blob
+
+    def _task_files_store_dir(self) -> Path:
+        """The internal content-addressed task input store for this agent."""
+        return self._agent._working_dir / "daemons" / _TASK_FILES_STORE_DIR_NAME
+
+    def _snapshot_task_files(self, spec: dict) -> list[dict] | None:
+        """Validate ``spec['task_files']`` and plan its snapshot rows.
+
+        Returns one manifest row per file (``path``, ``label``, ``role``,
+        ``sha256``, ``size``, ``resolved``, ``snapshot``) or ``None`` when the
+        task omits ``task_files``. Any malformed entry, out-of-root/missing
+        path, oversize file, or non-UTF-8 file raises ``ValueError`` so the
+        caller can refuse the whole batch before any run-dir creation or
+        scheduling — task input never silently falls back to the mutable
+        original path. This phase writes nothing; the caller materializes the
+        validated batch (``_materialize_task_files``) only after every task in
+        the dispatch has passed, so a refused batch leaves no store side
+        effects.
+        """
+        raw = spec.get("task_files")
+        if raw is None:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError(
+                "task_files must be an array of {path, label?, role?} objects"
+            )
+        if len(raw) > TASK_FILES_MAX_PER_TASK:
+            raise ValueError(
+                f"task_files exceeds the {TASK_FILES_MAX_PER_TASK}-file limit"
+            )
+        rows: list[dict] = []
+        store_dir = self._task_files_store_dir()
+        for idx, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ValueError(f"task_files[{idx}] must be an object with path")
+            path = item.get("path")
+            if not isinstance(path, str) or not path.strip():
+                raise ValueError(f"task_files[{idx}].path must be a non-empty string")
+            label = item.get("label")
+            if label is not None and (
+                not isinstance(label, str)
+                or len(label) > _TASK_FILES_ANNOTATION_MAX_CHARS
+            ):
+                raise ValueError(
+                    f"task_files[{idx}].label must be a string of at most "
+                    f"{_TASK_FILES_ANNOTATION_MAX_CHARS} characters"
+                )
+            role = item.get("role")
+            if role is not None and (
+                not isinstance(role, str)
+                or len(role) > _TASK_FILES_ANNOTATION_MAX_CHARS
+            ):
+                raise ValueError(
+                    f"task_files[{idx}].role must be a string of at most "
+                    f"{_TASK_FILES_ANNOTATION_MAX_CHARS} characters"
+                )
+            resolved = self._resolve_task_file_path(
+                path.strip(), self._agent._working_dir
+            )
+            try:
+                data = resolved.read_bytes()
+            except OSError as e:
+                raise ValueError(
+                    f"cannot read task file {path!r}: {e}"
+                ) from e
+            if len(data) > TASK_FILE_MAX_BYTES:
+                raise ValueError(
+                    f"task file {path!r} exceeds the {TASK_FILE_MAX_BYTES}-byte "
+                    "limit"
+                )
+            try:
+                data.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise ValueError(
+                    f"task file {path!r} is not valid UTF-8 text: {e}"
+                ) from e
+            # A NUL makes the payload a binary blob for this text-only contract
+            # even though Python's UTF-8 decoder accepts it.
+            if b"\x00" in data:
+                raise ValueError(f"task file {path!r} is not valid UTF-8 text: contains NUL byte")
+            sha256 = hashlib.sha256(data).hexdigest()
+            rows.append({
+                "path": path.strip(),
+                "label": label,
+                "role": role,
+                "sha256": sha256,
+                "size": len(data),
+                "resolved": str(resolved),
+                "snapshot": str(store_dir / sha256),
+            })
+        return rows or None
+
+    def _materialize_task_files(
+        self, group_id: str, rows_per_task: list[list[dict] | None]
+    ) -> str:
+        """Write the validated batch's blobs and one compact per-dispatch manifest.
+
+        Runs only after every task in the dispatch passed validation. The
+        manifest is indexed by task order (``None`` for a task without
+        ``task_files``). Each run's durable ``call_parameters.task_files``
+        points at this manifest plus its own rows, so retry/relaunch reads the
+        immutable snapshot instead of any mutable original path.
+        """
+        store_dir = self._task_files_store_dir()
+        # Verify every original first. Only after the whole batch still matches
+        # preflight do we publish any content-addressed blob, so an intervening
+        # source mutation cannot leave a partial task-files store behind.
+        blobs: dict[str, bytes] = {}
+        for rows in rows_per_task:
+            if not rows:
+                continue
+            for r in rows:
+                resolved = Path(r["resolved"])
+                data = resolved.read_bytes()
+                # TOCTOU guard: the mutable original must still be byte-for-byte
+                # what preflight validated; anything else fails loudly rather
+                # than silently snapshotting different content than dispatched.
+                if hashlib.sha256(data).hexdigest() != r["sha256"]:
+                    raise ValueError(
+                        f"task file changed during dispatch: {r['path']!r}"
+                    )
+                blobs.setdefault(r["sha256"], data)
+        for sha256, data in blobs.items():
+            self._store_task_file_blob(store_dir, sha256, data)
+        manifest = {
+            "version": _TASK_FILES_MANIFEST_VERSION,
+            "group_id": group_id,
+            "files": rows_per_task,
+        }
+        path = store_dir / f"manifest-{group_id}.json"
+        atomic_write_json(path, manifest)
+        return str(path)
+
+    @staticmethod
+    def _render_task_files_catalog(rows: list[dict] | None) -> str | None:
+        """Render the compact read-only manifest rows for the daemon prompt.
+
+        Only metadata and the immutable snapshot paths are rendered — never
+        file contents, and never the mutable original paths the worker could
+        re-read behind the snapshot's back.
+        """
+        if not rows:
+            return None
+        lines = [
+            "The parent snapshotted these task input files into a read-only "
+            "store; read them from the given snapshot paths when your task "
+            "requires them (the original paths may change or disappear):",
+            "task_files:",
+        ]
+        for r in rows:
+            lines.append(f"  - label: {r['label'] or r['path']}")
+            if r.get("role"):
+                lines.append(f"    role: {r['role']}")
+            lines.append(f"    sha256: {r['sha256']}")
+            lines.append(f"    size: {r['size']}")
+            lines.append(f"    snapshot: {r['snapshot']}")
+        return "\n".join(lines)
+
+    @staticmethod
     def _combine_oneshot_context(
         system_prompt: str | None,
         skill_catalog: str | None,
         mcp_catalog: str | None = None,
         plugin_catalog: str | None = None,
+        task_files_catalog: str | None = None,
     ) -> str | None:
         parts = []
         if system_prompt:
@@ -2632,6 +2854,8 @@ class DaemonManager:
             parts.append("## Parent-provided MCP registrations\n" + mcp_catalog)
         if plugin_catalog:
             parts.append("## Parent-selected plugins\n" + plugin_catalog)
+        if task_files_catalog:
+            parts.append("## Parent-provided task files\n" + task_files_catalog)
         return "\n\n".join(parts) or None
 
     @staticmethod
@@ -4762,6 +4986,20 @@ class DaemonManager:
                 except ValueError as exc:
                     return {"status": "error", "message": f"tasks[{i}].prompt: {exc}"}
 
+        # Pre-flight: optional per-task input files. Resolve every path under
+        # the parent working directory, validate UTF-8 text and the practical
+        # limits, and snapshot the bytes content-addressed BEFORE any run-dir
+        # creation, preset work, or scheduling — a single bad entry refuses the
+        # whole batch loudly and nothing is left half-started. Workers receive
+        # only the compact manifest/snapshot paths, never file contents.
+        task_files_rows: list[list[dict] | None] = []
+        for i, spec in enumerate(tasks):
+            try:
+                rows = self._snapshot_task_files(spec)
+            except ValueError as exc:
+                return {"status": "error", "message": f"tasks[{i}].task_files: {exc}"}
+            task_files_rows.append(rows)
+
         # Per-batch limit overrides. max_turns is capped at the manager's
         # ceiling (self._max_turns, also the schema maximum); timeout has no
         # schema maximum, so self._timeout is only the default when omitted.
@@ -4829,6 +5067,7 @@ class DaemonManager:
                 effective_max_turns=effective_max_turns,
                 effective_timeout=effective_timeout,
                 requested_timeout=requested_timeout,
+                task_files_rows=task_files_rows,
             )
 
         # Pre-flight: validate per-task ``context_token_limit`` (LingTai backend
@@ -4955,6 +5194,17 @@ class DaemonManager:
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
+        # One compact manifest per dispatch/group next to the immutable blobs;
+        # each run's durable metadata points at it (see call_parameters below).
+        task_files_manifest = None
+        if any(rows for rows in task_files_rows):
+            try:
+                task_files_manifest = self._materialize_task_files(
+                    group_id, task_files_rows
+                )
+            except (OSError, ValueError) as exc:
+                return {"status": "error", "message": f"task_files: {exc}"}
+
         for i, spec in enumerate(tasks):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
@@ -4978,6 +5228,7 @@ class DaemonManager:
                 task_mcp_regs, task_mcp_catalog = self._task_mcp_registrations(spec)
                 task_skill_catalog = self._task_skill_catalog(spec)
                 task_plugin_catalog, plugin_skill_rows, plugin_mcp_regs = self._task_plugin_context(spec)
+                task_files_catalog = self._render_task_files_catalog(task_files_rows[i])
             except Exception as e:
                 self._close_task_mcp_clients(task_mcp_clients)
                 return {"status": "error", "message": str(e)}
@@ -4989,7 +5240,8 @@ class DaemonManager:
                 )
             task_mcp_regs = list(task_mcp_regs) + list(plugin_mcp_regs)
             task_context = self._combine_oneshot_context(
-                None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog
+                None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog,
+                task_files_catalog=task_files_catalog,
             )
             task_context = self._append_daemon_common_context(task_context)
 
@@ -5019,6 +5271,10 @@ class DaemonManager:
                         "mcp": [],
                         "prompt": self._task_first_prompt(spec),
                         "context_token_limit": spec.get("context_token_limit"),
+                        "task_files": {
+                            "manifest": task_files_manifest,
+                            "files": task_files_rows[i],
+                        },
                     },
                     log_callback=self._log,
                     preset_name=resolved["name"] if resolved else None,
@@ -5041,7 +5297,8 @@ class DaemonManager:
                     )
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog
+                    None, task_skill_catalog, task_mcp_catalog, task_plugin_catalog,
+                    task_files_catalog=task_files_catalog,
                 )
                 task_context = self._append_daemon_common_context(task_context)
                 # Detached ownership starts task MCP only in the supervisor.
@@ -5148,6 +5405,7 @@ class DaemonManager:
         effective_max_turns: int,
         effective_timeout: float,
         requested_timeout: float | None = None,
+        task_files_rows: list[list[dict] | None] | None = None,
     ) -> dict:
         """Dispatch emanations via an external CLI backend.
 
@@ -5224,9 +5482,22 @@ class DaemonManager:
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
-        for spec, context in zip(tasks, contexts):
+        # The preflight validated every task input file; materialize the blobs
+        # and one compact per-dispatch manifest for the group's runs.
+        task_files_rows = task_files_rows or [None] * len(tasks)
+        task_files_manifest = None
+        if any(rows for rows in task_files_rows):
+            try:
+                task_files_manifest = self._materialize_task_files(
+                    group_id, task_files_rows
+                )
+            except (OSError, ValueError) as exc:
+                return {"status": "error", "message": f"task_files: {exc}"}
+
+        for i, (spec, context) in enumerate(zip(tasks, contexts)):
             em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
+            task_files_catalog = self._render_task_files_catalog(task_files_rows[i])
             user_backend_argv = list(context.backend_argv)
             backend_argv = list(user_backend_argv)
             backend_harness_argv: list[str] = []
@@ -5240,7 +5511,8 @@ class DaemonManager:
             system_prompt = f"[{backend} backend — task delegated to external CLI]"
 
             task_context = self._combine_oneshot_context(
-                context.system_prompt, context.skill_catalog, context.mcp_catalog
+                context.system_prompt, context.skill_catalog, context.mcp_catalog,
+                task_files_catalog=task_files_catalog,
             )
             if _cli_backend_loads_common_mcp(backend):
                 task_context = self._append_daemon_common_context(task_context)
@@ -5271,6 +5543,10 @@ class DaemonManager:
                         "skills": spec.get("skills", []),
                         "mcp": [],
                         "backend_options": public_backend_options,
+                        "task_files": {
+                            "manifest": task_files_manifest,
+                            "files": task_files_rows[i],
+                        },
                     },
                     log_callback=self._log,
                     backend=backend,
@@ -5291,7 +5567,8 @@ class DaemonManager:
                     )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
-                    None, context.skill_catalog, mcp_catalog
+                    None, context.skill_catalog, mcp_catalog,
+                    task_files_catalog=task_files_catalog,
                 )
                 if _cli_backend_loads_common_mcp(backend):
                     task_context = self._append_daemon_common_context(task_context)
@@ -5538,8 +5815,12 @@ class DaemonManager:
 
     @staticmethod
     def _looks_like_daemon_run_dir(run_path: Path) -> bool:
+        # Leading-underscore entries under the daemons root are internal-only
+        # (e.g. the ``_task_files`` task input store) and never runs; this keeps
+        # list/recovery/check scans from surfacing the store as an emanation.
         return (
             run_path.is_dir()
+            and not run_path.name.startswith("_")
             and (
                 run_path.name.startswith("em-")
                 or (run_path / ".prompt").exists()

@@ -299,8 +299,8 @@ def test_emanate_nested_task_schema_preserves_every_field():
     task = daemon_emanate_task_schema()
 
     assert set(task["properties"]) == {
-        "task", "tools", "skills", "mcp", "preset", "backend_options",
-        "prompt", "context_token_limit",
+        "task", "tools", "skills", "mcp", "plugin", "preset", "backend_options",
+        "prompt", "context_token_limit", "task_files",
     }
     assert task["required"] == ["task", "tools"]
     # The nested task object stays OPEN: the engine's own strict per-task
@@ -779,8 +779,8 @@ def test_responses_wire_preserves_the_root_action_input_correlation():
         # The complex nested emanate task object survives both wires intact.
         task_items = emanate_condition["properties"]["tasks"]["items"]
         assert set(task_items["properties"]) == {
-            "task", "tools", "skills", "mcp", "preset", "backend_options",
-            "prompt", "context_token_limit",
+            "task", "tools", "skills", "mcp", "plugin", "preset", "backend_options",
+            "prompt", "context_token_limit", "task_files",
         }
 
 
