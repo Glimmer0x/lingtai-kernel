@@ -4959,6 +4959,10 @@ class DaemonManager:
             em_id = self._new_emanation_id(reserved_ids=set(ids))
             ids.append(em_id)
             resolved = resolved_presets[i]
+            effective_llm = (
+                resolved["llm"] if resolved else self._implicit_parent_preset_llm()
+            )
+            effective_model = effective_llm["model"]
 
             # Build tool surface and system prompt up front so the run_dir
             # records the prompt verbatim before any LLM call. Validation
@@ -4989,9 +4993,6 @@ class DaemonManager:
             )
             task_context = self._append_daemon_common_context(task_context)
 
-            # Effective model for this emanation (preset overrides if present)
-            effective_model = (resolved["llm"]["model"]
-                               if resolved else self._default_model)
             system_prompt = "[daemon prompt pending MCP startup]"
 
             # Construct run_dir — creates folder on disk, writes daemon.json,
@@ -5069,7 +5070,6 @@ class DaemonManager:
                 return {"status": "error", "message": str(e)}
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
-            effective_llm = resolved["llm"] if resolved else self._implicit_parent_preset_llm()
             try:
                 self._spawn_detached_lingtai_run(
                     run_dir,

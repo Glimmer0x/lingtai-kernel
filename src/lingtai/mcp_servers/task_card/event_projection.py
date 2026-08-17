@@ -834,6 +834,22 @@ class TaskCardEventProjection:
                 for backend, value in sorted(safe_backends):
                     backend_parts.append(f"{backend} {value}")
 
+            if isinstance(daemon, dict) and isinstance(daemon.get("model_counts"), dict):
+                safe_models: list[tuple[str, int]] = []
+                for raw_model, raw_count in daemon["model_counts"].items():
+                    model = cls.machine_identifier(raw_model, limit=128)
+                    value = count(raw_count)
+                    if model is not None and value is not None and value > 0:
+                        safe_models.append((model, value))
+                safe_models.sort()
+                model_total = sum(value for _, value in safe_models)
+                if model_total == 1:
+                    daemon_parts.append(safe_models[0][0])
+                elif model_total > 1:
+                    daemon_parts.extend(
+                        f"{model} × {value}" for model, value in safe_models
+                    )
+
             stats_parts: list[str] = []
             if isinstance(daemon, dict):
                 input_tokens = count(daemon.get("input_tokens"))

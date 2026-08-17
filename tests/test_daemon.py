@@ -3579,6 +3579,34 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
     assert data.get("preset_model") == "deepseek-v3"
 
 
+def test_emanate_without_preset_persists_the_detached_effective_model(tmp_path, monkeypatch):
+    """daemon.json model follows the LLM sent to detached execution, not stale cache."""
+    agent = _make_agent(tmp_path, ["file", "daemon"])
+    mgr = agent.get_capability("daemon")
+    stale_model = agent.service.model
+    effective_model = "gpt-5.6-daemon"
+    assert stale_model != effective_model
+    agent.service.model = effective_model
+    captured = {}
+
+    def fake_spawn(run_dir, **kwargs):
+        captured["run_dir"] = run_dir
+        captured["effective_llm"] = kwargs["effective_llm"]
+
+    monkeypatch.setattr(mgr, "_spawn_detached_lingtai_run", fake_spawn)
+
+    result = mgr.handle({"action": "emanate", "tasks": [
+        {"task": "task A", "tools": ["file"]},
+    ]})
+
+    assert result["status"] == "dispatched"
+    state = json.loads(
+        captured["run_dir"].daemon_json_path.read_text(encoding="utf-8")
+    )
+    assert captured["effective_llm"]["model"] == effective_model
+    assert state["model"] == effective_model
+
+
 def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
     """Omitted preset inherits parent effective identity without allowlist reads."""
     agent = _make_agent(tmp_path, ["file", "daemon"])

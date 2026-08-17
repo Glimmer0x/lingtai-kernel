@@ -2722,6 +2722,7 @@ class TelegramManager:
         totals = {"input": 0, "output": 0, "cached": 0}
         cli_calls = 0
         backend_counts: dict[str, int] = {}
+        model_counts: dict[str, int] = {}
         included = False
         try:
             children = list(daemons_dir.iterdir())
@@ -2760,6 +2761,12 @@ class TelegramManager:
                 )
                 backend = TaskCardEventProjection.machine_identifier(backend, limit=48) or "unknown"
                 backend_counts[backend] = backend_counts.get(backend, 0) + 1
+                if state.get("backend") == "lingtai":
+                    model = TaskCardEventProjection.machine_identifier(
+                        state.get("model"), limit=128
+                    )
+                    if model is not None and model != "unknown":
+                        model_counts[model] = model_counts.get(model, 0) + 1
 
                 tokens = state.get("tokens")
                 cli_tokens = state.get("cli_tokens")
@@ -2793,7 +2800,7 @@ class TelegramManager:
                 continue
         if not included:
             return None
-        return {
+        snapshot = {
             **counts,
             "backend_counts": backend_counts,
             "input_tokens": totals["input"],
@@ -2801,6 +2808,9 @@ class TelegramManager:
             "cached_tokens": totals["cached"],
             "cli_calls": cli_calls,
         }
+        if model_counts:
+            snapshot["model_counts"] = model_counts
+        return snapshot
 
     def _task_card_async_shell_snapshot(self) -> dict | None:
         """Read-only async-shell lane using only durable ``state.json`` files."""
