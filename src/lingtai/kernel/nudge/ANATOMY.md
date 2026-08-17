@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/nudge/__init__.py
   - src/lingtai/kernel/nudge/folder_size.py
+  - src/lingtai/kernel/nudge/event_journal_count.py
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/kernel/nudge/goal.py
   - src/lingtai/kernel/nudge/kernel_version.py
@@ -41,7 +42,7 @@ the ordinary Notification Store channel; it does not create a second transport.
   New built-in producer entries carry fixed `nudge_channel` metadata:
   `release_version` for `kernel_version`, `source_integrity` for
   `source_drift`, `configuration_staleness` for `init_config_shape`, and
-  `storage_size` for `folder_size`;
+  `storage_size` for `folder_size` and `event_journal_line_count`;
   unrelated legacy/unknown entries remain channel-less, and legacy entries
   persisted before this field existed remain visible as-is until their producer
   rewrites or removes them.
@@ -68,6 +69,14 @@ the ordinary Notification Store channel; it does not create a second transport.
   shared `upsert`/`remove` so global repeat/enable/retry semantics stay live.
   Emits/clears a `storage_size` finding when the directory crosses
   `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5` decimal GB) (`src/lingtai/kernel/nudge/folder_size.py:1-182`).
+  `event_journal_count.py` has no user setting: its once-per-UTC-day direct
+  physical-line count is a fixed advisory human-discussion boundary.
+- `event_journal_count.py` — fixed 1,000,000-record advisory for active root
+  `events.jsonl`. It directly counts physical newlines once per UTC day for an
+  unchanged regular non-link file, with immediate re-count after identity
+  change/shrink; ordinary heartbeats only open/fstat the exact path. It never
+  parses, indexes, scans elsewhere, or changes journal data
+  (`src/lingtai/kernel/nudge/event_journal_count.py:1-151`).
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
   cadence (`src/lingtai/kernel/nudge/kernel_version.py:91-229`). Its remote

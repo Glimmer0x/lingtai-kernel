@@ -169,6 +169,7 @@ related_files:
   - tests/test_file_io_sidecar.py
   - tests/test_file_tool_family.py
   - tests/test_filesystem_mail.py
+  - tests/test_event_journal_count_nudge.py
   - tests/test_folder_size_nudge.py
   - tests/test_fsutil.py
   - tests/test_gated_session_proxy.py
