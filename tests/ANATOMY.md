@@ -120,6 +120,7 @@ related_files:
   - tests/test_daemon_common_finish_mcp.py
   - tests/test_daemon_cursor_backend.py
   - tests/test_daemon_cursor_submanual.py
+  - tests/test_daemon_deepseek_submanual.py
   - tests/test_daemon_detached_supervisor.py
   - tests/test_daemon_email_mcp.py
   - tests/test_daemon_empty_parity.py

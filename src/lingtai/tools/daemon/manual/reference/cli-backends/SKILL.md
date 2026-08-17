@@ -80,6 +80,13 @@ catalog. Only backends with proven demand get a page.
     Nested daemon-cli-backends reference for the Cursor backend's flag surface.
     Read this only when a daemon task needs Cursor-specific `agent` CLI flags,
     the harness-owned surfaces, or the source-pinned stream-json usage contract.
+- name: daemon-backend-deepseek
+  location: reference/backends/deepseek/SKILL.md
+  description: |
+    Nested daemon-cli-backends reference for the DeepSeek Harness (`deepseek`)
+    backend's flag surface. Read this only when a daemon task needs deepseek
+    launcher-level flags (`--patch` overlays), the run-private `$DSH_HOME`
+    caveat, or the no-`ask`/resume constraint.
 - name: daemon-backend-oh-my-pi
   location: reference/backends/oh-my-pi/SKILL.md
   description: |
@@ -108,6 +115,7 @@ catalog. Only backends with proven demand get a page.
 | Qwen Code (`qwen-code` / `qwen`)-specific flags for a daemon task: model selection, provider tunables, reserved `--prompt`/`--yolo`/`--approval-mode` boundary, no-`ask` planning; discover the installed `qwen` CLI's flags and translate them into `backend_options` | `reference/backends/qwen-code/SKILL.md` |
 | Kimi Code (`kimicode` / `kimi`)-specific flags for a daemon task: model selection (`--model`), skills/workspace dirs; reserved harness flags, run-private `mcp.json` MCP loader, why `ask`/resume is unsupported; discover the installed Kimi CLI's flags and translate them into `backend_options` | `reference/backends/kimicode/SKILL.md` |
 | Cursor-specific flags for a daemon task: model selection, output/tooling switches; discover the installed Cursor Agent CLI's (`agent`) flags and translate them into `backend_options` | `reference/backends/cursor/SKILL.md` |
+| DeepSeek Harness (`deepseek`)-specific flags for a daemon task: launcher-level options (`--patch` overlays), the reserved `--profile headless` boundary, run-private `$DSH_HOME`, and why `ask`/resume is unsupported; discover the installed `dsh` CLI's flags and translate them into `backend_options` | `reference/backends/deepseek/SKILL.md` |
 | Oh-My-Pi (`omp`)-specific flags for a daemon task: model selection, tool/provider switches, the harness-reserved mode/approval/session flags; discover the installed `omp` CLI's flags and translate them into `backend_options` | `reference/backends/oh-my-pi/SKILL.md` |
 | Built-in `lingtai` backend knowledge for a daemon task: confirm it has no CLI/`backend_options` flag surface; find the live authorities for preset selection/inspection, lingtai/tools/skills/MCP inheritance, and the completion contract | `reference/backends/lingtai/SKILL.md` |
 
@@ -145,7 +153,7 @@ page's per-backend references below (`reference/backends/<backend>/SKILL.md`),
 which **supersede the old `reference/bash-*/SKILL.md` guides** in the bash
 manual.
 
-All 9 shipped daemon backends have drill-down pages under
+All 10 shipped daemon backends have drill-down pages under
 `reference/backends/`. CLIs that are not daemon backends are not documented
 here. `shell-manual` owns only the shell-side supervision discipline
 (async + poll, reminders, scheduling, debugging, cleanup) that applies no
@@ -211,6 +219,7 @@ remains in the tree only so older callers and stored entries that recorded
 | `qwen-code` / `qwen` | `QWEN_CODE_SYSTEM_SETTINGS_PATH=<run>/qwen-daemon-settings.json qwen --yolo -p <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Qwen Code CLI backend (npm package `@qwen-code/qwen-code`, binary `qwen`). `qwen` canonicalizes to `qwen-code`. The per-run settings file contains `mcpServers.daemon_common`. |
 | `oh-my-pi` / `omp` | `omp --mode json --approval-mode yolo <prompt>` | `omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> ...` via `ask` (async) | Oh-My-Pi pi-coding-agent CLI backend (npm package `@oh-my-pi/pi-coding-agent`, binary `omp`). `--mode json` is non-interactive JSON event-stream print mode; the first `type:session` header line carries the resumable session id. `omp` canonicalizes to `oh-my-pi`. Per-run MCP injection is not wired yet pending evidence of its accepted config/env path. |
 | `kimicode` / `kimi` | `KIMI_CODE_HOME=<run>/kimi-code-home kimi --prompt <prompt> --output-format text` (same per-run env: telemetry/auto-update off, `KIMI_MODEL_API_KEY` mapped from `KIMICODE_API_KEY`/`KIMI_API_KEY`/`MOONSHOT_API_KEY` when unset, provider/base-url/model/context defaults only when absent) | Not supported yet; `ask` returns an explicit unsupported-backend error | MoonshotAI Kimi Code CLI backend (official `MoonshotAI/kimi-code`, binary `kimi`, source-verified v0.22.3 for MCP config). `kimi` canonicalizes to `kimicode`. LingTai owns `--prompt`/`--output-format` and forbids `--yolo` (the CLI refuses `--prompt` + `--yolo`); session/`--continue` flags are reserved because resume is not wired. Stable session-id output was not verified, so `ask`/resume is intentionally unsupported. The daemon writes `<run>/kimi-code-home/mcp.json` with `daemon_common` plus parent stdio and HTTP MCP registrations; secret env/header values stay out of prompts/logs and live only in the native per-run config. |
+| `deepseek` | `DSH_HOME=<run>/dsh-home DSH_TELEMETRY_DISABLED=1 dsh --profile headless <prompt>` | Not supported yet; `ask` returns an explicit unsupported-backend error | Official DeepSeek Harness CLI backend (npm package `@deepseek-ai/dsh`, binary `dsh`; **developer preview** — upstream may break compatibility). Runs the shipped headless one-shot profile: stdout gets the final assistant text and exit 0 means the session completed. LingTai owns the `--profile headless` launcher flags and pins a run-private `$DSH_HOME` so first-use profile auto-initialization never touches the operator's real home; telemetry is hard-disabled. `daemon_common` MCP injection is not wired yet (no evidence-backed dsh config path in this slice). Only launcher-level `backend_options` flags (e.g. `--patch`) are meaningful; see the child page. |
 | `cursor` | `agent -p <prompt>` | `agent -p --resume <cursor_session_id> ...` via `ask` (async) | Cursor Agent CLI backend. Per-run MCP injection is not wired yet; local `agent --help` could not be inspected in this environment because the CLI attempted macOS keychain access and failed before printing help. |
 
 **Per-task mapping.** The task-shape contract (`task` / `prompt` / `tools` /
@@ -248,7 +257,7 @@ Where each backend receives its native `daemon_common` MCP config:
 | `opencode` | `OPENCODE_CONFIG_CONTENT` environment variable |
 | `qwen-code` | per-run settings file path |
 | `kimicode` | run-private `mcp.json` loader (stdio **and** HTTP registrations) |
-| `mimocode`, `oh-my-pi`, `cursor` | **not wired yet** — documented or plausible MCP entrypoints still needing daemon-native config and tests; not declared unsupported |
+| `mimocode`, `oh-my-pi`, `cursor`, `deepseek` | **not wired yet** — documented or plausible MCP entrypoints still needing daemon-native config and tests; not declared unsupported |
 
 **When to use CLI backends:** Use them when the task benefits from a different
 agent runtime's tool surface (for example Claude Code's built-in file editing or

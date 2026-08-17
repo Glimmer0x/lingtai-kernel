@@ -131,7 +131,7 @@ ownership -> §Process and Terminal Boundaries.
   (non-terminal reset) or `manual` (read-only procedures); omission is refused.
 - Backends (`backend`, default `lingtai`): schema enum is `lingtai`, `claude-p`,
   `claude-code`, `codex`, `opencode`, `mimocode`, `mimo`, `qwen-code`, `qwen`,
-  `oh-my-pi`, `omp`, `kimicode`, `kimi`, `cursor`. Aliases collapse via
+  `oh-my-pi`, `omp`, `kimicode`, `kimi`, `cursor`, `deepseek`. Aliases collapse via
   `_normalize_backend`: `mimo→mimocode`, `qwen→qwen-code`, `omp→oh-my-pi`,
   `kimi→kimicode`; `claude-code` is a compatibility alias for `claude-p`.
   `claude` / `claude-interactive` are hidden (not schema-advertised). Active
@@ -605,6 +605,7 @@ Current source-backed status:
 | `oh-my-pi` / `omp` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
 | `kimicode` / `kimi` | Yes. | Yes for stdio and HTTP via run-private `$KIMI_CODE_HOME/mcp.json`. | Yes; live checkpoint and finish use the same run-private config. |
 | `cursor` | Yes. | Not verified; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
+| `deepseek` | Yes. | Not wired in this slice; prompt catalog only. | Not wired; do not claim checkpoint or completion. |
 
 The native stdio/helper set is source-owned by `_codex_mcp_argv`,
 `_opencode_mcp_env`, `_write_qwen_mcp_settings`, `_write_kimicode_mcp_config`,
