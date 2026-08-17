@@ -1690,6 +1690,71 @@ def test_deepseek_cmd_appends_backend_argv_before_profile_lock(tmp_path):
     assert run_dir._state["last_output"] == "deepseek done"
 
 
+@pytest.mark.parametrize(
+    ("lines", "exit_receipt", "cancel_after_stdout", "expected_state", "expected_result"),
+    [
+        # ``dsh`` prints its final answer once at the very end, and upstream
+        # turns LingTai's SIGTERM into exit 0
+        # (`apps/cli/src/profile-boot.ts`: `process.on('SIGTERM', () =>
+        # interrupt(0))`), so a timed-out/reclaimed run is reaped as a zero
+        # receipt with no stdout. Only the cancellation events can tell that
+        # receipt from a genuinely completed session.
+        ((), DaemonProcessExit(0, "timeout"), True, "timeout", "[cancelled]"),
+        # A zero receipt without cancellation is ordinary success: exit 0 with
+        # the final answer on stdout must still record done.
+        (("final answer\n",), DaemonProcessExit(0), False, "done", "final answer"),
+    ],
+)
+def test_deepseek_zero_receipt_classified_by_cancellation_not_exit_code(
+    tmp_path, monkeypatch, lines, exit_receipt, cancel_after_stdout,
+    expected_state, expected_result,
+):
+    """Regression for the review blocker: a SIGTERMed ``dsh`` exits 0, so a
+    zero receipt after LingTai initiated termination must be timeout/cancelled,
+    never ``done`` -- while a plain exit-0 receipt stays a successful run.
+    """
+    agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
+    mgr = agent.get_capability("daemon")
+    cancel_event = threading.Event()
+    timeout_event = threading.Event()
+    port = _OneShotRecordingPort(lines=lines, exit_receipt=exit_receipt)
+    mgr._process_port = port
+
+    def wait(handle, *, timeout=None):
+        port.waited.append(handle)
+        # Cancellation arrives while the runner is blocked (the external group
+        # sweep SIGTERMs dsh, stdout hits EOF, wait() reaps the receipt) --
+        # i.e. after the stdout loop, before terminal classification.
+        if cancel_after_stdout:
+            cancel_event.set()
+            timeout_event.set()
+        return exit_receipt
+
+    port.wait = wait
+    run_dir = make_daemon_run_dir(agent, backend="deepseek")
+    monkeypatch.setattr(
+        "lingtai.tools.daemon._kill_process_group",
+        lambda proc: pytest.fail("legacy kill used"),
+    )
+    result = mgr._run_deepseek_emanation(
+        "em-deepseek-sigterm", run_dir, "cancel me", cancel_event, timeout_event,
+    )
+
+    assert result == expected_result
+    assert run_dir._state["state"] == expected_state
+    assert port.deadlines == [None]
+    assert port.waited == [port.handle]
+    assert port.released == [port.handle]
+    if cancel_after_stdout:
+        # The zero receipt still carries the local cause; the forensic record
+        # must survive so daemon(check) can attribute the termination.
+        assert run_dir._state["cli_termination"]["reason"] == "timeout"
+        assert run_dir._state["cli_termination"]["signal"] == "SIGTERM"
+        assert run_dir._state["cli_termination"]["returncode"] == 0
+    else:
+        assert run_dir._state["last_output"] == "final answer"
+
+
 def test_deepseek_rejects_harness_owned_backend_options(tmp_path):
     agent = make_daemon_agent(tmp_path, {"daemon": {"manager_pool_size": 0}})
     mgr = agent.get_capability("daemon")

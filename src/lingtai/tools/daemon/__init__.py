@@ -7534,7 +7534,11 @@ class DaemonManager:
         DeepSeek AI's official ``dsh`` CLI (npm package ``@deepseek-ai/dsh``)
         runs one-shot via ``dsh --profile headless <task>``: one fresh
         persisted session, the last non-empty assistant text on stdout, and
-        exit 0 for completed / nonzero otherwise. LingTai owns the
+        exit 0 for completed / nonzero otherwise. One caveat: upstream's
+        SIGTERM handler also exits 0 (``process.on('SIGTERM', () =>
+        interrupt(0))``), so the runner never trusts a zero receipt alone -- a
+        cancelled/timed-out run is classified from the events, not the code.
+        LingTai owns the
         ``--profile headless`` launcher flags (the shipped headless app takes
         only the task text as its positional argument). ``--patch`` overlays
         remain available through free-form ``backend_options`` (the documented
@@ -7623,18 +7627,44 @@ class DaemonManager:
 
         stderr_tail = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
         output = "\n".join(stdout_lines).strip()
+        detail = stderr_tail or output
 
-        # ``dsh --profile headless`` exits 0 only when the session completed;
+        # Cancellation/timeout must win over a clean receipt: ``dsh`` exits 0
+        # both when the session completed and when LingTai SIGTERMs it
+        # (upstream `apps/cli/src/profile-boot.ts` installs
+        # ``process.on('SIGTERM', () => interrupt(0))``), so a timed-out /
+        # reclaimed run can hand back a zero return code here. The exit code
+        # alone therefore cannot classify the terminal state -- only the events
+        # can. (The qwen/kimi siblings need no such guard: they die with
+        # -15/143 on SIGTERM, so their nonzero receipts catch cancellation.)
+        if cancel_event.is_set():
+            attributed = self._attributed_process_exit(
+                exit_receipt, "deepseek", detail[-500:], run_dir,
+            )
+            if (
+                attributed is None
+                and exit_receipt.reason is not None
+                and exit_receipt.returncode == 0
+            ):
+                # dsh masked the SIGTERM as exit 0, so the receipt carries no
+                # raw signal for ``_attributed_process_exit`` to attribute;
+                # stamp the local cause directly so the ``cli_termination``
+                # forensic field survives on daemon.json.
+                try:
+                    run_dir.record_cli_termination(
+                        reason=exit_receipt.reason,
+                        signal_name="SIGTERM",
+                        returncode=exit_receipt.returncode,
+                    )
+                except Exception:
+                    pass
+            return _mark_cancelled_or_timeout(run_dir, timeout_event)
+
+        # ``dsh --profile headless`` exits 0 only for a completed session;
         # exit 1 covers usage errors, configuration/boot failures, and
         # non-completed sessions, so any nonzero receipt fails the run while
         # the printed text stays in the run dir for inspection.
         if exit_receipt.returncode != 0:
-            detail = stderr_tail or output
-            if cancel_event.is_set():
-                self._attributed_process_exit(
-                    exit_receipt, "deepseek", detail[-500:], run_dir,
-                )
-                return _mark_cancelled_or_timeout(run_dir, timeout_event)
             attributed = self._attributed_process_exit(
                 exit_receipt, "deepseek", detail[-500:], run_dir,
             )
