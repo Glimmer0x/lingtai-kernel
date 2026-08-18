@@ -123,8 +123,20 @@ class _CliDaemonAgent:
         schema validated, and every relative path resolved against
         ``agent_dir``.  That is :func:`lingtai.init_reader.read_init` — the one
         canonical reader boot and live refresh share.
+
+        Boot loads the configured ``env_file`` before any service or
+        capability construction (``cli.build_agent``); dispatch must match,
+        or a ``LINGTAI_*`` override configured there would be invisible to
+        managers constructed before the lazy ``service`` read triggers the
+        load. Same non-overwrite semantics: the caller's shell wins.
         """
-        return cls(agent_dir, _read_effective_init(agent_dir), journal=journal)
+        from lingtai.kernel.config_resolve import load_env_file
+
+        data = _read_effective_init(agent_dir)
+        env_file = data.get("env_file")
+        if env_file:
+            load_env_file(env_file)
+        return cls(agent_dir, data, journal=journal)
 
     @classmethod
     def for_inspection(cls, agent_dir: Path) -> "_CliDaemonAgent":
@@ -322,11 +334,17 @@ class _ReadOnlyDaemonView:
     """
 
     def __init__(self, agent: _CliDaemonAgent) -> None:
-        from lingtai.tools.daemon import DaemonManager
+        from lingtai.tools.daemon import (
+            DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
+            DaemonManager,
+        )
 
         self._agent = agent
         self._emanations: dict = {}
         self._manager_pool_size = 100
+        # Historical fixed cap for bounded ``.prompt`` reads during damaged-run
+        # reconstruction; inspection has no manager, so no resolved budget.
+        self._system_prompt_budget_chars = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
         self._manager_type = DaemonManager
         #: Run directories whose ``daemon.json`` the engine would have rewritten
         #: (missing, unparseable, or written by an older ``data_version``).

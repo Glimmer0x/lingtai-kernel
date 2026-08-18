@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 9
-last_changed_at: "2026-08-10"
+contract_version: 10
+last_changed_at: "2026-08-18"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -35,6 +35,8 @@ related_files:
   - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
   - src/lingtai/tools/daemon/manual/SKILL.md
+  - ENVIRONMENT_VARIABLES.md
+  - src/lingtai/cli_daemon.py
   - src/lingtai/tools/daemon/manual/reference/cli-backends/SKILL.md
   - src/lingtai/mcp_servers/daemon_common/server.py
   - src/lingtai/llm/openai/ANATOMY.md
@@ -259,7 +261,7 @@ and that run's snapshot rows (`path`, `label`, `role`, `sha256`, `size`,
 `snapshot`), so `check`, retry, and relaunch never need the original file.
 Every backend receives only a compact `## Parent-provided task files`
 oneshot-context section with the snapshot paths — never file contents —
-keeping the daemon system prompt within its 20,000-character budget
+keeping the daemon system prompt within its resolved character budget
 regardless of input size. The `_task_files` store is internal-only: its
 leading underscore excludes it from every run-dir scan
 (`_looks_like_daemon_run_dir`), so `list`/recovery/`check` never surface it
@@ -510,9 +512,23 @@ the relevant manual before first using a tool or workflow that has one; use a
 visible result tool's `summary=true` only for predictably bulky output whose
 exact raw text is unnecessary; and use daemon `compact`, never the unavailable
 parent `system.summarize`, for same-run context reset. The complete rendered
-string MUST be no more than 20,000 Python string characters. If task or selected
-skill/MCP context would exceed that budget, prompt construction fails before the
-LLM is scheduled and MUST NOT silently truncate any parent constraint.
+string MUST be no more than the resolved `system_prompt_budget_chars` Python
+string-character limit. The base value is the per-agent daemon setting in
+`<workdir>/daemon/daemon.json`, defaults to 20,000, and accepts only a positive
+integer; a missing, malformed, non-integer, boolean, zero, or negative file
+value falls back safely to 20,000. A valid positive explicit per-agent daemon
+capability kwarg replaces that file value; an invalid explicit value retains it.
+Finally, a valid positive-integer
+`LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` environment value overrides both at
+`DaemonManager` construction; a missing, blank, malformed, zero, or negative
+environment value instead retains the explicit-capability/file resolution.
+`lingtai-agent daemon emanate` dispatches through the same `setup()` and manager
+resolution, not a CLI-specific parser, and loads the agent's configured
+`env_file` (non-overwriting, exactly as boot does) before constructing the
+manager, so an override configured there is visible at construction. If task
+or selected skill/MCP context
+would exceed the resolved budget, prompt construction fails before the LLM is
+scheduled and MUST NOT silently truncate any parent constraint.
 
 Every LingTai daemon receives `compact` automatically, independent of provider.
 Its `action` is required and accepts only explicit `run` or `manual`. Execution
@@ -888,6 +904,8 @@ Re-check this contract when touching:
 |---|---|---|
 | `handle` dispatches the five actions; unknown actions error | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py` (dispatch), `tests/test_daemon_check.py::test_check_unknown_id_returns_error` |
 | Default `manager_pool_size` is 100 and the config reaches the manager/list output | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_daemon_default_manager_pool_size_is_100`, `::test_daemon_manager_pool_size_config_reaches_manager` |
+| Per-agent `system_prompt_budget_chars` defaults to 20,000, accepts a positive `daemon/daemon.json` override, and safely falls back for malformed/non-positive values while retaining fail-loud/no-truncation rendering | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/system_prompt.py` | `tests/test_daemon.py::test_daemon_default_system_prompt_budget_is_20000_without_config`, `::test_daemon_config_system_prompt_budget_allows_larger_complete_prompt`, `::test_daemon_invalid_system_prompt_budget_falls_back_to_default` |
+| Budget precedence: a valid `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` wins at manager construction (including `lingtai-agent daemon emanate` via the agent's `env_file`); invalid env or explicit capability values retain the file/default resolution and never drop the capability | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/cli_daemon.py` | `tests/test_daemon.py::test_daemon_system_prompt_budget_env_overrides_config`, `::test_daemon_invalid_system_prompt_budget_env_keeps_config_value`, `::test_daemon_invalid_explicit_system_prompt_budget_keeps_file_or_env`, `tests/test_cli_daemon.py::test_emanate_env_file_budget_overrides_daemon_json` |
 | Backend schema enum matches the ordered alias contract | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_backend_options.py::test_backend_schema_enum_matches_ordered_contract`, `::test_backend_metadata_consistency_keeps_hidden_legacy_claude` |
 | `check` returns state + events, honors `last`/`truncate`, validates inputs | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon_check.py` |
 | CLI-backend terminal `ask` returns immediately and enforces its own timeout | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_ask_codex_returns_immediately_when_subprocess_hangs`, `::test_ask_codex_silent_subprocess_enforces_timeout` |

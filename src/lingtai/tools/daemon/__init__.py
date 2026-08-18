@@ -64,7 +64,10 @@ from lingtai.adapters.posix.process_identity import (
     process_identity_matches,
 )
 from .run_dir import DaemonRunDir
-from .system_prompt import build_daemon_system_prompt
+from .system_prompt import (
+    DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
+    build_daemon_system_prompt,
+)
 from .claude_interactive import ClaudeInteractiveError, run_claude_interactive
 from .runtime import (
     kill_process_group as _runtime_kill_process_group,
@@ -141,14 +144,15 @@ def _kill_process_group(proc, *, term_timeout: float = 5.0, kill_timeout: float 
 DEFAULT_MAX_TURNS = 5000
 # Per-agent daemon capability config, mirroring the sibling task_card
 # capability's ``<workdir>/taskcard/taskcard.json`` pattern: this capability's
-# own config lives at ``<workdir>/daemon/daemon.json``. Today it supports a
-# ``max_turns`` and ``manager_pool_size`` fields. A configured positive
-# ``max_turns`` becomes the parent ceiling (and therefore the emanation default)
-# when ``setup()`` is called without an explicit ``max_turns``. The
-# ``manager_pool_size`` field caps concurrent central-manager execution
-# workers. A missing file, a malformed/undecodable file, or an invalid field
-# falls back independently, so agents without a config file behave exactly as
-# before.
+# own config lives at ``<workdir>/daemon/daemon.json``. It supports
+# ``max_turns``, ``manager_pool_size``, and ``system_prompt_budget_chars``.
+# Configured positive ``max_turns`` and ``system_prompt_budget_chars`` become
+# the corresponding defaults when ``setup()`` omits explicit capability kwargs.
+# A valid ``LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`` is the final override
+# at daemon-manager construction. ``manager_pool_size`` caps concurrent central-manager
+# execution workers. A missing file, a malformed/undecodable file, or an
+# invalid field falls back independently, so agents without a config file
+# behave exactly as before.
 _DAEMON_CONFIG_DIR = "daemon"
 _CONFIG_FILENAME = "daemon.json"
 
@@ -158,9 +162,10 @@ class _Config(NamedTuple):
 
     max_turns: int
     manager_pool_size: int
+    system_prompt_budget_chars: int
 
 
-_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100)
+_BUILTIN_CONFIG = _Config(DEFAULT_MAX_TURNS, 100, DAEMON_SYSTEM_PROMPT_BUDGET_CHARS)
 
 
 def _config_max_turns(value: Any) -> int:
@@ -171,6 +176,11 @@ def _config_max_turns(value: Any) -> int:
 def _config_nonnegative_int(value: Any, default: int) -> int:
     """Coerce a non-negative integer config field with a safe fallback."""
     return value if type(value) is int and value >= 0 else default
+
+
+def _config_positive_int(value: Any, default: int) -> int:
+    """Coerce a positive integer config field with a safe fallback."""
+    return value if type(value) is int and value > 0 else default
 
 
 def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
@@ -192,6 +202,10 @@ def _load_config(agent_working_dir: str | os.PathLike[str]) -> _Config:
         _config_max_turns(data.get("max_turns")),
         _config_nonnegative_int(
             data.get("manager_pool_size"), _BUILTIN_CONFIG.manager_pool_size
+        ),
+        _config_positive_int(
+            data.get("system_prompt_budget_chars"),
+            _BUILTIN_CONFIG.system_prompt_budget_chars,
         ),
     )
 
@@ -1414,6 +1428,7 @@ def _build_emanation_prompt_standalone(
     task: str,
     schemas: list[FunctionSchema],
     system_prompt: str | None = None,
+    system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
 ) -> str:
     """Build the bounded LingTai daemon prompt for parent and supervisor paths."""
     _ = language  # The dedicated daemon operating contract is canonical English.
@@ -1421,6 +1436,7 @@ def _build_emanation_prompt_standalone(
         task=task,
         tool_names=(schema.name for schema in schemas),
         oneshot_context=system_prompt,
+        budget_chars=system_prompt_budget_chars,
     )
 
 
@@ -1529,6 +1545,7 @@ class DaemonManager:
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
+                 system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
                  *, process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
         self._agent = agent
@@ -1536,6 +1553,12 @@ class DaemonManager:
         self._timeout = timeout
         self._manager_pool_size = self._env_nonnegative_int(
             "LINGTAI_DAEMON_MANAGER_POOL_SIZE", manager_pool_size,
+        )
+        self._system_prompt_budget_chars = self._env_positive_int(
+            "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS",
+            _config_positive_int(
+                system_prompt_budget_chars, DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+            ),
         )
         self._default_model = agent.service.model
         self._notify_threshold = notify_threshold
@@ -1614,6 +1637,17 @@ class DaemonManager:
         except (TypeError, ValueError):
             return default
         return value if value >= 0 else default
+
+    @staticmethod
+    def _env_positive_int(name: str, default: int) -> int:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
 
     def _reap_dead_parent_daemon_records(self) -> None:
         """Mark stale running daemon.json records failed after a restart.
@@ -3265,7 +3299,16 @@ class DaemonManager:
     ) -> str:
         """Build the system prompt for an emanation."""
         return _build_emanation_prompt_standalone(
-            self._agent._config.language, task, schemas, system_prompt=system_prompt,
+            self._agent._config.language,
+            task,
+            schemas,
+            system_prompt=system_prompt,
+            # Production managers resolve this in __init__.  Retain the
+            # renderer's established default for lightweight test facades that
+            # bind this helper directly without constructing a manager.
+            system_prompt_budget_chars=getattr(
+                self, "_system_prompt_budget_chars", DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+            ),
         )
 
     _SUPERVISOR_STARTUP_TIMEOUT_S = 5.0
@@ -5862,7 +5905,7 @@ class DaemonManager:
         prompt_path = run_path / ".prompt"
         try:
             with open(prompt_path, encoding="utf-8") as f:
-                text = f.read(20000)
+                text = f.read(self._system_prompt_budget_chars)
         except (OSError, UnicodeDecodeError):
             return None
         markers = ["\nYour task:\n", "\nTask:\n"]
@@ -9452,6 +9495,7 @@ def setup(agent: "Agent",
           max_turns: int | None = None, timeout: float = 3600.0,
           notify_threshold: int = 20,
           manager_pool_size: int | None = None,
+          system_prompt_budget_chars: int | None = None,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
     """Set up the daemon capability on an agent.
@@ -9461,15 +9505,23 @@ def setup(agent: "Agent",
     resolves from the agent's per-agent config file
     (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
     ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
-    invalid. ``manager_pool_size`` follows the same explicit-argument,
-    config-file, built-in fallback order. Explicit capability kwargs always
-    win over the config file.
+    invalid. ``manager_pool_size`` and ``system_prompt_budget_chars`` follow
+    the same valid-explicit-argument, config-file, built-in fallback order.
+    Malformed or non-positive explicit system-prompt budgets retain the file
+    result; a valid environment value remains the final manager override.
     """
     config = _load_config(agent._working_dir)
     if max_turns is None:
         max_turns = config.max_turns
     if manager_pool_size is None:
         manager_pool_size = config.manager_pool_size
+    # Validity-based, not None-based: a malformed or non-positive explicit
+    # budget (e.g. manifest capability kwargs) must retain the daemon.json/
+    # default resolution instead of displacing it or raising during
+    # capability setup, which would drop the whole daemon capability.
+    system_prompt_budget_chars = _config_positive_int(
+        system_prompt_budget_chars, config.system_prompt_budget_chars
+    )
     if process_port is None:
         if os.name == "posix":
             process_port = PosixDaemonProcessPort()
@@ -9491,6 +9543,7 @@ def setup(agent: "Agent",
     mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
                         notify_threshold=notify_threshold,
                         manager_pool_size=manager_pool_size,
+                        system_prompt_budget_chars=system_prompt_budget_chars,
                         process_port=process_port,
                         interactive_terminal_port=interactive_terminal_port)
     schema = get_schema()
