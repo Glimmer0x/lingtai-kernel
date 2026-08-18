@@ -9,7 +9,7 @@ skin over the *existing* engine: it builds a minimal agent-shaped facade
 model uses.  No emanation, preset, run-directory, supervisor, or notification
 logic is reimplemented here.
 
-Three actions are exposed, deliberately fewer than the tool's six:
+Four actions are exposed, deliberately fewer than the tool's six:
 
 ``emanate``
     Dispatch a batch from a tasks JSON file.  Preview-by-default; ``--yes`` is
@@ -31,8 +31,13 @@ Three actions are exposed, deliberately fewer than the tool's six:
     unmodified ``_handle_list`` / ``_handle_check`` units, the same forwarding
     shape ``daemon/execution_host.py`` uses inside a supervisor process.
 
-``ask`` and ``reclaim`` are intentionally absent: this surface performs no
-side effect beyond spawning daemons exactly as the tool would.
+``reclaim``
+    Cancel every active or queued detached run of this agent directory,
+    through the same family dispatch and durable control spool the tool's
+    ``daemon(action="reclaim")`` uses — a CLI-created daemon stays exactly as
+    controllable as an agent-created one.
+
+``ask`` is intentionally absent.
 """
 from __future__ import annotations
 
@@ -981,10 +986,22 @@ def _handle_check(args) -> int:
     return 0 if result.get("status") != "error" else 1
 
 
+def _handle_reclaim(args) -> int:
+    from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
+
+    agent_dir = _resolve_agent_dir(args.agent_dir)
+    journal = PosixJsonlEventJournalAdapter(agent_dir)
+    agent = _CliDaemonAgent.for_dispatch(agent_dir, journal=journal)
+    result = _dispatch_through_tool_family(agent, "reclaim", {})
+    _emit_json(result)
+    return 0 if result.get("status") == "reclaimed" else 1
+
+
 _HANDLERS = {
     "emanate": _handle_emanate,
     "list": _handle_list,
     "check": _handle_check,
+    "reclaim": _handle_reclaim,
 }
 
 
@@ -1034,6 +1051,17 @@ def add_daemon_parser(sub: "argparse._SubParsersAction") -> None:
         type=Path,
         default=None,
         help="Agent working directory containing init.json (default: cwd)",
+    )
+
+    reclaim = daemon_sub.add_parser(
+        "reclaim",
+        help="Cancel every active or queued detached daemon run of this agent",
+    )
+    reclaim.add_argument(
+        "--agent-dir",
+        type=Path,
+        required=True,
+        help="Agent working directory containing init.json",
     )
 
     check = daemon_sub.add_parser("check", help="Inspect one daemon run (read-only)")

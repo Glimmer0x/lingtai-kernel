@@ -563,3 +563,44 @@ def test_central_manager_malformed_top_level_queue_job_is_terminal(tmp_path):
     record = json.loads((journal_dir / "em-bad.json").read_text(encoding="utf-8"))
     assert record["state"] == "failed_malformed_queue_job"
     assert record["error"]["type"] == "ValueError"
+
+
+def test_reclaim_cancels_active_and_queued_central_manager_runs(tmp_path, monkeypatch):
+    """One daemon-family reclaim cancels central-manager active and queued runs."""
+    from lingtai.cli_daemon import (
+        _CliDaemonAgent,
+        _ReadOnlyDaemonView,
+        _dispatch_through_tool_family,
+    )
+
+    agent = make_daemon_agent(tmp_path, ["file", "daemon"])
+    _enable_detached_fake_llm(monkeypatch, agent, sleep_s=8.0)
+    manager = DaemonManager(agent, manager_pool_size=1)
+    try:
+        result = manager._handle_emanate([
+            {"task": "slow task A", "tools": ["file"]},
+            {"task": "slow task B", "tools": ["file"]},
+        ])
+        active_dir = manager._emanations[result["ids"][0]]["run_dir"]
+        queued_dir = manager._emanations[result["ids"][1]]["run_dir"]
+        queued_job = agent._working_dir / MANAGER_DIR / "queue" / f"{result['ids'][1]}.json"
+        _wait_for(
+            lambda: DaemonRunDir.read_state_from_disk(active_dir.path).get("supervisor_pid"),
+            timeout=10.0,
+            message="first managed run to start",
+        )
+        assert queued_job.exists()
+
+        outcome = _dispatch_through_tool_family(agent, "reclaim", {})
+        assert outcome == {"status": "reclaimed", "cancelled": 2, "natural_terminal": 0}
+        _wait_state(active_dir, "cancelled")
+        _wait_state(queued_dir, "cancelled")
+        assert not queued_job.exists()
+
+        view = _ReadOnlyDaemonView(_CliDaemonAgent.for_inspection(agent._working_dir))
+        listed = view._handle_list(
+            contains="", status_filter="cancelled", include_done=True, limit=None,
+        )
+        assert set(result["ids"]) <= {entry["id"] for entry in listed["emanations"]}
+    finally:
+        _terminate_resident_manager(agent)
