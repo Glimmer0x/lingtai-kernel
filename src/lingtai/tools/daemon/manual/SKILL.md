@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.12.1
-last_changed_at: 2026-08-14T00:00:00Z
+version: 0.12.2
+last_changed_at: 2026-08-18T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -216,8 +216,13 @@ Behavior notes:
   only for predictable bulky output whose exact raw text is unnecessary, use
   daemon `compact` rather than the unavailable parent `system.summarize`, and
   finish truthfully. The complete rendered system prompt is capped at 20,000
-  characters and fails instead of truncating task/skill/MCP context. Keep the
-  run-specific objective, authority, safety boundary, and deliverable in `task`.
+  characters by default and fails instead of truncating task/skill/MCP context.
+  A per-agent `<workdir>/daemon/daemon.json` positive-integer
+  `system_prompt_budget_chars` value changes that cap; missing, malformed, or
+  non-positive values safely retain 20,000. A valid
+  `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` is the final manager-construction
+  override; an invalid value keeps the valid explicit-capability/file result, and an invalid explicit capability value keeps the file result. Keep the run-specific objective,
+  authority, safety boundary, and deliverable in `task`.
 - On the LingTai backend, explicit `summary=true` uses a daemon-local,
   no-tools session on the same effective service, provider, and model. It keeps
   raw output in the run-local `logs/events.jsonl` and returns the generated

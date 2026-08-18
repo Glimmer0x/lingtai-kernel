@@ -191,6 +191,111 @@ def _write_daemon_config(agent_dir: Path, payload: dict) -> Path:
     return path
 
 
+def test_daemon_default_system_prompt_budget_is_20000_without_config(tmp_path, monkeypatch):
+    """No daemon config preserves the 20,000-character no-truncation budget."""
+    from lingtai.tools.daemon.system_prompt import DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+
+    monkeypatch.delenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", raising=False)
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+
+    assert DAEMON_SYSTEM_PROMPT_BUDGET_CHARS == 20_000
+    assert mgr._system_prompt_budget_chars == DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+
+
+def test_daemon_config_system_prompt_budget_allows_larger_complete_prompt(tmp_path, monkeypatch):
+    """A positive daemon.json budget applies to the rendered LingTai prompt."""
+    from lingtai.tools.daemon.system_prompt import DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+
+    budget = 25_000
+    monkeypatch.delenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", raising=False)
+    _write_daemon_config(
+        tmp_path / "daemon-agent", {"system_prompt_budget_chars": budget},
+    )
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    schemas, _ = mgr._build_tool_surface([])
+
+    prompt = mgr._build_emanation_prompt(
+        "configured task marker",
+        schemas,
+        system_prompt="x" * DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
+    )
+    run_path = tmp_path / "large-prompt-run"
+    run_path.mkdir()
+    (run_path / ".prompt").write_text(prompt, encoding="utf-8")
+
+    assert mgr._system_prompt_budget_chars == budget
+    assert DAEMON_SYSTEM_PROMPT_BUDGET_CHARS < len(prompt) <= budget
+    assert mgr._infer_task_from_prompt(run_path) == "configured task marker"
+
+
+def test_daemon_invalid_system_prompt_budget_falls_back_to_default(tmp_path, monkeypatch):
+    """Malformed/non-positive daemon.json budgets keep the safe default cap."""
+    from lingtai.tools.daemon.system_prompt import DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
+
+    monkeypatch.delenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", raising=False)
+    for i, bad in enumerate(("lots", 0, -5, 3.5, True)):
+        workdir_name = f"daemon-agent-budget-{i}"
+        _write_daemon_config(
+            tmp_path / workdir_name, {"system_prompt_budget_chars": bad},
+        )
+        agent = _make_agent(tmp_path, ["daemon"], working_dir_name=workdir_name)
+        mgr = agent.get_capability("daemon")
+        schemas, _ = mgr._build_tool_surface([])
+
+        assert mgr._system_prompt_budget_chars == DAEMON_SYSTEM_PROMPT_BUDGET_CHARS, bad
+        with pytest.raises(ValueError, match="20,000-character budget"):
+            mgr._build_emanation_prompt("x" * DAEMON_SYSTEM_PROMPT_BUDGET_CHARS, schemas)
+
+
+def test_daemon_system_prompt_budget_env_overrides_config(tmp_path, monkeypatch):
+    """The daemon-manager environment override takes precedence over daemon.json."""
+    _write_daemon_config(
+        tmp_path / "daemon-agent", {"system_prompt_budget_chars": 25_000},
+    )
+    monkeypatch.setenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", "26000")
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    assert agent.get_capability("daemon")._system_prompt_budget_chars == 26_000
+
+
+@pytest.mark.parametrize("bad", ("", "lots", "0", "-5", "3.5"))
+def test_daemon_invalid_system_prompt_budget_env_keeps_config_value(tmp_path, monkeypatch, bad):
+    """Malformed/non-positive env values do not displace a valid daemon.json cap."""
+    _write_daemon_config(
+        tmp_path / "daemon-agent", {"system_prompt_budget_chars": 25_000},
+    )
+    monkeypatch.setenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", bad)
+
+    agent = _make_agent(tmp_path, ["daemon"])
+
+    assert agent.get_capability("daemon")._system_prompt_budget_chars == 25_000
+
+
+def test_daemon_invalid_explicit_system_prompt_budget_keeps_file_or_env(tmp_path, monkeypatch):
+    """An invalid capability kwarg cannot block file fallback or a valid env override."""
+    _write_daemon_config(
+        tmp_path / "daemon-agent", {"system_prompt_budget_chars": 25_000},
+    )
+
+    monkeypatch.delenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", raising=False)
+    agent = _make_agent(tmp_path, {"daemon": {"system_prompt_budget_chars": 0}})
+    assert agent.get_capability("daemon")._system_prompt_budget_chars == 25_000
+
+    _write_daemon_config(
+        tmp_path / "daemon-agent-env", {"system_prompt_budget_chars": 25_000},
+    )
+    monkeypatch.setenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", "26000")
+    agent = _make_agent(
+        tmp_path,
+        {"daemon": {"system_prompt_budget_chars": 0}},
+        working_dir_name="daemon-agent-env",
+    )
+    assert agent.get_capability("daemon")._system_prompt_budget_chars == 26_000
+
+
 def test_daemon_default_max_turns_is_5000_without_config(tmp_path):
     """No config file: the built-in 5000 ceiling applies unchanged."""
     assert daemon_tool.DEFAULT_MAX_TURNS == 5000

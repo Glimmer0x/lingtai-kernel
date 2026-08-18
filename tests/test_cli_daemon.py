@@ -277,6 +277,56 @@ def test_emanate_with_yes_dispatches_through_the_engine(tmp_path, monkeypatch,
     assert (agent_dir / "daemons").is_dir()
 
 
+def test_emanate_env_file_budget_overrides_daemon_json(tmp_path, monkeypatch,
+                                                       capsys, no_spawn):
+    """A budget override in the agent's env_file reaches manager construction.
+
+    Regression: dispatch used to build the ``DaemonManager`` before the lazy
+    ``service`` read loaded the configured ``env_file``, so a valid
+    ``LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS`` configured there lost to
+    ``daemon/daemon.json`` on the CLI path only.
+    """
+    # setenv-then-delenv records the key with monkeypatch so the mid-run
+    # load_env_file write is removed at teardown; the run itself starts with
+    # no inherited process value masking the env_file source.
+    monkeypatch.setenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS", "sentinel")
+    monkeypatch.delenv("LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS")
+
+    env_file = tmp_path / "runtime.env"
+    env_file.write_text(
+        "LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS=26000\n", encoding="utf-8",
+    )
+    agent_dir = _write_agent_dir(tmp_path, env_file=str(env_file))
+    (agent_dir / "daemon").mkdir()
+    (agent_dir / "daemon" / "daemon.json").write_text(
+        json.dumps({"system_prompt_budget_chars": 25_000}), encoding="utf-8",
+    )
+
+    import lingtai.tools.daemon as daemon_tool
+
+    budgets: list[int] = []
+    real_setup = daemon_tool.setup
+
+    def _recording_setup(agent, **kwargs):
+        mgr = real_setup(agent, **kwargs)
+        budgets.append(mgr._system_prompt_budget_chars)
+        return mgr
+
+    monkeypatch.setattr(daemon_tool, "setup", _recording_setup)
+
+    tasks = _write_tasks(tmp_path, {"tasks": [
+        {"task": "Summarize docs into notes.md", "tools": ["file"]},
+    ]})
+    assert _run_cli(monkeypatch, [
+        "daemon", "emanate", "--tasks", str(tasks),
+        "--agent-dir", str(agent_dir), "--yes",
+    ]) == 0
+
+    assert json.loads(capsys.readouterr().out)["status"] == "dispatched"
+    assert len(no_spawn) == 1
+    assert budgets == [26_000]
+
+
 def test_emanate_backend_flag_overrides_the_file(tmp_path, monkeypatch, capsys, no_spawn):
     agent_dir = _write_agent_dir(tmp_path)
     tasks = _write_tasks(tmp_path, {

@@ -33,8 +33,11 @@ def build_daemon_system_prompt(
     task: str,
     tool_names: Iterable[str],
     oneshot_context: str | None = None,
+    budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
 ) -> str:
     """Compose one daemon prompt and fail rather than silently truncating it."""
+    if type(budget_chars) is not int or budget_chars <= 0:
+        raise ValueError("daemon system prompt budget must be a positive integer")
     names = tuple(dict.fromkeys(name.strip() for name in tool_names if name.strip()))
     sections = [_DAEMON_OPERATING_PROMPT]
     if names:
@@ -57,9 +60,9 @@ def build_daemon_system_prompt(
         )
     sections.append("Your task:\n" + task)
     prompt = "\n\n".join(sections)
-    if len(prompt) > DAEMON_SYSTEM_PROMPT_BUDGET_CHARS:
+    if len(prompt) > budget_chars:
         raise ValueError(
-            "daemon system prompt exceeds the 20,000-character budget "
+            f"daemon system prompt exceeds the {budget_chars:,}-character budget "
             f"({len(prompt)} characters); shorten the task or selected skill/MCP "
             "context, or put bulky background in a file and point the task to it"
         )
