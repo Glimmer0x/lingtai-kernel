@@ -1381,6 +1381,26 @@ def _apply_site_quirks(
 def _apply_quirk_dict(params: dict, active: frozenset[str]) -> dict:
     """Apply the registered quirks to one parameters dict."""
     if "move_type_into_union_branches" in active:
+        # Moonshot's validator enforces two conflicting rules at the
+        # parameters ROOT: type:"object" is required, AND anyOf/oneOf at
+        # root may not coexist with a parent type. So a root-level union
+        # (conditional constraints, e.g. the daemon ``compact`` tool)
+        # cannot be expressed on the wire at all — drop it before the
+        # branch move runs so the required root type stays at the root.
+        # ``compact`` independently enforces its dropped run/_reason
+        # condition; other affected tools must enforce relaxed union
+        # constraints at their dispatch/server boundary. Nested nodes are
+        # unaffected.
+        if (
+            isinstance(params, dict)
+            and params.get("type") == "object"
+            and ("anyOf" in params or "oneOf" in params)
+        ):
+            params = {
+                key: value
+                for key, value in params.items()
+                if key not in ("anyOf", "oneOf")
+            }
         return _move_type_into_union_branches(params)
     return params
 

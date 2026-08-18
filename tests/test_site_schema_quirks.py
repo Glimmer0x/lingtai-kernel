@@ -119,16 +119,14 @@ def test_exact_kimi_host_applies_chat_quirk() -> None:
     original = copy.deepcopy(_CHAT_TOOL)
     result = _apply_site_quirks("https://api.kimi.com/coding/v1", [_CHAT_TOOL])
     parameters = result[0]["function"]["parameters"]
-    assert "type" not in parameters
-    assert all(branch["type"] == "object" for branch in parameters["anyOf"])
+    assert parameters == {"type": "object"}
     assert _CHAT_TOOL == original
 
 
 def test_exact_kimi_host_applies_responses_quirk() -> None:
     result = _apply_site_quirks("https://api.kimi.com/coding/v1", [_RESPONSES_TOOL])
     parameters = result[0]["parameters"]
-    assert "type" not in parameters
-    assert all(branch["type"] == "object" for branch in parameters["oneOf"])
+    assert parameters == {"type": "object"}
 
 
 def test_exact_moonshot_host_applies_real_daemon_compact_quirk() -> None:
@@ -139,8 +137,12 @@ def test_exact_moonshot_host_applies_real_daemon_compact_quirk() -> None:
         [compact_tool],
     )
     parameters = result[0]["function"]["parameters"]
-    assert "type" not in parameters
-    assert all(branch["type"] == "object" for branch in parameters["anyOf"])
+    assert parameters["type"] == "object"
+    assert "anyOf" not in parameters
+    assert "oneOf" not in parameters
+    assert parameters["properties"] == original["function"]["parameters"]["properties"]
+    assert parameters["required"] == original["function"]["parameters"]["required"]
+    assert parameters["additionalProperties"] is False
     assert compact_tool == original
 
 
@@ -175,3 +177,72 @@ def test_site_registry_is_exact_and_named() -> None:
         "api.kimi.com": frozenset({"move_type_into_union_branches"}),
         "api.moonshot.cn": frozenset({"move_type_into_union_branches"}),
     }
+
+
+def _chat(parameters: dict) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "x",
+            "description": "x",
+            "parameters": parameters,
+        },
+    }
+
+
+def test_root_anyof_and_oneof_are_stripped_before_recursive_move() -> None:
+    tool = _chat(
+        {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": ["x"],
+            "additionalProperties": False,
+            "anyOf": [{"required": ["x"]}],
+            "oneOf": [{"required": ["x"]}],
+        }
+    )
+    original = copy.deepcopy(tool)
+    result = _apply_site_quirks("https://api.moonshot.cn/v1", [tool])[0][
+        "function"
+    ]["parameters"]
+    assert result == {
+        "type": "object",
+        "properties": {"x": {"type": "string"}},
+        "required": ["x"],
+        "additionalProperties": False,
+    }
+    assert tool == original
+
+
+def test_nested_union_still_uses_pr_1408_branch_move() -> None:
+    tool = _chat(
+        {
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "anyOf": [{"required": ["x"]}, {"required": ["y"]}],
+                }
+            },
+        }
+    )
+    result = _apply_site_quirks("https://api.moonshot.cn/v1", [tool])[0][
+        "function"
+    ]["parameters"]
+    assert result["type"] == "object"
+    nested = result["properties"]["payload"]
+    assert "type" not in nested
+    assert [branch["type"] for branch in nested["anyOf"]] == ["object", "object"]
+
+
+def test_allof_root_is_untouched() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {"x": {"type": "string"}},
+        "allOf": [{"required": ["x"]}],
+    }
+    result = _apply_site_quirks(
+        "https://api.moonshot.cn/v1",
+        [_chat(parameters)],
+    )[0]["function"]["parameters"]
+    assert result == parameters
