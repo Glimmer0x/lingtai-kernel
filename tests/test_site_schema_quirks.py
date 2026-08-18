@@ -1,4 +1,4 @@
-"""Site-specific schema quirk regressions for issue #694."""
+"""Site-specific schema quirk regressions for issues #694 and #913."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import copy
 from lingtai.llm.openai.adapter import (
     _SITE_SCHEMA_QUIRKS,
     _apply_site_quirks,
+    _build_tools,
     _move_type_into_union_branches,
 )
 
@@ -106,6 +107,13 @@ _RESPONSES_TOOL = {
     },
 }
 
+def _daemon_compact_tool() -> dict:
+    from lingtai.tools.daemon import DaemonManager
+
+    manager = DaemonManager.__new__(DaemonManager)
+    schemas, _handlers = manager._daemon_intrinsic_surface()
+    return _build_tools([schemas["compact"]])[0]
+
 
 def test_exact_kimi_host_applies_chat_quirk() -> None:
     original = copy.deepcopy(_CHAT_TOOL)
@@ -121,6 +129,27 @@ def test_exact_kimi_host_applies_responses_quirk() -> None:
     parameters = result[0]["parameters"]
     assert "type" not in parameters
     assert all(branch["type"] == "object" for branch in parameters["oneOf"])
+
+
+def test_exact_moonshot_host_applies_real_daemon_compact_quirk() -> None:
+    compact_tool = _daemon_compact_tool()
+    original = copy.deepcopy(compact_tool)
+    result = _apply_site_quirks(
+        "https://api.moonshot.cn/v1",
+        [compact_tool],
+    )
+    parameters = result[0]["function"]["parameters"]
+    assert "type" not in parameters
+    assert all(branch["type"] == "object" for branch in parameters["anyOf"])
+    assert compact_tool == original
+
+
+def test_moonshot_lookalike_host_does_not_apply_quirk() -> None:
+    compact_tool = _daemon_compact_tool()
+    assert _apply_site_quirks(
+        "https://api.moonshot.cn.example.test/v1",
+        [compact_tool],
+    ) == [compact_tool]
 
 
 def test_openrouter_does_not_apply_kimi_quirk() -> None:
@@ -144,4 +173,5 @@ def test_none_and_empty_inputs_are_passthrough() -> None:
 def test_site_registry_is_exact_and_named() -> None:
     assert _SITE_SCHEMA_QUIRKS == {
         "api.kimi.com": frozenset({"move_type_into_union_branches"}),
+        "api.moonshot.cn": frozenset({"move_type_into_union_branches"}),
     }

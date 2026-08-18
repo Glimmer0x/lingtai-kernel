@@ -1309,10 +1309,12 @@ def _build_responses_tools(schemas: list[FunctionSchema] | None) -> list[dict] |
 # only the transformations explicitly registered for the exact base_url host;
 # unmatched providers keep the canonical schema byte-for-byte.
 #
-# See <https://github.com/Lingtai-AI/lingtai/issues/694> for the Kimi API error
-# that motivated this boundary.
+# See <https://github.com/Lingtai-AI/lingtai/issues/694> and
+# <https://github.com/Lingtai-AI/lingtai/issues/913> for the two official Kimi
+# API hosts that require this boundary.
 _SITE_SCHEMA_QUIRKS: dict[str, frozenset[str]] = {
     "api.kimi.com": frozenset({"move_type_into_union_branches"}),
+    "api.moonshot.cn": frozenset({"move_type_into_union_branches"}),
 }
 
 
