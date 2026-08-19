@@ -188,8 +188,9 @@ class AgentConfig:
     # cache-miss (uncached input) total reaches or exceeds this value, a "molt
     # now" reminder is restamped into _meta.agent_meta.agent_state.context.molt (see
     # meta_block.build_cache_miss_budget_context) and the budget value is surfaced
-    # under _meta.agent_meta.agent_state.context. It is a soft cap — nothing is blocked; the
-    # agent is expected to molt. The cache-miss total is read from the cumulative
+    # under _meta.agent_meta.agent_state.context. It is advisory in metadata; the
+    # agent-facing system(refresh) tool refuses an exhausted budget because refresh
+    # cannot clear it. The cache-miss total is read from the cumulative
     # get_token_usage() totals (which SURVIVE restore_token_state), so a refresh
     # does NOT reset the remaining budget; a successful molt starts a new
     # since-last-molt session/budget cycle. It is deliberately NOT the

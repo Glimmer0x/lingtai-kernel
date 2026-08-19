@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/preset.py
+  - src/lingtai/kernel/meta_block.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/name.py
@@ -19,6 +20,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_refresh_cache_miss_budget_guard.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -54,9 +56,10 @@ System intrinsic — runtime, lifecycle, and identity. Provides the agent with r
 
 - `preset.py` — Preset management and refresh.
   - `_preset_ref_in()` (`preset.py:9-36`) — normalized membership test for preset path strings (~/foo vs absolute).
-  - `_check_context_fits()` (`preset.py:39-76`) — verify agent's current context fits within target preset's context_limit.
-  - `_refresh()` (`preset.py:79-199`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard. **Empty-string normalization:** `args.get('preset')` returning `''` or whitespace-only is treated as absent (`preset_name = None`) before any conflict/swap logic; this protects against tool-call providers that serialize optional string fields as `""` instead of omitting them — without normalization, an empty string would fall into the allowed-list gate and surface as `"preset '' is not in this agent's allowed list"`. The `preset='' + revert_preset=True` combination is consequently treated as a plain revert (no conflict). **MCP retry hook (issue #34):** before calling `agent._perform_refresh()`, invokes `agent._retry_failed_mcps()` if the Agent subclass defines it. Failures are logged and swallowed so a flaky MCP cannot block refresh itself. Lets the documented "fix config → refresh" recovery path work in-process.
-  - `_presets()` (`preset.py:202-282`) — list available presets with LLM connectivity probing.
+  - `_check_context_fits()` (`preset.py:37-74`) — verify agent's current context fits within target preset's context_limit.
+  - `_check_cache_miss_budget()` (`preset.py:77-98`) — consume `build_cache_miss_budget_context()` as the single cache-budget decision shared with the model-visible `molt now` reminder; returns the `_check_context_fits` triple shape and therefore fails open for the same unavailable/no-budget cases.
+  - `_refresh()` (`preset.py:101-239`) — stop, reload config + MCP servers, restart. Handles preset swap (named or revert) with authorization gate and context-limit guard. **Cache-miss budget guard:** immediately after the preset/revert conflict check — and therefore before the revert-default read, the allowed-list gate, `_check_context_fits`, activation, and `_perform_refresh` — it calls `_check_cache_miss_budget()` and, when the budget is exhausted, logs `refresh_refused_cache_miss_budget` (`cache_miss_tokens`, `cache_miss_budget`) and returns `{status: 'error', message}` redirecting to durable stores then `context(action='molt')`. Refresh preserves the conversation and the cache-miss total survives it, so refresh is structurally unable to clear the budget; refusing keeps it from replaying the preserved context at full cost for a recovery it cannot deliver. Only this agent-facing tool path is guarded; direct operator and internal recovery callers of `agent._perform_refresh()` are deliberately unaffected. **Empty-string normalization:** `args.get('preset')` returning `''` or whitespace-only is treated as absent (`preset_name = None`) before any conflict/swap logic; this protects against tool-call providers that serialize optional string fields as `""` instead of omitting them — without normalization, an empty string would fall into the allowed-list gate and surface as `"preset '' is not in this agent's allowed list"`. The `preset='' + revert_preset=True` combination is consequently treated as a plain revert (no conflict). **MCP retry hook (issue #34):** before calling `agent._perform_refresh()`, invokes `agent._retry_failed_mcps()` if the Agent subclass defines it. Failures are logged and swallowed so a flaky MCP cannot block refresh itself. Lets the documented "fix config → refresh" recovery path work in-process.
+  - `_presets()` (`preset.py:242-322`) — list available presets with LLM connectivity probing.
 
 - `karma.py` — Karma-gated lifecycle actions.
   - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:13-14`) — gate mapping sets.

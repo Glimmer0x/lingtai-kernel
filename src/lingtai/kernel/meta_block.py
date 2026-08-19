@@ -1387,8 +1387,10 @@ def build_cache_miss_budget_context(agent) -> dict | None:
     Returns ``None`` (no guard) when: the ``context`` intrinsic is absent (matching
     :func:`build_molt_context`, since ``molt`` presupposes the molt action), the
     budget is not a positive int, the cumulative-usage getter is missing/raising,
-    or the cache-miss total is below the budget.  It is a soft signal only —
-    nothing is blocked — and NOT a new event route (no emission-event payload).
+    or the cache-miss total is below the budget. It is advisory in this metadata
+    path; the agent-facing `system(action='refresh')` tool separately refuses an
+    exhausted budget because refresh cannot clear it. This remains NOT a new event
+    route (no emission-event payload).
     """
     if "context" not in getattr(agent, "_intrinsics", set()):
         return None

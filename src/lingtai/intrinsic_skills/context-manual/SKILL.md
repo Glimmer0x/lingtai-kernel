@@ -2,13 +2,15 @@
 name: context-manual
 description: |
   Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
-version: 2.1.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 2.2.0
+last_changed_at: "2026-08-18T00:00:00Z"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
 - src/lingtai/tools/context/_session_journal.py
 - src/lingtai/tools/system/summarize.py
+- src/lingtai/tools/system/preset.py
+- src/lingtai/tools/system/CONTRACT.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
@@ -196,10 +198,11 @@ When this reminder appears, follow the urgent cadence in `reference/summarize-ma
 
 ### Cache-miss budget
 
-The soft **cache-miss token budget** (default 1,000,000 via `manifest.cache_miss_budget`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Two details only documented here:
+The soft **cache-miss token budget** (default 1,000,000 via `manifest.cache_miss_budget`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Three details only documented here:
 
-- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution, so `env_file` + refresh applies it without an init.json edit; an invalid or non-positive value silently falls back to the configured budget). `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`.
+- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution; while under budget, `env_file` + refresh applies it without an init.json edit; an invalid or non-positive value silently falls back to the configured budget). `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`.
 - The total **survives a refresh/restart** — it is not the since-refresh runtime delta, so refreshing does not reset the remaining budget. If the sustained context-pressure reminder is also active, both warnings are preserved in `context.molt`.
+- At or above the budget, `system(action='refresh')` refuses rather than replaying preserved context for a recovery it cannot deliver. Tend durable stores, then call `context(action='molt')`; that starts the new budget cycle. An operator may still use an out-of-band refresh signal when an exhausted agent must apply a raised env-file value.
 
 ## 8. Post-Wipe Recovery
 

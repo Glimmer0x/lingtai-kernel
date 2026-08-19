@@ -1,12 +1,14 @@
 ---
 name: system-contract
 tool: system
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
+  - src/lingtai/tools/system/preset.py
+  - src/lingtai/kernel/meta_block.py
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
@@ -14,7 +16,9 @@ related_files:
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_refresh_cache_miss_budget_guard.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -27,6 +31,10 @@ maintenance: |
   and the two name actions arrived here from the dissolved psyche family.
   summarize.py stays here as a private engine only — keep the context Contract
   link current, since that family owns the public actions driving it.
+  contract_version 4 narrows `refresh`: it is refused outright once the
+  since-last-molt cache-miss budget is exhausted (§Refresh preconditions).
+  Keep that clause, `preset.py:_check_cache_miss_budget`, and the kernel
+  budget resolver it shares (`meta_block._resolve_cache_miss_budget`) in step.
 ---
 
 # System capability contract
@@ -110,7 +118,7 @@ siblings.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
-| `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
+| `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, exhausted cache-miss budget (§Refresh preconditions), unauthorized preset, oversize context, or activation failure |
 | `sleep` | — | `reason`, `force` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`) | — |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
 | `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
@@ -173,6 +181,33 @@ refusal paths ([B004](BEHAVIORS.md#behavior-b004),
 ([B006](BEHAVIORS.md#behavior-b006)). Change any of these behaviors, update the
 matching behavior entry and this clause together.
 
+### Refresh preconditions
+
+`refresh` rebuilds the runtime from `init.json` with the **same identity and a
+preserved conversation**. Two capacity preconditions can refuse before preset
+activation, MCP retry, or relaunch, each with `{status: "error", message}`:
+
+1. **Cache-miss budget (unconditional).** The since-last-molt cache-miss total
+   is `max(input_tokens - cached_tokens, 0)` over the cumulative token counters,
+   which survive `restore_token_state` and are reset only by a molt. A refresh
+   therefore cannot lower it — it replays the preserved context at full
+   cold-cache cost and returns with the same budget exhausted. When that total
+   reaches or exceeds the effective budget (the `LINGTAI_CACHE_MISS_BUDGET`
+   env override, then `manifest.cache_miss_budget`; resolved by the kernel's
+   `meta_block._resolve_cache_miss_budget`, the same value behind the
+   `cache miss budget {N} reached, molt now` reminder), `refresh` is refused
+   before any preset or MCP work, logs `refresh_refused_cache_miss_budget`, and
+   redirects to durable stores then `context(action='molt')`. It never molts on
+   the agent's behalf. Below budget, refresh behavior is unchanged.
+   The refusal fails **open** — no refusal at all — when the `context`
+   intrinsic is absent (that agent has no molt action and must not be trapped),
+   when no positive-int budget resolves, or when usage cannot be read.
+   This gate is on the **tool** path only; direct operator and internal recovery
+   callers of `_perform_refresh` are deliberately not gated.
+2. **Target `context_limit` (preset swap/revert only).** If current context
+   exceeds the target preset's `context_limit`, the swap is refused
+   (`preset_swap_refused_oversize`) — molt first, then retry.
+
 ## State & storage
 
 Karma verbs write **signal files** into the *target* agent's working directory;
@@ -216,6 +251,8 @@ drive it are `context`'s.
 | `sleep` transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:_sleep` | `tests/test_system.py::test_system_self_sleep` |
 | Unknown/legacy actions return the unknown-action error | `src/lingtai/tools/system/__init__.py:handle` | `tests/test_system.py::test_system_rejects_unknown_and_retired_actions` |
 | `refresh` with an unauthorized preset is refused | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` |
+| `refresh` is refused, with a molt redirect and no preset/MCP side effect, once the since-last-molt cache-miss budget is exhausted | `src/lingtai/tools/system/preset.py:_check_cache_miss_budget` | `tests/test_refresh_cache_miss_budget_guard.py::test_refresh_refused_when_cache_miss_budget_exhausted`, `::test_refusal_precedes_any_preset_side_effect` |
+| That refusal reads the same budget as the kernel `molt now` reminder, and never fires below budget or for an agent that cannot molt | `src/lingtai/kernel/meta_block.py:_resolve_cache_miss_budget` | `tests/test_refresh_cache_miss_budget_guard.py::test_env_override_moves_the_refusal_threshold_both_ways`, `::test_refresh_proceeds_when_cache_miss_is_below_budget`, `::test_refresh_not_refused_when_context_intrinsic_is_absent` |
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |
 | `presets` lists the allowed library and strips credentials | `src/lingtai/tools/system/preset.py:_presets` | `tests/test_system.py::test_presets_action_lists_full_library`, `tests/test_system.py::test_presets_action_strips_credentials` |
 | `cpr` propagates launch failure instead of reporting success | `src/lingtai/tools/system/karma.py:_cpr` | `tests/test_system.py::test_cpr_propagates_launch_failure_instead_of_resuscitated` |
@@ -238,6 +275,7 @@ drive it are `context`'s.
 
 | Invariant | Automated test | Manual check | Risk if broken |
 |---|---|---|---|
+| `refresh` never pretends to recover a cache-budget-exhausted agent | `tests/test_refresh_cache_miss_budget_guard.py` | Exhaust the budget, call `system(action='refresh')` | An unbounded refresh loop that replays preserved context at full cost and never clears the budget |
 | Karma gate blocks unauthorized control | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` + karma gate paths | Call `lull` without `admin.karma` | Any agent could sleep/destroy peers |
 | `nirvana` requires karma AND nirvana | karma gate in `src/lingtai/tools/system/karma.py:_check_karma_gate` | Call `nirvana` with only karma | Irreversible deletion by under-privileged agent |
 | The private engine preserves the original in events.jsonl | `tests/test_system_summarize.py::test_summarize_replaces_block_content` | `context(action='summarize')` a result, grep events.jsonl by tool_call_id | Loss of original tool output |
@@ -251,7 +289,7 @@ drive it are `context`'s.
 Run before merging system changes:
 
 ```bash
-python -m pytest tests/test_system.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py tests/test_karma.py tests/test_tool_family_system_migration.py tests/test_tool_family_context_migration.py tests/test_intrinsic_manual_actions.py -q
+python -m pytest tests/test_system.py tests/test_refresh_cache_miss_budget_guard.py tests/test_preset_context_guard.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py tests/test_karma.py tests/test_tool_family_system_migration.py tests/test_tool_family_context_migration.py tests/test_intrinsic_manual_actions.py -q
 ```
 
 ## Schema and glossary ownership

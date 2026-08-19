@@ -212,7 +212,9 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
 # argument references restated in the ``input`` shape they now take.
 ACTION_ENUM_DESCRIPTION = (
     "refresh: rebuild from init.json — same identity, preserved conversation. "
-    "Reloads MCP, capabilities, addons, LLM, prompt sections. See "
+    "Reloads MCP, capabilities, addons, LLM, prompt sections. Because the "
+    "conversation is preserved, your since-last-molt cache-miss total survives "
+    "it: once that budget is exhausted refresh is refused — molt first. See "
     "system-manual.\n\n"
     "presets: list available presets with tags, connectivity, capabilities. "
     "See system-manual.\n\n"

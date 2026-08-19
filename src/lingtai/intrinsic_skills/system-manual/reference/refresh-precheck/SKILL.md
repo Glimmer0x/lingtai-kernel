@@ -8,8 +8,8 @@ description: |
   consistency, newly introduced env vars, context-vs-target-context_limit,
   durable-store and working-tree state, source_drift, and what to check when
   a refresh fails or comes back with a broken surface.
-version: 1.0.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 1.1.0
+last_changed_at: "2026-08-18T00:00:00Z"
 tags: [lingtai, system, refresh, preset, precheck, checklist, mcp, env, pth, editable-install, verification, lifecycle]
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
@@ -20,6 +20,8 @@ related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
 - src/lingtai/tools/system/schema.py
+- src/lingtai/tools/system/preset.py
+- src/lingtai/tools/system/CONTRACT.md
 - src/lingtai/kernel/presets.py
 maintenance: |
   Sequencing-only node: every check here cites the owner that holds the fact
@@ -170,8 +172,14 @@ If current context exceeds the target's limit, **the swap is refused before acti
 have already told a human "switching now" is a self-inflicted incident. Order is:
 tend durable stores → `context(action="molt", …)` → re-check → swap.
 
-Note also that the cache-miss budget (`manifest.cache_miss_budget`, default 1,000,000)
-accumulates **since last molt and survives a refresh** — refreshing does not reset it.
+### Step 5b — Cache-miss budget (unconditional; runtime checks it first)
+
+The cache-miss budget (`manifest.cache_miss_budget`, default 1,000,000) accumulates
+**since last molt and survives a refresh**. At or above it, `system(action='refresh')`
+refuses before preset/MCP work and directs you to tend durable stores then
+`context(action='molt')`; retrying refresh cannot clear the total. If the goal is to
+apply a raised env-file budget value while already exhausted, use the operator-owned
+out-of-band refresh path instead.
 
 ### Step 6 — Newly introduced environment variables (trigger: the change adds an env read)
 
@@ -253,10 +261,11 @@ system(action="refresh", input={"revert_preset": true},
        reasoning="return to default preset after experimenting")
 ```
 
-The refresh path checks `allowed` membership → checks target context limit → activates
-atomically (writing raw `init.json`) → persists the new default for a named swap →
-best-effort retries failed MCPs → rebuilds LLM/config/capabilities/MCP/prompts,
-preserving conversation history where a live session exists.
+The refresh path checks the cache-miss budget → checks `allowed` membership → checks
+target context limit → activates atomically (writing raw `init.json`) → persists the new
+default for a named swap → best-effort retries failed MCPs → rebuilds
+LLM/config/capabilities/MCP/prompts, preserving conversation history where a live session
+exists.
 
 Note: refresh requests a **deferred relaunch** and only when the runtime can build a
 valid launch command and has a configured refresh watcher. Without a launch command it
@@ -294,7 +303,7 @@ is success** — diagnose before believing the refresh happened.
 | Refresh returned but nothing changed | Re-run the interpreter/import probe in the new process | A refresh only loads code already on disk. It cannot pull a commit or repair an incomplete checkout. Check for a still-held old process or a different environment. |
 | `lingtai` imports from the wrong source, or an edit to the checkout has no effect | Step 2 — list `*lingtai*.pth` + `lingtai-*.dist-info` in the runtime venv's site-packages and compare each `.pth` entry against `lingtai.__file__` | Two markers (editable + non-editable) → `sys.path` order decides, not intent. A `.pth` naming a path that no longer exists → the entry is skipped and the next candidate wins. Orphaned `dist-info` with no `.pth` → stale metadata reporting a version nothing imports. Repair the install via pip/installer with step-0 authority; do **not** refresh against a mismatched marker. |
 | Refresh returned without relaunching | Can the runtime build a valid launch command? Is a refresh watcher configured? | Missing launch command → returns silently; missing watcher → raises. Diagnose the launcher, do not retry blindly. |
-| Refresh raised | The raised error text first | Then `init.json` parse, then `allowed` membership, then target `context_limit` — these are the three gates that reject *before* any runtime change (so the old surface is intact). |
+| Refresh raised or returns an error | The error text first | Then cache-miss budget, `init.json` parse, `allowed` membership, and target `context_limit` — these four gates reject before runtime change, so the old surface is intact. Exhausted budget → tend durable stores and molt; do not retry refresh. |
 | Preset swap refused | Was the path in `system(action="presets")` output? Does current context fit the target `context_limit`? | Unauthorized path → ask the config owner to add it to `manifest.preset.allowed`, then refresh, then re-verify with `presets`. Context too large → molt first. |
 | Broken/missing MCP surface after refresh | `mcp(action="info")` `problems` list; `init.json` `mcp` block vs. `mcp_registry.jsonl` records | Fix the registry/config, then refresh **once** more. Do not loop refreshes against an unfixed config. |
 | Active preset file missing or malformed | Which one? | Missing → materialization may fall back to a different loadable default (so the running preset may not be the one you think). Malformed **existing active** preset → materialization fails rather than silently substituting. Read `system/manifest.resolved.json` to see what actually loaded. |

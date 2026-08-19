@@ -74,6 +74,30 @@ def _check_context_fits(agent, preset_name: str) -> tuple:
     return True, None, None
 
 
+def _check_cache_miss_budget(agent) -> tuple:
+    """Return the meta guard's exact cache-budget decision for ``refresh``.
+
+    The shared builder uses the same intrinsic gate, budget resolution, and
+    cumulative cache-miss arithmetic as the model-visible ``molt now`` reminder.
+    A refresh cannot lower that total because it preserves the conversation, so
+    this tool path refuses only when that exact guard is active.
+    """
+    from lingtai.kernel.meta_block import build_cache_miss_budget_context
+
+    guard = build_cache_miss_budget_context(agent)
+    if guard is None:
+        return True, None, None
+
+    cache_miss = guard["cache_miss_tokens"]
+    budget = guard["cache_miss_budget"]
+    return False, (
+        f"cache-miss budget exhausted ({cache_miss} of {budget} tokens since "
+        f"your last molt) — refresh preserves this conversation and cannot clear "
+        f"the budget. Tend durable stores, then call context(action='molt'); "
+        f"refresh again after the molt if still needed."
+    ), {"cache_miss_tokens": cache_miss, "cache_miss_budget": budget}
+
+
 def _refresh(agent, args: dict) -> dict:
     from lingtai.kernel.i18n import t
     reason = args.get("reason", "")
@@ -99,6 +123,18 @@ def _refresh(agent, args: dict) -> dict:
             "status": "error",
             "message": "cannot specify both 'preset' and 'revert_preset' — choose one",
         }
+
+    # Guard: refuse the WHOLE refresh — plain, named swap, or revert alike —
+    # once the since-last-molt cache-miss budget is exhausted. Refresh is
+    # deliberately non-resetting, so it cannot recover a budget-exhausted
+    # agent; performing it would replay the preserved context at full cost and
+    # return with the same guard tripped. Runs before the revert/allowed/
+    # oversize preset gates so no preset is activated and no default is
+    # persisted on a refresh that is going to be refused anyway.
+    under_budget, budget_refuse_msg, budget_extra = _check_cache_miss_budget(agent)
+    if not under_budget:
+        agent._log("refresh_refused_cache_miss_budget", **budget_extra)
+        return {"status": "error", "message": budget_refuse_msg}
 
     # Revert path: read default name from disk, then route through the same
     # context-limit guard and activation as a named swap.
