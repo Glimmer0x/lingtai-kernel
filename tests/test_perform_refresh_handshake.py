@@ -93,6 +93,14 @@ def _fast_watcher_script(script: str) -> str:
         script
         .replace("MAX_ATTEMPTS = 12", "MAX_ATTEMPTS = 2")
         .replace("HEALTH_CHECK_WAIT = 10", "HEALTH_CHECK_WAIT = 0.1")
+        # The health check polls for a fresh heartbeat instead of sampling once
+        # (slow-MCP-boot incident 2026-08-19), and waits for a terminated
+        # duplicate to release the working directory before retrying. Both
+        # windows are bounded by module-top constants; shrink them so these
+        # subprocess tests still finish inside their timeout.
+        .replace("HEALTH_CHECK_BUDGET = 60", "HEALTH_CHECK_BUDGET = 5")
+        .replace("WATCHER_POLL_INTERVAL = 0.5", "WATCHER_POLL_INTERVAL = 0.02")
+        .replace("DUPLICATE_EXIT_WAIT = 15", "DUPLICATE_EXIT_WAIT = 1")
         .replace("deadline = time.time() + 60", "deadline = time.time() + 1")
         .replace("deadline = time.time() + 5", "deadline = time.time() + 0.05")
     )
@@ -784,6 +792,53 @@ def test_refresh_watcher_script_cleans_stale_duplicate_process(tmp_path):
     assert ".graceful_stop(observation)" in script
     assert ".force_stop(observation)" in script
     assert "refresh_watcher_stale_duplicate" in script
+
+
+def test_refresh_watcher_script_bounds_health_check_and_duplicate_exit_waits(tmp_path):
+    """Production incident 2026-08-19 (spiritual-bliss-attractor codex): all 12
+    relaunch attempts were starved because the health check slept
+    `HEALTH_CHECK_WAIT` once and read `.agent.heartbeat` a single time — too
+    early for an agent still spawning MCP stdio servers — and because the loop
+    retried immediately after SIGKILLing a duplicate that had not yet released
+    the working directory. The rendered policy must therefore carry a bounded
+    heartbeat poll and a bounded post-cleanup exit wait, both as module-top
+    constants rather than inline literals, and must still terminate.
+    """
+    from lingtai.kernel.refresh_watcher.watcher_program import (
+        DUPLICATE_EXIT_WAIT,
+        HEALTH_CHECK_BUDGET,
+        HEALTH_CHECK_WAIT,
+        MAX_ATTEMPTS,
+        WATCHER_POLL_INTERVAL,
+    )
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    script = _capture_watcher_script(agent)
+
+    # The contract's default attempt budget is unchanged by this fix.
+    assert MAX_ATTEMPTS == 12
+    # The poll budget must actually cover a slow MCP boot, i.e. be meaningfully
+    # longer than the single sleep it replaces, and be bounded.
+    assert HEALTH_CHECK_BUDGET > HEALTH_CHECK_WAIT
+    assert 0 < WATCHER_POLL_INTERVAL < HEALTH_CHECK_BUDGET
+    assert 0 < DUPLICATE_EXIT_WAIT
+
+    assert f"HEALTH_CHECK_BUDGET = {HEALTH_CHECK_BUDGET}" in script
+    assert f"WATCHER_POLL_INTERVAL = {WATCHER_POLL_INTERVAL}" in script
+    assert f"DUPLICATE_EXIT_WAIT = {DUPLICATE_EXIT_WAIT}" in script
+
+    # The single blind sleep-then-sample health check is gone.
+    assert "if time.time() - hb_ts < HEALTH_CHECK_WAIT + 10:" not in script
+    assert "def _await_fresh_heartbeat(attempt):" in script
+    assert "deadline = started + HEALTH_CHECK_BUDGET" in script
+
+    # Cleanup's exit wait reuses the canonical same-agent guard rather than a
+    # bare liveness probe: a duplicate this watcher itself launched is never
+    # reaped, so its PID survives as a zombie a liveness probe calls alive.
+    assert "def _await_duplicate_exit(attempt, pid):" in script
+    assert "if not _is_same_agent_run(pid):" in script
+    assert "failure_state['last_cleanup_result'] = 'still_alive'" in script
+    assert "_await_duplicate_exit(attempt, failure_state['last_duplicate_pid'])" in script
 
 
 # ---------------------------------------------------------------------------

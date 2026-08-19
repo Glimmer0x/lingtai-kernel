@@ -51,9 +51,15 @@ data afterward.
    — raising `ValueError` before generating any source if the snapshot is
    invalid JSON or not a JSON object — then renders complete Python program
    source independent of the parent process's live objects: the ACK/lock handshake poll, the
-   12-attempt relaunch loop with a 10s health-check wait, stale same-agent
-   duplicate-process cleanup (SIGTERM → 5s grace → SIGKILL), redacted event
-   logging, and the terminal failure artifact/notification. This module
+   12-attempt relaunch loop whose health check polls `.agent.heartbeat` every
+   0.5s for up to 60s (long enough for an agent still spawning its MCP stdio
+   servers to write a first heartbeat, and short-circuited as soon as that
+   attempt's own stderr shows the duplicate guard), stale same-agent
+   duplicate-process cleanup (SIGTERM → 5s grace → SIGKILL → up to 15s waiting
+   for the duplicate to stop matching the same-agent guard before the next
+   attempt), redacted event logging, and the terminal failure
+   artifact/notification. Every wait is bounded, so the loop still ends in at
+   most 12 attempts. This module
    performs no OS calls itself. Executing the rendered source requires an
    importable LingTai package for the kernel's redaction helper and canonical
    Core process-command matcher. The duplicate-process guard imports
