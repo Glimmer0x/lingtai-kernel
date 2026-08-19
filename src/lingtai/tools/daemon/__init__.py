@@ -9173,8 +9173,11 @@ class DaemonManager:
             if entry.get("detached") and entry.get("run_dir") is not None
         }
         # A fresh manager has no in-memory registry. Discover only exact
-        # supervisor-owned active records; this is a control facade, not an
-        # execution-owner adoption path.
+        # control-capable active detached records — supervisor-owned or
+        # central-manager-owned, same durable owner set as the ask/entry
+        # facades (`_durable_detached_entry`/`_handle_ask_detached`); this is
+        # a control facade, not an execution-owner adoption path.
+        skipped_dead_manager = 0
         daemons_dir = self._agent._working_dir / "daemons"
         if daemons_dir.is_dir():
             for run_path in daemons_dir.iterdir():
@@ -9186,17 +9189,35 @@ class DaemonManager:
                     continue
                 if state.get("state") not in {"running", "active"}:
                     continue
-                if state.get("owner") != "supervisor":
+                owner = state.get("owner")
+                if owner not in {"supervisor", "manager"}:
                     continue
                 pid = state.get("supervisor_pid")
-                if not isinstance(pid, int) or not self._pid_identity_matches(
-                    pid, state.get("supervisor_start_identity")
-                ):
+                if isinstance(pid, int) and not isinstance(pid, bool):
+                    # Active detached record: both owners stamp the exact
+                    # supervisor_pid/start identity at execution start, so one
+                    # unchanged guard covers supervisor- and manager-owned runs.
+                    if not self._pid_identity_matches(
+                        pid, state.get("supervisor_start_identity")
+                    ):
+                        continue
+                elif owner == "manager":
+                    # Queued central-manager record (no execution worker yet):
+                    # eligible only behind a live, identity-matched manager
+                    # whose queue loop consumes the reclaim before start. A
+                    # dead or mismatched manager gets no request and no
+                    # signal; the startup reaper owns terminalizing its
+                    # records.
+                    if not self._manager_owner_alive(state):
+                        skipped_dead_manager += 1
+                        continue
+                else:
                     continue
                 try:
                     run_dirs.setdefault(run_path, DaemonRunDir.attach(run_path))
                 except (OSError, ValueError, json.JSONDecodeError):
                     continue
+        self._last_reclaim_skipped_dead_manager = skipped_dead_manager
         if not run_dirs:
             return 0, 0
 
@@ -9240,6 +9261,8 @@ class DaemonManager:
         self._log(
             "daemon_reclaim", cancelled_count=cancelled,
             detached_confirmed=detached_confirmed, detached_pending=detached_pending,
+            skipped_dead_manager=getattr(
+                self, "_last_reclaim_skipped_dead_manager", 0),
         )
         result = {
             "status": "reclaimed",

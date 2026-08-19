@@ -816,6 +816,24 @@ def test_inspection_does_not_require_a_usable_init(tmp_path, monkeypatch, capsys
     assert "em-1" in capsys.readouterr().out
 
 
+def test_reclaim_dispatches_through_the_daemon_family(tmp_path, monkeypatch, capsys):
+    """CLI reclaim is the tool-family reclaim surface, not a second control path."""
+    agent_dir = _write_agent_dir(tmp_path)
+    calls: list[tuple[Path, str, dict]] = []
+
+    def fake_dispatch(agent, action, action_input):
+        calls.append((agent._working_dir, action, action_input))
+        return {"status": "reclaimed", "cancelled": 2}
+
+    monkeypatch.setattr("lingtai.cli_daemon._dispatch_through_tool_family", fake_dispatch)
+
+    assert _run_cli(monkeypatch, [
+        "daemon", "reclaim", "--agent-dir", str(agent_dir),
+    ]) == 0
+    assert calls == [(agent_dir, "reclaim", {})]
+    assert json.loads(capsys.readouterr().out) == {"status": "reclaimed", "cancelled": 2}
+
+
 # ---------------------------------------------------------------------------
 # Read-only list / check
 # ---------------------------------------------------------------------------

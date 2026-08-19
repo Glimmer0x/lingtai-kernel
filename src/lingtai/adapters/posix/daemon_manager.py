@@ -336,6 +336,7 @@ class _DaemonManagerProcess:
         idle_since: float | None = None
         while True:
             self._reap_finished_threads()
+            self._consume_queue_cancel_requests()
             self._start_queued_jobs()
             if self.active or list(self.queue_dir.glob("*.json")):
                 idle_since = None
@@ -355,6 +356,82 @@ class _DaemonManagerProcess:
             finished = [run_id for run_id, thread in self.active.items() if not thread.is_alive()]
             for run_id in finished:
                 self.active.pop(run_id, None)
+
+    def _consume_queue_cancel_requests(self) -> None:
+        """Honor durable reclaim requests for still-queued jobs before start.
+
+        A queued job has no execution worker and therefore no control watcher
+        yet; this pass is the queue-phase consumer of the same run-local
+        ``control/`` spool. The queue job file's ``unlink()`` is the single
+        arbitration token, shared with ``_start_queued_jobs``: whoever unlinks
+        the job owns the run's fate, so a pending reclaim is honored on
+        exactly one branch — here (terminal ``cancelled`` before start) or by
+        the started worker's own active watcher. Queued ``ask`` requests are
+        deliberately left untouched for that future watcher.
+        """
+        from lingtai.kernel.daemon_supervisor import control
+
+        for job_path in sorted(self.queue_dir.glob("*.json")):
+            job = read_json(job_path, default={}, expect=dict)
+            if not isinstance(job, dict) or "request" not in job:
+                # Malformed jobs stay owned by _start_queued_jobs' quarantine.
+                continue
+            try:
+                request = decode_request(str(job["request"]))
+            except Exception:
+                continue
+            # Canonical layout puts the manifest inside the run directory, so
+            # the spool can be probed cheaply before any manifest read.
+            run_path = Path(request.manifest_path).parent
+            pending = control.pending_requests(run_path)
+            if not pending:
+                continue
+            try:
+                manifest = _read_manifest_for_request(request)
+                run_dir = _attach_run_dir(manifest)
+            except Exception:
+                continue
+            reclaim_requests: list[Path] = []
+            for req_path in pending:
+                try:
+                    req = control.read_request(req_path)
+                except Exception:
+                    control.mark_request_done(
+                        req_path, {"status": "error", "error": "unreadable request"}
+                    )
+                    continue
+                if req.get("run_id") != request.run_id:
+                    control.mark_request_done(
+                        req_path, {"status": "rejected", "error": "run_id mismatch"}
+                    )
+                    continue
+                if req.get("kind") != "reclaim":
+                    continue
+                reclaim_requests.append(req_path)
+            if not reclaim_requests:
+                continue
+            state = run_dir.read_state_from_disk(run_dir.path)
+            if state.get("state") not in {"running", "active"}:
+                for req_path in reclaim_requests:
+                    control.mark_request_done(req_path, {
+                        "status": "rejected",
+                        "error": f"run is already {state.get('state')!r}",
+                    })
+                continue
+            try:
+                job_path.unlink()
+            except OSError:
+                continue  # the worker won the handoff; its watcher consumes this
+            with self.lock:
+                self.capsules.pop(request.run_id, None)
+            run_dir.update_state(owner="manager", manager_pid=os.getpid())
+            run_dir.mark_cancelled()
+            _publish_terminal(run_dir, manifest)
+            self._journal(request.run_id, "cancelled_queued", request, {})
+            for req_path in reclaim_requests:
+                control.mark_request_done(
+                    req_path, {"status": "accepted", "phase": "queued"}
+                )
 
     def _start_queued_jobs(self) -> None:
         with self.lock:
