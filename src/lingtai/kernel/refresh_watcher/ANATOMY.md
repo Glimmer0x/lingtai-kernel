@@ -51,10 +51,14 @@ walkthrough.
 - `RefreshWatcherProcessHandle`, `RefreshWatcherProcessObservation`, and
   `RefreshWatcherProcessPort` define the local observe/liveness/start/graceful
   stop/force-stop boundary (`src/lingtai/kernel/refresh_watcher/__init__.py:79-145`).
-- `render_watcher_script(request)` renders the existing ACK/lock, heartbeat,
-  retry, matcher, redaction, and alert policy and calls only an injected
+- `render_watcher_script(request)` renders the ACK/lock, heartbeat, retry,
+  matcher, redaction, and alert policy and calls only an injected
   `PROCESS_MECHANISM` global for process operations
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:53-431`).
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:69-571`). Its
+  wall-clock policy lives in module-top constants — `MAX_ATTEMPTS`,
+  `HEALTH_CHECK_WAIT`, `HEALTH_CHECK_BUDGET`, `WATCHER_POLL_INTERVAL`,
+  `DUPLICATE_EXIT_WAIT` — that the renderer embeds as plain assignments
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:24-40`).
 - `select_refresh_watcher` is the fail-loud outer selector
   (`src/lingtai/adapters/refresh_watcher.py:14-35`).
 

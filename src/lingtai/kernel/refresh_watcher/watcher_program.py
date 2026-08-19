@@ -8,10 +8,12 @@ only assembles policy source and never constructs a concrete process adapter.
 The entrypoint injects that adapter as the ``PROCESS_MECHANISM`` global.
 
 The stale same-agent guard imports the canonical Core matcher at runtime rather
-than embedding another matcher. Request identity fields are serialized JSON
-snapshots and are validated before source generation. The renderer itself
-performs no operating-system process operation; file, time, heartbeat, retry,
-redaction, and alert policy remain in the generated Core policy.
+than embedding another matcher, and is reused to decide when a terminated
+duplicate has actually released the working directory. Request identity fields
+are serialized JSON snapshots and are validated before source generation. The
+renderer itself performs no operating-system process operation; file, time,
+heartbeat, retry, redaction, and alert policy remain in the generated Core
+policy.
 """
 from __future__ import annotations
 
@@ -21,7 +23,21 @@ from . import RefreshWatcherRequest
 
 MAX_ATTEMPTS = 12
 HEALTH_CHECK_WAIT = 10
+# A relaunched agent boots its MCP stdio servers before the first heartbeat
+# write. Production incident 2026-08-19 (spiritual-bliss-attractor/codex) showed
+# that boot exceeding a single ``HEALTH_CHECK_WAIT`` sleep on every one of the
+# 12 attempts, so the watcher declared a healthy-but-slow agent dead. The health
+# check therefore polls for a fresh heartbeat every ``WATCHER_POLL_INTERVAL``
+# until ``HEALTH_CHECK_BUDGET`` expires rather than sampling once.
+HEALTH_CHECK_BUDGET = 60
+WATCHER_POLL_INTERVAL = 0.5
+# The same incident showed the other half of the starvation: cleanup sent
+# SIGKILL to a stale duplicate and the next attempt started immediately, hitting
+# 'another lingtai agent is already running' again because the duplicate had not
+# left the process table yet. Bound how long the watcher waits for that exit.
+DUPLICATE_EXIT_WAIT = 15
 STDERR_TAIL_CHARS = 1200
+DUPLICATE_GUARD_MESSAGE = "another lingtai agent is already running"
 
 
 def _decode_identity_fields(identity_fields_json: str) -> dict:
@@ -100,6 +116,10 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         f"identity_fields = {identity_fields!r}\n"
         f"MAX_ATTEMPTS = {MAX_ATTEMPTS}\n"
         f"HEALTH_CHECK_WAIT = {HEALTH_CHECK_WAIT}\n"
+        f"HEALTH_CHECK_BUDGET = {HEALTH_CHECK_BUDGET}\n"
+        f"WATCHER_POLL_INTERVAL = {WATCHER_POLL_INTERVAL}\n"
+        f"DUPLICATE_EXIT_WAIT = {DUPLICATE_EXIT_WAIT}\n"
+        f"DUPLICATE_GUARD_MESSAGE = {DUPLICATE_GUARD_MESSAGE!r}\n"
         # The watcher writes events.jsonl through its own log() below, bypassing
         # the in-process CompositeLoggingService.redact_for_trajectory. Secret-
         # shaped values reach these events via stderr_tail (relaunched-process
@@ -346,6 +366,60 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "def is_alive():\n"
         "    age = heartbeat_age()\n"
         "    return age is not None and age < 30\n"
+        # The attempt marker written before every start_agent lets the health
+        # check attribute a duplicate-guard line to *this* attempt. Read only the
+        # tail so a multi-hundred-megabyte relaunch log stays cheap to poll, and
+        # report False whenever this attempt's marker is not inside that window,
+        # so a stale guard line from an earlier attempt can never end the poll.
+        "def _attempt_marker(attempt):\n"
+        "    return f'--- relaunch attempt {attempt} ---'\n"
+        "def _duplicate_guard_seen(attempt):\n"
+        "    try:\n"
+        "        with open(stderr_log, 'rb') as f:\n"
+        "            try:\n"
+        "                f.seek(0, os.SEEK_END)\n"
+        "                f.seek(max(0, f.tell() - 8192))\n"
+        "            except OSError:\n"
+        "                pass\n"
+        "            window = f.read().decode('utf-8', 'replace')\n"
+        "    except OSError:\n"
+        "        return False\n"
+        "    marker = _attempt_marker(attempt)\n"
+        "    if marker not in window:\n"
+        "        return False\n"
+        "    return DUPLICATE_GUARD_MESSAGE in window.rsplit(marker, 1)[1]\n"
+        # Poll for a fresh heartbeat instead of sampling once after a fixed
+        # sleep: a slow MCP boot writes its first heartbeat well after
+        # HEALTH_CHECK_WAIT (incident 2026-08-19) and was being declared dead.
+        # The poll is bounded by HEALTH_CHECK_BUDGET so the watcher still
+        # terminates, and returns early once this attempt's own stderr proves
+        # the launch was refused by the duplicate guard and no heartbeat is
+        # coming, after one settle interval so that launch finishes flushing.
+        # Freshness is safe to test immediately: the attempt only
+        # reaches here after the is_alive() gate proved the heartbeat was
+        # missing or at least 30s old, so anything younger than
+        # HEALTH_CHECK_WAIT + 10 was written by the process just started.
+        "def _await_fresh_heartbeat(attempt):\n"
+        "    started = time.time()\n"
+        "    deadline = started + HEALTH_CHECK_BUDGET\n"
+        "    guard_seen = False\n"
+        "    while True:\n"
+        "        age = heartbeat_age()\n"
+        "        if age is not None and age < HEALTH_CHECK_WAIT + 10:\n"
+        "            return round(time.time() - started, 3)\n"
+        "        if guard_seen:\n"
+        "            return None\n"
+        "        if _duplicate_guard_seen(attempt):\n"
+        # Settle for one poll interval before giving up: the refused launch
+        # writes its 'PID <n>' line immediately after the guard line, and the
+        # caller reads that tail to identify the duplicate.
+        "            guard_seen = True\n"
+        "            time.sleep(WATCHER_POLL_INTERVAL)\n"
+        "            continue\n"
+        "        remaining = deadline - time.time()\n"
+        "        if remaining <= 0:\n"
+        "            return None\n"
+        "        time.sleep(min(WATCHER_POLL_INTERVAL, remaining))\n"
         "def _extract_duplicate_pid(stderr_tail):\n"
         "    for line in stderr_tail.splitlines():\n"
         "        line = line.strip()\n"
@@ -413,6 +487,35 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "        failure_state['last_cleanup_result'] = 'sigkill_error'\n"
         "        failure_state['last_cleanup_error'] = str(e)\n"
         "        return False\n"
+        # graceful_stop/force_stop only *request* the duplicate's exit. Starting
+        # the next relaunch while the duplicate still holds the working directory
+        # reproduces the same guard and burns another attempt (incident
+        # 2026-08-19), so wait a bounded DUPLICATE_EXIT_WAIT before retrying.
+        #
+        # The blocking condition is re-checked with the same canonical
+        # same-agent-run guard cleanup used, not with a bare liveness probe: the
+        # duplicate is frequently a process this very watcher launched on an
+        # earlier attempt, and the watcher never reaps its children, so after a
+        # SIGKILL its PID survives as a zombie that a liveness probe would report
+        # alive forever. A zombie's process-table command line no longer matches
+        # an agent run for this working directory, so it correctly reads as gone.
+        #
+        # If a live duplicate outlives the wait, record that in failure_state and
+        # let the loop retry anyway rather than hanging.
+        "def _await_duplicate_exit(attempt, pid):\n"
+        "    if not pid:\n"
+        "        return True\n"
+        "    deadline = time.time() + DUPLICATE_EXIT_WAIT\n"
+        "    while True:\n"
+        "        if not _is_same_agent_run(pid):\n"
+        "            return True\n"
+        "        remaining = deadline - time.time()\n"
+        "        if remaining <= 0:\n"
+        "            log('refresh_watcher_stale_duplicate_still_alive', attempt=attempt,\n"
+        "                pid=pid, waited=DUPLICATE_EXIT_WAIT)\n"
+        "            failure_state['last_cleanup_result'] = 'still_alive'\n"
+        "            return False\n"
+        "        time.sleep(min(WATCHER_POLL_INTERVAL, remaining))\n"
         "for attempt in range(1, MAX_ATTEMPTS + 1):\n"
         "    # Check if already alive before relaunching\n"
         "    if is_alive():\n"
@@ -427,7 +530,7 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "    log('refresh_watcher_relaunch', attempt=attempt)\n"
         "    try:\n"
         "        with open(stderr_log, 'a') as serr:\n"
-        "            serr.write(f'--- relaunch attempt {attempt} ---\\n')\n"
+        "            serr.write(_attempt_marker(attempt) + '\\n')\n"
         "            serr.flush()\n"
         "        proc = _process_mechanism().start_agent(cmd, stderr_log)\n"
         "    except Exception as e:\n"
@@ -447,16 +550,11 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "    failure_state['last_relaunch_pid'] = proc.pid\n"
         "    failure_state['last_relaunch_error'] = None\n"
         "    # Wait for the new process to start writing heartbeat\n"
-        "    time.sleep(HEALTH_CHECK_WAIT)\n"
-        "    hb = os.path.join(wd, '.agent.heartbeat')\n"
-        "    if os.path.exists(hb):\n"
-        "        try:\n"
-        "            hb_ts = float(open(hb).read().strip())\n"
-        "            if time.time() - hb_ts < HEALTH_CHECK_WAIT + 10:\n"
-        "                log('refresh_watcher_success', attempt=attempt, pid=proc.pid)\n"
-        "                sys.exit(0)\n"
-        "        except (ValueError, OSError):\n"
-        "            pass\n"
+        "    heartbeat_wait = _await_fresh_heartbeat(attempt)\n"
+        "    if heartbeat_wait is not None:\n"
+        "        log('refresh_watcher_success', attempt=attempt, pid=proc.pid,\n"
+        "            heartbeat_wait=heartbeat_wait)\n"
+        "        sys.exit(0)\n"
         "    # Process not alive — log failure and retry\n"
         "    stderr_tail = ''\n"
         "    try:\n"
@@ -474,11 +572,21 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "    failure_state['last_cleanup_error'] = None\n"
         "    log('refresh_watcher_relaunch_dead', attempt=attempt, pid=proc.pid,\n"
         "        stderr_tail=stderr_tail[-500:])\n"
-        "    if 'another lingtai agent is already running' in stderr_tail:\n"
-        "        _cleanup_stale_duplicate(stderr_tail, attempt)\n"
+        "    if DUPLICATE_GUARD_MESSAGE in stderr_tail:\n"
+        "        if _cleanup_stale_duplicate(stderr_tail, attempt):\n"
+        "            _await_duplicate_exit(attempt, failure_state['last_duplicate_pid'])\n"
         "alert_id, meta = _publish_refresh_failed_permanent()\n"
         "log('refresh_failed_permanent', alert_id=alert_id, **meta)\n"
     )
 
 
-__all__ = ["render_watcher_script", "MAX_ATTEMPTS", "HEALTH_CHECK_WAIT", "STDERR_TAIL_CHARS"]
+__all__ = [
+    "render_watcher_script",
+    "MAX_ATTEMPTS",
+    "HEALTH_CHECK_WAIT",
+    "HEALTH_CHECK_BUDGET",
+    "WATCHER_POLL_INTERVAL",
+    "DUPLICATE_EXIT_WAIT",
+    "STDERR_TAIL_CHARS",
+    "DUPLICATE_GUARD_MESSAGE",
+]

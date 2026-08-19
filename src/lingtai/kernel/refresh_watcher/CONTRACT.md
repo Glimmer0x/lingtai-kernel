@@ -4,6 +4,7 @@ contract_version: 3
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/refresh_watcher/ANATOMY.md
+  - src/lingtai/kernel/refresh_watcher/BEHAVIORS.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/refresh_watcher/__init__.py
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
@@ -187,7 +188,13 @@ operations, and may import the canonical
 a process-table command, perform process termination, or launch a replacement.
 Instead, stale-duplicate cleanup calls the injected process Port in the order
 chosen by policy (`observe` → `is_alive` → `graceful_stop` → grace polling →
-`force_stop` when needed), and relaunch calls `start_agent` once per retry.
+`force_stop` when needed → bounded `observe`/`is_alive` re-checks of the
+canonical same-agent guard until the duplicate is gone or `DUPLICATE_EXIT_WAIT`
+expires), and relaunch calls `start_agent` once per retry. The post-termination
+re-check deliberately reuses the same-agent guard rather than raw liveness: the
+duplicate is often a process this watcher itself launched on an earlier attempt
+and never reaps, so its PID survives as a zombie that `is_alive` alone would
+report alive indefinitely.
 
 The generated policy must continue to redact bounded stderr/cleanup/relaunch
 errors before all three terminal-failure sinks. It must continue to use the
@@ -197,9 +204,21 @@ same matcher import and not embed a second matcher implementation.
 
 1. Outer `spawn_detached` and request wire behavior remain lossless,
    deterministic, immutable, and exactly-once at the successful handshake.
-2. The generated watcher keeps the prior ACK/lock deadlines, heartbeat
-   threshold, retry count/timing, signal-file cleanup, duplicate decision,
-   redaction, artifact, system notification, and event semantics.
+2. The generated watcher keeps the prior ACK/lock deadlines, heartbeat freshness
+   threshold, `MAX_ATTEMPTS` retry budget, signal-file cleanup, duplicate
+   decision, redaction, artifact, system notification, and prior event
+   semantics. Its post-relaunch health check polls `.agent.heartbeat` every
+   `WATCHER_POLL_INTERVAL` until a fresh heartbeat appears or
+   `HEALTH_CHECK_BUDGET` expires, instead of sampling once after a single
+   `HEALTH_CHECK_WAIT` sleep; it returns early when this attempt's own stderr
+   segment already carries the duplicate guard, so a refused launch does not
+   spend the whole budget. After a cleanup that terminated a duplicate, the
+   watcher waits up to `DUPLICATE_EXIT_WAIT` for that PID to stop matching the
+   canonical same-agent guard before starting the next attempt; when the
+   duplicate outlives that wait it records `last_cleanup_result = 'still_alive'`
+   and retries anyway. Both waits are bounded, so the loop still terminates
+   within `MAX_ATTEMPTS` attempts.
+   Guarded by: [RW002](BEHAVIORS.md#behavior-rw002)
 3. Core policy never imports or constructs an adapter and never directly owns
    process observation, liveness, launch, or termination. The generated policy
    uses only the injected `RefreshWatcherProcessPort` global.
