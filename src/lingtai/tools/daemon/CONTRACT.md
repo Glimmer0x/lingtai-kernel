@@ -378,7 +378,7 @@ then append a `daemon_checkpoint` event and refresh heartbeat. It next publishes
 a stable-key `source="daemon"`, `kind="daemon_checkpoint"`, `terminal=false`
 event on the singular built-in `daemon` channel so the parent wakes without
 consuming the exactly-once terminal notification. Checkpoints use the same
-append/cap/idempotency format and durable `data.daemon` batch count/alarm latch as
+append/idempotency format and durable `data.daemon` batch count/alarm latch as
 terminal daemon notices; no daemon-originated parent wake lands on `system`. The tool response returns the drained IDs/messages. Once the
 durable state write succeeds, an event append, heartbeat touch, or notification
 publication failure is an honest error carrying `checkpoint_recorded=true`, the
@@ -463,37 +463,44 @@ path is implemented and tested.
 ### 6. Terminal notifications use published receipts, not attempted claims
 
 Every terminal daemon outcome (`done`, `failed`, `cancelled`, `timeout`) must
-surface through `.notification/daemon.json` rather than ordinary parent request
+surface through the per-run mini-channel
+`.notification/daemon/<daemon-id>.json`, rather than ordinary parent request
 text. `daemon` is a built-in notification channel; both the in-process manager
-and the detached supervisor publish the identical event shape there. The run
-directory may write a temporary
-`daemon.json.terminal_notification_claim` before publication to suppress
-concurrent callbacks, but `daemon.json.terminal_notified=true` is a receipt and
-may be written only after `_publish_daemon_notification` succeeds or an
-idempotent retry observes an already-published daemon-channel event.
+and detached supervisor use the typed `NotificationStorePort.compare_update_channel`
+operation, and the production adapter routes each run id to its own file. The
+sibling `.notification/daemon.json` is a derived report containing only
+mini-file run/state statistics; it is excluded from aggregate snapshot,
+fingerprint, and dismissal. Existing root event facts may be retained only as
+report migration metadata and are never re-delivered; new event writes always
+route to the run's mini-file and never fall back to the root. The run directory
+may write a temporary `daemon.json.terminal_notification_claim` before publication to
+suppress concurrent callbacks, but `daemon.json.terminal_notified=true` is a
+receipt and may be written only after `_publish_daemon_notification` succeeds or
+an idempotent retry observes an already-published daemon-channel event.
 
 Failed enqueue must clear the pending claim and leave the terminal run
 retryable. Startup reconciliation retries only new-schema terminal run dirs that
 explicitly carry `terminal_notified=false`, including stale pending claims left
 by a crash. Legacy records with `terminal_notified=true` or with the key absent
 are treated conservatively as already handled, not retroactively replayed. The
-event idempotency key is stable per terminal run, so a crash after
-publication but before receipt persistence does not create a duplicate event on
-restart while the original event remains in the capped 20-event `daemon.json`
-window. If that event is dismissed or evicted before recovery records the
-receipt, startup may safely republish: the contract is at-least-once delivery
-without false durable success.
+event idempotency key is stable per terminal run, so a crash after publication
+but before receipt persistence does not create a duplicate event on restart. A
+mini-channel retains all same-run checkpoint/terminal/follow-up events; there is
+no fixed 20-event retention cap. If a run's event is dismissed, its exact
+mini-file is removed only after the delivered aggregate version still matches;
+a late/newer mini-file therefore survives a stale dismissal.
 
-Delivery is separate from attention. `daemon.json` carries durable batch state
-under `data.daemon` (`count` since the last clear, plus a latched
-`alarm_fired`). When `<agent>/notification.json` sets
+Delivery is separate from attention. The aggregate daemon projection carries
+durable batch state under `data.daemon` (`count` since the last clear, plus a
+latched `alarm_fired`). When `<agent>/notification.json` sets
 `channels.daemon.alarm_threshold`, arrivals at or below the threshold remain
 readable through notification snapshot/check but do not move the attention
 fingerprint, so they neither wake nor inject; the strict first `count > N`
 crossing produces exactly one alarm edge, and clearing the channel resets the
 batch so a later crossing can alarm again. Absent a valid threshold, every
-terminal notice wakes the parent as before. Run-local `daemon.json` and result
-files remain the terminal source of truth regardless of attention state.
+terminal notice wakes the parent as before. Per-run `daemons/<id>/daemon.json`
+and result files remain the terminal source of truth regardless of attention
+state; the top-level `.notification/daemon.json` is only the derived report.
 
 ### 7. LingTai task mapping and self-compact are separate from provider compaction
 

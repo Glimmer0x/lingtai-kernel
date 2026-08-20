@@ -170,9 +170,9 @@ def test_expiry_reexposes_unchanged_target_and_writes_one_conservative_alarm(tmp
     assert _call(agent, "email", 30)["status"] == "ok"
     _expire_state(agent)
 
-    assert reconcile_notification_delay(tmp_path) is True
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is True
     first_alarm = (tmp_path / ".notification" / "delay-alarm.json").read_bytes()
-    assert reconcile_notification_delay(tmp_path) is False
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is False
     assert (tmp_path / ".notification" / "delay-alarm.json").read_bytes() == first_alarm
     assert (tmp_path / ".notification" / "email.json").read_bytes() == original
 
@@ -192,16 +192,25 @@ def test_expiry_reexposes_unchanged_target_and_writes_one_conservative_alarm(tmp
 
 def test_expiry_marks_changed_without_claiming_capped_event_total(tmp_path: Path) -> None:
     agent = _DelayAgent(tmp_path)
-    publish_test_payload(tmp_path, "daemon", {"data": {"events": [{"event_id": "old"}]}})
+    publish_test_payload(
+        tmp_path,
+        "daemon",
+        {"data": {"daemon_id": "delay-test", "events": [{"event_id": "old"}]}},
+    )
     assert _call(agent, "daemon", 30)["status"] == "ok"
     publish_test_payload(
         tmp_path,
         "daemon",
-        {"data": {"events": [{"event_id": "new-a"}, {"event_id": "new-b"}]}},
+        {
+            "data": {
+                "daemon_id": "delay-test",
+                "events": [{"event_id": "new-a"}, {"event_id": "new-b"}],
+            }
+        },
     )
     _expire_state(agent)
 
-    assert reconcile_notification_delay(tmp_path) is True
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is True
     alarm = snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]["data"]["delay_alarm"]
     assert alarm["changed"] is True
     assert alarm["current"]["retained_event_count"] == 2
@@ -274,7 +283,7 @@ def test_concurrent_expiry_recovery_claims_one_alarm_publication(tmp_path: Path)
     _expire_state(agent)
 
     with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda _: reconcile_notification_delay(tmp_path), range(6)))
+        results = list(pool.map(lambda _: reconcile_notification_delay(tmp_path, agent._notification_store), range(6)))
 
     assert results.count(True) == 1
     assert results.count(False) == 5

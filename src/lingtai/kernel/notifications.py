@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from .notification_store import NotificationStorePort
+
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 # Notification channels are intentionally allowlisted.  Unknown files in
@@ -320,31 +322,39 @@ def _active_delay_state(state: object, *, now: float | None = None) -> dict[str,
     return state
 
 
-def _read_target_stats_locked(workdir: str, channel: str) -> dict[str, Any]:
-    """Read conservative current target facts without claiming a total.
+def _read_target_stats_locked(
+    workdir: str, channel: str, store: NotificationStorePort
+) -> dict[str, Any]:
+    """Read conservative target facts through the injected Store Port.
 
-    The byte fingerprint tells the alarm whether the current mirror differs from
-    the mirror seen at delay start.  ``reported_count`` is only copied when a
-    producer explicitly supplied it; event counts are explicitly labelled as
-    retained entries because append/overwrite/cap policies cannot prove totals.
+    The delay transaction already holds the native Store lock.  Snapshot and
+    fingerprint therefore describe the same target without Core constructing a
+    concrete filesystem adapter; daemon stats use the aggregate projection and
+    its synthetic raw version exactly like ordinary delivery/CAS.
     """
-    notification_dir, _, _ = _delay_paths(workdir)
-    path = notification_dir / f"{channel}.json"
     try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
-        return {"present": False}
+        allow = lambda name: name == channel
+        payload = store.snapshot(allow).get(channel)
+        entries = tuple(store.fingerprint(allow))
     except OSError as exc:
         return {"present": None, "read_error": type(exc).__name__}
+    except Exception as exc:
+        return {"present": None, "read_error": type(exc).__name__}
+
+    expected_name = f"{channel}.json"
+    entry = next((item for item in entries if item and item[0] == expected_name), None)
+    if entry is None and payload is None:
+        return {"present": False}
+    if entry is None:
+        # A non-filesystem Store may expose a payload without a byte version.
+        # Keep the delay fail-visible rather than inventing a CAS token.
+        return {"present": None, "read_error": "missing_fingerprint"}
+
     stats: dict[str, Any] = {
         "present": True,
-        "byte_size": len(raw),
-        "sha256": hashlib.sha256(raw).hexdigest(),
+        "byte_size": entry[1],
+        "sha256": entry[2],
     }
-    try:
-        payload = json.loads(raw)
-    except (ValueError, TypeError):
-        return stats
     if not isinstance(payload, dict):
         return stats
     data = payload.get("data")
@@ -402,7 +412,10 @@ def _delay_alarm_payload(completion: dict[str, Any]) -> dict[str, Any]:
 
 
 def reconcile_notification_delay(
-    workdir: str | Path | None, *, expected_request_id: str | None = None
+    workdir: str | Path | None,
+    store: NotificationStorePort,
+    *,
+    expected_request_id: str | None = None,
 ) -> bool:
     """Recover or complete an overdue delay, publishing one stable alarm mirror.
 
@@ -450,7 +463,7 @@ def reconcile_notification_delay(
                     or deadline > now
                 ):
                     return False
-                current = _read_target_stats_locked(key, target)
+                current = _read_target_stats_locked(key, target, store)
                 initial = state.get("initial")
                 completion = {
                     "request_id": request_id,
@@ -501,13 +514,15 @@ def _read_active_notification_delay(workdir: str | Path | None) -> dict[str, Any
         return None
 
 
-def delayed_notification_target(workdir: str | Path | None) -> str | None:
+def delayed_notification_target(
+    workdir: str | Path | None, store: NotificationStorePort
+) -> str | None:
     """Return the one currently hidden target, failing open on bad state.
 
     Expiry recovery runs first so a due target becomes visible and its alarm is
     created before this consumer snapshot begins.
     """
-    reconcile_notification_delay(workdir)
+    reconcile_notification_delay(workdir, store)
     active = _read_active_notification_delay(workdir)
     return active.get("target") if active else None
 
@@ -521,7 +536,9 @@ def _cancel_notification_delay_timer(workdir: str) -> None:
 
 def _delay_timer_fired(agent, workdir: str, request_id: str) -> None:
     try:
-        reconcile_notification_delay(workdir, expected_request_id=request_id)
+        reconcile_notification_delay(
+            workdir, agent._notification_store, expected_request_id=request_id
+        )
         sync = getattr(agent, "_sync_notifications", None)
         if callable(sync):
             sync()
@@ -540,7 +557,7 @@ def arm_notification_delay_timer(agent) -> None:
     workdir = _delay_workdir_key(getattr(agent, "_working_dir", None))
     if workdir is None:
         return
-    reconcile_notification_delay(workdir)
+    reconcile_notification_delay(workdir, agent._notification_store)
     active = _read_active_notification_delay(workdir)
     if active is None:
         _cancel_notification_delay_timer(workdir)
@@ -571,6 +588,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
     the target again.
     """
     workdir = _delay_workdir_key(getattr(agent, "_working_dir", None))
+    store = agent._notification_store
     if workdir is None:
         return {
             "status": "error",
@@ -599,7 +617,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
     # the record. Recheck *under the same native lock* below: expiry can race the
     # first recovery call, and overwriting an overdue active record would lose
     # the alarm it owes.
-    reconcile_notification_delay(workdir)
+    reconcile_notification_delay(workdir, store)
     for _ in range(2):
         overdue_request_id = None
         try:
@@ -654,7 +672,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
                             "started_at": _delay_iso(now),
                             "deadline_epoch": now + seconds,
                             "deadline_at": _delay_iso(now + seconds),
-                            "initial": _read_target_stats_locked(workdir, channel),
+                            "initial": _read_target_stats_locked(workdir, channel, store),
                         }
                         _write_delay_state_locked(state_path, state)
                         result = {
@@ -677,7 +695,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
         if overdue_request_id is None:
             break
         if not reconcile_notification_delay(
-            workdir, expected_request_id=overdue_request_id
+            workdir, store, expected_request_id=overdue_request_id
         ):
             return {
                 "status": "error",
@@ -771,7 +789,7 @@ def register_notification_channel(channel: str) -> None:
 # ---------------------------------------------------------------------------
 #
 # All daemon-originated parent notices — cooperative daemon_common checkpoints
-# plus terminal/follow-up outcomes — land in `.notification/daemon.json` (not
+# plus terminal/follow-up outcomes — land in independent `.notification/daemon/<daemon-id>.json` mini-channels (not
 # `system`), so one batch policy governs every daemon wake. The channel payload
 # carries durable batch state under `data.daemon`:
 #
@@ -1018,7 +1036,7 @@ def coherent_attention_read(
     # refresh/restart, reconciliation publishes the alarm and turns filtering
     # off before this single consumer observation is built, so target visibility
     # and the high-priority alarm arrive in the same sync/wake cycle.
-    delayed_target = delayed_notification_target(workdir)
+    delayed_target = delayed_notification_target(workdir, store)
 
     def _consumer_allow(channel: str) -> bool:
         return allow_channel(channel) and channel != delayed_target
@@ -1866,14 +1884,14 @@ def dismiss_channel(
             "message": protected_message,
         }
 
-    if (event_id or ref_id) and channel != "system":
+    if (event_id or ref_id) and channel not in {"system", DAEMON_CHANNEL}:
         return {
             "status": "error",
             "reason": "atomic_dismiss_requires_system_channel",
             "channel": channel,
             "event_id": event_id,
             "ref_id": ref_id,
-            "message": "event_id/ref_id dismiss is only supported for channel='system'.",
+            "message": "event_id/ref_id dismiss is only supported for channel='system' or 'daemon'.",
         }
 
     suggested = is_generic_dismiss_guarded(channel)
@@ -2067,7 +2085,7 @@ def dismiss_channel(
             ), True, value
 
         try:
-            update = store.compare_update_channel("system", expected, _mutator)
+            update = store.compare_update_channel(channel, expected, _mutator)
         except OSError as e:
             return {
                 "status": "error", "reason": "clear_failed",
@@ -2199,8 +2217,8 @@ def dismiss_channel(
         except Exception:
             pass
 
-    # Store compare-update owns system-channel serialization.
-    if channel == "system":
+    # Store compare-update owns system/daemon aggregate serialization.
+    if channel in {"system", DAEMON_CHANNEL}:
         result = _dismiss_system_event()
     else:
         result = _clear_current_channel()

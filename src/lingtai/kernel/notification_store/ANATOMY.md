@@ -56,6 +56,10 @@ The Notification Store is the Core-owned persistence boundary for current
 - `PosixNotificationStoreAdapter` maps the Port onto the established
   `.notification/` layout and owns both in-process and native cross-process
   mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-314`).
+  Non-daemon channels remain root mirrors; daemon writes use locked
+  `.notification/daemon/<daemon-id>.json` mini-channels, while snapshot and
+  fingerprint compose a single aggregate view over those files. The sibling
+  `.notification/daemon.json` is a derived run/state report, not an event file.
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
   current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:122-219`,
   `src/lingtai/kernel/notifications.py:704-788`,
@@ -82,14 +86,20 @@ and outer roots inject the Store Port.
 
 ## State
 
-Persistent protocol state is the existing `.notification/<channel>.json`, the
-acknowledgement registry `.notification/large_result_acks.json`, and the
-hook-manifest registry `.notification/hooks.json` (a single non-channel file,
+Persistent protocol state is the existing `.notification/<channel>.json` for
+all non-daemon channels, the derived daemon report
+`.notification/daemon.json`, independent daemon mini-channels
+`.notification/daemon/<daemon-id>.json`, and the aggregate model-visible daemon
+projection, the acknowledgement registry `.notification/large_result_acks.json`,
+and the hook-manifest registry `.notification/hooks.json` (a single non-channel file,
 invisible to snapshot/fingerprint; its `(st_mtime_ns, st_size)` stat is the
 cheap staleness fingerprint Core consults for out-of-band re-seed). The
 Store-owned non-channel stems (`hooks`, `large_result_acks`) are never channels:
 adapters skip them in snapshot/fingerprint and Core validation rejects them as
-hook channels. The adapter holds its workdir, an
+hook channels. The daemon aggregate fingerprint changes for mini-file additions,
+removals, and same-file appends; the root report never participates in that
+fingerprint. Channel/event/ref dismissals use the aggregate CAS before deleting
+mini-files. The adapter holds its workdir, an
 in-process mutex, and a platform-selected mutation lock. Native adapters lock
 `.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
 (`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,

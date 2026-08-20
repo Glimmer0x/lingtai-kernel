@@ -4843,7 +4843,12 @@ class DaemonManager:
         run_path: Path | None = None,
         idempotency_key: str | None = None,
     ) -> bool:
-        """Publish a compact daemon terminal event via .notification/daemon.json.
+        """Publish a compact daemon terminal event via its run mini-channel.
+
+        Events are appended to ``.notification/daemon/<daemon-id>.json`` by the
+        injected Store's existing channel mutation operation. The sibling
+        ``.notification/daemon.json`` is a derived run-state report, never an
+        event source; no fixed event cap is used.
 
         Fired on every terminal status (done / failed / cancelled / timeout) so
         the parent agent can dispatch a daemon and safely go idle: the kernel

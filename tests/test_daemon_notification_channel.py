@@ -11,14 +11,19 @@ batch so a later crossing can alarm again. With no valid threshold configured,
 every terminal notice wakes exactly as before — now carried by the daemon
 channel rather than `system`.
 
-Run-local `daemon.json` / result files remain the terminal source of truth;
-this channel is only the parent-facing wake surface.
+Per-run `daemon.json` / result files remain the terminal source of truth;
+the top-level `.notification/daemon.json` is only a report, and this channel is
+the parent-facing wake surface.
 """
 from __future__ import annotations
 
 import json
+import multiprocessing
+from pathlib import Path
 
 import pytest
+
+from lingtai.kernel.base_agent.messaging import _enqueue_system_notification
 
 from lingtai.kernel.notifications import (
     DAEMON_CHANNEL,
@@ -30,7 +35,7 @@ from lingtai.kernel.notifications import (
 )
 
 from tests._daemon_helpers import make_daemon_agent
-from tests._notification_store_helpers import snapshot_notifications
+from tests._notification_store_helpers import publish_test_payload, snapshot_notifications
 
 
 def _write_threshold(agent, threshold) -> None:
@@ -50,6 +55,34 @@ def _publish(agent, ref_id: str) -> str:
         ref_id=ref_id,
         body=f"Daemon {ref_id} done.",
         idempotency_key=f"daemon-terminal:{ref_id}",
+        skip_if_idempotency_key_exists=True,
+        channel=DAEMON_CHANNEL,
+    )
+
+
+class _ProcessDaemonAgent:
+    def __init__(self, workdir: str):
+        from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+
+        self._working_dir = Path(workdir)
+        self._notification_store = PosixNotificationStoreAdapter(self._working_dir)
+
+    def _log(self, *_args, **_kwargs):
+        return None
+
+    def _wake_nap(self, *_args, **_kwargs):
+        return None
+
+
+def _publish_from_process(workdir: str, ref_id: str, barrier) -> None:
+    agent = _ProcessDaemonAgent(workdir)
+    barrier.wait(timeout=30)
+    _enqueue_system_notification(
+        agent,
+        source="daemon",
+        ref_id=ref_id,
+        body=f"Daemon {ref_id} checkpoint.",
+        idempotency_key=f"daemon-process:{ref_id}",
         skip_if_idempotency_key_exists=True,
         channel=DAEMON_CHANNEL,
     )
@@ -80,6 +113,110 @@ def test_terminal_notice_lands_on_the_daemon_channel_not_system(tmp_path):
     events = snapshot[DAEMON_CHANNEL]["data"]["events"]
     assert [e["ref_id"] for e in events] == ["em-1"]
     assert events[0]["source"] == "daemon"
+
+
+def test_root_report_is_not_a_daemon_event_source(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    root_path = agent._working_dir / ".notification" / "daemon.json"
+    root_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "header": "1 daemon notification",
+        "icon": "🔔",
+        "data": {"events": [{"event_id": "legacy-event", "ref_id": "legacy-run"}]},
+    }
+    root_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    _publish(agent, "new-run")
+
+    snapshot = snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]
+    assert [event["ref_id"] for event in snapshot["data"]["events"]] == ["new-run"]
+    report = json.loads(root_path.read_text(encoding="utf-8"))
+    assert report["kind"] == "daemon_report"
+    assert report["stats"]["run_count"] == 1
+    assert report["stats"]["event_count"] == 1
+    assert report["migration"]["legacy_root"]["data"]["events"][0]["ref_id"] == "legacy-run"
+    assert (agent._working_dir / ".notification" / "daemon" / "new-run.json").is_file()
+
+
+def test_root_report_cannot_reinject_legacy_events_after_mini_dismissal(tmp_path):
+    from lingtai.kernel.meta_block import _commit_notification_fp
+    from lingtai.kernel.notifications import dismiss_channel
+
+    agent = make_daemon_agent(tmp_path)
+    root_path = agent._working_dir / ".notification" / "daemon.json"
+    root_path.parent.mkdir(parents=True, exist_ok=True)
+    root_path.write_text(
+        json.dumps({"data": {"events": [{"ref_id": "legacy-run"}]} }),
+        encoding="utf-8",
+    )
+    _publish(agent, "new-run")
+    _commit_notification_fp(agent)
+
+    result = dismiss_channel(
+        agent, DAEMON_CHANNEL, invoked_by="notification", ref_id="new-run"
+    )
+
+    assert result["status"] == "ok" and result["removed"] == 1
+    assert DAEMON_CHANNEL not in snapshot_notifications(agent._working_dir)
+    assert json.loads(root_path.read_text(encoding="utf-8"))["stats"]["run_count"] == 0
+
+
+def test_daemon_publish_without_id_never_falls_back_to_root_report(tmp_path):
+    from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
+
+    store = PosixNotificationStoreAdapter(tmp_path)
+    with pytest.raises(ValueError, match="daemon_id"):
+        store.publish(
+            DAEMON_CHANNEL,
+            {"data": {"events": [{"ref_id": "unmarked"}]}},
+        )
+    assert not (tmp_path / ".notification" / "daemon.json").exists()
+    assert store.fingerprint(lambda channel: channel == DAEMON_CHANNEL) == ()
+
+
+def test_same_run_retains_more_than_twenty_events_without_fixed_cap(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    for index in range(25):
+        agent._enqueue_system_notification(
+            source="daemon",
+            ref_id="long-run",
+            body=f"checkpoint-{index}",
+            idempotency_key=f"daemon-checkpoint:long-run:{index}",
+            skip_if_idempotency_key_exists=True,
+            channel=DAEMON_CHANNEL,
+        )
+
+    mini = agent._working_dir / ".notification" / "daemon" / "long-run.json"
+    payload = json.loads(mini.read_text(encoding="utf-8"))
+    assert len(payload["data"]["events"]) == 25
+    assert len(snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]["data"]["events"]) == 25
+
+
+def test_independent_processes_append_separate_run_mini_channels(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    processes = [
+        context.Process(
+            target=_publish_from_process,
+            args=(str(tmp_path), ref_id, barrier),
+        )
+        for ref_id in ("process-a", "process-b")
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=30)
+        assert process.exitcode == 0
+
+    mini_dir = tmp_path / ".notification" / "daemon"
+    assert {path.name for path in mini_dir.glob("*.json")} == {
+        "process-a.json", "process-b.json"
+    }
+    refs = {
+        event["ref_id"]
+        for event in snapshot_notifications(tmp_path)[DAEMON_CHANNEL]["data"]["events"]
+    }
+    assert refs == {"process-a", "process-b"}
 
 
 def test_idempotency_key_still_suppresses_a_duplicate_republish(tmp_path):
@@ -724,3 +861,109 @@ def test_quiet_clear_retries_when_the_interface_is_poisoned(tmp_path):
         "the quiet clear must be retried after the interface recovers"
     )
     assert agent.inbox.empty()
+
+
+def test_daemon_ids_use_independent_mini_channels_and_aggregate_without_overwrite(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    _publish(agent, "em-1")
+    _publish(agent, "em-2")
+
+    mini_dir = agent._working_dir / ".notification" / "daemon"
+    assert {path.name for path in mini_dir.glob("*.json")} == {"em-1.json", "em-2.json"}
+    events = snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]["data"]["events"]
+    assert {event["ref_id"] for event in events} == {"em-1", "em-2"}
+    report = json.loads(
+        (agent._working_dir / ".notification" / "daemon.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert report["kind"] == "daemon_report"
+    assert report["stats"]["run_count"] == 2
+    assert report["stats"]["event_count"] == 2
+
+
+def test_same_daemon_checkpoint_and_terminal_append_to_one_mini_file(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    _publish(agent, "em-append")
+    agent._enqueue_system_notification(
+        source="daemon",
+        ref_id="em-append",
+        body="checkpoint",
+        idempotency_key="daemon-checkpoint:em-append:1",
+        skip_if_idempotency_key_exists=True,
+        channel=DAEMON_CHANNEL,
+    )
+    agent._enqueue_system_notification(
+        source="daemon",
+        ref_id="em-append",
+        body="terminal",
+        idempotency_key="daemon-terminal:em-append-followup",
+        skip_if_idempotency_key_exists=True,
+        channel=DAEMON_CHANNEL,
+    )
+
+    mini = agent._working_dir / ".notification" / "daemon" / "em-append.json"
+    assert mini.is_file()
+    payload = json.loads(mini.read_text(encoding="utf-8"))
+    assert [event["body"] for event in payload["data"]["events"]] == [
+        "Daemon em-append done.", "checkpoint", "terminal"
+    ]
+
+
+def test_daemon_fingerprint_notices_add_remove_and_same_file_append(tmp_path):
+    agent = make_daemon_agent(tmp_path)
+    store = agent._notification_store
+    before = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+    _publish(agent, "em-fp")
+    added = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+    assert added != before
+    agent._enqueue_system_notification(
+        source="daemon",
+        ref_id="em-fp",
+        body="append",
+        idempotency_key="daemon-terminal:em-fp-append",
+        skip_if_idempotency_key_exists=True,
+        channel=DAEMON_CHANNEL,
+    )
+    appended = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+    assert appended != added
+    assert store.clear(DAEMON_CHANNEL) is True
+    removed = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+    assert removed != appended
+    assert removed == ()
+
+
+def test_daemon_event_or_ref_dismiss_deletes_only_matching_mini_file(tmp_path):
+    from lingtai.kernel.meta_block import _commit_notification_fp
+    from lingtai.kernel.notifications import dismiss_channel
+
+    agent = make_daemon_agent(tmp_path)
+    first = _publish(agent, "em-remove")
+    _publish(agent, "em-keep")
+    _commit_notification_fp(agent)
+    result = dismiss_channel(
+        agent, DAEMON_CHANNEL, invoked_by="notification", ref_id="em-remove"
+    )
+
+    assert result["status"] == "ok" and result["removed"] == 1
+    mini_dir = agent._working_dir / ".notification" / "daemon"
+    assert not (mini_dir / "em-remove.json").exists()
+    assert (mini_dir / "em-keep.json").exists()
+    assert first
+
+
+def test_daemon_channel_dismiss_refuses_to_delete_late_mini_file(tmp_path):
+    from lingtai.kernel.meta_block import _commit_notification_fp
+    from lingtai.kernel.notifications import dismiss_channel
+
+    agent = make_daemon_agent(tmp_path)
+    _publish(agent, "em-old")
+    _commit_notification_fp(agent)
+    _publish(agent, "em-late")
+
+    result = dismiss_channel(agent, DAEMON_CHANNEL, invoked_by="notification")
+    assert result["status"] == "error"
+    assert result["reason"] == "stale_channel_version"
+    mini_dir = agent._working_dir / ".notification" / "daemon"
+    assert (mini_dir / "em-old.json").exists()
+    assert (mini_dir / "em-late.json").exists()

@@ -494,12 +494,12 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
     """Publish the terminal event directly via the notification store Port.
 
     Mirrors ``DaemonManager._publish_daemon_notification``'s body/text
-    shape and ``_enqueue_system_notification``'s payload mutator so
-    ``.notification/daemon.json`` looks identical regardless of whether the
-    in-process callback or this detached supervisor produced it — the
-    fresh-manager reconciliation path and the wire's rendering both already
-    depend on that shape, and the parent's alarm-threshold attention mask
-    reads the same ``data.daemon`` batch state either way.
+    shape and ``_enqueue_system_notification``'s payload mutator. The typed
+    Store routes this run id to
+    ``.notification/daemon/<daemon-id>.json``; the sibling
+    ``.notification/daemon.json`` is only a derived run-state report and is not
+    part of notification delivery. The parent's alarm-threshold attention mask
+    reads the mini-file aggregate's ``data.daemon`` state.
     """
     from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
     from lingtai.kernel.notification_store import UNCONDITIONAL
@@ -580,7 +580,6 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
             "idempotency_key": idempotency_key,
         }
         events.append(event)
-        events = events[-20:]
         envelope_priority = (
             "high" if any(
                 isinstance(ev, dict) and (ev.get("severity") == "high" or ev.get("priority") == "high")
@@ -596,10 +595,12 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
                 "events": events,
                 # Same durable batch state the in-process publisher stamps, so
                 # the parent's attention mask behaves identically regardless of
-                # which process produced the terminal notice.
+                # which process produced the terminal notice. The run id is
+                # consumed by the typed Store adapter when it writes the mini-file.
                 DAEMON_CHANNEL: next_daemon_batch_state(
                     current, daemon_alarm_threshold(parent_working_dir)
                 ),
+                "daemon_id": em_id,
             },
         }
         return payload, True, event_id
