@@ -315,7 +315,7 @@ class LocalCommandCore:
                 with path.open("r", encoding="utf-8") as handle:
                     data = json.load(handle)
                 return data if isinstance(data, dict) else {}
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                 return {}
 
         def count_matching(root: Path, pattern: str) -> int:

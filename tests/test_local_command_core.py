@@ -218,6 +218,33 @@ def test_kanban_snapshot_preserves_shared_dashboard_values(tmp_path: Path) -> No
     assert data["addon_status"] == {"telegram": False, "feishu": True}
 
 
+def test_kanban_snapshot_survives_sibling_with_non_utf8_agent_json(
+    tmp_path: Path,
+) -> None:
+    # A sibling agent dir under the same lingtai root can carry a
+    # present-but-non-UTF-8-decodable .agent.json (e.g. mid-write, or
+    # corrupted). Kanban collection walks every sibling for the "all
+    # agents" roster and must degrade that one entry rather than crash.
+    (tmp_path / "init.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".agent.json").write_text(
+        json.dumps({"agent_id": "agent-1"}), encoding="utf-8"
+    )
+    sibling = tmp_path.parent / "sibling-agent"
+    sibling.mkdir()
+    (sibling / ".agent.json").write_bytes(b"\xff\xfe{")
+
+    try:
+        data = LocalCommandCore(tmp_path).collect_kanban_data()
+
+        assert data is not None
+        assert data["current_agent"] == tmp_path.name
+        assert data["all_agents"]["sibling-agent"]["state"] == "?"
+        assert data["all_agents"]["sibling-agent"]["model"] == "?"
+    finally:
+        (sibling / ".agent.json").unlink()
+        sibling.rmdir()
+
+
 def test_service_injects_one_workdir_bound_core_for_every_account(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
