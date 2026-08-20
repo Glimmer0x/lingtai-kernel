@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 import pytest
 
+import lingtai.agent as agent_module
 from lingtai.agent import Agent
 from lingtai.services.mcp_registry import (
     REGISTRY_FILENAME,
@@ -572,6 +574,199 @@ def test_loader_skips_unregistered_init_mcp(tmp_path, caplog):
     # We can't easily intercept the kernel logger here, but the registry stays empty
     # and no MCP client should have been added.
     # (The legacy mcp/servers.json path is also untouched.)
+
+
+def _agent_source_root() -> str:
+    """The source root the curated pin is expected to prepend: the parent
+    of the `lingtai` package directory that `lingtai.agent` itself was
+    imported from in this test process."""
+    return str(Path(agent_module.__file__).resolve().parent.parent)
+
+
+def test_curated_init_mcp_command_pinned_to_runtime_executable(tmp_path, monkeypatch):
+    """A registered init.json MCP whose registry record has source ==
+    "lingtai-curated" must launch under this Agent's own sys.executable,
+    never the (possibly stale, prior-venv) command stored in init.json —
+    otherwise the spawned MCP can import a different `lingtai` source than
+    the running kernel. A non-curated registry source is left unchanged."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+
+    stale_python = "/opt/lingtai/venv-main-20250101/bin/python"
+    registry_lines = [
+        {
+            "name": "telegram",
+            "summary": "curated",
+            "transport": "stdio",
+            "command": stale_python,
+            "args": ["-m", "lingtai.mcp_servers.telegram"],
+            "source": "lingtai-curated",
+        },
+        {
+            "name": "custom-tool",
+            "summary": "third party",
+            "transport": "stdio",
+            "command": stale_python,
+            "args": ["-m", "some.other.tool"],
+            "source": "user",
+        },
+    ]
+    (workdir / "mcp_registry.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in registry_lines) + "\n"
+    )
+
+    init = {
+        "mcp": {
+            "telegram": {
+                "type": "stdio",
+                "command": stale_python,
+                "args": ["-m", "lingtai.mcp_servers.telegram"],
+                "env": {"FOO": "bar"},
+            },
+            "custom-tool": {
+                "type": "stdio",
+                "command": stale_python,
+                "args": ["-m", "some.other.tool"],
+                "env": {"BAZ": "qux"},
+            },
+        },
+    }
+    (workdir / "init.json").write_text(json.dumps(init))
+
+    spawned = {}
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        spawned[env.get("LINGTAI_MCP_NAME")] = {
+            "command": command, "args": args, "env": env,
+        }
+        return []  # no tools to register
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+
+    # Curated: command pinned to the running interpreter; args/env preserved.
+    assert spawned["telegram"]["command"] == sys.executable
+    assert spawned["telegram"]["args"] == ["-m", "lingtai.mcp_servers.telegram"]
+    assert spawned["telegram"]["env"]["FOO"] == "bar"
+
+    # Non-curated: init.json command is launched verbatim, unchanged.
+    assert spawned["custom-tool"]["command"] == stale_python
+    assert spawned["custom-tool"]["args"] == ["-m", "some.other.tool"]
+    assert spawned["custom-tool"]["env"]["BAZ"] == "qux"
+
+
+def test_curated_init_mcp_pythonpath_pinned_to_agent_source_root(tmp_path, monkeypatch):
+    """Interpreter pinning alone is not enough: the MCP stdio transport's
+    default env allowlist excludes PYTHONPATH, so a curated child spawned
+    on the right sys.executable could still import `lingtai` from that
+    interpreter's own site-packages instead of the source this Agent
+    actually runs. The loader must also prepend this Agent's own source
+    root to the child's PYTHONPATH — deduplicated against, and preserving,
+    any PYTHONPATH already configured on the entry. A non-curated entry's
+    PYTHONPATH must be left completely alone, and neither init.json nor
+    the registry file may be rewritten on disk."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+
+    stale_python = "/opt/lingtai/venv-main-20250101/bin/python"
+    stale_site_packages = "/opt/lingtai/venv-main-20250101/lib/site-packages"
+    noncurated_pythonpath = "/opt/some/other/tool/lib"
+
+    registry_lines = [
+        {
+            "name": "telegram",
+            "summary": "curated",
+            "transport": "stdio",
+            "command": stale_python,
+            "args": ["-m", "lingtai.mcp_servers.telegram"],
+            "source": "lingtai-curated",
+        },
+        {
+            "name": "custom-tool",
+            "summary": "third party",
+            "transport": "stdio",
+            "command": stale_python,
+            "args": ["-m", "some.other.tool"],
+            "source": "user",
+        },
+    ]
+    registry_text = "\n".join(json.dumps(r) for r in registry_lines) + "\n"
+    registry_path = workdir / "mcp_registry.jsonl"
+    registry_path.write_text(registry_text)
+
+    init = {
+        "mcp": {
+            # PYTHONPATH already contains the expected root, in the middle
+            # of an otherwise-stale path list — must be deduplicated to a
+            # single leading entry, not appended a second time.
+            "telegram": {
+                "type": "stdio",
+                "command": stale_python,
+                "args": ["-m", "lingtai.mcp_servers.telegram"],
+                "env": {
+                    "FOO": "bar",
+                    "PYTHONPATH": os.pathsep.join(
+                        [stale_site_packages, _agent_source_root()]
+                    ),
+                },
+            },
+            "custom-tool": {
+                "type": "stdio",
+                "command": stale_python,
+                "args": ["-m", "some.other.tool"],
+                "env": {"BAZ": "qux", "PYTHONPATH": noncurated_pythonpath},
+            },
+        },
+    }
+    init_text = json.dumps(init)
+    init_path = workdir / "init.json"
+    init_path.write_text(init_text)
+
+    spawned = {}
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        spawned[env.get("LINGTAI_MCP_NAME")] = {
+            "command": command, "args": args, "env": env,
+        }
+        return []
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    agent = Agent(
+        service=make_mock_service(),
+        agent_name="test",
+        working_dir=workdir,
+        capabilities={"mcp": {}},
+    )
+
+    expected_root = _agent_source_root()
+
+    # Curated: source root is first, the stale entry survives deduplicated
+    # (not duplicated, not dropped), original order otherwise preserved.
+    telegram_pythonpath = spawned["telegram"]["env"]["PYTHONPATH"].split(os.pathsep)
+    assert telegram_pythonpath == [expected_root, stale_site_packages]
+    assert spawned["telegram"]["env"]["FOO"] == "bar"
+    assert spawned["telegram"]["command"] == sys.executable
+
+    # Non-curated: PYTHONPATH is untouched — no pin, no reordering.
+    assert spawned["custom-tool"]["env"]["PYTHONPATH"] == noncurated_pythonpath
+    assert spawned["custom-tool"]["command"] == stale_python
+
+    # The stored retry cfg carries the same pin, so `_retry_failed_mcps`
+    # respawns a dead curated child on the same interpreter and source root.
+    retry_cfg = agent._mcp_init_specs["telegram"]["cfg"]
+    assert retry_cfg["command"] == sys.executable
+    assert retry_cfg["env"]["PYTHONPATH"].split(os.pathsep)[0] == expected_root
+
+    # Neither init.json nor the registry is mutated on disk.
+    assert init_path.read_text() == init_text
+    assert registry_path.read_text() == registry_text
 
 
 # ---------------------------------------------------------------------------

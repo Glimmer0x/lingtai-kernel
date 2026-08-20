@@ -799,6 +799,20 @@ class Agent(BaseAgent):
         2. ``init.json`` top-level ``mcp`` field — gated by the per-agent
            registry at ``working_dir/mcp_registry.jsonl``. An init.json mcp
            entry whose name is not in the registry is skipped with a warning.
+           If the registry record's ``source`` is exactly ``"lingtai-curated"``
+           (imap/telegram/feishu/wechat/whatsapp/cloud_mail), the spawned
+           ``command`` is overridden to this Agent's own ``sys.executable``
+           regardless of what init.json stored, and the child's ``PYTHONPATH``
+           gets the root of this Agent's own currently-imported ``lingtai``
+           package prepended — a stale command (and a stale or absent
+           ``PYTHONPATH``) frozen from a prior venv would otherwise let the
+           child import a different ``lingtai`` source than the running
+           kernel, even under the same interpreter, since the MCP stdio
+           transport does not inherit ``PYTHONPATH`` from the parent process.
+           Any ``PYTHONPATH`` already configured on the entry is kept after
+           the prepended root (deduplicated), and every other env key and all
+           args are preserved verbatim. Neither init.json nor
+           mcp_registry.jsonl is rewritten.
 
         Both sources accept stdio and HTTP entries:
 
@@ -824,9 +838,19 @@ class Agent(BaseAgent):
         and re-spawn MCPs whose subprocess died (issue #34).
         """
         import json
+        import os
+        import sys
 
         from lingtai.kernel.logging import get_logger
         logger = get_logger()
+
+        # The root directory containing this Agent's own currently-imported
+        # `lingtai` package (e.g. `<checkout>/src` for an editable/source
+        # checkout, or a venv's site-packages for an installed wheel).
+        # Curated init.json entries get this prepended to their child
+        # PYTHONPATH below — see the docstring note on why the interpreter
+        # pin alone is not enough.
+        curated_source_root = str(Path(__file__).resolve().parent.parent)
 
         # Per-name tracking of init.json MCP launches. Populated below and
         # consulted by `_retry_failed_mcps`. Reset on every load so that
@@ -918,22 +942,45 @@ class Agent(BaseAgent):
         try:
             from .services.mcp_registry import read_registry
             registered, _problems = read_registry(self._working_dir)
-            registered_names = {r["name"] for r in registered}
+            registered_sources = {r["name"]: r.get("source") for r in registered}
         except Exception as e:
             logger.warning("[%s] mcp registry read failed: %s",
                            self.agent_name, e)
-            registered_names = set()
+            registered_sources = {}
 
         for name, cfg in init_mcp.items():
             if not isinstance(cfg, dict):
                 continue
-            if name not in registered_names:
+            if name not in registered_sources:
                 logger.warning(
                     "[%s] init.json mcp %r: skipped — not in mcp_registry.jsonl. "
                     "Register it first (see mcp-manual skill).",
                     self.agent_name, name,
                 )
                 continue
+            # Curated MCPs (imap/telegram/feishu/wechat/...) must run under
+            # the same interpreter AND the same lingtai source as this Agent,
+            # never a command (or import path) frozen into init.json from a
+            # prior venv. Interpreter alone is not enough: the MCP stdio
+            # transport's default env allowlist does not include PYTHONPATH,
+            # so a curated child spawned on this Agent's own sys.executable
+            # could still resolve `lingtai` from that interpreter's own
+            # site-packages instead of the source this Agent actually
+            # imported. Registry membership is the "curated" signal
+            # (mcp_catalog.json's `source`), not the init.json command string.
+            if (registered_sources.get(name) == "lingtai-curated"
+                    and isinstance(cfg.get("command"), str)):
+                existing_env = cfg.get("env") or {}
+                existing_pythonpath = existing_env.get("PYTHONPATH", "")
+                kept = [
+                    p for p in existing_pythonpath.split(os.pathsep)
+                    if p and p != curated_source_root
+                ]
+                pinned_env = {
+                    **existing_env,
+                    "PYTHONPATH": os.pathsep.join([curated_source_root, *kept]),
+                }
+                cfg = {**cfg, "command": sys.executable, "env": pinned_env}
             client = _spawn(name, cfg, source="init.json:mcp")
             # Record every registered init.json mcp entry — failures (client
             # is None) and successes alike — so `_retry_failed_mcps` can
