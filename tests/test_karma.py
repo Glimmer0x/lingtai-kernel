@@ -5,7 +5,7 @@ from lingtai.tools.registry import INTRINSICS as _TEST_INTRINSICS
 import threading
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -194,60 +194,171 @@ class TestCPRLingtai:
         assert llm_config["provider"] == "mock"
         assert llm_config["model"] == "test-model"
 
-    def test_cpr_agent_hook_returns_truthy(self, tmp_path):
-        """_cpr_agent now launches the target as a detached subprocess and
-        returns a truthy sentinel (not a reconstructed Agent). The test
-        validates the hook fires and yields a non-None signal — actual
-        process spawning is mocked out so no real lingtai child is forked."""
-        import json as _json
-        from lingtai.agent import Agent
-        from unittest.mock import patch
-
+    @staticmethod
+    def _cpr_service():
         svc = MagicMock()
         svc.create_session.return_value = MagicMock()
         svc.provider = "mock"
         svc.model = "test-model"
         svc._base_url = None
+        return svc
 
-        agents_dir = tmp_path / "agents"
-        agents_dir.mkdir()
-        target = Agent(svc, working_dir=agents_dir / "bobbob000001",
-                       agent_name="bob")
-        target_dir = str(target.working_dir)
+    @staticmethod
+    def _stage_cpr_target(target: Path) -> None:
+        """Create the non-human target shape needed to reach CPR's watchdog."""
+        import json
 
-        # _cpr_agent reads init.json before launching; Agent.__init__ doesn't
-        # persist it, so the test stages a minimal one.
-        (target.working_dir / "init.json").write_text(_json.dumps({
+        target.mkdir(parents=True)
+        (target / ".agent.json").write_text(json.dumps({
+            "agent_id": "target",
+            "admin": {},
+        }), encoding="utf-8")
+        (target / "init.json").write_text(json.dumps({
             "manifest": {
-                "agent_name": "bob",
+                "agent_name": "target",
                 "llm": {"provider": "mock", "model": "test-model"},
             },
-        }))
+        }), encoding="utf-8")
+
+    @staticmethod
+    def _cpr_reviver(tmp_path, svc):
+        from lingtai.agent import Agent
 
         reviver_dir = tmp_path / "reviver"
         reviver_dir.mkdir()
-        reviver = Agent(svc, working_dir=reviver_dir / "admin000001",
-                        agent_name="admin", admin={"karma": True})
+        return Agent(
+            svc,
+            working_dir=reviver_dir / "admin000001",
+            agent_name="admin",
+            admin={"karma": True},
+        )
 
-        target._workdir_lease.release()
-
-        # Stub Popen so no real subprocess is forked. Also short-circuit
-        # the venv resolver, which otherwise probes the runtime via
-        # subprocess.run (no real venv available in the test env).
-        # _cpr_agent imports these inside the function body, so the patch
-        # targets the source module rather than lingtai.agent.
+    def test_cpr_agent_hook_returns_truthy(self, tmp_path):
+        """A confirmed fresh heartbeat keeps the established truthy path."""
+        target = tmp_path / "agents" / "bobbob000001"
+        self._stage_cpr_target(target)
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
         fake_proc = MagicMock()
         fake_proc.pid = 99999
-        from pathlib import Path as _Path
-        with patch("subprocess.Popen", return_value=fake_proc),\
-             patch("lingtai.venv_resolve.resolve_venv",
-                   return_value=_Path("/fake/venv")),\
-             patch("lingtai.venv_resolve.venv_python",
-                   return_value="/fake/venv/bin/python"):
-            resuscitated = reviver._cpr_agent(target_dir)
 
-        assert resuscitated is not None
-        assert resuscitated  # truthy sentinel
+        # Stub Popen and venv resolution so no child process or venv probe runs.
+        # Patching the Core observation at its imported source makes this a
+        # confirmed-heartbeat test even though the staged target is non-human.
+        with (
+            patch.object(reviver, "_log") as log,
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
+            patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
+            patch("lingtai.kernel.agent_presence.observe_alive", return_value=True),
+        ):
+            resuscitated = reviver._cpr_agent(str(target))
+
+        assert resuscitated is True
+        assert fake_proc.poll.call_count == 0
+        log.assert_any_call("cpr_alive", target=str(target), pid=99999)
+
+    def test_cpr_agent_returns_unconfirmed_running_child(self, tmp_path):
+        """A live child with delayed heartbeat is not a false CPR failure."""
+        target = tmp_path / "agents" / "delayed00001"
+        self._stage_cpr_target(target)
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        fake_proc.poll.return_value = None
+        log_path = target / "logs" / "cpr_relaunch.log"
+
+        # The fake clock enters one poll iteration then reaches the 10-second
+        # boundary. The final values drive the required final observation.
+        with (
+            patch.object(reviver, "_log") as log,
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
+            patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
+            patch("lingtai.kernel.agent_presence.observe_alive", return_value=False) as observe_alive,
+            patch("time.time", side_effect=[0.0, 0.0, 0.0, 10.0, 10.0]),
+            patch("time.sleep"),
+        ):
+            resuscitated = reviver._cpr_agent(str(target))
+
+        assert resuscitated is True
+        assert observe_alive.call_count == 2
+        assert fake_proc.poll.call_count == 2
+        log.assert_any_call(
+            "cpr_launch_unconfirmed",
+            target=str(target),
+            pid=99999,
+            log=str(log_path),
+        )
+        assert all(call.args[0] != "cpr_timeout" for call in log.call_args_list)
+
+    @pytest.mark.parametrize("exit_code", [0, 23])
+    def test_cpr_agent_reports_early_exit_before_heartbeat(self, tmp_path, exit_code):
+        """Any observed child exit, including zero, remains a launch failure."""
+        target = tmp_path / "agents" / "exited000001"
+        self._stage_cpr_target(target)
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        fake_proc.poll.return_value = exit_code
+        log_path = target / "logs" / "cpr_relaunch.log"
+
+        with (
+            patch.object(reviver, "_log") as log,
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
+            patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
+            patch("lingtai.kernel.agent_presence.observe_alive", return_value=False),
+            patch("time.time", side_effect=[0.0, 0.0, 0.0]),
+        ):
+            result = reviver._cpr_agent(str(target))
+
+        assert result["error"] is True
+        assert result["exit_code"] == exit_code
+        assert result["log"] == str(log_path)
+        assert f"exit code {exit_code}" in result["message"]
+        assert "Last log output:" in result["message"]
+        log.assert_any_call(
+            "cpr_failed",
+            target=str(target),
+            pid=99999,
+            exit_code=exit_code,
+            log=str(log_path),
+        )
+
+    def test_cpr_agent_reports_exit_observed_at_confirmation_deadline(self, tmp_path):
+        """The final status poll also classifies a just-exited child as failed."""
+        target = tmp_path / "agents" / "deadline00001"
+        self._stage_cpr_target(target)
+        reviver = self._cpr_reviver(tmp_path, self._cpr_service())
+        fake_proc = MagicMock()
+        fake_proc.pid = 99999
+        fake_proc.poll.side_effect = [None, 0]
+        log_path = target / "logs" / "cpr_relaunch.log"
+
+        with (
+            patch.object(reviver, "_log") as log,
+            patch("subprocess.Popen", return_value=fake_proc),
+            patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
+            patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
+            patch("lingtai.kernel.agent_presence.observe_alive", return_value=False) as observe_alive,
+            patch("time.time", side_effect=[0.0, 0.0, 0.0, 10.0, 10.0]),
+            patch("time.sleep"),
+        ):
+            result = reviver._cpr_agent(str(target))
+
+        assert result["error"] is True
+        assert result["exit_code"] == 0
+        assert result["log"] == str(log_path)
+        assert observe_alive.call_count == 2
+        assert fake_proc.poll.call_count == 2
+        log.assert_any_call(
+            "cpr_failed",
+            target=str(target),
+            pid=99999,
+            exit_code=0,
+            log=str(log_path),
+        )
+        assert all(call.args[0] != "cpr_launch_unconfirmed" for call in log.call_args_list)
 
 
 class TestSelfSleepPendingNotificationsGuard:
