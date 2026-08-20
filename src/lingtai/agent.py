@@ -800,6 +800,30 @@ class Agent(BaseAgent):
            registry at ``working_dir/mcp_registry.jsonl``. An init.json mcp
            entry whose name is not in the registry is skipped with a warning.
 
+           If the registry record's ``source`` is exactly ``"lingtai-curated"``
+           (imap/telegram/feishu/wechat/whatsapp/cloud_mail), the entry's
+           ``init.json`` config is *activation-only*: its presence activates
+           the addon, and any non-launch ``env`` it carries (account/config
+           keys such as ``LINGTAI_IMAP_CONFIG``) is passed through. The
+           complete launcher — transport/``type``, interpreter, module
+           ``args``, and the ``lingtai`` import source — is instead derived
+           fresh from this Agent's own currently-imported ``mcp_catalog.json``
+           (``services.mcp_registry.load_catalog``) and this Agent's own
+           ``sys.executable`` / source root, by ``_resolve_curated_launch``.
+           A stale ``command``/``args``/``type`` or ``env.PYTHONPATH`` frozen
+           into init.json from a prior venv is never read for the launch —
+           each is a read-compatible legacy field, ignored with a bounded
+           warning if present, never rewritten and never migrated on disk.
+           This is necessary, not merely defense in depth: the MCP stdio
+           transport does not inherit ``PYTHONPATH`` from the parent process,
+           so even the right interpreter could otherwise still resolve
+           ``lingtai`` from that interpreter's own site-packages instead of
+           the source this Agent actually imported. If the catalog cannot
+           supply a safe stdio launcher for a name registered as curated
+           (missing entry, non-stdio transport, malformed ``args`` — e.g. a
+           kernel/registry mismatch), the entry is skipped with a warning
+           rather than falling back to any stale launcher field.
+
         Both sources accept stdio and HTTP entries:
 
             {
@@ -824,9 +848,78 @@ class Agent(BaseAgent):
         and re-spawn MCPs whose subprocess died (issue #34).
         """
         import json
+        import sys
 
         from lingtai.kernel.logging import get_logger
         logger = get_logger()
+
+        # The root directory containing this Agent's own currently-imported
+        # `lingtai` package (e.g. `<checkout>/src` for an editable/source
+        # checkout, or a venv's site-packages for an installed wheel). A
+        # curated init.json entry's child gets this as its *entire*
+        # PYTHONPATH below (see `_resolve_curated_launch`) — the running
+        # kernel's own source, never whatever init.json stored.
+        curated_source_root = str(Path(__file__).resolve().parent.parent)
+
+        def _resolve_curated_launch(name: str, cfg: dict) -> dict | None:
+            """Build the complete stdio launcher for a curated init.json mcp
+            entry from the current kernel's packaged ``mcp_catalog.json``.
+
+            Returns the effective launch cfg, or ``None`` if the catalog
+            cannot supply a safe launcher for ``name`` — the caller must
+            skip the entry rather than fall back to any field in ``cfg``.
+
+            ``cfg`` remains the activation/account config: only its ``env``
+            (minus the legacy ``PYTHONPATH`` key, which this pin owns) is
+            carried into the effective launch. ``command``, ``args``, and
+            ``type`` are read-compatible legacy inputs — present in older
+            configs, or copy-pasted from the addon docs' worked example —
+            and are ignored here with a bounded warning, never rewritten and
+            never migrated on disk.
+            """
+            from .services.mcp_registry import load_catalog
+            entry = load_catalog().get(name)
+            if not isinstance(entry, dict) or entry.get("transport") != "stdio":
+                logger.warning(
+                    "[%s] init.json mcp %r: registered source is "
+                    "lingtai-curated but mcp_catalog.json has no stdio "
+                    "entry for it — skipping rather than trusting a stale "
+                    "launcher. Update the kernel package.",
+                    self.agent_name, name,
+                )
+                return None
+            args = entry.get("args")
+            if not isinstance(args, list) or not args or not all(isinstance(a, str) for a in args):
+                logger.warning(
+                    "[%s] init.json mcp %r: mcp_catalog.json's stdio entry "
+                    "has malformed args — skipping rather than trusting a "
+                    "stale launcher. Update the kernel package.",
+                    self.agent_name, name,
+                )
+                return None
+
+            legacy_fields = [k for k in ("command", "args", "type") if k in cfg]
+            existing_env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+            if "PYTHONPATH" in existing_env:
+                legacy_fields.append("env.PYTHONPATH")
+            if legacy_fields:
+                logger.warning(
+                    "[%s] init.json mcp %r: legacy launcher field(s) %s "
+                    "ignored — this lingtai-curated entry's launcher (type, "
+                    "interpreter, args, import source) always comes from "
+                    "the running kernel's own mcp_catalog.json, never from "
+                    "init.json. Only non-launch env/account config passes "
+                    "through. See reference/curated-addons.md.",
+                    self.agent_name, name, ", ".join(legacy_fields),
+                )
+
+            account_env = {k: v for k, v in existing_env.items() if k != "PYTHONPATH"}
+            return {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": list(args),
+                "env": {**account_env, "PYTHONPATH": curated_source_root},
+            }
 
         # Per-name tracking of init.json MCP launches. Populated below and
         # consulted by `_retry_failed_mcps`. Reset on every load so that
@@ -918,22 +1011,34 @@ class Agent(BaseAgent):
         try:
             from .services.mcp_registry import read_registry
             registered, _problems = read_registry(self._working_dir)
-            registered_names = {r["name"] for r in registered}
+            registered_sources = {r["name"]: r.get("source") for r in registered}
         except Exception as e:
             logger.warning("[%s] mcp registry read failed: %s",
                            self.agent_name, e)
-            registered_names = set()
+            registered_sources = {}
 
         for name, cfg in init_mcp.items():
             if not isinstance(cfg, dict):
                 continue
-            if name not in registered_names:
+            if name not in registered_sources:
                 logger.warning(
                     "[%s] init.json mcp %r: skipped — not in mcp_registry.jsonl. "
                     "Register it first (see mcp-manual skill).",
                     self.agent_name, name,
                 )
                 continue
+            # Curated MCPs (imap/telegram/feishu/wechat/...) must run the
+            # exact launcher the running kernel's own catalog defines, never
+            # whatever command/args/type/PYTHONPATH init.json happens to
+            # store — see `_resolve_curated_launch` and the docstring above.
+            # Registry membership is the "curated" signal (mcp_catalog.json's
+            # `source`), not the init.json command string.
+            if registered_sources.get(name) == "lingtai-curated":
+                cfg = _resolve_curated_launch(name, cfg)
+                if cfg is None:
+                    # Fail loud/skip: do not spawn and do not track for
+                    # retry — there is no safe launcher to retry with.
+                    continue
             client = _spawn(name, cfg, source="init.json:mcp")
             # Record every registered init.json mcp entry — failures (client
             # is None) and successes alike — so `_retry_failed_mcps` can

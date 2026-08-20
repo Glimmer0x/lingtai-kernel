@@ -8,7 +8,8 @@ import from here directly.
 
 Contents: registry record schema (``validate_record`` / ``validate_registry_line``),
 JSONL registry read/append (``read_registry`` / ``_append_record``), the
-kernel-shipped catalog loader (``_load_catalog``), the secret-safe identity
+kernel-shipped catalog loader (``_load_catalog``, publicly exposed as
+``load_catalog`` for ``agent.py``'s curated-launcher resolution), the secret-safe identity
 projection (``read_identities`` and the ``IDENTITY_SAFE_ACCOUNT_KEYS`` allowlist),
 boot-time addon decompression (``decompress_addons``), and the system-prompt XML
 renderer (``_build_registry_xml``).
@@ -61,6 +62,21 @@ def _load_catalog() -> dict[str, dict]:
         if not name.startswith("_") and isinstance(record, dict)
     }
     return _CATALOG_CACHE
+
+
+def load_catalog() -> dict[str, dict]:
+    """Public read-only accessor for the kernel-shipped MCP catalog.
+
+    Returns a fresh deep copy of the cached catalog on every call so a
+    caller can never mutate ``_CATALOG_CACHE`` by editing the returned dict
+    or a nested list/dict inside a record. This is the authoritative source
+    for a curated (``source == "lingtai-curated"``) main-agent ``init.json``
+    entry's complete stdio launcher (transport, module args) — the running
+    Agent owns the interpreter and import source itself; see
+    ``Agent._load_mcp_from_workdir``.
+    """
+    import copy
+    return copy.deepcopy(_load_catalog())
 
 
 # ---------------------------------------------------------------------------
