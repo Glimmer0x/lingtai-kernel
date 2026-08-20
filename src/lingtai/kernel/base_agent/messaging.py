@@ -168,6 +168,11 @@ def _enqueue_system_notification(
         if isinstance(extra, dict):
             event.update(extra)
         events.append(event)
+        # Daemon events live in their per-run mini-file and must remain
+        # unbounded for that run. Every other legacy single-file channel keeps
+        # its established bounded mirror.
+        if channel != DAEMON_CHANNEL:
+            events = events[-20:]
 
         # Envelope priority is high if this call asked for it, or if any
         # retained event carries a high severity/priority field.
