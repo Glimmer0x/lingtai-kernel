@@ -2680,6 +2680,8 @@ class TelegramManager:
                 snapshot["endpoint"] = llm_extra["endpoint"]
             if "thinking" in llm_extra:
                 snapshot["thinking"] = llm_extra["thinking"]
+            if "service_tier" in llm_extra:
+                snapshot["service_tier"] = llm_extra["service_tier"]
         try:
             snapshot["device_short_name"] = socket.gethostname()
         except (OSError, ValueError):
@@ -2918,6 +2920,9 @@ class TelegramManager:
                 thinking = None
         if isinstance(thinking, str) and thinking.strip():
             out["thinking"] = thinking.strip()
+        service_tier = llm.get("service_tier")
+        if isinstance(service_tier, str) and service_tier.strip():
+            out["service_tier"] = service_tier.strip()
         return out or None
 
     def _task_card_agent_lifecycle_status(self) -> str | None:

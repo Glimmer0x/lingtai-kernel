@@ -691,6 +691,13 @@ class TaskCardEventProjection:
         thinking = metadata.get("thinking")
         if isinstance(thinking, str) and thinking.strip() and len(thinking.strip()) <= 48:
             session_parts.append(thinking.strip())
+        service_tier = metadata.get("service_tier")
+        if (
+            isinstance(service_tier, str)
+            and service_tier.strip()
+            and len(service_tier.strip()) <= 48
+        ):
+            session_parts.append(f"tier {service_tier.strip()}")
         endpoint = metadata.get("endpoint")
         if isinstance(endpoint, str) and endpoint.strip() and len(endpoint.strip()) <= 96:
             session_parts.append(f"@{endpoint.strip()}")

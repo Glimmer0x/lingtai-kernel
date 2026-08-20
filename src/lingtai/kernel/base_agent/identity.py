@@ -70,7 +70,14 @@ def _update_identity(agent) -> None:
 #: field is enough to break the contract, so anything outside this set is
 #: dropped silently. ``base_url`` is included because operators rely on it
 #: to disambiguate self-hosted endpoints from upstream providers.
-_LLM_PUBLIC_KEYS = ("provider", "model", "base_url", "api_compat", "context_limit")
+_LLM_PUBLIC_KEYS = (
+    "provider",
+    "model",
+    "base_url",
+    "api_compat",
+    "context_limit",
+    "service_tier",
+)
 
 
 def _build_manifest(agent) -> dict:
@@ -150,6 +157,19 @@ def _safe_llm_from_service(agent) -> dict:
     api_compat = _provider_default_from_service(service, "api_compat")
     if isinstance(api_compat, str) and api_compat:
         llm["api_compat"] = api_compat
+
+    # The native Codex adapter always uses the Responses API. Its configured
+    # service tier is safe runtime identity metadata; other adapters do not
+    # consume this option and must not claim one in presentation surfaces.
+    provider = llm.get("provider")
+    if isinstance(provider, str) and provider.lower() in {
+        "codex",
+        "codex-pool",
+        "codex_pool",
+    }:
+        service_tier = _provider_default_from_service(service, "service_tier")
+        if isinstance(service_tier, str) and service_tier.strip():
+            llm["service_tier"] = service_tier.strip()
 
     return llm
 
