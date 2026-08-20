@@ -112,15 +112,26 @@ def _sends(account):
 
 # ---------------------------------------------------------------------------
 # ``_task_card_active_seconds`` — "active since last API call" (Jason
-# 2026-08-16): prefers ``runtime.last_api_call_at``, falls back to
-# ``runtime.last_progress_at`` for older status files.
+# 2026-08-16): prefers the Agent record's ``health.last_api_call_at``, falls
+# back to ``health.last_progress_at`` for records that predate that field.
 # ---------------------------------------------------------------------------
 
-def _write_status(tmp_path, runtime):
+def _write_agent_record(tmp_path, *, state, last_progress_at=None, last_api_call_at=None):
     import json
-    (tmp_path / ".status.json").write_text(
-        json.dumps({"runtime": runtime}), encoding="utf-8"
-    )
+    health = {}
+    if last_progress_at is not None:
+        health["last_progress_at"] = last_progress_at
+    if last_api_call_at is not None:
+        health["last_api_call_at"] = last_api_call_at
+    payload = {
+        "schema": "lingtai.agent_record/v1", "schema_version": 1,
+        "generated_at": "2026-08-20T00:00:00Z",
+        "session": {"state": state},
+        "health": health,
+    }
+    path = tmp_path / "system" / "agent_record.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_task_card_active_seconds_prefers_last_api_call_at(tmp_path):
@@ -128,11 +139,10 @@ def test_task_card_active_seconds_prefers_last_api_call_at(tmp_path):
     from lingtai.kernel.state import AgentState
 
     now = time.time()
-    _write_status(tmp_path, {
-        "state": AgentState.ACTIVE.value,
-        "last_progress_at": now - 2.0,
-        "last_api_call_at": now - 10.0,
-    })
+    _write_agent_record(
+        tmp_path, state=AgentState.ACTIVE.value,
+        last_progress_at=now - 2.0, last_api_call_at=now - 10.0,
+    )
     manager, _ = _manager(tmp_path)
     age = manager._task_card_active_seconds()
     assert age is not None and 9.0 <= age <= 11.0
@@ -143,10 +153,7 @@ def test_task_card_active_seconds_falls_back_to_last_progress_at(tmp_path):
     from lingtai.kernel.state import AgentState
 
     now = time.time()
-    _write_status(tmp_path, {
-        "state": AgentState.ACTIVE.value,
-        "last_progress_at": now - 4.0,
-    })
+    _write_agent_record(tmp_path, state=AgentState.ACTIVE.value, last_progress_at=now - 4.0)
     manager, _ = _manager(tmp_path)
     age = manager._task_card_active_seconds()
     assert age is not None and 3.0 <= age <= 5.0
@@ -155,11 +162,10 @@ def test_task_card_active_seconds_falls_back_to_last_progress_at(tmp_path):
 def test_task_card_active_seconds_none_when_not_active(tmp_path):
     from lingtai.kernel.state import AgentState
 
-    _write_status(tmp_path, {
-        "state": AgentState.IDLE.value,
-        "last_progress_at": 1_000.0,
-        "last_api_call_at": 1_000.0,
-    })
+    _write_agent_record(
+        tmp_path, state=AgentState.IDLE.value,
+        last_progress_at=1_000.0, last_api_call_at=1_000.0,
+    )
     manager, _ = _manager(tmp_path)
     assert manager._task_card_active_seconds() is None
 

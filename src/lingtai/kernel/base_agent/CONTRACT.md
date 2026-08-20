@@ -23,6 +23,7 @@ related_files:
   - src/lingtai/kernel/lifecycle_clock/CONTRACT.md
   - src/lingtai/kernel/notification_store/CONTRACT.md
   - src/lingtai/kernel/event_journal/CONTRACT.md
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/agent.py
   - src/lingtai/cli.py
   - docs/references/windows-support.md

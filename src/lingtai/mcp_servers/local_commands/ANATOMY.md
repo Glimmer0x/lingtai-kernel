@@ -4,6 +4,8 @@ related_files:
   - src/lingtai/mcp_servers/ANATOMY.md
   - src/lingtai/mcp_servers/local_commands/__init__.py
   - src/lingtai/mcp_servers/local_commands/core.py
+  - src/lingtai/kernel/session_stats/ANATOMY.md
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/service.py
   - src/lingtai/mcp_servers/feishu/control_cards.py
@@ -26,6 +28,15 @@ Agent status, briefing, system Markdown, command catalogs, and Task Card
 preferences; it writes only the established `.refresh`, `.sleep`, and `.clear`
 signals. It never admits a chat actor, chooses a recipient, builds Telegram
 keyboards/Markdown or Feishu cards, or sends a provider request.
+
+`collect_kanban_data`'s live/usage fields (own agent `agent_state`/`ctx`/
+`uptime`/`started_at` and each sibling agent's `state`/token totals in
+`all_agents`) are curated from `kernel.session_stats.read_agent_record` —
+the current agent's and each sibling's own published Agent record — instead
+of independently reading `.status.json`/`token_ledger.jsonl`. See
+`kernel/session_stats/ANATOMY.md`. Everything else in this function (init.json,
+`.agent.json`, preset files, addon/delegate/knowledge/skill counts) is
+unrelated static/config state, not live session status, and is unchanged.
 
 ## Components
 

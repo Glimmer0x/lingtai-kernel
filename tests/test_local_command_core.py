@@ -191,11 +191,14 @@ def test_kanban_snapshot_preserves_shared_dashboard_values(tmp_path: Path) -> No
         json.dumps({"agent_id": "agent-1", "molt_count": 2}),
         encoding="utf-8",
     )
-    (tmp_path / ".status.json").write_text(
+    (tmp_path / "system").mkdir(exist_ok=True)
+    (tmp_path / "system" / "agent_record.json").write_text(
         json.dumps(
             {
-                "runtime": {"state": "active", "uptime_seconds": 125},
-                "tokens": {"context": {"total_tokens": 100, "usage_pct": 2.5}},
+                "schema": "lingtai.agent_record/v1", "schema_version": 1,
+                "generated_at": "2026-08-20T00:00:00Z",
+                "session": {"state": "active", "uptime_seconds": 125},
+                "usage": {"context_used_tokens": 100, "context_usage_pct": 2.5},
             }
         ),
         encoding="utf-8",
