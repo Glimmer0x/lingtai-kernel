@@ -170,6 +170,10 @@ def _safe_llm_from_service(agent) -> dict:
         service_tier = _provider_default_from_service(service, "service_tier")
         if isinstance(service_tier, str) and service_tier.strip():
             llm["service_tier"] = service_tier.strip()
+        else:
+            # The request omits service_tier, so label the known request-side
+            # default rather than inventing a provider-returned tier.
+            llm["service_tier"] = "default"
 
     return llm
 
