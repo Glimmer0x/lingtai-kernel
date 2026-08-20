@@ -1097,9 +1097,10 @@ class Agent(BaseAgent):
     def _cpr_agent(self, address: str) -> bool | dict | None:
         """Resuscitate a suspended agent by launching it as a detached process.
 
-        Uses the resolved venv Python to run `lingtai run <dir>`.  Success is
-        reported only after the target writes a fresh heartbeat; quick child
-        exits and startup timeouts are returned as explicit errors.
+        Uses the resolved venv Python to run `lingtai run <dir>`. A fresh
+        heartbeat confirms the launch; an observed child exit is an explicit
+        error. A child still running after the bounded confirmation interval is
+        logged as unconfirmed and returns the established truthy sentinel.
         """
         import shlex
         import subprocess
@@ -1164,6 +1165,14 @@ class Agent(BaseAgent):
 
         self._log("cpr_launched", target=str(target), pid=proc.pid, log=str(log_path))
 
+        def _launch_failure(code: int) -> dict:
+            tail = _tail_log()
+            self._log("cpr_failed", target=str(target), pid=proc.pid, exit_code=code, log=str(log_path))
+            message = f"CPR launch exited before heartbeat (exit code {code}); see {log_path}"
+            if tail.strip():
+                message += f"\n\nLast log output:\n{tail}"
+            return {"error": True, "message": message, "exit_code": code, "log": str(log_path)}
+
         # Poll with the kernel-fixed liveness window (shared default), NOT a
         # local 3.0: karma's CPR gate and this relaunch poll must use the same
         # threshold, so a heartbeat fresh enough to satisfy the poll is by
@@ -1181,21 +1190,24 @@ class Agent(BaseAgent):
                 return True
             code = proc.poll()
             if code is not None:
-                tail = _tail_log()
-                self._log("cpr_failed", target=str(target), pid=proc.pid, exit_code=code, log=str(log_path))
-                message = f"CPR launch exited before heartbeat (exit code {code}); see {log_path}"
-                if tail.strip():
-                    message += f"\n\nLast log output:\n{tail}"
-                return {"error": True, "message": message, "exit_code": code, "log": str(log_path)}
+                return _launch_failure(code)
             time.sleep(0.2)
 
-        self._log("cpr_timeout", target=str(target), pid=proc.pid, log=str(log_path))
-        return {
-            "error": True,
-            "message": f"CPR launch did not produce a fresh heartbeat within 10s (pid {proc.pid}); see {log_path}",
-            "pid": proc.pid,
-            "log": str(log_path),
-        }
+        # One final presence observation accepts a heartbeat written at the
+        # confirmation boundary. Absent that evidence, only an observed child
+        # exit proves CPR launch failure; a still-running detached child may
+        # still be initializing and remains unconfirmed rather than failed.
+        if _presence_observe_alive(
+            target_presence,
+            wall_now=time.time(),
+        ):
+            self._log("cpr_alive", target=str(target), pid=proc.pid)
+            return True
+        code = proc.poll()
+        if code is not None:
+            return _launch_failure(code)
+        self._log("cpr_launch_unconfirmed", target=str(target), pid=proc.pid, log=str(log_path))
+        return True
 
     def start(self) -> None:
         super().start()

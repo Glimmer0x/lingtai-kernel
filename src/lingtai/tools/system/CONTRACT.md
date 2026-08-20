@@ -114,7 +114,7 @@ siblings.
 | `sleep` | — | `reason`, `force` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`) | — |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
 | `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
-| `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported/failed) |
+| `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported, or observed child exit before a fresh heartbeat) |
 | `interrupt` | `address` | `reason` | `{status: "interrupted", address}` | `{error: True, message}` (as above) |
 | `clear` | `address` | `reason` | `{status: "cleared", address, source}` | `{error: True, message}` (as above) |
 | `nirvana` | `address` | `reason` | `{status: "nirvana", address}` | `{error: True, message}` (requires karma AND nirvana; shutdown-timeout error) |
@@ -169,9 +169,21 @@ by [`BEHAVIORS.md`](BEHAVIORS.md) — authorization gate
 ([B001](BEHAVIORS.md#behavior-b001)), signal-file effects
 ([B002](BEHAVIORS.md#behavior-b002), [B003](BEHAVIORS.md#behavior-b003)),
 refusal paths ([B004](BEHAVIORS.md#behavior-b004),
-[B005](BEHAVIORS.md#behavior-b005)), and nirvana privilege
-([B006](BEHAVIORS.md#behavior-b006)). Change any of these behaviors, update the
+[B005](BEHAVIORS.md#behavior-b005)), nirvana privilege
+([B006](BEHAVIORS.md#behavior-b006)), and CPR launch confirmation
+([B007](BEHAVIORS.md#behavior-b007)). Change any of these behaviors, update the
 matching behavior entry and this clause together.
+
+### CPR launch confirmation
+
+After `cpr` spawns its detached child, it waits at most 10 seconds for a fresh
+heartbeat as confirmation. At that boundary it makes one final heartbeat
+observation and checks the child process: an observed exit (including exit code
+zero) returns the existing launch-failure error with its relaunch-log tail; a
+still-running child with no fresh heartbeat is logged as `cpr_launch_unconfirmed`
+and returns the established `{status: "resuscitated", address}` receipt. The
+latter records absence of confirmation evidence, not an ongoing-health guarantee.
+This observable distinction is guarded by [B007](BEHAVIORS.md#behavior-b007).
 
 ## State & storage
 
@@ -218,7 +230,7 @@ drive it are `context`'s.
 | `refresh` with an unauthorized preset is refused | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` |
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |
 | `presets` lists the allowed library and strips credentials | `src/lingtai/tools/system/preset.py:_presets` | `tests/test_system.py::test_presets_action_lists_full_library`, `tests/test_system.py::test_presets_action_strips_credentials` |
-| `cpr` propagates launch failure instead of reporting success | `src/lingtai/tools/system/karma.py:_cpr` | `tests/test_system.py::test_cpr_propagates_launch_failure_instead_of_resuscitated` |
+| `cpr` reports an observed launch exit as failure, but retains its established receipt for a child still running after bounded heartbeat confirmation | `src/lingtai/tools/system/karma.py:_cpr` | `tests/test_system.py::test_cpr_propagates_launch_failure_instead_of_resuscitated`, `tests/test_karma.py::TestCPRLingtai` |
 | The two name actions preserve live identity, `.agent.json`, and the protected prompt `identity` section, and mutate neither address nor workdir | `src/lingtai/tools/system/name.py` | `tests/test_tool_family_system_migration.py::test_name_actions_preserve_identity_semantics` |
 | The public `summarize` action is gone from `system` with no alias | `src/lingtai/tools/system/schema.py:ACTION_ORDER` | `tests/test_tool_family_system_migration.py::test_public_summarize_action_is_gone_and_fails_loudly`, `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` |
 | `items`/`rebuild` belong to no `system` action | `src/lingtai/tools/system/schema.py:INPUT_SCHEMAS` | `tests/test_tool_family_system_migration.py::test_departed_summarize_fields_are_rejected_on_every_action` |

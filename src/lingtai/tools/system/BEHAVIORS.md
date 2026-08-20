@@ -177,3 +177,38 @@ an agent can interrupt itself.
 ### Pass / Fail
 Pass when nirvana is refused AND the target is untouched. Fail if nirvana
 succeeds with only karma privilege.
+
+## Behavior B007 — CPR distinguishes an observed exit from an unconfirmed live launch
+
+- **id**: B007
+- **title**: CPR does not report a still-running child failed solely for a delayed heartbeat
+- **guards**: `system-contract` § [CPR launch confirmation](CONTRACT.md#cpr-launch-confirmation)
+- **supersedes**: `tests/test_karma.py::TestCPRLingtai::test_cpr_agent_returns_unconfirmed_running_child`,
+  `tests/test_karma.py::TestCPRLingtai::test_cpr_agent_reports_early_exit_before_heartbeat`,
+  `tests/test_karma.py::TestCPRLingtai::test_cpr_agent_reports_exit_observed_at_confirmation_deadline`
+- **runner**: an agent with `admin: {"karma": true}` and the hermetic CPR-launch harness
+- **prerequisites**: a disposable non-human target agent directory with `init.json`; the
+  harness can hold its heartbeat observation false, advance the 10-second confirmation
+  interval without wall-clock waiting, and control the detached child's `poll()` result
+- **estimate**: 1 min
+
+### Steps
+1. Launch CPR against the disposable target with its fresh-heartbeat observation held
+   false while the fake detached child remains running (`poll()` returns `None`), then
+   advance the confirmation interval to its boundary.
+2. Inspect the CPR result and the reviver's lifecycle events.
+3. Repeat with no fresh heartbeat and a child exit observed by `poll()` (including exit
+   code zero); inspect the result and relaunch-log diagnostic.
+
+### Expected evidence
+- [ ] The still-running case returns the established `resuscitated` receipt and records
+  `cpr_launch_unconfirmed`; it does not record `cpr_timeout` or return a launch error.
+- [ ] The observed-exit case returns an error with the exact `exit_code`, relaunch-log
+  path, and bounded log-tail diagnostic; it does not report `resuscitated`.
+- [ ] Both cases retain the bounded 10-second confirmation interval; the live-child
+  receipt is not evidence of continuing health after CPR returns.
+
+### Pass / Fail
+Pass when absence of heartbeat evidence is distinguished from an observed child exit as
+above. Fail if CPR calls a still-running child failed solely for missing confirmation, or
+if any observed exit is reported as `resuscitated`.
