@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -21,6 +20,7 @@ from lingtai.agent import Agent
 from lingtai.services.mcp_registry import (
     REGISTRY_FILENAME,
     decompress_addons,
+    load_catalog,
     read_registry,
     validate_record,
 )
@@ -577,36 +577,47 @@ def test_loader_skips_unregistered_init_mcp(tmp_path, caplog):
 
 
 def _agent_source_root() -> str:
-    """The source root the curated pin is expected to prepend: the parent
-    of the `lingtai` package directory that `lingtai.agent` itself was
-    imported from in this test process."""
+    """The source root the curated launcher is expected to set as the
+    child's entire PYTHONPATH: the parent of the `lingtai` package
+    directory that `lingtai.agent` itself was imported from in this test
+    process."""
     return str(Path(agent_module.__file__).resolve().parent.parent)
 
 
-def test_curated_init_mcp_command_pinned_to_runtime_executable(tmp_path, monkeypatch):
-    """A registered init.json MCP whose registry record has source ==
-    "lingtai-curated" must launch under this Agent's own sys.executable,
-    never the (possibly stale, prior-venv) command stored in init.json —
-    otherwise the spawned MCP can import a different `lingtai` source than
-    the running kernel. A non-curated registry source is left unchanged."""
+def _curated_registry_line(name: str) -> dict:
+    """A `source == lingtai-curated` registry record for `name`, with a
+    deliberately stale `command`/`args` — this stale record must never be
+    consulted for the live launch (only the fresh `mcp_catalog.json` may
+    be), so its exact contents do not matter beyond gating registration."""
+    return {
+        "name": name,
+        "summary": "curated",
+        "transport": "stdio",
+        "command": "/opt/lingtai/venv-main-20250101/bin/python",
+        "args": ["-m", "some.stale.module.path"],
+        "source": "lingtai-curated",
+    }
+
+
+def test_curated_init_mcp_minimal_activation_launches_from_catalog(tmp_path, monkeypatch):
+    """A minimal curated activation entry — no `command`, no `args`, no
+    `type`, just non-launch `env` (or nothing at all) — must still launch:
+    the running kernel's own mcp_catalog.json supplies the entire stdio
+    launcher (command = this Agent's sys.executable, args = the catalog's
+    module args), and the child's PYTHONPATH is set to this Agent's own
+    imported lingtai source root. A non-curated entry's own command/args/env
+    are launched verbatim, untouched by any of this."""
     workdir = tmp_path / "agent"
     workdir.mkdir(parents=True)
 
-    stale_python = "/opt/lingtai/venv-main-20250101/bin/python"
     registry_lines = [
-        {
-            "name": "telegram",
-            "summary": "curated",
-            "transport": "stdio",
-            "command": stale_python,
-            "args": ["-m", "lingtai.mcp_servers.telegram"],
-            "source": "lingtai-curated",
-        },
+        _curated_registry_line("telegram"),
+        _curated_registry_line("imap"),
         {
             "name": "custom-tool",
             "summary": "third party",
             "transport": "stdio",
-            "command": stale_python,
+            "command": "/opt/other/venv/bin/python",
             "args": ["-m", "some.other.tool"],
             "source": "user",
         },
@@ -617,15 +628,13 @@ def test_curated_init_mcp_command_pinned_to_runtime_executable(tmp_path, monkeyp
 
     init = {
         "mcp": {
-            "telegram": {
-                "type": "stdio",
-                "command": stale_python,
-                "args": ["-m", "lingtai.mcp_servers.telegram"],
-                "env": {"FOO": "bar"},
-            },
+            # Ordinary activation + account config only — no launcher shape.
+            "telegram": {"env": {"LINGTAI_TELEGRAM_CONFIG": ".secrets/telegram.json"}},
+            # Fully empty: activation alone, no config file at all.
+            "imap": {},
             "custom-tool": {
                 "type": "stdio",
-                "command": stale_python,
+                "command": "/opt/other/venv/bin/python",
                 "args": ["-m", "some.other.tool"],
                 "env": {"BAZ": "qux"},
             },
@@ -650,77 +659,57 @@ def test_curated_init_mcp_command_pinned_to_runtime_executable(tmp_path, monkeyp
         capabilities={"mcp": {}},
     )
 
-    # Curated: command pinned to the running interpreter; args/env preserved.
-    assert spawned["telegram"]["command"] == sys.executable
-    assert spawned["telegram"]["args"] == ["-m", "lingtai.mcp_servers.telegram"]
-    assert spawned["telegram"]["env"]["FOO"] == "bar"
+    catalog = load_catalog()
+    expected_root = _agent_source_root()
 
-    # Non-curated: init.json command is launched verbatim, unchanged.
-    assert spawned["custom-tool"]["command"] == stale_python
+    # Curated: launcher is entirely catalog + Agent interpreter/source-derived.
+    assert spawned["telegram"]["command"] == sys.executable
+    assert spawned["telegram"]["args"] == catalog["telegram"]["args"]
+    assert spawned["telegram"]["env"]["PYTHONPATH"] == expected_root
+    assert spawned["telegram"]["env"]["LINGTAI_TELEGRAM_CONFIG"] == ".secrets/telegram.json"
+
+    # Curated with a fully empty activation entry: still launches.
+    assert spawned["imap"]["command"] == sys.executable
+    assert spawned["imap"]["args"] == catalog["imap"]["args"]
+    assert spawned["imap"]["env"]["PYTHONPATH"] == expected_root
+
+    # Non-curated: init.json's own command/args/env launched verbatim.
+    assert spawned["custom-tool"]["command"] == "/opt/other/venv/bin/python"
     assert spawned["custom-tool"]["args"] == ["-m", "some.other.tool"]
     assert spawned["custom-tool"]["env"]["BAZ"] == "qux"
+    assert "PYTHONPATH" not in spawned["custom-tool"]["env"]
 
 
-def test_curated_init_mcp_pythonpath_pinned_to_agent_source_root(tmp_path, monkeypatch):
-    """Interpreter pinning alone is not enough: the MCP stdio transport's
-    default env allowlist excludes PYTHONPATH, so a curated child spawned
-    on the right sys.executable could still import `lingtai` from that
-    interpreter's own site-packages instead of the source this Agent
-    actually runs. The loader must also prepend this Agent's own source
-    root to the child's PYTHONPATH — deduplicated against, and preserving,
-    any PYTHONPATH already configured on the entry. A non-curated entry's
-    PYTHONPATH must be left completely alone, and neither init.json nor
-    the registry file may be rewritten on disk."""
+def test_curated_init_mcp_legacy_launcher_fields_ignored_no_disk_mutation(tmp_path, monkeypatch, caplog):
+    """A curated entry that still carries the old `command`/`args`/`type`
+    and an `env.PYTHONPATH` (e.g. copied from a pre-existing setup, or from
+    an older version of the worked example in the addon docs) must launch
+    from the catalog exactly like a minimal entry would — those fields are
+    read-compatible legacy inputs, silently accepted by the schema but
+    ignored for the actual launch, never rewritten and never migrated onto
+    disk. Only non-launch env keys pass through."""
+    import logging
+
     workdir = tmp_path / "agent"
     workdir.mkdir(parents=True)
 
-    stale_python = "/opt/lingtai/venv-main-20250101/bin/python"
-    stale_site_packages = "/opt/lingtai/venv-main-20250101/lib/site-packages"
-    noncurated_pythonpath = "/opt/some/other/tool/lib"
-
-    registry_lines = [
-        {
-            "name": "telegram",
-            "summary": "curated",
-            "transport": "stdio",
-            "command": stale_python,
-            "args": ["-m", "lingtai.mcp_servers.telegram"],
-            "source": "lingtai-curated",
-        },
-        {
-            "name": "custom-tool",
-            "summary": "third party",
-            "transport": "stdio",
-            "command": stale_python,
-            "args": ["-m", "some.other.tool"],
-            "source": "user",
-        },
-    ]
+    registry_lines = [_curated_registry_line("telegram")]
     registry_text = "\n".join(json.dumps(r) for r in registry_lines) + "\n"
     registry_path = workdir / "mcp_registry.jsonl"
     registry_path.write_text(registry_text)
 
+    stale_python = "/opt/lingtai/venv-main-20250101/bin/python"
+    stale_site_packages = "/opt/lingtai/venv-main-20250101/lib/site-packages"
     init = {
         "mcp": {
-            # PYTHONPATH already contains the expected root, in the middle
-            # of an otherwise-stale path list — must be deduplicated to a
-            # single leading entry, not appended a second time.
             "telegram": {
                 "type": "stdio",
                 "command": stale_python,
-                "args": ["-m", "lingtai.mcp_servers.telegram"],
+                "args": ["-m", "lingtai_telegram"],  # historical pre-bundle name
                 "env": {
                     "FOO": "bar",
-                    "PYTHONPATH": os.pathsep.join(
-                        [stale_site_packages, _agent_source_root()]
-                    ),
+                    "PYTHONPATH": stale_site_packages,
                 },
-            },
-            "custom-tool": {
-                "type": "stdio",
-                "command": stale_python,
-                "args": ["-m", "some.other.tool"],
-                "env": {"BAZ": "qux", "PYTHONPATH": noncurated_pythonpath},
             },
         },
     }
@@ -738,6 +727,147 @@ def test_curated_init_mcp_pythonpath_pinned_to_agent_source_root(tmp_path, monke
 
     monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
 
+    with caplog.at_level(logging.WARNING):
+        Agent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=workdir,
+            capabilities={"mcp": {}},
+        )
+
+    catalog = load_catalog()
+    expected_root = _agent_source_root()
+
+    # Legacy command/args/type/PYTHONPATH are all ignored; the catalog wins.
+    assert spawned["telegram"]["command"] == sys.executable
+    assert spawned["telegram"]["args"] == catalog["telegram"]["args"]
+    assert spawned["telegram"]["env"]["PYTHONPATH"] == expected_root
+    assert spawned["telegram"]["env"]["PYTHONPATH"] != stale_site_packages
+    # Non-launch env passes through untouched.
+    assert spawned["telegram"]["env"]["FOO"] == "bar"
+
+    # A bounded compatibility warning names the ignored fields.
+    assert any(
+        "telegram" in r.message and "legacy launcher field" in r.message
+        for r in caplog.records
+    )
+
+    # Neither init.json nor the registry is mutated on disk.
+    assert init_path.read_text() == init_text
+    assert registry_path.read_text() == registry_text
+
+
+def test_curated_init_mcp_missing_from_catalog_fails_loud_and_skips(tmp_path, monkeypatch, caplog):
+    """A registry record marked `source == lingtai-curated` for a name the
+    current kernel's own mcp_catalog.json does not (or no longer) define
+    must fail loud and skip — never fall back to the registry's own stale
+    `command`/`args`, and never spawn under a guessed launcher."""
+    import logging
+
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+
+    (workdir / "mcp_registry.jsonl").write_text(
+        json.dumps(_curated_registry_line("retired-addon")) + "\n"
+    )
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {"retired-addon": {"env": {"FOO": "bar"}}},
+    }))
+
+    spawn_calls = []
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        spawn_calls.append(command)
+        return []
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    with caplog.at_level(logging.WARNING):
+        agent = Agent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=workdir,
+            capabilities={"mcp": {}},
+        )
+
+    assert spawn_calls == []
+    assert "retired-addon" not in agent._mcp_init_specs
+    assert any(
+        "retired-addon" in r.message and "no stdio entry" in r.message
+        for r in caplog.records
+    )
+
+
+def test_curated_init_mcp_empty_catalog_args_fails_loud_and_skips(tmp_path, monkeypatch, caplog):
+    """An empty args list is not a safe curated stdio launcher: the resolver
+    must skip it rather than executing the Agent interpreter with no catalog
+    module arguments or falling back to old init.json launcher fields."""
+    import logging
+
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    (workdir / "mcp_registry.jsonl").write_text(
+        json.dumps(_curated_registry_line("telegram")) + "\n"
+    )
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {"telegram": {}},
+    }))
+
+    catalog = load_catalog()
+    catalog["telegram"]["args"] = []
+    monkeypatch.setattr(
+        "lingtai.services.mcp_registry.load_catalog", lambda: catalog,
+    )
+
+    spawn_calls = []
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        spawn_calls.append((command, args, env))
+        return []
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
+    with caplog.at_level(logging.WARNING):
+        agent = Agent(
+            service=make_mock_service(),
+            agent_name="test",
+            working_dir=workdir,
+            capabilities={"mcp": {}},
+        )
+
+    assert spawn_calls == []
+    assert "telegram" not in agent._mcp_init_specs
+    assert any(
+        "telegram" in r.message and "malformed args" in r.message
+        for r in caplog.records
+    )
+
+
+def test_curated_init_mcp_retry_reuses_resolved_catalog_launch(tmp_path, monkeypatch):
+    """`_retry_failed_mcps` must respawn a dead curated child with the same
+    catalog-derived launcher it resolved at boot, not re-derive it from (or
+    fall back to) init.json's own stale fields."""
+    workdir = tmp_path / "agent"
+    workdir.mkdir(parents=True)
+    (workdir / "mcp_registry.jsonl").write_text(
+        json.dumps(_curated_registry_line("telegram")) + "\n"
+    )
+    (workdir / "init.json").write_text(json.dumps({
+        "mcp": {"telegram": {"env": {"FOO": "bar"}}},
+    }))
+
+    spawned_commands = []
+
+    def fake_connect_mcp(self, command, args=None, env=None):
+        spawned_commands.append((command, tuple(args or ()), env))
+        client = _FakeMCPClient(is_connected_value=(len(spawned_commands) >= 2))
+        if not hasattr(self, "_mcp_clients"):
+            self._mcp_clients = []
+        self._mcp_clients.append(client)
+        return []
+
+    monkeypatch.setattr(Agent, "connect_mcp", fake_connect_mcp)
+
     agent = Agent(
         service=make_mock_service(),
         agent_name="test",
@@ -745,28 +875,23 @@ def test_curated_init_mcp_pythonpath_pinned_to_agent_source_root(tmp_path, monke
         capabilities={"mcp": {}},
     )
 
+    catalog = load_catalog()
     expected_root = _agent_source_root()
+    boot_cfg = agent._mcp_init_specs["telegram"]["cfg"]
+    assert boot_cfg["command"] == sys.executable
+    assert boot_cfg["args"] == catalog["telegram"]["args"]
+    assert boot_cfg["env"]["PYTHONPATH"] == expected_root
 
-    # Curated: source root is first, the stale entry survives deduplicated
-    # (not duplicated, not dropped), original order otherwise preserved.
-    telegram_pythonpath = spawned["telegram"]["env"]["PYTHONPATH"].split(os.pathsep)
-    assert telegram_pythonpath == [expected_root, stale_site_packages]
-    assert spawned["telegram"]["env"]["FOO"] == "bar"
-    assert spawned["telegram"]["command"] == sys.executable
+    report = agent._retry_failed_mcps()
+    assert "telegram" in report["recovered"]
 
-    # Non-curated: PYTHONPATH is untouched — no pin, no reordering.
-    assert spawned["custom-tool"]["env"]["PYTHONPATH"] == noncurated_pythonpath
-    assert spawned["custom-tool"]["command"] == stale_python
-
-    # The stored retry cfg carries the same pin, so `_retry_failed_mcps`
-    # respawns a dead curated child on the same interpreter and source root.
-    retry_cfg = agent._mcp_init_specs["telegram"]["cfg"]
-    assert retry_cfg["command"] == sys.executable
-    assert retry_cfg["env"]["PYTHONPATH"].split(os.pathsep)[0] == expected_root
-
-    # Neither init.json nor the registry is mutated on disk.
-    assert init_path.read_text() == init_text
-    assert registry_path.read_text() == registry_text
+    # Both spawn attempts used the identical resolved launcher.
+    assert len(spawned_commands) == 2
+    for command, args, env in spawned_commands:
+        assert command == sys.executable
+        assert list(args) == catalog["telegram"]["args"]
+        assert env["PYTHONPATH"] == expected_root
+        assert env["FOO"] == "bar"
 
 
 # ---------------------------------------------------------------------------

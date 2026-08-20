@@ -30,7 +30,7 @@ The MCP subprocess hit a missing config field. The error message *is* the missin
 Check the exact field name spelling — `email_password` not `password`, `bot_token` not `token`, etc. This is the single most common failure mode and the docs always have the correct field name.
 
 **`MCP server failed to start` / "command not found"**
-The `command` path in your `init.json` `mcp.<name>` entry doesn't have the executable. For Python addons, confirm the venv path is correct (typically `~/.lingtai-tui/runtime/venv/bin/python`). For `npx`/`uvx` servers, confirm those tools are on `PATH`.
+For a **non-curated** third-party entry, the `command` path in your `init.json` `mcp.<name>` entry doesn't have the executable — for Python servers, confirm the venv path is correct; for `npx`/`uvx` servers, confirm those tools are on `PATH`. A **kernel-curated** addon (`source == "lingtai-curated"`) never reads `command`/`args`/`type` from `init.json` at all — the running kernel's own `mcp_catalog.json` derives the whole launcher, so editing or "fixing" that field in `init.json` has no effect; see `curated-addons.md` "MCP child processes run in their own runtime". A curated addon that still fails to start is a kernel/environment problem (e.g. the registered name is missing from the current `mcp_catalog.json` — check the agent log for a "no stdio entry for it" warning), not an `init.json` field to edit.
 
 **Tools not appearing in your tool surface**
 You forgot to `system(action="refresh")` after editing config. Refresh and re-check `mcp(action="info", input={}, reasoning="confirm the refreshed registry")`.

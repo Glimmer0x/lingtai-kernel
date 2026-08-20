@@ -101,6 +101,7 @@ Atomic write: write to `<event_id>.json.tmp`, fsync, then rename. `push_inbox_ev
 mcp/__init__.py
   ├── Catalog
   │   ├── _load_catalog()           — reads kernel-shipped mcp_catalog.json, cached
+  │   ├── load_catalog()            — public deep-copy read; agent.py's curated launcher resolution uses this
   │   └── decompress_addons()       — boot-time: append catalog entries for addons not in registry
   │
   ├── Validation
