@@ -162,6 +162,15 @@ def test_safe_llm_from_service_uses_provider_default_base_url():
     assert out["context_limit"] == 123456
 
 
+def test_safe_llm_from_service_exposes_codex_responses_service_tier():
+    agent = MagicMock()
+    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex-pool": {"service_tier": "fast"}}
+    agent.service = svc
+
+    assert _safe_llm_from_service(agent)["service_tier"] == "fast"
+
+
 def test_safe_llm_from_service_with_no_service():
     agent = MagicMock()
     agent.service = None

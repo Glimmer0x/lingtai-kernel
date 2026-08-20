@@ -202,6 +202,13 @@ def test_metadata_renders_device_and_working_dir_lines() -> None:
     assert " | " in identity
 
 
+def test_metadata_renders_service_tier_when_supplied() -> None:
+    lines = TaskCardEventProjection.format_metadata(
+        {"model": "gpt-5.6-terra", "service_tier": "fast"}
+    )
+    assert lines == ["Session · gpt-5.6-terra · tier fast"]
+
+
 def test_metadata_omits_device_line_when_only_bad_values() -> None:
     """Missing or malformed device identity degrades to no device/path groups."""
     metadata = {"agent_lifecycle": "active", "device_short_name": 42, "working_dir": ""}
