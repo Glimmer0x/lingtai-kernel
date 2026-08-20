@@ -29,9 +29,8 @@ from uuid import uuid4
 import logging
 import threading
 
-from lingtai.adapters.posix.agent_presence import PosixAgentPresenceStoreAdapter
 from lingtai.kernel._frontmatter import strip_frontmatter
-from lingtai.kernel.agent_presence import observe_alive
+from lingtai.kernel.session_stats import read_agent_record
 from lingtai.kernel.state import AgentState
 from lingtai.tools.bash._async_supervisor import load_state
 from lingtai.mcp_servers.task_card import (
@@ -2928,77 +2927,78 @@ class TelegramManager:
     def _task_card_agent_lifecycle_status(self) -> str | None:
         """Read this agent's own canonical lifecycle for the footer.
 
-        Sources ``.status.json``'s ``runtime.state`` — the same
-        ``AgentState`` value ``BaseAgent._write_status_snapshot`` writes on
-        every turn — and, only for the non-terminal ``active``/``idle``/
-        ``asleep`` states, falls back to the canonical presence liveness
-        policy (``kernel.agent_presence.observe_alive`` via
-        ``PosixAgentPresenceStoreAdapter``) to catch a process that died
-        without ever writing ``stuck``. ``stuck`` and ``suspended`` are
-        trusted as-is: both are the process explicitly reporting its own
-        state, and a stale heartbeat proves nothing more in either case.
-        Missing, malformed, non-UTF-8, or non-object status data degrades to
-        ``None`` — no line is rendered rather than fabricating a state.
+        Sources the owning agent's published Agent record
+        (``session.state`` / ``health.heartbeat_at`` — see
+        ``lingtai.kernel.session_stats``), the same redacted live snapshot
+        ``BaseAgent`` publishes on every turn, instead of reading
+        ``.status.json``/presence files directly — Telegram curates and
+        renders the record, it does not re-collect underlying facts itself.
+        Only for the non-terminal ``active``/``idle``/``asleep`` states is
+        heartbeat freshness consulted, catching a process that died without
+        ever writing ``stuck``. ``stuck`` and ``suspended`` are trusted
+        as-is: both are the process explicitly reporting its own state, and
+        a stale heartbeat proves nothing more in either case.
+
+        The record's own ``health.liveness`` string is a write-time snapshot
+        baked in by the agent that was alive when it wrote the record; it
+        never changes once that process dies, so it cannot be trusted here.
+        Freshness is instead recomputed against the *current* wall clock from
+        ``health.heartbeat_at`` using the same ``HEARTBEAT_LIVENESS_SECONDS``
+        threshold the writer used, so a dead process's last record correctly
+        reads as offline once the heartbeat goes stale. A missing record,
+        missing blocks, or an unrecognized state degrades to ``None`` — no
+        line is rendered rather than fabricating a state.
         """
-        try:
-            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        from lingtai.kernel.config import HEARTBEAT_LIVENESS_SECONDS
+
+        record = read_agent_record(self._working_dir)
+        if record is None:
             return None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
+        session = record.get("session")
+        if not isinstance(session, dict):
             return None
-        if not isinstance(data, dict):
-            return None
-        runtime = data.get("runtime")
-        if not isinstance(runtime, dict):
-            return None
-        state = runtime.get("state")
+        state = session.get("state")
         if state not in _TASK_CARD_AGENT_STATES:
             return None
         if state in (AgentState.SUSPENDED.value, AgentState.STUCK.value):
             return state
-        try:
-            alive = observe_alive(
-                PosixAgentPresenceStoreAdapter(self._working_dir), time.time(),
-            )
-        except Exception:
+        health = record.get("health")
+        heartbeat_at = health.get("heartbeat_at") if isinstance(health, dict) else None
+        if not isinstance(heartbeat_at, (int, float)) or isinstance(heartbeat_at, bool):
             return state
-        return state if alive else "offline"
+        if not math.isfinite(heartbeat_at):
+            return state
+        age = time.time() - heartbeat_at
+        if not math.isfinite(age):
+            return state
+        return state if age < HEARTBEAT_LIVENESS_SECONDS else "offline"
 
     def _task_card_active_seconds(self) -> float | None:
         """Seconds since the agent's last API call while it is active.
 
-        Reads ``.status.json``'s ``runtime.last_api_call_at`` (the wall
+        Reads the Agent record's ``health.last_api_call_at`` (the wall
         timestamp of the most recent ``llm_call`` event; ``BaseAgent``
         refreshes it on every turn and every API call) and returns its age
-        only when the runtime reports ``active``. This is the "how long
-        has the agent been grinding since it last talked to the model"
+        only when ``session.state`` reports ``active``. This is the "how
+        long has the agent been grinding since it last talked to the model"
         signal Jason wants (2026-08-16): while the model thinks or a tool
         runs, ``last_api_call_at`` stays put and the age grows; when a new
-        API call starts it resets. For older status files that predate the
-        field it falls back to ``runtime.last_progress_at``. Missing/
-        malformed data, a non-active state, or a future timestamp degrades
-        to ``None``.
+        API call starts it resets. Falls back to ``health.last_progress_at``
+        when the anchor is absent. Missing/malformed data, a non-active
+        state, or a future timestamp degrades to ``None``.
         """
-        try:
-            raw = (self._working_dir / ".status.json").read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        record = read_agent_record(self._working_dir)
+        if record is None:
             return None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
+        session = record.get("session")
+        if not isinstance(session, dict) or session.get("state") != AgentState.ACTIVE.value:
             return None
-        if not isinstance(data, dict):
+        health = record.get("health")
+        if not isinstance(health, dict):
             return None
-        runtime = data.get("runtime")
-        if not isinstance(runtime, dict):
-            return None
-        if runtime.get("state") != AgentState.ACTIVE.value:
-            return None
-        anchor = runtime.get("last_api_call_at")
+        anchor = health.get("last_api_call_at")
         if not isinstance(anchor, (int, float)) or isinstance(anchor, bool):
-            anchor = runtime.get("last_progress_at")
+            anchor = health.get("last_progress_at")
         if not isinstance(anchor, (int, float)) or isinstance(anchor, bool):
             return None
         if not math.isfinite(anchor):

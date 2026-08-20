@@ -34,6 +34,7 @@ related_files:
   - src/lingtai/tools/daemon/posix_process.py
   - src/lingtai/tools/daemon/windows_process.py
   - src/lingtai/tools/daemon/run_dir.py
+  - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/tools/daemon/manual/SKILL.md
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/cli_daemon.py
@@ -673,6 +674,7 @@ All paths are relative to the parent agent working directory (`<parent>/`):
 ```text
 <parent>/daemons/<handle>-<YYYYMMDD-HHMMSS>-<hash6>/   # one dir per run (run_id)
   daemon.json                  # identity/live status + checkpoint sequence/latest/pending count
+  session_stats.json           # compact redacted self-record (kernel.session_stats), refreshed every turn
   .prompt                      # system prompt verbatim
   .heartbeat                   # mtime-touched on activity
   history/chat_history.jsonl   # session transcript
@@ -690,6 +692,15 @@ rows tagged `source="daemon"` so `sum_token_ledger(scope="main_agent")`
 excludes daemon spend while `scope="all"` includes it. On daemon-manager startup,
 stale `running`/`active` `daemon.json` records whose `parent_pid` is dead are
 reaped to `failed`.
+
+`session_stats.json` is a distinct, smaller artifact governed by
+[`kernel/session_stats/CONTRACT.md`](../../kernel/session_stats/CONTRACT.md):
+a bounded, redacted subset of `daemon.json` (identity/lifecycle/usage only —
+never task text, tool arguments, or error messages) written atomically every
+time `daemon.json` itself is rewritten. It is the only file the owning agent's
+Agent Record aggregation reads from a daemon run directory; `daemon.json`
+remains the full internal working state for `daemon(check)`/`daemon(list)`
+and is never scanned by that aggregation.
 
 ## Process and Terminal Boundaries
 

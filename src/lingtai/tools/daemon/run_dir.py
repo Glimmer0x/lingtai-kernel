@@ -244,7 +244,7 @@ class DaemonRunDir:
             "supervisor_pid": None,
         }
 
-        self._atomic_write_json(self.daemon_json_path, self._state)
+        self._persist_daemon_state()
         self.prompt_path.write_text(system_prompt, encoding="utf-8")
         self.heartbeat_path.touch()
         self._append_jsonl(self.events_path,
@@ -402,7 +402,7 @@ class DaemonRunDir:
                 key: self._durable_value(redact_durable_value(value, field=key))
                 for key, value in fields.items()
             })
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
 
     @contextmanager
     def _state_transaction(self):
@@ -502,7 +502,7 @@ class DaemonRunDir:
                 "resume_claim": claim,
                 "resume_state": "claimed",
             })
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return {**claim, "status": "running", "launch_status": "pending-launch", "path": str(claim_path)}
 
     def update_resume_claim(self, generation: str, **fields) -> bool:
@@ -517,7 +517,7 @@ class DaemonRunDir:
             row.update(fields)
             self._atomic_write_json(path, row)
             self._state["resume_claim"] = self._durable_value(row)
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return True
 
     def activate_resume_generation(self, generation: str, nonce: str) -> bool:
@@ -544,7 +544,7 @@ class DaemonRunDir:
             self._atomic_write_json(path, row)
             self._state.update({"resume_claim": row, "resume_pid": os.getpid(),
                                 "resume_start_identity": identity, "resume_state": "running"})
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return True
 
     def release_resume_generation(self, generation: str, nonce: str, *,
@@ -575,7 +575,7 @@ class DaemonRunDir:
             self._state["resume_claim"] = row
             self._state["resume_state"] = result_status or self._state.get("resume_state")
             self._state["resume_pid"] = None
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return True
 
     def record_followup(self, generation: str, *, status: str,
@@ -616,7 +616,7 @@ class DaemonRunDir:
                 queue = []
                 self._state["pending_followups"] = queue
             queue.append(message)
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return True
 
     def drain_followups(self) -> str | None:
@@ -627,7 +627,7 @@ class DaemonRunDir:
                 return None
             messages = [item for item in queue if isinstance(item, str) and item]
             self._state["pending_followups"] = []
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
         return "\n\n".join(messages) or None
 
     def enqueue_checkpoint_message(self, message: str) -> str | None:
@@ -658,7 +658,7 @@ class DaemonRunDir:
                 "message": safe_message,
                 "queued_at": self._now_iso(),
             })
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return message_id
 
     def record_checkpoint(self, payload: dict) -> dict:
@@ -694,7 +694,7 @@ class DaemonRunDir:
             self._state["checkpoint_sequence"] = sequence
             self._state["latest_checkpoint"] = checkpoint
             self._state["pending_checkpoint_messages"] = []
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             recorded = {"checkpoint": checkpoint, "messages": valid_messages}
             try:
                 self._append_jsonl(
@@ -746,7 +746,7 @@ class DaemonRunDir:
             if not overwrite and self._state.get(key):
                 return False
             self._state[key] = value
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             return True
 
     # ------------------------------------------------------------------
@@ -773,6 +773,35 @@ class DaemonRunDir:
     def _atomic_write_json(self, path: Path, data: dict) -> None:
         """Write JSON atomically — readers never see partial state."""
         atomic_write_json(path, data, ensure_ascii=False, indent=2)
+
+    def _persist_daemon_state(self) -> None:
+        """Atomically write daemon.json, then refresh this daemon's compact
+        self-record — on every daemon turn (see ``session_stats.CONTRACT.md``).
+
+        daemon.json keeps its existing exception behavior (some callers, e.g.
+        ``set_session_id``, deliberately let a write failure propagate). The
+        self-record write is separate and always best-effort: it must never
+        turn a successful daemon.json write into a failed one, and a torn or
+        missing self-record just means this daemon is ignored by the owning
+        agent's bounded aggregation, never a fake zero.
+        """
+        self._atomic_write_json(self.daemon_json_path, self._state)
+        try:
+            from lingtai.kernel.session_stats import write_daemon_record
+
+            write_daemon_record(self._path, self._state)
+        except Exception as e:
+            if self._log_callback is not None:
+                try:
+                    self._log_callback(
+                        "daemon_fs_error",
+                        em_id=self._handle,
+                        run_id=self._run_id,
+                        op="write_session_stats_record",
+                        error=str(e),
+                    )
+                except Exception:
+                    pass
 
     def _append_jsonl(self, path: Path, entry: dict) -> None:
         """Append one JSON line."""
@@ -850,7 +879,7 @@ class DaemonRunDir:
             self._state["turn"] = turn
             self._state["current_tool"] = None
             self._state["elapsed_s"] = self._now_secs()
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.chat_path,
                 {
@@ -879,7 +908,7 @@ class DaemonRunDir:
         def _write():
             self._state["current_tool"] = name
             self._state["tool_call_count"] += 1
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             args_preview = json.dumps(args, ensure_ascii=False)
             if len(args_preview) > self._ARGS_PREVIEW_MAX:
                 suffix = "...[truncated]"
@@ -907,7 +936,7 @@ class DaemonRunDir:
         def _write():
             tool_name = self._state["current_tool"]
             self._state["current_tool"] = None
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.events_path,
                 {
@@ -957,7 +986,7 @@ class DaemonRunDir:
             self._state["elapsed_s"] = self._now_secs()
             self._state["last_output"] = last_output
             self._state["last_output_at"] = ts
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             entry = {
                 "event": "cli_output",
                 "stream": stream,
@@ -1012,7 +1041,7 @@ class DaemonRunDir:
             self._state["tokens"]["output"] += output
             self._state["tokens"]["thinking"] += thinking
             self._state["tokens"]["cached"] += cached
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
         self._safe_state("append_tokens.state", _update_state)
 
         # Sanitize once, then mirror the same safe pool-attribution subset
@@ -1102,7 +1131,7 @@ class DaemonRunDir:
             cli_tokens["cached"] += cached
             cli_tokens["thinking"] += thinking
             cli_tokens["calls"] += 1
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             entry = {
                 "event": "cli_usage",
                 "input": input,
@@ -1357,7 +1386,7 @@ class DaemonRunDir:
                 preview = preview[:self._RESULT_PREVIEW_MAX]
             self._state["result_preview"] = preview
             self._state["result_path"] = result_path
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.events_path,
                 {
@@ -1403,7 +1432,7 @@ class DaemonRunDir:
                 "type": type(exc).__name__,
                 "message": msg,
             }
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.events_path,
                 {
@@ -1437,7 +1466,7 @@ class DaemonRunDir:
                 "returncode": returncode,
                 "ts": self._now_iso(),
             }
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.events_path,
                 {
@@ -1490,7 +1519,7 @@ class DaemonRunDir:
                 }
                 self._safe(
                     "claim_terminal_notification",
-                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                    lambda: self._persist_daemon_state(),
                 )
                 return key
 
@@ -1511,7 +1540,7 @@ class DaemonRunDir:
                 self._state["terminal_notification_claim"] = None
                 self._safe(
                     "clear_terminal_notification_claim",
-                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                    lambda: self._persist_daemon_state(),
                 )
 
     def mark_terminal_notification_published(self, idempotency_key: str) -> None:
@@ -1535,7 +1564,7 @@ class DaemonRunDir:
                 }
                 self._safe(
                     "mark_terminal_notification_published",
-                    lambda: self._atomic_write_json(self.daemon_json_path, self._state),
+                    lambda: self._persist_daemon_state(),
                 )
 
     @classmethod
@@ -1574,7 +1603,7 @@ class DaemonRunDir:
             self._state["finished_at"] = self._now_iso()
             self._state["elapsed_s"] = self._now_secs()
             self._state["current_tool"] = None
-            self._atomic_write_json(self.daemon_json_path, self._state)
+            self._persist_daemon_state()
             self._append_jsonl(
                 self.events_path,
                 {

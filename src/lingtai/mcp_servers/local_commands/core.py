@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from lingtai.kernel.session_stats import read_agent_record
+
 
 DEFAULT_COMMANDS: list[dict[str, str]] = [
     {"command": "help", "description": "List available commands"},
@@ -313,7 +315,7 @@ class LocalCommandCore:
                 with path.open("r", encoding="utf-8") as handle:
                     data = json.load(handle)
                 return data if isinstance(data, dict) else {}
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
                 return {}
 
         def count_matching(root: Path, pattern: str) -> int:
@@ -401,13 +403,28 @@ class LocalCommandCore:
                 except (json.JSONDecodeError, OSError):
                     pass
 
-        status = read_json(agent_path / ".status.json")
-        runtime = status.get("runtime", {})
-        tokens_status = status.get("tokens", {})
-        ctx = tokens_status.get("context", {})
-        agent_state = runtime.get("state", agent_meta.get("state", "?"))
-        uptime = runtime.get("uptime_seconds", 0)
-        started_at = runtime.get("started_at") or started_at
+        # Own live state/usage — curated from this agent's published Agent
+        # record (lingtai.kernel.session_stats) rather than re-collected
+        # from .status.json: /kanban renders the record, it does not
+        # reconstruct normal live state itself.
+        record = read_agent_record(agent_path)
+        record_session = (record or {}).get("session") if isinstance(record, dict) else None
+        record_usage = (record or {}).get("usage") if isinstance(record, dict) else None
+        if not isinstance(record_session, dict):
+            record_session = {}
+        if not isinstance(record_usage, dict):
+            record_usage = {}
+        agent_state = record_session.get("state", agent_meta.get("state", "?"))
+        uptime = record_session.get("uptime_seconds", 0)
+        started_at = record_session.get("started_at") or started_at
+        ctx = {
+            "total_tokens": record_usage.get("context_used_tokens", 0),
+            "window_size": record_usage.get("context_limit_tokens"),
+            "usage_pct": record_usage.get("context_usage_pct", 0) or 0,
+            "system_tokens": record_usage.get("context_system_tokens", 0),
+            "tools_tokens": record_usage.get("context_tools_tokens", 0),
+            "history_tokens": record_usage.get("context_history_tokens", 0),
+        }
 
         all_agents: dict[str, dict[str, Any]] = {}
         total_input = total_output = total_thinking = total_cached = 0
@@ -419,39 +436,35 @@ class LocalCommandCore:
             if not agent_json.exists():
                 continue
             child_meta = read_json(agent_json)
-            child_status = read_json(child / ".status.json")
-            child_runtime = child_status.get("runtime", {})
-            ledger_path = child / "logs" / "token_ledger.jsonl"
-            agent_input = agent_output = agent_thinking = agent_cached = 0
-            agent_calls = 0
-            if ledger_path.exists():
-                try:
-                    with ledger_path.open("r", encoding="utf-8") as handle:
-                        for line in handle:
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                entry = json.loads(line)
-                                agent_input += entry.get("input", 0)
-                                agent_output += entry.get("output", 0)
-                                agent_thinking += entry.get("thinking", 0)
-                                agent_cached += entry.get("cached", 0)
-                                agent_calls += 1
-                            except json.JSONDecodeError:
-                                continue
-                except OSError:
-                    pass
+            # Sibling agent's own live state + usage — curated from its
+            # published Agent record instead of an independent .status.json
+            # read plus a raw token_ledger.jsonl scan. This is a deliberate
+            # scope change from "lifetime ledger total" to "current session
+            # usage" (the record's usage block), matching the record's own
+            # session/molt-boundary semantics rather than re-deriving a
+            # second, possibly-disagreeing total.
+            child_record = read_agent_record(child)
+            child_session = (child_record or {}).get("session") if isinstance(child_record, dict) else None
+            child_usage = (child_record or {}).get("usage") if isinstance(child_record, dict) else None
+            if not isinstance(child_session, dict):
+                child_session = {}
+            if not isinstance(child_usage, dict):
+                child_usage = {}
             all_agents[child.name] = {
-                "input": agent_input,
-                "output": agent_output,
-                "thinking": agent_thinking,
-                "cached": agent_cached,
-                "calls": agent_calls,
-                "state": child_runtime.get("state") or child_meta.get("state", "?"),
+                "input": child_usage.get("input_tokens", 0),
+                "output": child_usage.get("output_tokens", 0),
+                "thinking": child_usage.get("thinking_tokens", 0),
+                "cached": child_usage.get("cached_tokens", 0),
+                "calls": child_usage.get("api_calls", 0),
+                "state": child_session.get("state") or child_meta.get("state", "?"),
                 "molt_count": int(child_meta.get("molt_count") or 0),
                 "model": child_meta.get("llm", {}).get("model", "?"),
             }
+            agent_input = child_usage.get("input_tokens", 0) or 0
+            agent_output = child_usage.get("output_tokens", 0) or 0
+            agent_thinking = child_usage.get("thinking_tokens", 0) or 0
+            agent_cached = child_usage.get("cached_tokens", 0) or 0
+            agent_calls = child_usage.get("api_calls", 0) or 0
             total_input += agent_input
             total_output += agent_output
             total_thinking += agent_thinking

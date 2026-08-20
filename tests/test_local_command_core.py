@@ -191,11 +191,14 @@ def test_kanban_snapshot_preserves_shared_dashboard_values(tmp_path: Path) -> No
         json.dumps({"agent_id": "agent-1", "molt_count": 2}),
         encoding="utf-8",
     )
-    (tmp_path / ".status.json").write_text(
+    (tmp_path / "system").mkdir(exist_ok=True)
+    (tmp_path / "system" / "agent_record.json").write_text(
         json.dumps(
             {
-                "runtime": {"state": "active", "uptime_seconds": 125},
-                "tokens": {"context": {"total_tokens": 100, "usage_pct": 2.5}},
+                "schema": "lingtai.agent_record/v1", "schema_version": 1,
+                "generated_at": "2026-08-20T00:00:00Z",
+                "session": {"state": "active", "uptime_seconds": 125},
+                "usage": {"context_used_tokens": 100, "context_usage_pct": 2.5},
             }
         ),
         encoding="utf-8",
@@ -213,6 +216,33 @@ def test_kanban_snapshot_preserves_shared_dashboard_values(tmp_path: Path) -> No
     assert data["fmt"](1200) == "1.2K"
     assert data["fmt_duration"](125) == "2m"
     assert data["addon_status"] == {"telegram": False, "feishu": True}
+
+
+def test_kanban_snapshot_survives_sibling_with_non_utf8_agent_json(
+    tmp_path: Path,
+) -> None:
+    # A sibling agent dir under the same lingtai root can carry a
+    # present-but-non-UTF-8-decodable .agent.json (e.g. mid-write, or
+    # corrupted). Kanban collection walks every sibling for the "all
+    # agents" roster and must degrade that one entry rather than crash.
+    (tmp_path / "init.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".agent.json").write_text(
+        json.dumps({"agent_id": "agent-1"}), encoding="utf-8"
+    )
+    sibling = tmp_path.parent / "sibling-agent"
+    sibling.mkdir()
+    (sibling / ".agent.json").write_bytes(b"\xff\xfe{")
+
+    try:
+        data = LocalCommandCore(tmp_path).collect_kanban_data()
+
+        assert data is not None
+        assert data["current_agent"] == tmp_path.name
+        assert data["all_agents"]["sibling-agent"]["state"] == "?"
+        assert data["all_agents"]["sibling-agent"]["model"] == "?"
+    finally:
+        (sibling / ".agent.json").unlink()
+        sibling.rmdir()
 
 
 def test_service_injects_one_workdir_bound_core_for_every_account(

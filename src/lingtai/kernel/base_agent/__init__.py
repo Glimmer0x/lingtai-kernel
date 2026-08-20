@@ -748,6 +748,13 @@ class BaseAgent:
         self._soul_fire_lock: threading.Lock = threading.Lock()
         self._insight_turn_counter: int = 0
 
+        # Agent record — throttled by LINGTAI_SESSION_STATS_REFRESH_SECONDS;
+        # see _write_session_stats_record. Sequence is process-local only
+        # (resets on restart); atomic replace already makes torn reads
+        # impossible, sequence is a bonus ordering signal for one process.
+        self._session_stats_last_written_at: float | None = None
+        self._session_stats_sequence: int = 0
+
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
         self._heartbeat_thread: threading.Thread | None = None
@@ -2415,6 +2422,47 @@ class BaseAgent:
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to write .status.json: {e}")
 
+    def _build_agent_record_extra(self) -> dict:
+        """Curated ``handles``/``integrations`` blocks for the Agent record.
+
+        Core owns no MCP/integration knowledge, so the base implementation
+        contributes nothing; ``lingtai.Agent`` overrides this to safelist
+        verified consumer-facing handles (e.g. a Telegram bot username) and
+        visible MCP integration labels from ``services.mcp_registry``.
+        """
+        return {}
+
+    def _write_session_stats_record(self) -> None:
+        """Publish the redacted Agent record, throttled by
+        LINGTAI_SESSION_STATS_REFRESH_SECONDS (default 5s).
+
+        This is the one atomic/versioned/redacted live personal record every
+        LingTai Agent (including avatars) owns — see
+        ``lingtai.kernel.session_stats``. Best-effort: a write failure is
+        logged and never interrupts the turn.
+        """
+        from ..session_stats import (
+            build_agent_record,
+            session_stats_refresh_seconds,
+            should_refresh_agent_record,
+            write_agent_record,
+        )
+
+        try:
+            wall_now = self._lifecycle_clock.wall_seconds()
+            if not should_refresh_agent_record(
+                self._session_stats_last_written_at,
+                wall_now,
+                session_stats_refresh_seconds(),
+            ):
+                return
+            self._session_stats_sequence += 1
+            record = build_agent_record(self, sequence=self._session_stats_sequence)
+            write_agent_record(self._working_dir, record)
+            self._session_stats_last_written_at = wall_now
+        except Exception as e:
+            logger.warning(f"[{self.agent_name}] Failed to write agent record: {e}")
+
     # ------------------------------------------------------------------
     # Messaging (pass-throughs)
     # ------------------------------------------------------------------
@@ -2578,6 +2626,7 @@ class BaseAgent:
         except Exception as e:
             logger.warning(f"[{self.agent_name}] Failed to update manifest: {e}")
         self._write_status_snapshot()
+        self._write_session_stats_record()
         # Append per-call token usage to ledger
         usage, self._last_usage = self._last_usage, None
         if usage is not None:

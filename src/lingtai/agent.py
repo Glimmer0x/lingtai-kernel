@@ -762,6 +762,57 @@ class Agent(BaseAgent):
                     clean[key] = allowed
         return clean
 
+    #: Preference order for picking one display handle per MCP identity —
+    #: mirrors the account-identity safelist in ``services.mcp_registry``
+    #: (``IDENTITY_SAFE_ACCOUNT_KEYS``); no new field is invented here.
+    _HANDLE_KEY_PREFERENCE = ("bot_username", "username", "alias", "display_name")
+
+    def _build_agent_record_extra(self) -> dict:
+        """Curate ``handles``/``integrations`` for the Agent record.
+
+        Reads only already-redacted, already-public sources: the MCP
+        registry (``services.mcp_registry.read_registry`` — name/summary/
+        transport, no credentials) for integration labels, and per-MCP
+        identity documents (``read_identities`` — the same
+        ``IDENTITY_SAFE_ACCOUNT_KEYS`` allowlist the system prompt itself
+        renders) for one verified consumer-facing handle per integration.
+        Best-effort: any read failure yields an empty extra rather than
+        breaking the record write.
+        """
+        try:
+            from .services.mcp_registry import read_identities, read_registry
+
+            records, _problems = read_registry(self._working_dir)
+            identities = read_identities(self._working_dir)
+        except Exception:
+            return {}
+
+        integrations = []
+        handles: dict[str, str] = {}
+        for record in records:
+            name = record.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            integrations.append({
+                "name": name,
+                "transport": record.get("transport"),
+                "connected": name in getattr(self, "_mcp_init_specs", {}),
+            })
+            identity = identities.get(name)
+            accounts = identity.get("accounts") if isinstance(identity, dict) else None
+            if not accounts or not isinstance(accounts, list):
+                continue
+            first = accounts[0]
+            if not isinstance(first, dict):
+                continue
+            for key in self._HANDLE_KEY_PREFERENCE:
+                value = first.get(key)
+                if isinstance(value, str) and value:
+                    handles[name] = value
+                    break
+
+        return {"handles": handles, "integrations": integrations}
+
     def _build_system_prompt(self) -> str:
         """Override kernel's prompt builder to inject app tool descriptions.
 

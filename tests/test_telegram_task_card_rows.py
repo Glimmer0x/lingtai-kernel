@@ -494,12 +494,49 @@ def test_metadata_unchanged_when_no_agent_lifecycle_present():
 
 
 # ---------------------------------------------------------------------------
-# _task_card_agent_lifecycle_status — sources .status.json, degrades safely
+# _task_card_agent_lifecycle_status — sources the published Agent record
+# (system/agent_record.json), degrades safely. The record's own
+# health.liveness field is a write-time snapshot baked in by whichever agent
+# process was alive when it wrote the record; it never advances once that
+# process dies, so the read path recomputes freshness itself from
+# health.heartbeat_at against the current wall clock (HEARTBEAT_LIVENESS_SECONDS
+# threshold) instead of trusting the stored string. These tests assert on the
+# record's heartbeat_at field (not liveness) driving the outcome, and include
+# cases where a stale heartbeat_at is paired with a frozen liveness="fresh"
+# string to prove the frozen field is ignored.
 # ---------------------------------------------------------------------------
 
-def _write_status(tmp_path, payload):
+from lingtai.kernel.config import HEARTBEAT_LIVENESS_SECONDS
+
+
+def _write_agent_record(tmp_path, *, state=None, liveness=None, heartbeat_at=None,
+                         last_api_call_at=None, last_progress_at=None, raw=None):
     import json as _json
-    (tmp_path / ".status.json").write_text(_json.dumps(payload), encoding="utf-8")
+
+    if raw is not None:
+        payload = raw
+    else:
+        payload = {
+            "schema": "lingtai.agent_record/v1", "schema_version": 1,
+            "generated_at": "2026-08-20T00:00:00Z",
+            "session": {} if state is None else {"state": state},
+            "health": {
+                k: v for k, v in {
+                    "liveness": liveness,
+                    "heartbeat_at": heartbeat_at,
+                    "last_api_call_at": last_api_call_at,
+                    "last_progress_at": last_progress_at,
+                }.items() if v is not None
+            },
+        }
+    path = tmp_path / "system" / "agent_record.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(payload, bytes):
+        path.write_bytes(payload)
+    elif isinstance(payload, str):
+        path.write_text(payload, encoding="utf-8")
+    else:
+        path.write_text(_json.dumps(payload), encoding="utf-8")
 
 
 def test_lifecycle_status_missing_file_degrades_to_none(tmp_path):
@@ -509,100 +546,104 @@ def test_lifecycle_status_missing_file_degrades_to_none(tmp_path):
 
 def test_lifecycle_status_malformed_json_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    (tmp_path / ".status.json").write_text("{not json", encoding="utf-8")
+    _write_agent_record(tmp_path, raw="{not json")
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
 def test_lifecycle_status_non_object_json_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    (tmp_path / ".status.json").write_text("[1, 2, 3]", encoding="utf-8")
+    _write_agent_record(tmp_path, raw=[1, 2, 3])
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
 def test_lifecycle_status_non_utf8_bytes_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    (tmp_path / ".status.json").write_bytes(b"\xff\xfe\x00\x01")
+    _write_agent_record(tmp_path, raw=b"\xff\xfe\x00\x01")
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
 def test_lifecycle_status_missing_runtime_block_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"identity": {}})
+    _write_agent_record(tmp_path, raw={"identity": {}})
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
 def test_lifecycle_status_runtime_not_a_dict_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": "active"})
+    _write_agent_record(tmp_path, raw={"session": "active"})
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
 def test_lifecycle_status_unrecognized_state_degrades_to_none(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "haunted"}})
+    _write_agent_record(tmp_path, state="haunted")
     assert mgr._task_card_agent_lifecycle_status() is None
 
 
-def test_lifecycle_status_suspended_never_checks_presence(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    def _boom(*a, **kw):
-        raise AssertionError("suspended must not consult presence liveness")
-
-    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+def test_lifecycle_status_suspended_ignores_stale_heartbeat(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "suspended"}})
+    stale_heartbeat_at = time.time() - (HEARTBEAT_LIVENESS_SECONDS + 60.0)
+    _write_agent_record(
+        tmp_path, state="suspended", liveness="fresh", heartbeat_at=stale_heartbeat_at,
+    )
     assert mgr._task_card_agent_lifecycle_status() == "suspended"
 
 
-def test_lifecycle_status_stuck_never_checks_presence(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    def _boom(*a, **kw):
-        raise AssertionError("stuck must not consult presence liveness")
-
-    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+def test_lifecycle_status_stuck_ignores_stale_heartbeat(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "stuck"}})
+    stale_heartbeat_at = time.time() - (HEARTBEAT_LIVENESS_SECONDS + 60.0)
+    _write_agent_record(
+        tmp_path, state="stuck", liveness="fresh", heartbeat_at=stale_heartbeat_at,
+    )
     assert mgr._task_card_agent_lifecycle_status() == "stuck"
 
 
-def test_lifecycle_status_active_trusts_fresh_presence(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: True)
+def test_lifecycle_status_active_with_fresh_heartbeat_stays_active(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    _write_agent_record(
+        tmp_path, state="active", liveness="fresh", heartbeat_at=time.time(),
+    )
     assert mgr._task_card_agent_lifecycle_status() == "active"
 
 
-def test_lifecycle_status_idle_with_stale_presence_becomes_offline(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: False)
+def test_lifecycle_status_idle_with_stale_heartbeat_becomes_offline_despite_frozen_fresh_liveness(tmp_path):
+    # Regression: a dead process's Agent record keeps whatever health.liveness
+    # string was true the instant it last wrote the record ("fresh", since it
+    # was alive then) forever after — that field can never advance on its own.
+    # The read path must recompute freshness from heartbeat_at against the
+    # current wall clock instead of trusting the frozen field, or a dead
+    # process's last idle record renders as "idle" forever instead of offline.
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "idle"}})
+    stale_heartbeat_at = time.time() - (HEARTBEAT_LIVENESS_SECONDS + 60.0)
+    _write_agent_record(
+        tmp_path, state="idle", liveness="fresh", heartbeat_at=stale_heartbeat_at,
+    )
     assert mgr._task_card_agent_lifecycle_status() == "offline"
 
 
-def test_lifecycle_status_asleep_with_stale_presence_becomes_offline(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: False)
+def test_lifecycle_status_asleep_with_stale_heartbeat_becomes_offline_despite_frozen_fresh_liveness(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "asleep"}})
+    stale_heartbeat_at = time.time() - (HEARTBEAT_LIVENESS_SECONDS + 60.0)
+    _write_agent_record(
+        tmp_path, state="asleep", liveness="fresh", heartbeat_at=stale_heartbeat_at,
+    )
     assert mgr._task_card_agent_lifecycle_status() == "offline"
 
 
-def test_lifecycle_status_presence_error_falls_back_to_raw_state(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    def _boom(*a, **kw):
-        raise OSError("presence adapter blew up")
-
-    monkeypatch.setattr(manager_mod, "observe_alive", _boom)
+def test_lifecycle_status_fresh_heartbeat_wins_over_frozen_stale_liveness(tmp_path):
+    # The inverse of the regression above: a frozen liveness="stale" string
+    # must not override a heartbeat that is, right now, still within the
+    # threshold — the recomputation is authoritative in both directions.
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "idle"}})
+    _write_agent_record(
+        tmp_path, state="idle", liveness="stale", heartbeat_at=time.time(),
+    )
+    assert mgr._task_card_agent_lifecycle_status() == "idle"
+
+
+def test_lifecycle_status_missing_heartbeat_falls_back_to_raw_state(tmp_path):
+    mgr, _ = _integration_manager(tmp_path)
+    _write_agent_record(tmp_path, state="idle")
     assert mgr._task_card_agent_lifecycle_status() == "idle"
 
 
@@ -622,12 +663,9 @@ def test_event_metadata_snapshot_none_when_nothing_available(tmp_path):
     assert "working_dir" in snapshot
 
 
-def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path, monkeypatch):
-    import lingtai.mcp_servers.telegram.manager as manager_mod
-
-    monkeypatch.setattr(manager_mod, "observe_alive", lambda *a, **kw: True)
+def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    _write_agent_record(tmp_path, state="active", liveness="fresh")
     snapshot = mgr._task_card_event_metadata_snapshot()
     assert snapshot["agent_lifecycle"] == "active"
     assert "device_short_name" in snapshot
@@ -636,7 +674,7 @@ def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path, monkeypatch):
 
 def test_event_metadata_snapshot_merges_with_existing_session_metadata(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "suspended"}})
+    _write_agent_record(tmp_path, state="suspended")
     mgr._task_card_event_metadata = {"api_calls": 4}
     snapshot = mgr._task_card_event_metadata_snapshot()
     assert snapshot["api_calls"] == 4
@@ -662,7 +700,7 @@ def test_event_metadata_snapshot_adds_current_model(tmp_path):
         _json.dumps({"llm": {"model": "deepseek-v4-flash"}}), encoding="utf-8"
     )
     mgr, _ = _integration_manager(tmp_path)
-    _write_status(tmp_path, {"runtime": {"state": "active"}})
+    _write_agent_record(tmp_path, state="active", liveness="fresh")
     snapshot = mgr._task_card_event_metadata_snapshot()
     assert snapshot["agent_lifecycle"] == "active"
     assert snapshot["model"] == "deepseek-v4-flash"

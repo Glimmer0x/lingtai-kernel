@@ -651,6 +651,7 @@ def _heartbeat_loop(agent) -> None:
                         deferred_oldest_at=agent._deferred_notifications_oldest_at,
                     )
                     agent._write_status_snapshot()
+                    agent._write_session_stats_record()
                     agent._active_stuck_logged = True
 
             # Periodic snapshot (Time Machine) — off by default
@@ -722,6 +723,10 @@ def _write_heartbeat_tick(agent) -> None:
 
     try:
         agent._write_status_snapshot()
+    except Exception:
+        pass
+    try:
+        agent._write_session_stats_record()
     except Exception:
         pass
 
