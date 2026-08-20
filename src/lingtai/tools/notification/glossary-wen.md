@@ -16,3 +16,4 @@ maintenance: |
 **名相对照**
 
 - `notification`：原 locale catalog 未载 model-facing 本地名；召名、action 枚举之值与参名皆仍书上文 canonical English。
+- `delay`：暂缓消费者之递达，未改生产者之牍；`delay-alarm` 乃期满之镜，不可为暂缓之的。

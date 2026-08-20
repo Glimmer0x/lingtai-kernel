@@ -376,8 +376,10 @@ A valid live checkpoint performs one RunDir state transaction: increment
 ID-bearing `pending_checkpoint_messages` exactly once in the durable state write;
 then append a `daemon_checkpoint` event and refresh heartbeat. It next publishes
 a stable-key `source="daemon"`, `kind="daemon_checkpoint"`, `terminal=false`
-system event so the parent wakes without consuming the exactly-once terminal
-notification. The tool response returns the drained IDs/messages. Once the
+event on the singular built-in `daemon` channel so the parent wakes without
+consuming the exactly-once terminal notification. Checkpoints use the same
+append/cap/idempotency format and durable `data.daemon` batch count/alarm latch as
+terminal daemon notices; no daemon-originated parent wake lands on `system`. The tool response returns the drained IDs/messages. Once the
 durable state write succeeds, an event append, heartbeat touch, or notification
 publication failure is an honest error carrying `checkpoint_recorded=true`, the
 sequence, and those same drained messages; a retry cannot hide or redeliver them.
@@ -468,7 +470,7 @@ directory may write a temporary
 `daemon.json.terminal_notification_claim` before publication to suppress
 concurrent callbacks, but `daemon.json.terminal_notified=true` is a receipt and
 may be written only after `_publish_daemon_notification` succeeds or an
-idempotent retry observes an already-published system event.
+idempotent retry observes an already-published daemon-channel event.
 
 Failed enqueue must clear the pending claim and leave the terminal run
 retryable. Startup reconciliation retries only new-schema terminal run dirs that

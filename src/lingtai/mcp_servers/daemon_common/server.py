@@ -20,6 +20,7 @@ from mcp.server.stdio import stdio_server
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 from lingtai.kernel._fsutil import atomic_write_json
 from lingtai.kernel.base_agent.messaging import _enqueue_system_notification
+from lingtai.kernel.notifications import DAEMON_CHANNEL
 from lingtai.tools.daemon.run_dir import DaemonRunDir
 
 from .._results import json_tool_result as _tool_result
@@ -284,6 +285,7 @@ class _CheckpointNotifier:
     """Small process-local adapter for the canonical system-event mutator."""
 
     def __init__(self, parent_workdir: Path):
+        self._working_dir = parent_workdir
         self._notification_store = PosixNotificationStoreAdapter(parent_workdir)
 
     def _log(self, *_args, **_kwargs) -> None:
@@ -334,6 +336,7 @@ def _record_checkpoint(run_dir: DaemonRunDir, arguments: dict[str, Any]) -> dict
                 "checkpoint_sequence": sequence,
                 "checkpoint_state": checkpoint["state"],
             },
+            channel=DAEMON_CHANNEL,
         )
     except Exception as exc:
         return {

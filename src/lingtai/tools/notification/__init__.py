@@ -31,6 +31,9 @@ Actions:
                      ``.notification/system.json``.
     dismiss_ref    — remove ``system`` event(s) by ``ref_id`` from
                      ``.notification/system.json``.
+    delay          — temporarily suppress consumer delivery for one allowed
+                     channel (0 cancels); producer state is never touched and
+                     expiry raises a delay-alarm mirror.
     manual         — return the installed notification manual body. Read-only;
                      notification and producer state are not touched.
 
@@ -64,7 +67,7 @@ from ..tool_family.manual import build_manual_child
 
 # Single-source delegate — the canonical dismissal helper.  No notification
 # logic is reimplemented here.
-from lingtai.kernel.notifications import dismiss_channel
+from lingtai.kernel.notifications import delay_notification_channel, dismiss_channel
 
 
 # Placeholder returned by ``check`` — the live payload (``_meta.agent_meta.notifications.attention``
@@ -101,7 +104,7 @@ def _schema_only_family() -> ToolFamily:
     off.  The real handlers need an ``agent``, which only arrives per call,
     so :func:`handle` builds a per-call family with bound handlers and this
     module-level one never dispatches.  Constructing it at import time is
-    still load-bearing: it proves the fixed nine-child registry has no
+    still load-bearing: it proves the fixed ten-child registry has no
     duplicate and no reserved-name collision on ``manual``
     (``ToolFamilyError`` raises here, at import, rather than shipping
     silently).
@@ -288,6 +291,11 @@ def _dismiss_ref(agent, args: dict) -> dict:
     )
 
 
+def _delay(agent, args: dict) -> dict:
+    """Delay one allowed channel's consumer delivery without touching its producer."""
+    return delay_notification_channel(agent, args.get("channel"), args.get("seconds"))
+
+
 def _add_hook(agent, args: dict) -> dict:
     """Register an external hook manifest (notification add)."""
     from lingtai.kernel.notifications import add_hook
@@ -379,6 +387,7 @@ def _build_family(agent) -> ToolFamily:
         "drop": _drop_hook,
         "edit": _edit_hook,
         "list": _list_hooks,
+        "delay": _delay,
         "check": _check,
         "dismiss_channel": _dismiss_channel,
         "dismiss_event": _dismiss_event,

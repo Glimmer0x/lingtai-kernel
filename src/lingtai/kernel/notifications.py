@@ -24,11 +24,17 @@ The basename is the *tool* whose namespace owns the notification.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import threading
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import NamedTuple
+from pathlib import Path
+from typing import Any, NamedTuple
 
 _CHANNEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -41,6 +47,7 @@ _NOTIFICATION_CHANNEL_ALLOWLIST: set[str] = {
     "btw",
     "cron",
     "daemon",
+    "delay-alarm",
     "email",
     "goal",
     "molt",
@@ -165,6 +172,539 @@ def _invalidate_allow_predicates() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Consumer notification delay — private durable state, timer, and alarm mirror
+# ---------------------------------------------------------------------------
+#
+# Delay is intentionally a *consumer* policy.  It never mutates the target
+# producer's .json file: a short-lived private state record causes the coherent
+# consumer read below to omit one target channel.  Expiry writes a separate
+# delay-alarm mirror and immediately stops filtering the target.  The state and
+# alarm use the same native lock as NotificationStore mutations, so independently
+# composed processes cannot race a timer/recovery into two alarm publications.
+
+DELAY_ALARM_CHANNEL = "delay-alarm"
+_DELAY_STATE_FILENAME = ".delay_state.json"
+NOTIFICATION_DELAY_MAX_SECONDS_ENV = "LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS"
+DEFAULT_NOTIFICATION_DELAY_MAX_SECONDS = 600
+_DELAY_LOCKS_GUARD = threading.Lock()
+_DELAY_LOCKS: dict[str, threading.RLock] = {}
+_DELAY_TIMERS_GUARD = threading.Lock()
+_DELAY_TIMERS: dict[str, tuple[str, float, threading.Timer]] = {}
+
+
+def notification_delay_max_seconds(agent=None) -> int:
+    """Return the live finite delay cap, logging invalid configured fallbacks.
+
+    The environment is intentionally read for every delay action, so an operator
+    can tune the bounded consumer silence window without a restart. Invalid,
+    blank, zero, and negative values fail safe to the ten-minute default; no
+    configuration can turn delay into an unbounded suppression.
+    """
+    raw = os.environ.get(NOTIFICATION_DELAY_MAX_SECONDS_ENV)
+    if raw is None:
+        return DEFAULT_NOTIFICATION_DELAY_MAX_SECONDS
+    try:
+        value = int(raw.strip())
+    except (AttributeError, TypeError, ValueError):
+        value = 0
+    if value > 0:
+        return value
+    try:
+        agent._log(
+            "notification_delay_max_seconds_invalid",
+            env=NOTIFICATION_DELAY_MAX_SECONDS_ENV,
+            raw_value=str(raw)[:100],
+            fallback_seconds=DEFAULT_NOTIFICATION_DELAY_MAX_SECONDS,
+        )
+    except Exception:
+        pass
+    return DEFAULT_NOTIFICATION_DELAY_MAX_SECONDS
+
+
+def _delay_workdir_key(workdir: str | Path | None) -> str | None:
+    if workdir is None:
+        return None
+    try:
+        return str(Path(workdir))
+    except (TypeError, ValueError):
+        return None
+
+
+def _delay_paths(workdir: str | Path) -> tuple[Path, Path, Path]:
+    notification_dir = Path(workdir) / ".notification"
+    return (
+        notification_dir,
+        notification_dir / _DELAY_STATE_FILENAME,
+        notification_dir / f"{DELAY_ALARM_CHANNEL}.json",
+    )
+
+
+def _delay_thread_lock(workdir: str) -> threading.RLock:
+    with _DELAY_LOCKS_GUARD:
+        lock = _DELAY_LOCKS.get(workdir)
+        if lock is None:
+            lock = threading.RLock()
+            _DELAY_LOCKS[workdir] = lock
+        return lock
+
+
+@contextmanager
+def _delay_transaction(workdir: str):
+    """Serialize private delay state with the Store's native mutation lock.
+
+    This deliberately performs the tiny delay/alarm transaction directly rather
+    than adding a ninth Store Port family: the target and alarm files remain
+    ordinary Store-compatible channel mirrors, while the private dotfile stays
+    outside the Store's public channel surface.  We never call a Store mutation
+    while holding this lock, avoiding a reversed in-process lock order.
+    """
+    from lingtai.adapters.notification_store_lock import select_notification_store_lock
+
+    notification_dir, _, _ = _delay_paths(workdir)
+    with _delay_thread_lock(workdir):
+        with select_notification_store_lock().exclusive(notification_dir):
+            yield
+
+
+def _read_delay_state_locked(state_path: Path) -> dict[str, Any] | None:
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _write_delay_state_locked(state_path: Path, state: dict[str, Any]) -> None:
+    from ._fsutil import atomic_write_json
+
+    atomic_write_json(
+        state_path, state, ensure_ascii=False, indent=None, sort_keys=True, fsync=True
+    )
+
+
+def _delay_iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _active_delay_state(state: object, *, now: float | None = None) -> dict[str, Any] | None:
+    """Return a validated live delay, or ``None`` (fail visible).
+
+    A malformed/unreadable state never suppresses consumer delivery.  This is
+    deliberately stricter than ordinary state parsing: silence is not a safe
+    fallback for a consumer-only policy.
+    """
+    if not isinstance(state, dict) or state.get("status") != "active":
+        return None
+    target = state.get("target")
+    request_id = state.get("request_id")
+    seconds = state.get("requested_seconds")
+    started = state.get("started_epoch")
+    deadline = state.get("deadline_epoch")
+    if (
+        not isinstance(target, str)
+        or target == DELAY_ALARM_CHANNEL
+        or not isinstance(request_id, str)
+        or not request_id
+        or isinstance(seconds, bool)
+        or not isinstance(seconds, int)
+        or seconds < 1
+        or isinstance(started, bool)
+        or not isinstance(started, (int, float))
+        or isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or deadline < started
+    ):
+        return None
+    if now is not None and deadline <= now:
+        return None
+    return state
+
+
+def _read_target_stats_locked(workdir: str, channel: str) -> dict[str, Any]:
+    """Read conservative current target facts without claiming a total.
+
+    The byte fingerprint tells the alarm whether the current mirror differs from
+    the mirror seen at delay start.  ``reported_count`` is only copied when a
+    producer explicitly supplied it; event counts are explicitly labelled as
+    retained entries because append/overwrite/cap policies cannot prove totals.
+    """
+    notification_dir, _, _ = _delay_paths(workdir)
+    path = notification_dir / f"{channel}.json"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return {"present": False}
+    except OSError as exc:
+        return {"present": None, "read_error": type(exc).__name__}
+    stats: dict[str, Any] = {
+        "present": True,
+        "byte_size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return stats
+    if not isinstance(payload, dict):
+        return stats
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return stats
+    reported_count = data.get("count")
+    if isinstance(reported_count, int) and not isinstance(reported_count, bool) and reported_count >= 0:
+        stats["producer_reported_count"] = reported_count
+    events = data.get("events")
+    if isinstance(events, list):
+        stats["retained_event_count"] = len(events)
+        stats["retained_event_count_scope"] = "current mirror entries; not asserted total"
+    return stats
+
+
+def _delay_stats_changed(initial: object, current: object) -> bool:
+    if not isinstance(initial, dict) or not isinstance(current, dict):
+        return True
+    if initial.get("present") != current.get("present"):
+        return True
+    if initial.get("present") is not True:
+        return False
+    return initial.get("sha256") != current.get("sha256")
+
+
+def _delay_alarm_payload(completion: dict[str, Any]) -> dict[str, Any]:
+    target = str(completion["target"])
+    return {
+        "header": f"Notification delay ended: {target}",
+        "icon": "⏰",
+        "priority": "high",
+        "published_at": completion["expired_at"],
+        "instructions": (
+            "This is a consumer-only delay alarm. The target producer state was "
+            "not changed; handle the re-exposed target, then dismiss delay-alarm "
+            "when this reminder is no longer needed."
+        ),
+        "data": {
+            "delay_alarm": {
+                "request_id": completion["request_id"],
+                "target": target,
+                "requested_seconds": completion["requested_seconds"],
+                "actual_seconds": completion["actual_seconds"],
+                "changed": completion["changed"],
+                "initial": completion["initial"],
+                "current": completion["current"],
+                "statistics_scope": (
+                    "Byte fingerprints compare the current mirror with delay start. "
+                    "Counts are producer-reported or retained current entries only; "
+                    "they are never asserted as an exact total for overwrite/capped payloads."
+                ),
+            }
+        },
+    }
+
+
+def reconcile_notification_delay(
+    workdir: str | Path | None, *, expected_request_id: str | None = None
+) -> bool:
+    """Recover or complete an overdue delay, publishing one stable alarm mirror.
+
+    The state first records an immutable ``expiring`` completion snapshot, then
+    writes the alarm and marks it ``published`` under the same cross-process
+    lock.  A crash after the alarm replace but before the final state write only
+    repeats that exact same latest-only mirror (same request id, timestamp, and
+    payload) on recovery; it cannot append a second alarm.  A corrupt state or
+    any I/O failure returns without filtering so the caller fails toward visible
+    delivery; later heartbeat/timer sync retries publication.
+    """
+    key = _delay_workdir_key(workdir)
+    if key is None:
+        return False
+    try:
+        with _delay_transaction(key):
+            _, state_path, alarm_path = _delay_paths(key)
+            state = _read_delay_state_locked(state_path)
+            if not isinstance(state, dict):
+                return False
+            status = state.get("status")
+            if status == "published" or status == "cancelled":
+                return False
+            request_id = state.get("request_id")
+            if expected_request_id is not None and request_id != expected_request_id:
+                return False
+            completion = state.get("completion")
+            if status == "active":
+                # Validate even in the expiry path; invalid state is visible.
+                target = state.get("target")
+                seconds = state.get("requested_seconds")
+                started = state.get("started_epoch")
+                deadline = state.get("deadline_epoch")
+                now = time.time()
+                if (
+                    not isinstance(target, str)
+                    or target == DELAY_ALARM_CHANNEL
+                    or isinstance(seconds, bool)
+                    or not isinstance(seconds, int)
+                    or seconds < 1
+                    or isinstance(started, bool)
+                    or not isinstance(started, (int, float))
+                    or isinstance(deadline, bool)
+                    or not isinstance(deadline, (int, float))
+                    or deadline > now
+                ):
+                    return False
+                current = _read_target_stats_locked(key, target)
+                initial = state.get("initial")
+                completion = {
+                    "request_id": request_id,
+                    "target": target,
+                    "requested_seconds": seconds,
+                    "actual_seconds": round(max(0.0, now - float(started)), 3),
+                    "expired_at": _delay_iso(now),
+                    "changed": _delay_stats_changed(initial, current),
+                    "initial": initial if isinstance(initial, dict) else {"present": None},
+                    "current": current,
+                }
+                state["status"] = "expiring"
+                state["completion"] = completion
+                _write_delay_state_locked(state_path, state)
+            if state.get("status") != "expiring" or not isinstance(completion, dict):
+                return False
+            required = {
+                "request_id", "target", "requested_seconds", "actual_seconds",
+                "expired_at", "changed", "initial", "current",
+            }
+            if not required.issubset(completion):
+                return False
+            from ._fsutil import atomic_write_json
+
+            # Latest-only alarm channel makes the recovery write idempotent.
+            atomic_write_json(
+                alarm_path, _delay_alarm_payload(completion), ensure_ascii=False,
+                indent=None, sort_keys=True, fsync=True,
+            )
+            state["status"] = "published"
+            _write_delay_state_locked(state_path, state)
+            return True
+    except Exception:
+        return False
+
+
+def _read_active_notification_delay(workdir: str | Path | None) -> dict[str, Any] | None:
+    key = _delay_workdir_key(workdir)
+    if key is None:
+        return None
+    try:
+        _, state_path, _ = _delay_paths(key)
+        active = _active_delay_state(_read_delay_state_locked(state_path), now=time.time())
+        if active is None or not is_channel_allowed(active["target"], workdir=key):
+            return None
+        return active
+    except Exception:
+        return None
+
+
+def delayed_notification_target(workdir: str | Path | None) -> str | None:
+    """Return the one currently hidden target, failing open on bad state.
+
+    Expiry recovery runs first so a due target becomes visible and its alarm is
+    created before this consumer snapshot begins.
+    """
+    reconcile_notification_delay(workdir)
+    active = _read_active_notification_delay(workdir)
+    return active.get("target") if active else None
+
+
+def _cancel_notification_delay_timer(workdir: str) -> None:
+    with _DELAY_TIMERS_GUARD:
+        existing = _DELAY_TIMERS.pop(workdir, None)
+    if existing is not None:
+        existing[2].cancel()
+
+
+def _delay_timer_fired(agent, workdir: str, request_id: str) -> None:
+    try:
+        reconcile_notification_delay(workdir, expected_request_id=request_id)
+        sync = getattr(agent, "_sync_notifications", None)
+        if callable(sync):
+            sync()
+    except Exception:
+        # Heartbeat/sync recovery remains the durable backstop.
+        pass
+
+
+def arm_notification_delay_timer(agent) -> None:
+    """Arm/re-arm the per-agent process timer from persisted live state.
+
+    Called after a delay action and on every notification sync; refresh/restart
+    therefore recreates a missed timer from disk.  The request id guards a stale
+    callback after an explicit replacement/cancellation.
+    """
+    workdir = _delay_workdir_key(getattr(agent, "_working_dir", None))
+    if workdir is None:
+        return
+    reconcile_notification_delay(workdir)
+    active = _read_active_notification_delay(workdir)
+    if active is None:
+        _cancel_notification_delay_timer(workdir)
+        return
+    request_id = active["request_id"]
+    deadline = float(active["deadline_epoch"])
+    with _DELAY_TIMERS_GUARD:
+        existing = _DELAY_TIMERS.get(workdir)
+        if existing is not None and existing[0] == request_id and existing[1] == deadline:
+            return
+        if existing is not None:
+            existing[2].cancel()
+        timer = threading.Timer(
+            max(0.001, deadline - time.time()),
+            _delay_timer_fired,
+            args=(agent, workdir, request_id),
+        )
+        timer.daemon = True
+        _DELAY_TIMERS[workdir] = (request_id, deadline, timer)
+        timer.start()
+
+
+def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, Any]:
+    """Start, replace, or cancel the one consumer delay for ``agent``.
+
+    Only delay state changes here; the target producer file is neither cleared
+    nor rewritten.  On cancellation the next coherent read immediately exposes
+    the target again.
+    """
+    workdir = _delay_workdir_key(getattr(agent, "_working_dir", None))
+    if workdir is None:
+        return {
+            "status": "error",
+            "reason": "delay_requires_workdir",
+            "message": "notification delay requires an agent working directory",
+        }
+    try:
+        sync_hook_registry(agent)
+        validate_allowed_channel(channel, workdir=_workdir_key(agent))
+        if channel == DELAY_ALARM_CHANNEL:
+            raise ValueError("delay-alarm is an alarm mirror and cannot be delayed")
+        if isinstance(seconds, bool) or not isinstance(seconds, int):
+            raise ValueError("seconds must be an integer")
+        delay_cap = notification_delay_max_seconds(agent)
+        if not 0 <= seconds <= delay_cap:
+            raise ValueError(f"seconds must be between 0 and {delay_cap}")
+    except ValueError as exc:
+        return {
+            "status": "error",
+            "reason": "invalid_delay",
+            "channel": channel,
+            "message": str(exc),
+        }
+
+    # If a timer was missed, publish its owed alarm before replacing/cancelling
+    # the record. Recheck *under the same native lock* below: expiry can race the
+    # first recovery call, and overwriting an overdue active record would lose
+    # the alarm it owes.
+    reconcile_notification_delay(workdir)
+    for _ in range(2):
+        overdue_request_id = None
+        try:
+            with _delay_transaction(workdir):
+                _, state_path, _ = _delay_paths(workdir)
+                current = _read_delay_state_locked(state_path)
+                now = time.time()
+                candidate = _active_delay_state(current)
+                if (
+                    candidate is not None
+                    and float(candidate["deadline_epoch"]) <= now
+                ):
+                    overdue_request_id = candidate["request_id"]
+                else:
+                    active = _active_delay_state(current, now=now)
+                    if seconds == 0:
+                        if active is not None and active.get("target") != channel:
+                            return {
+                                "status": "error",
+                                "reason": "delay_target_mismatch",
+                                "channel": channel,
+                                "active_channel": active.get("target"),
+                                "message": "seconds=0 must name the currently delayed channel",
+                            }
+                        if active is None:
+                            result = {
+                                "status": "ok",
+                                "action": "cancelled",
+                                "channel": channel,
+                                "cancelled": False,
+                            }
+                        else:
+                            next_state = dict(active)
+                            next_state["status"] = "cancelled"
+                            next_state["cancelled_at"] = _delay_iso(now)
+                            _write_delay_state_locked(state_path, next_state)
+                            result = {
+                                "status": "ok",
+                                "action": "cancelled",
+                                "channel": channel,
+                                "cancelled": True,
+                            }
+                    else:
+                        request_id = uuid.uuid4().hex
+                        state = {
+                            "version": 1,
+                            "status": "active",
+                            "request_id": request_id,
+                            "target": channel,
+                            "requested_seconds": seconds,
+                            "started_epoch": now,
+                            "started_at": _delay_iso(now),
+                            "deadline_epoch": now + seconds,
+                            "deadline_at": _delay_iso(now + seconds),
+                            "initial": _read_target_stats_locked(workdir, channel),
+                        }
+                        _write_delay_state_locked(state_path, state)
+                        result = {
+                            "status": "ok",
+                            "action": "delayed",
+                            "channel": channel,
+                            "seconds": seconds,
+                            "request_id": request_id,
+                            "deadline_at": state["deadline_at"],
+                        }
+                        if active is not None:
+                            result["replaced_channel"] = active.get("target")
+        except OSError as exc:
+            return {
+                "status": "error",
+                "reason": "delay_state_write_failed",
+                "channel": channel,
+                "message": f"could not persist notification delay: {type(exc).__name__}",
+            }
+        if overdue_request_id is None:
+            break
+        if not reconcile_notification_delay(
+            workdir, expected_request_id=overdue_request_id
+        ):
+            return {
+                "status": "error",
+                "reason": "delay_expiry_recovery_pending",
+                "channel": channel,
+                "message": "an overdue delay must publish its alarm before replacement",
+            }
+    else:  # pragma: no cover - bounded defense if a racing writer never settles
+        return {
+            "status": "error",
+            "reason": "delay_expiry_recovery_pending",
+            "channel": channel,
+            "message": "an overdue delay must publish its alarm before replacement",
+        }
+
+    if seconds == 0:
+        _cancel_notification_delay_timer(workdir)
+    else:
+        arm_notification_delay_timer(agent)
+    try:
+        agent._log("notification_delay", channel=channel, seconds=seconds)
+    except Exception:
+        pass
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Channel validation
 # ---------------------------------------------------------------------------
 
@@ -230,9 +770,10 @@ def register_notification_channel(channel: str) -> None:
 # Daemon channel — batch counting + alarm-threshold attention policy
 # ---------------------------------------------------------------------------
 #
-# Daemon terminal notices land in `.notification/daemon.json` (not `system`), so
-# a batch of emanations reports terminal state without each arrival waking the
-# parent. The channel payload carries durable batch state under `data.daemon`:
+# All daemon-originated parent notices — cooperative daemon_common checkpoints
+# plus terminal/follow-up outcomes — land in `.notification/daemon.json` (not
+# `system`), so one batch policy governs every daemon wake. The channel payload
+# carries durable batch state under `data.daemon`:
 #
 #   {"count": <events appended since the last clear>, "alarm_fired": <bool>}
 #
@@ -473,6 +1014,15 @@ def coherent_attention_read(
     payload map marked unstable, so no caller mistakes the failure for "the
     channels are quiet".
     """
+    # First reconcile any elapsed persisted delay.  If the timer was missed by
+    # refresh/restart, reconciliation publishes the alarm and turns filtering
+    # off before this single consumer observation is built, so target visibility
+    # and the high-priority alarm arrive in the same sync/wake cycle.
+    delayed_target = delayed_notification_target(workdir)
+
+    def _consumer_allow(channel: str) -> bool:
+        return allow_channel(channel) and channel != delayed_target
+
     threshold = daemon_alarm_threshold(workdir)
     raw_fp: tuple = ()
     payloads: dict = {}
@@ -480,9 +1030,9 @@ def coherent_attention_read(
 
     for _ in range(_COHERENT_READ_ATTEMPTS):
         try:
-            before = tuple(store.fingerprint(allow_channel))
-            payloads = store.snapshot(allow_channel)
-            after = tuple(store.fingerprint(allow_channel))
+            before = tuple(store.fingerprint(_consumer_allow))
+            payloads = store.snapshot(_consumer_allow)
+            after = tuple(store.fingerprint(_consumer_allow))
         except Exception:
             # Read failure: report the last known fingerprint with no payloads
             # and unstable, so masking is skipped and quiet is never inferred.

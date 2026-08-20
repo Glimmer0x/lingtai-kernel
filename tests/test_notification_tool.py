@@ -124,7 +124,7 @@ def test_notification_wired_into_every_agent() -> None:
     assert callable(wired["notification"])
 
 
-_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop", "edit", "list", "manual"]
+_ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop", "edit", "list", "delay", "manual"]
 
 
 def test_notification_schema_exposes_atomic_actions() -> None:
@@ -152,6 +152,7 @@ def test_notification_action_order_is_pinned() -> None:
         "drop",
         "edit",
         "list",
+        "delay",
         "manual",
     )
 
@@ -208,6 +209,7 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
             "instructions",
         },
         "list": set(),
+        "delay": {"channel", "seconds"},
         "check": set(),
         "dismiss_channel": {"channel", "force", "reason"},
         "dismiss_event": {"event_id", "channel", "force", "reason"},

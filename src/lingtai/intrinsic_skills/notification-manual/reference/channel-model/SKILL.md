@@ -6,9 +6,9 @@ description: >
   kernel sync, voluntary check behavior, and canonical producer state versus
   notification mirrors. Read after notification-manual when interpreting,
   producing, or debugging notification payloads; skip for dismissal policy.
-version: 0.4.0
-tags: [lingtai, notifications, channels, protocol, sync, nudge, hooks, whitelist]
-last_changed_at: "2026-08-10T00:00:00Z"
+version: 0.5.0
+tags: [lingtai, notifications, channels, protocol, sync, delay, alarm, nudge, hooks, whitelist]
+last_changed_at: "2026-08-20T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
@@ -30,8 +30,8 @@ A channel is the filename stem in `.notification/<channel>.json`:
 - `.notification/goal.json` becomes `_meta.agent_meta.notifications.attention.goal`.
 
 The kernel accepts built-in channels including `email`, `system`, `soul`,
-`nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, and
-`goal`; MCP bridge channels use the `mcp.` prefix. The **effective allowlist**
+`nudge`, `post-molt`, `tool_loop_guard`, `bash`, `btw`, `cron`, `molt`, `goal`,
+`daemon`, and `delay-alarm`; MCP bridge channels use the `mcp.` prefix. The **effective allowlist**
 is `static ∪ mcp.* ∪ the agent's own registered hook channels`, and it is
 **per-agent, not process-global**: a hook channel is allowed only for the agent
 whose workdir registered it (external hooks register manifests via
@@ -102,6 +102,29 @@ single live payload onto a suitable dict-shaped tool result only on first
 appearance, material change, or a deliberate check. Delivery fingerprints and
 the live holder belong to kernel synchronization, not to the `manual` action.
 
+## Consumer delay filtering
+
+`notification(action='delay', input={'channel': ..., 'seconds': 0 or a live configured cap})` is
+not a producer operation. Its private `.notification/.delay_state.json` record
+causes the coherent consumer snapshot, delivery fingerprint, synthetic wake, and
+voluntary `check` projection to omit exactly one allowed target while it is live;
+the target file itself continues receiving and retaining producer updates. A
+nonzero delay replaces the prior one, and `seconds: 0` cancels the matching target
+and makes it visible again. The nonzero limit is read at each action from
+`LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default 600); invalid/non-positive
+values log and fall back to that finite default.
+
+The process timer is only a prompt path. Every coherent sync also recovers a
+persisted overdue delay. Recovery stops filtering and publishes one high-priority
+`delay-alarm` mirror in the same read/wake cycle. Its state uses the established
+native notification mutation lock plus atomic sibling replacement, and a stable
+request id makes a stale callback/restart retry overwrite the same latest-only
+alarm rather than append a duplicate. The alarm contains only byte-level change
+comparison plus producer-reported or retained-event measurements; such values are
+not claimed to be exact totals for overwrite/capped payloads. `delay-alarm` is a
+built-in mirror consumers may dismiss, but it cannot itself be delayed. Missing or
+malformed delay state fails toward visible target delivery.
+
 ## Canonical producer state versus mirror
 
 A generic channel clear changes only the `.notification/<channel>.json` surface.
@@ -118,9 +141,10 @@ producer's own schema and lifecycle.
 
 The protocol footprint is `.notification/<channel>.json` plus kernel-owned
 notification metadata such as legacy acknowledgement state
-(`.notification/large_result_acks.json`) and the hook-manifest registry
-(`.notification/hooks.json`, a single non-channel file invisible to
-collection). Inspect it read-only
+(`.notification/large_result_acks.json`), the hook-manifest registry
+(`.notification/hooks.json`, a single non-channel file invisible to collection),
+and consumer-delay state (`.notification/.delay_state.json`, a private dotfile
+invisible to collection). Inspect it read-only
 before diagnosing a producer. Never delete the directory or bulk-remove files —
 that bypasses the guards and stale checks that only the producer verb or an
 atomic notification action honor.

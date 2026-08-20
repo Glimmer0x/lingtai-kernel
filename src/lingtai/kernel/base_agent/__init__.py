@@ -1388,6 +1388,7 @@ class BaseAgent:
         from ..notifications import (
             DAEMON_CHANNEL,
             _workdir_key,
+            arm_notification_delay_timer,
             coherent_attention_read,
             flag_unregistered_channel,
             is_channel_allowed,
@@ -1427,6 +1428,11 @@ class BaseAgent:
 
         def _allow(channel: str) -> bool:
             return is_channel_allowed(channel, workdir=_workdir_key(self))
+
+        # Re-arm the durable consumer-delay timer after refresh/restart.  The
+        # helper also recovers an overdue delay before the coherent read, so its
+        # target becomes visible together with the delay-alarm mirror.
+        arm_notification_delay_timer(self)
 
         # One coherent observation: the fingerprint, the daemon-attention mask
         # derived from it, and the payloads all describe the same instant

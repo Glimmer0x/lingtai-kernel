@@ -1,6 +1,6 @@
 ---
 name: notification-tool
-contract_version: 3
+contract_version: 5
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/agent.py
   - tests/test_notification_tool.py
+  - tests/test_notification_delay_alarm.py
   - tests/test_system_dismiss.py
   - tests/test_tools_package_data.py
   - src/lingtai/tools/notification/glossary-en.md
@@ -42,11 +43,11 @@ maintenance: |
 ## Purpose
 
 The mandatory `notification` tool is the sole agent-callable notification
-surface. It exposes eight operational actions: four hook-registry actions
-(`add`/`drop`/`edit`/`list`) plus the four pre-existing actions for reading or
+surface. It exposes nine operational actions: four hook-registry actions
+(`add`/`drop`/`edit`/`list`), the four pre-existing actions for reading or
 atomically clearing notification mirrors (`check` and the three atomic dismiss
-actions), plus one strictly read-only `manual` action for progressive
-disclosure. It owns no producer state. The hook-registry actions mutate the
+actions), and consumer-only `delay`, plus one strictly read-only `manual` action
+for progressive disclosure. It owns no producer state. The hook-registry actions mutate the
 Notification Store's family-8 hook-manifest registry
 (`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
 `.notification/hooks.json`);
@@ -66,7 +67,7 @@ atomic dismiss action after handling a notification. They MUST NOT treat generic
 dismissal as mutation of producer canonical state, bypass protected channels, or
 route large-result compaction through this tool.
 
-Coding agents MUST preserve all eight operational actions, Store semantics,
+Coding agents MUST preserve all nine operational actions, Store semantics,
 notification Core guards, producer state, and the absence of `system`
 notification/dismiss aliases. They MUST keep `manual` read-only, fixed to the
 installed per-agent path, and independent of check/dismiss delivery state.
@@ -81,9 +82,9 @@ object whose properties are exactly `action`, `input`, `reasoning`, and
 `summarize`, with `additionalProperties: false` and `action`, `input`, and
 `reasoning` required. The action domain, in order, is: `check`,
 `dismiss_channel`, `dismiss_event`, `dismiss_ref`, `add`, `drop`, `edit`,
-`list`, `manual`. Read/clear actions keep the pre-existing prefix stable;
+`list`, `delay`, `manual`. Read/clear actions keep the pre-existing prefix stable;
 hook-registry management (`add`/`drop`/`edit`/`list`) is administrative and
-follows; `manual` closes the enum.
+follows; consumer-only `delay` follows them; `manual` closes the enum.
 Each action value
 is simultaneously the child's canonical name and its dispatch key; there is no
 mapping layer.
@@ -104,6 +105,9 @@ and Responses wires. Per-action inputs are:
 - `edit` — `name` (required), plus nullable `version`, `source`, `description`,
   `channel`, `how_to_modify`, `how_to_cancel`, and `instructions`.
 - `list` — strictly empty.
+- `delay` — `channel` and integer `seconds` (both required); `seconds=0` cancels,
+  and a nonzero value is bounded by the live
+  `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` cap (default 600).
 - `manual` — strictly empty.
 
 Declared optional fields use the provider-compatible nullable representation.
@@ -143,7 +147,7 @@ Observable action contracts are:
   returns `{status: "ok", reason: "added", name}`; `duplicate_name` and
   `channel_in_use` are `status: "error"` results that leave the registry
   unchanged. A channel that is a built-in static channel
-  (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`daemon`/`tool_loop_guard`)
+  (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`daemon`/`delay-alarm`/`tool_loop_guard`)
   or a Store-reserved non-channel stem (`hooks`/`large_result_acks`) is refused
   with `reason: "invalid_manifest"` and a clear message.
   Guards [N002](BEHAVIORS.md#behavior-n002) (registered channel passes through)
@@ -171,6 +175,23 @@ Observable action contracts are:
   registry exists but is corrupt (invalid JSON) or unreadable, `list`, `add`,
   `drop`, and `edit` all return a `hook_registry_load_failed` error result
   instead of misreporting the registry or raising.
+- `delay` validates an allowed target channel and refuses `delay-alarm`; one
+  active delay is persisted per agent and a nonzero call replaces a prior live
+  delay explicitly. `seconds=0` cancels the matching live target early; every
+  action invocation live-reads `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default
+  600) for its finite nonzero cap. Missing/blank/invalid/non-positive values log
+  a diagnostic fallback to 600 rather than permitting unbounded silence. Delay
+  never rewrites or clears the target producer file: while live, the coherent
+  consumer snapshot/fingerprint omits only that target (including voluntary
+  `check`), while all other channels stay normal. At expiry/recovery it stops
+  filtering and writes exactly one high-priority latest-only `delay-alarm`
+  mirror identifying target, requested/actual duration, byte-level changed/no-
+  change, and only conservative producer-reported/retained-event statistics.
+  Its private `.notification/.delay_state.json` state is atomically replaced
+  under the established cross-process Store lock; a daemon process timer and
+  heartbeat/sync recovery share a stable request id so stale callbacks/restarts
+  cannot append duplicate alarms. Malformed/unreadable delay state fails open to
+  target visibility, never silence.
 - Unknown or absent actions return `{status: "error", message}` naming the
   unknown notification action.
 - An invalid envelope — a non-object `input`, a non-boolean `summarize`, an
@@ -190,7 +211,7 @@ source checkout fallback, and no compatibility alias. No public `parameters`,
 
 `lingtai.tools.registry.INTRINSICS` is the composition wiring that installs the
 package as a mandatory tool. `handle()` is the driving dispatch adapter for the
-nine actions; it composes schema and envelope dispatch onto the generic
+ten actions; it composes schema and envelope dispatch onto the generic
 `lingtai.tools.tool_family` infrastructure, which is optional infrastructure
 rather than a required base class (`../CONTRACT.md` "Implementation
 independence"). The turn-loop notification post-hook completes `check` with the
@@ -201,8 +222,8 @@ stale checks, protected channels, acknowledgement policy, and Store use. The
 four hook-registry handlers adapt tool arguments into Core's
 `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which validate manifests,
 enforce name/channel uniqueness, and write `.notification/hooks.json` through
-Store family 8. Core keeps a per-workdir module-level mirror of registered hook
-channels (`_REGISTERED_HOOK_CHANNELS`, keyed by the agent's working directory),
+Store family 8. The `delay` handler delegates to Core's consumer-only durable delay/timer/alarm
+policy. Core keeps a per-workdir module-level mirror of registered hook channels (`_REGISTERED_HOOK_CHANNELS`, keyed by the agent's working directory),
 serialized under `_HOOK_REGISTRY_LOCK`; `sync_hook_registry` re-seeds it
 whenever `hooks.json`'s `(st_mtime_ns, st_size)` stat changes — including
 out-of-band writes from another process (sibling CLI, Telegram server, hook
@@ -251,7 +272,9 @@ is not a second inbound adapter.
   tool owns no producer publication action.
 - `check` and `manual` are read-only. The three dismiss actions mutate
   notification mirror state; `add`/`drop`/`edit` mutate the hook registry and
-  the registered-channel allowlist. The family MUST NOT present a posture
+  the registered-channel allowlist; `delay` atomically mutates only private
+  consumer delay state and (on expiry) the separate `delay-alarm` mirror.
+  The family MUST NOT present a posture
   weaker than its strongest action: a read-only annotation for the whole
   family would hide those mutations and is forbidden.
 - Hook channels are per-agent: `is_channel_allowed`/`validate_allowed_channel`
@@ -269,26 +292,28 @@ is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
-- `contract_version` is `3`: the hook-registry change adds four new action
-  values (`add`/`drop`/`edit`/`list`) to the closed action enum and a new
-  per-action `input` for each — a breaking Port-contract change for callers
-  even though the tool name, the five pre-existing action values, and every
-  pre-existing result shape are preserved. (Version `2` recorded the LTP v2
-  migration that moved every action argument from flat root properties into a
-  per-action `input` object and added required `reasoning`.)
+- `contract_version` is `5`: `delay` now resolves its nonzero duration cap live
+  from `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default 600) rather than a
+  static schema maximum, so callers must use the current action contract rather
+  than cache a fixed bound. Version `4` added the consumer-only closed-enum
+  action and strict branch; version `3` added hook-registry actions; version `2`
+  recorded the LTP v2 envelope migration.
 
 ## Contract tests
 
 `tests/test_notification_tool.py` proves mandatory registration and wiring, the
-ordered nine-action schema, the closed LTP v2 root, each action's strict input
+ordered ten-action schema, the closed LTP v2 root, each action's strict input
 branch and its `allOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical
-description, absent aggregate actions, manual success/degraded envelopes and
+description, absent aggregate actions, manual success/degraded envelopes, delay schema ordering, and
 fixed path, no-double-wrap flattening, read-only state/log behavior, check
 placeholder shape, all atomic dismiss semantics, hook add/drop/edit/list
 lifecycle and whitelist gating, null-optional defaulting,
 cross-action rejection before I/O, `_tc_id` tolerance, the kernel summarize
-allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_system_dismiss.py` protects shared
+allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_notification_delay_alarm.py`
+proves consumer filtering for coherent/voluntary reads, early cancellation,
+replacement, durable expiry/recovery idempotence, alarm priority and conservative
+statistics, and `delay-alarm` refusal. `tests/test_system_dismiss.py` protects shared
 operational dismissal behavior. `tests/test_tools_package_data.py` verifies tool
 and documentation package data. Architecture, Anatomy drift, glossary, and skill
 validators cover the linked document and manual graphs.

@@ -16,3 +16,4 @@ maintenance: |
 **术语对照**
 
 - `notification`：原 locale catalog 未定义 model-facing 本地化别名；调用名、action 枚举值和参数名均保持上方 canonical English。
+- `delay`：消费者侧的暂缓投递；不改生产者文件。`delay-alarm` 为到期提示镜像，不能作为暂缓目标。
