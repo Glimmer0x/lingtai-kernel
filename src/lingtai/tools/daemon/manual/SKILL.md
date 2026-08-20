@@ -99,6 +99,7 @@ identical.
 lingtai-agent daemon emanate --tasks batch.json --agent-dir ~/agents/foo [--backend lingtai] [--yes]
 lingtai-agent daemon list  [--status running] [--agent-dir ~/agents/foo]
 lingtai-agent daemon check em-1 [--agent-dir ~/agents/foo]
+lingtai-agent daemon run-sync "<prompt>" --agent-dir ~/agents/foo [--tools file,shell] [--preset P] [--stream]
 ```
 
 `--tasks` takes the tool's own `emanate` input object (`tasks`, and optionally
@@ -149,8 +150,31 @@ Behavior worth knowing before wiring it into a job:
 - **Secrets are redacted from CLI output** (`backend_options.env`, MCP
   `env`/`headers`, credential-shaped keys), using the same policy as the
   durable daemon manifest.
-- `ask` and `reclaim` are deliberately not exposed: this surface causes no side
-  effect beyond spawning daemons.
+- **`run-sync` is the `claude -p` / `codex exec` shape**: one prompt argument
+  in, one result on stdout, blocking. It builds a single-task `emanate` request
+  in memory and puts it through the same schema validation, preset allowlist,
+  capability policy, and dispatch as `emanate --yes`, then polls the same
+  read-only `check` binding until the run is terminal. Specifics:
+  - `--tools` is comma-separated. Omitting it defaults to this agent's granted
+    share of the borrowable host tool floor (`file`, `shell`, `task_card`) —
+    the one parent surface reachable both with and without a preset, so an
+    implicit default can never ask a preset's sandbox for tools it lacks.
+    Optional/provider capabilities are opt-in via `--tools`. `--tools ""` runs
+    a result-only daemon with no tools.
+  - `--preset` falls back to `$LINGTAI_P_PRESET`; with neither, the daemon
+    inherits the parent's model and tool surface exactly as an `emanate` task
+    that omits `preset` does.
+  - `--timeout` is both the daemon's own watchdog timeout and a wall-clock
+    ceiling on the command. If the ceiling expires the command exits non-zero
+    and says so on stderr; the daemon keeps running under its watchdog and is
+    still reachable via `check` / `reclaim`.
+  - `--output-format text` (default) prints the result and nothing else on
+    stdout; `json` prints the full envelope (status, ids, result, tokens,
+    paths). `--stream` tails the run's `events.jsonl` to **stderr** while
+    waiting, so stdout stays a clean result channel either way.
+  - Exit code is 0 only for state `done`; `failed`, `cancelled`, `timeout`, and
+    a give-up-waiting all exit 1.
+- `ask` is deliberately not exposed.
 
 ## Router table
 

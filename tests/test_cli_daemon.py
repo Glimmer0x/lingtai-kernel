@@ -1186,3 +1186,619 @@ def test_daemon_manual_documents_the_cli():
     ).read_text(encoding="utf-8")
     assert "## Programmatic use / CLI" in manual
     assert "lingtai-agent daemon emanate" in manual
+
+
+# ---------------------------------------------------------------------------
+# run-sync — one prompt in, one result out
+#
+# The engine is untouched by this action, so these pin the composition: that
+# the request is held to the same schema/gates as a tasks file, that the wait
+# is the read-only check binding, and what each terminal state prints and exits.
+# ---------------------------------------------------------------------------
+
+
+def _parse_daemon_args(argv: list[str]):
+    """Parse an argv through the real ``daemon`` parser tree, without running it."""
+    import argparse
+
+    from lingtai.cli_daemon import add_daemon_parser
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    add_daemon_parser(sub)
+    return parser.parse_args(argv)
+
+
+@pytest.fixture
+def stub_clock(monkeypatch):
+    """Replace ``cli_daemon``'s ``time`` with a clock only its poll loop drives.
+
+    Scoped to the module attribute rather than the ``time`` module so the
+    engine's own timestamps stay real, and so a wall-clock-ceiling test costs
+    no wall clock: ``sleep`` advances the same counter ``monotonic`` reads.
+    """
+    from lingtai import cli_daemon
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.now = 0.0
+            self.slept: list[float] = []
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.slept.append(seconds)
+            self.now += seconds
+
+    clock = _Clock()
+    monkeypatch.setattr(cli_daemon, "time", clock)
+    return clock
+
+
+@pytest.fixture
+def finishing_spawn(monkeypatch):
+    """Spawn replaced by an immediate terminal transition on the real run dir.
+
+    Everything before the process boundary stays live (validation, gates, run
+    directory, prompt build) exactly as ``no_spawn`` leaves it; this fixture
+    additionally drives the run dir to a terminal state through ``DaemonRunDir``'s
+    own writers, so ``run-sync``'s poll observes the same ``daemon.json`` /
+    ``result.txt`` / ``events.jsonl`` a real detached run would have written.
+    Set ``outcome["state"] = "running"`` to model a run that never finishes.
+    """
+    from lingtai.tools.daemon import DaemonManager
+
+    outcome = {"state": "done", "text": "the daemon's answer"}
+    spawns: list[dict] = []
+
+    def _record(self, run_dir, **kwargs):
+        spawns.append({"run_dir": run_dir, **kwargs})
+        if outcome["state"] == "done":
+            run_dir.mark_done(outcome["text"])
+        elif outcome["state"] == "failed":
+            run_dir.mark_failed(RuntimeError(outcome["text"]))
+        elif outcome["state"] == "cancelled":
+            run_dir.mark_cancelled()
+
+    monkeypatch.setattr(DaemonManager, "_spawn_detached_lingtai_run", _record)
+    outcome["spawns"] = spawns
+    return outcome
+
+
+def _run_sync(monkeypatch, agent_dir: Path, prompt: str = "answer me",
+              *extra: str) -> int:
+    return _run_cli(monkeypatch, [
+        "daemon", "run-sync", prompt, "--agent-dir", str(agent_dir),
+        "--tools", "file", "--poll-interval", "0.01", *extra,
+    ])
+
+
+# -- argparse wiring --------------------------------------------------------
+
+
+def test_run_sync_argparse_defaults():
+    args = _parse_daemon_args(["daemon", "run-sync", "do a thing",
+                               "--agent-dir", "/tmp/agent"])
+    assert args.daemon_command == "run-sync"
+    assert args.prompt == "do a thing"
+    assert args.agent_dir == Path("/tmp/agent")
+    assert args.tools is None and args.preset is None
+    assert args.max_turns is None and args.timeout is None
+    assert args.poll_interval == 2.0
+    assert args.output_format == "text"
+    assert args.stream is False
+
+
+def test_run_sync_argparse_flags():
+    args = _parse_daemon_args([
+        "daemon", "run-sync", "p", "--agent-dir", "/tmp/a",
+        "--tools", "file,shell", "--preset", "/p.json", "--max-turns", "7",
+        "--timeout", "30", "--poll-interval", "0.5",
+        "--output-format", "json", "--stream",
+    ])
+    assert args.tools == "file,shell" and args.preset == "/p.json"
+    assert args.max_turns == 7 and args.timeout == 30.0
+    assert args.poll_interval == 0.5
+    assert args.output_format == "json" and args.stream is True
+
+
+def test_run_sync_requires_an_agent_dir():
+    with pytest.raises(SystemExit):
+        _parse_daemon_args(["daemon", "run-sync", "p"])
+
+
+def test_run_sync_rejects_an_unknown_output_format():
+    with pytest.raises(SystemExit):
+        _parse_daemon_args(["daemon", "run-sync", "p", "--agent-dir", "/tmp/a",
+                            "--output-format", "yaml"])
+
+
+def test_run_sync_is_registered_as_a_handler():
+    from lingtai.cli_daemon import _HANDLERS, _handle_run_sync
+
+    assert _HANDLERS["run-sync"] is _handle_run_sync
+
+
+# -- preset selection: flag beats env, env beats nothing --------------------
+
+
+@pytest.mark.parametrize("flag,env,expected", [
+    ("/flag.json", None, "/flag.json"),
+    (None, "/env.json", "/env.json"),
+    ("/flag.json", "/env.json", "/flag.json"),  # the flag wins
+    (None, None, None),                          # neither: inherit
+    (None, "   ", None),                         # a blank env var is not a preset
+])
+def test_run_sync_preset_priority(monkeypatch, flag, env, expected):
+    import argparse
+
+    from lingtai.cli_daemon import _RUN_SYNC_PRESET_ENV, _resolve_run_sync_preset
+
+    if env is None:
+        monkeypatch.delenv(_RUN_SYNC_PRESET_ENV, raising=False)
+    else:
+        monkeypatch.setenv(_RUN_SYNC_PRESET_ENV, env)
+    assert _resolve_run_sync_preset(argparse.Namespace(preset=flag)) == expected
+
+
+def test_run_sync_env_preset_reaches_the_dispatched_task(tmp_path, monkeypatch,
+                                                         capsys, no_spawn):
+    """``LINGTAI_P_PRESET`` is a real default, not just a resolved string."""
+    from lingtai.cli_daemon import _RUN_SYNC_PRESET_ENV
+
+    allowed = _write_preset(tmp_path, "cheap")
+    agent_dir = _write_agent_dir(tmp_path, allowed=[allowed])
+    monkeypatch.setenv(_RUN_SYNC_PRESET_ENV, allowed)
+
+    captured: list[dict] = []
+
+    def fake_dispatch(agent, action, action_input):
+        captured.append({"action": action, "input": action_input})
+        return {"status": "error", "message": "stopped after capture"}
+
+    monkeypatch.setattr("lingtai.cli_daemon._dispatch_through_tool_family", fake_dispatch)
+
+    assert _run_sync(monkeypatch, agent_dir) == 1
+    capsys.readouterr()
+    assert captured[0]["action"] == "emanate"
+    assert captured[0]["input"]["tasks"][0]["preset"] == allowed
+
+
+def test_run_sync_omits_preset_entirely_when_none_is_selected(tmp_path, monkeypatch,
+                                                              capsys, no_spawn):
+    """Omission — not ``null`` — is the engine's existing inherit-the-parent path."""
+    from lingtai.cli_daemon import _RUN_SYNC_PRESET_ENV
+
+    monkeypatch.delenv(_RUN_SYNC_PRESET_ENV, raising=False)
+    agent_dir = _write_agent_dir(tmp_path)
+    captured: list[dict] = []
+
+    def fake_dispatch(agent, action, action_input):
+        captured.append(action_input)
+        return {"status": "error", "message": "stopped after capture"}
+
+    monkeypatch.setattr("lingtai.cli_daemon._dispatch_through_tool_family", fake_dispatch)
+
+    assert _run_sync(monkeypatch, agent_dir) == 1
+    capsys.readouterr()
+    assert "preset" not in captured[0]["tasks"][0]
+
+
+# -- default tool surface ---------------------------------------------------
+
+
+def test_run_sync_default_tools_are_the_granted_host_floor(tmp_path):
+    """The default is the one surface reachable with *and* without a preset."""
+    from lingtai.cli_daemon import _CliDaemonAgent, _default_run_sync_tools
+    from lingtai.tools.daemon import _parent_host_tool_floor
+
+    agent_dir = _write_agent_dir(tmp_path)
+    agent = _CliDaemonAgent.for_dispatch(agent_dir)
+    tools = _default_run_sync_tools(agent)
+
+    assert set(tools) == set(agent.effective_capabilities()) & _parent_host_tool_floor()
+    assert "file" in tools and "shell" in tools
+    # Only what actually registered is requested, so a capability whose setup
+    # was skipped cannot turn an implicit default into "Unknown tools".
+    assert set(tools) == {s.name for s in agent._tool_schemas}
+
+
+def test_run_sync_default_tools_respect_manifest_disable(tmp_path):
+    """An implicit default must not hand back a capability the agent disabled."""
+    from lingtai.cli_daemon import _CliDaemonAgent, _default_run_sync_tools
+
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    tools = _default_run_sync_tools(_CliDaemonAgent.for_dispatch(agent_dir))
+
+    assert "shell" not in tools
+    assert "file" in tools
+
+
+def test_run_sync_default_tools_reach_the_dispatched_task(tmp_path, monkeypatch,
+                                                          capsys, no_spawn):
+    """Omitting ``--tools`` is a real default, not an empty ``tools`` list."""
+    agent_dir = _write_agent_dir(tmp_path)
+    captured: list[dict] = []
+
+    def fake_dispatch(agent, action, action_input):
+        captured.append(action_input)
+        return {"status": "error", "message": "stopped after capture"}
+
+    monkeypatch.setattr("lingtai.cli_daemon._dispatch_through_tool_family", fake_dispatch)
+
+    assert _run_cli(monkeypatch, [
+        "daemon", "run-sync", "x", "--agent-dir", str(agent_dir),
+        "--poll-interval", "0.01",
+    ]) == 1
+    capsys.readouterr()
+    assert "file" in captured[0]["tasks"][0]["tools"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, None),
+    ("", []),
+    ("file", ["file"]),
+    (" file , shell ,", ["file", "shell"]),
+])
+def test_run_sync_tools_flag_parsing(raw, expected):
+    from lingtai.cli_daemon import _parse_tools_flag
+
+    assert _parse_tools_flag(raw) == expected
+
+
+# -- blocking poll to a terminal state --------------------------------------
+
+
+def test_run_sync_blocks_until_done_and_prints_only_the_result(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir, "summarize the docs") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "the daemon's answer\n"
+    assert captured.err == ""
+    assert finishing_spawn["spawns"], "the dispatch never reached the engine"
+
+
+def test_run_sync_waits_for_a_run_that_is_not_terminal_yet(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """The loop must poll again rather than report the first non-terminal read."""
+    from lingtai.tools.daemon import DaemonManager
+
+    finishing_spawn["state"] = "running"
+    agent_dir = _write_agent_dir(tmp_path)
+
+    real_check = DaemonManager._handle_check
+    calls: list[str] = []
+
+    def finishing_check(self, em_id, *args, **kwargs):
+        calls.append(em_id)
+        if len(calls) == 3:  # the run finishes between the second and third poll
+            finishing_spawn["spawns"][0]["run_dir"].mark_done("late answer")
+        return real_check(self, em_id, *args, **kwargs)
+
+    monkeypatch.setattr(DaemonManager, "_handle_check", finishing_check)
+
+    assert _run_sync(monkeypatch, agent_dir) == 0
+    assert capsys.readouterr().out == "late answer\n"
+    assert len(calls) == 3
+    assert stub_clock.slept == [0.01, 0.01]
+
+
+def test_run_sync_polls_the_read_only_check_binding(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """Waiting must not reconcile, repair, or reap — it is the `check` surface.
+
+    ``_ReadOnlyDaemonView`` binds the manager's own unmodified ``_handle_check``
+    through ``__getattr__``, so spying on the manager unit is what proves *who*
+    the poll loop called it as.
+    """
+    from lingtai.cli_daemon import _ReadOnlyDaemonView
+    from lingtai.tools.daemon import DaemonManager
+
+    agent_dir = _write_agent_dir(tmp_path)
+    seen: list[object] = []
+    real_check = DaemonManager._handle_check
+
+    def spy(self, em_id, *args, **kwargs):
+        seen.append(type(self))
+        return real_check(self, em_id, *args, **kwargs)
+
+    monkeypatch.setattr(DaemonManager, "_handle_check", spy)
+
+    assert _run_sync(monkeypatch, agent_dir) == 0
+    capsys.readouterr()
+    assert seen and set(seen) == {_ReadOnlyDaemonView}
+    assert not (agent_dir / ".notification").exists()
+
+
+def test_run_sync_json_output_carries_the_whole_envelope(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir, "answer me",
+                     "--output-format", "json") == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    run_dir = finishing_spawn["spawns"][0]["run_dir"]
+    assert payload["status"] == "done"
+    assert payload["result"] == "the daemon's answer"
+    assert payload["id"] == run_dir.path.name
+    assert payload["agent_dir"] == str(agent_dir)
+    assert payload["tools"] == ["file"]
+    assert payload["preset"] is None
+    assert payload["gave_up_waiting"] is False
+    assert payload["path"] == str(run_dir.path)
+    assert Path(payload["result_path"]).read_text(encoding="utf-8") == \
+        "the daemon's answer"
+
+
+def test_run_sync_reads_the_full_result_not_the_bounded_preview(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """``result_preview`` in daemon.json is capped; ``result.txt`` is the answer."""
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    long_answer = "x" * (DaemonRunDir._RESULT_PREVIEW_MAX + 500)
+    finishing_spawn["text"] = long_answer
+    agent_dir = _write_agent_dir(tmp_path)
+
+    assert _run_sync(monkeypatch, agent_dir) == 0
+    assert capsys.readouterr().out == long_answer + "\n"
+
+
+# -- non-zero exits ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", ["failed", "cancelled"])
+def test_run_sync_exits_nonzero_on_a_non_done_terminal_state(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock, state):
+    finishing_spawn["state"] = state
+    finishing_spawn["text"] = "the daemon blew up"
+    agent_dir = _write_agent_dir(tmp_path)
+
+    assert _run_sync(monkeypatch, agent_dir) == 1
+    captured = capsys.readouterr()
+    assert f"finished {state}" in captured.err
+
+
+def test_run_sync_gives_up_at_the_wall_clock_ceiling(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """``--timeout`` bounds the command; the daemon keeps its own watchdog."""
+    finishing_spawn["state"] = "running"
+    agent_dir = _write_agent_dir(tmp_path)
+
+    code = _run_sync(monkeypatch, agent_dir, "answer me", "--timeout", "10")
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "gave up waiting after --timeout 10.0s" in err
+    assert "daemon check" in err and "reclaim" in err
+    assert stub_clock.now >= 10.0
+
+    # The run itself was never marked terminal by the CLI.
+    state = json.loads(
+        (finishing_spawn["spawns"][0]["run_dir"].path / "daemon.json")
+        .read_text(encoding="utf-8")
+    )
+    assert state["state"] == "running"
+
+
+def test_run_sync_timeout_reports_status_timeout_in_json(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    finishing_spawn["state"] = "running"
+    agent_dir = _write_agent_dir(tmp_path)
+
+    assert _run_sync(monkeypatch, agent_dir, "answer me",
+                     "--timeout", "10", "--output-format", "json") == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "timeout"
+    assert payload["gave_up_waiting"] is True
+
+
+def test_run_sync_passes_timeout_through_as_the_daemon_watchdog(
+        tmp_path, monkeypatch, capsys, no_spawn):
+    """One flag, both roles: the engine gets it too, not just the poll loop."""
+    agent_dir = _write_agent_dir(tmp_path)
+    captured: list[dict] = []
+
+    def fake_dispatch(agent, action, action_input):
+        captured.append(action_input)
+        return {"status": "error", "message": "stopped after capture"}
+
+    monkeypatch.setattr("lingtai.cli_daemon._dispatch_through_tool_family", fake_dispatch)
+
+    assert _run_sync(monkeypatch, agent_dir, "answer me",
+                     "--timeout", "45", "--max-turns", "3") == 1
+    capsys.readouterr()
+    assert captured[0]["timeout"] == 45.0
+    assert captured[0]["max_turns"] == 3
+    assert captured[0]["backend"] is None
+
+
+def test_run_sync_refuses_a_non_positive_poll_interval(tmp_path, monkeypatch,
+                                                       capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    code = _run_cli(monkeypatch, [
+        "daemon", "run-sync", "x", "--agent-dir", str(agent_dir),
+        "--tools", "file", "--poll-interval", "0",
+    ])
+    assert code == 1
+    assert "--poll-interval must be > 0" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+# -- the same validation and gates as a tasks file --------------------------
+
+
+@pytest.mark.parametrize("extra,fragment", [
+    (["--max-turns", "0"], "max_turns must be >= 1"),
+    (["--timeout", "1"], "timeout must be >= 5"),
+])
+def test_run_sync_is_held_to_the_emanate_schema(tmp_path, monkeypatch, capsys,
+                                                no_spawn, extra, fragment):
+    """The in-memory request meets the same schema a ``--tasks`` file meets."""
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir, "x", *extra) == 1
+    err = capsys.readouterr().err
+    assert fragment in err
+    assert "run-sync does not match the daemon emanate schema" in err
+    assert "--tasks file" not in err  # it was never given one
+    assert no_spawn == []
+
+
+def test_run_sync_refuses_an_empty_prompt(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir, "   ") == 1
+    assert "must be a non-empty string" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_run_sync_refuses_a_preset_outside_the_allowlist(tmp_path, monkeypatch,
+                                                         capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path, allowed=[str(tmp_path / "ok.json")])
+    code = _run_sync(monkeypatch, agent_dir, "x",
+                     "--preset", str(tmp_path / "evil.json"))
+    assert code == 1
+    assert "not in this agent's allowed list" in capsys.readouterr().err
+    assert no_spawn == []
+    assert not (agent_dir / "daemons").exists()
+
+
+def test_run_sync_refuses_a_capability_the_agent_disabled(tmp_path, monkeypatch,
+                                                          capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path, disable=["shell"])
+    code = _run_cli(monkeypatch, [
+        "daemon", "run-sync", "x", "--agent-dir", str(agent_dir),
+        "--tools", "shell", "--poll-interval", "0.01",
+    ])
+    assert code == 1
+    assert "does not grant" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+def test_run_sync_refuses_an_unusable_init(tmp_path, monkeypatch, capsys, no_spawn):
+    agent_dir = _write_agent_dir(tmp_path)
+    (agent_dir / "init.json").write_text(
+        json.dumps({"manifest": {"agent_name": "x"}}), encoding="utf-8",
+    )
+    assert _run_sync(monkeypatch, agent_dir) == 1
+    assert "is not usable" in capsys.readouterr().err
+    assert no_spawn == []
+
+
+# -- --stream tail ----------------------------------------------------------
+
+
+def test_event_tail_returns_only_new_complete_lines(tmp_path):
+    """A line still mid-write is held back, and nothing is replayed."""
+    from lingtai.cli_daemon import _EventTail
+
+    events = tmp_path / "events.jsonl"
+    events.write_text('{"event": "a"}\n{"event": "b"}\n', encoding="utf-8")
+    tail = _EventTail(events)
+
+    assert [e["event"] for e in tail.drain()] == ["a", "b"]
+    assert tail.drain() == []
+
+    # A partial line: not an event until its newline lands.
+    with open(events, "a", encoding="utf-8") as handle:
+        handle.write('{"event": "c"}')
+    assert tail.drain() == []
+    with open(events, "a", encoding="utf-8") as handle:
+        handle.write('\n{"event": "d"}\n')
+    assert [e["event"] for e in tail.drain()] == ["c", "d"]
+
+
+def test_event_tail_survives_a_missing_file_and_bad_lines(tmp_path):
+    from lingtai.cli_daemon import _EventTail
+
+    events = tmp_path / "events.jsonl"
+    tail = _EventTail(events)
+    assert tail.drain() == []  # not created yet
+
+    events.write_text('not json\n\n{"event": "ok"}\n"scalar"\n', encoding="utf-8")
+    assert [e["event"] for e in tail.drain()] == ["ok"]
+
+
+def test_event_tail_resumes_after_the_file_is_replaced(tmp_path):
+    from lingtai.cli_daemon import _EventTail
+
+    events = tmp_path / "events.jsonl"
+    events.write_text('{"event": "old"}\n' * 3, encoding="utf-8")
+    tail = _EventTail(events)
+    tail.drain()
+
+    events.write_text('{"event": "new"}\n', encoding="utf-8")  # shorter than before
+    assert [e["event"] for e in tail.drain()] == ["new"]
+
+
+def test_stream_event_lines_are_compact_and_redacted():
+    from lingtai.cli_daemon import _format_stream_event
+
+    line = _format_stream_event({
+        "event": "tool_call", "name": "file", "turn": 2,
+        "args_preview": '{"action": "read",\n  "path": "notes.md"}',
+        "ts": "2026-08-20T00:00:00Z",
+    })
+    assert line.startswith("· tool_call name=file turn=2")
+    assert "\n" not in line
+
+    secret = _format_stream_event({
+        "event": "mcp_start", "env": {"TOKEN": "s3cr3t-value"},
+    })
+    assert "s3cr3t-value" not in secret
+
+
+def test_run_sync_stream_tails_events_to_stderr(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """The tail is over the run's own events.jsonl, and stdout stays the result."""
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir, "answer me", "--stream") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == "the daemon's answer\n"
+    # Written by DaemonRunDir itself: construction, then the terminal transition.
+    assert "· daemon_start" in captured.err
+    assert "· daemon_done" in captured.err
+
+
+def test_run_sync_without_stream_prints_no_events(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    agent_dir = _write_agent_dir(tmp_path)
+    assert _run_sync(monkeypatch, agent_dir) == 0
+    assert "daemon_start" not in capsys.readouterr().err
+
+
+def test_run_sync_stream_does_not_replay_events_across_polls(
+        tmp_path, monkeypatch, capsys, finishing_spawn, stub_clock):
+    """Each event is printed once, however many polls the wait takes."""
+    from lingtai.tools.daemon import DaemonManager
+
+    finishing_spawn["state"] = "running"
+    agent_dir = _write_agent_dir(tmp_path)
+
+    real_check = DaemonManager._handle_check
+    polls: list[int] = []
+
+    def finishing_check(self, em_id, *args, **kwargs):
+        polls.append(1)
+        if len(polls) == 4:
+            finishing_spawn["spawns"][0]["run_dir"].mark_done("done at last")
+        return real_check(self, em_id, *args, **kwargs)
+
+    monkeypatch.setattr(DaemonManager, "_handle_check", finishing_check)
+
+    assert _run_sync(monkeypatch, agent_dir, "answer me", "--stream") == 0
+    err = capsys.readouterr().err
+    assert err.count("· daemon_start") == 1
+    assert err.count("· daemon_done") == 1
+
+
+# -- documentation ----------------------------------------------------------
+
+
+def test_daemon_manual_documents_run_sync():
+    manual = (
+        Path(__file__).resolve().parents[1]
+        / "src/lingtai/tools/daemon/manual/SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "lingtai-agent daemon run-sync" in manual

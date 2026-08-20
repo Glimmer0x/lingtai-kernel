@@ -9,7 +9,8 @@ skin over the *existing* engine: it builds a minimal agent-shaped facade
 model uses.  No emanation, preset, run-directory, supervisor, or notification
 logic is reimplemented here.
 
-Four actions are exposed, deliberately fewer than the tool's six:
+Five actions are exposed: four deliberately fewer than the tool's six, plus
+one the tool has no need for:
 
 ``emanate``
     Dispatch a batch from a tasks JSON file.  Preview-by-default; ``--yes`` is
@@ -37,13 +38,25 @@ Four actions are exposed, deliberately fewer than the tool's six:
     ``daemon(action="reclaim")`` uses — a CLI-created daemon stays exactly as
     controllable as an agent-created one.
 
+``run-sync``
+    One prompt in, one result out, blocking — the ``claude -p`` / ``codex
+    exec`` shape, for a caller that is a script rather than an agent.  It is
+    composition, not a fifth engine path: a single-task ``emanate`` request is
+    built in memory and put through the *same* schema validation, preset gate,
+    capability gate, and family dispatch ``emanate --yes`` uses, then the
+    read-only ``check`` binding above is polled until the run is terminal.
+    The model never needs this action — an agent that blocks on its own daemon
+    has simply made a synchronous call — so it exists only here.
+
 ``ask`` is intentionally absent.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +71,18 @@ _MAX_TASKS_FILE_BYTES = 4 * 1024 * 1024
 
 #: Task text shown per row in the ``emanate`` preview.
 _PREVIEW_TASK_CHARS = 120
+
+#: Default ``run-sync`` poll cadence, seconds. Short enough that a quick
+#: emanation is not padded by the wait, long enough that a long one does not
+#: re-read ``events.jsonl`` and ``daemon.json`` in a tight loop.
+_RUN_SYNC_POLL_INTERVAL_S = 2.0
+
+#: Consulted for ``run-sync``'s preset when ``--preset`` is absent, so a shell
+#: or CI job can pin one preset for a whole session of calls. The flag wins.
+_RUN_SYNC_PRESET_ENV = "LINGTAI_P_PRESET"
+
+#: Per-field width of a ``--stream`` tail line.
+_STREAM_FIELD_CHARS = 100
 
 
 class CliDaemonError(Exception):
@@ -613,7 +638,8 @@ def _collect(value: Any, schema: dict, path: str) -> list[str]:
     return errors
 
 
-def _validate_emanate_input(payload: dict) -> list[dict]:
+def _validate_emanate_input(payload: dict, *,
+                            source: str = "--tasks file") -> list[dict]:
     """Validate the tasks file against the daemon tool's own ``emanate`` schema.
 
     This runs at **preview** time, before ``--yes`` is even considered, so a
@@ -635,6 +661,11 @@ def _validate_emanate_input(payload: dict) -> list[dict]:
     ``_tool_family`` so the engine can return domain-specific errors, but a
     typo'd key in a CI tasks file should not be silently ignored; the property
     list is read from the schema, so it tracks the schema automatically.
+
+    ``source`` names the caller in the two whole-request refusals, so
+    ``run-sync`` — which builds its request in memory — does not report a
+    ``--tasks file`` it was never given. Only the wording moves; every rule
+    below is the one both callers are held to.
     """
     from lingtai.tools.daemon import _BACKEND_SCHEMA_ENUM
     from lingtai.tools.daemon._tool_family import (
@@ -654,13 +685,13 @@ def _validate_emanate_input(payload: dict) -> list[dict]:
     _check_schema(candidate, input_schema, "", errors)
     if errors:
         raise CliDaemonError(
-            "--tasks file does not match the daemon emanate schema:\n  - "
+            f"{source} does not match the daemon emanate schema:\n  - "
             + "\n  - ".join(errors)
         )
 
     tasks = candidate["tasks"]
     if not tasks:
-        raise CliDaemonError("--tasks file defines no tasks")
+        raise CliDaemonError(f"{source} defines no tasks")
 
     for i, spec in enumerate(tasks):
         unknown = sorted(set(spec) - task_props)
@@ -997,11 +1028,339 @@ def _handle_reclaim(args) -> int:
     return 0 if result.get("status") == "reclaimed" else 1
 
 
+# --------------------------------------------------------------------------
+# run-sync — one prompt in, one result out
+# --------------------------------------------------------------------------
+
+
+def _parse_tools_flag(raw: str | None) -> list[str] | None:
+    """Split ``--tools a,b,c`` into a list; ``None`` means the flag was absent.
+
+    An explicitly empty value (``--tools ""``) is an empty list — a deliberate
+    result-only daemon — and is kept distinct from an absent flag, which
+    inherits the surface :func:`_default_run_sync_tools` derives.
+    """
+    if raw is None:
+        return None
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
+def _default_run_sync_tools(agent: _CliDaemonAgent) -> list[str]:
+    """The tool surface a bare ``run-sync`` (no ``--tools``) inherits.
+
+    ``emanate`` never needs this: its tasks file always states ``tools``,
+    because the daemon schema requires the field.  A ``-p``-shaped call has no
+    file, so the default has to come from somewhere — and it is read off the
+    engine rather than chosen: ``_parent_host_tool_floor()``, intersected with
+    what this agent actually grants.
+
+    That floor is the right default for three independent reasons, all of them
+    the engine's own facts:
+
+    * It is the one parent surface reachable in **both** branches of
+      ``_build_tool_surface``.  A preset emanation may borrow only the floor,
+      so a wider default would ask a preset's sandbox for tools it does not
+      have and the engine would refuse the run outright — the default must not
+      be able to do that, and this one cannot, preset or no preset.
+    * It is the host primitive set — read/write/edit/glob/grep plus shell —
+      which is what a one-shot external call actually needs.  Optional and
+      provider capabilities (``vision``, ``web_search``, …) are opt-in through
+      ``--tools``, fail-closed, exactly as they are for a preset emanation.
+    * It is instantiable on this facade.  ``_CliDaemonAgent`` is deliberately
+      not a live :class:`~lingtai.agent.Agent`; capabilities that reconcile a
+      system-prompt section (``mcp``, ``knowledge``) raise ``AttributeError``
+      against it, which ``install_tool_surface`` does not catch — it catches
+      what ``Agent.__init__`` catches, and widening that here would make the
+      CLI more tolerant than the agent it stands in for.
+
+    The intersection with :meth:`effective_capabilities` means an agent that
+    put ``shell`` in ``manifest.disable`` does not get it back through an
+    implicit default; the return value is taken *after*
+    :meth:`install_tool_surface` so a capability whose ``setup()`` was skipped
+    is never requested either.
+    """
+    from lingtai.tools.daemon import _parent_host_tool_floor
+
+    agent.install_tool_surface(
+        set(agent.effective_capabilities()) & _parent_host_tool_floor()
+    )
+    return sorted(schema.name for schema in agent._tool_schemas)
+
+
+def _resolve_run_sync_preset(args) -> str | None:
+    """``--preset`` wins over ``LINGTAI_P_PRESET``; neither means "inherit".
+
+    Returning ``None`` leaves the task's ``preset`` key *omitted*, which is the
+    engine's existing no-preset path (inherit the parent's regular tool surface
+    and the implicit parent preset LLM) — no separate CLI fallback exists or
+    should.
+    """
+    for candidate in (args.preset, os.environ.get(_RUN_SYNC_PRESET_ENV)):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+class _EventTail:
+    """Byte-offset tail over one run's append-only ``logs/events.jsonl``.
+
+    Read in binary and resumed from :meth:`tell` so a multi-byte character
+    split across two polls is never decoded twice or mangled, and a line still
+    mid-write is held back as ``_partial`` until its newline lands.  The file
+    is the daemon's own event log, written for ``check``; nothing here asks the
+    run to produce anything extra.
+    """
+
+    def __init__(self, events_path: Path) -> None:
+        self._path = events_path
+        self._offset = 0
+        self._partial = ""
+
+    def drain(self) -> list[dict]:
+        """Return every complete event appended since the last call."""
+        try:
+            size = self._path.stat().st_size
+        except OSError:
+            return []
+        if size < self._offset:  # replaced under us — restart rather than skew
+            self._offset = 0
+            self._partial = ""
+        if size == self._offset:
+            return []
+        try:
+            with open(self._path, "rb") as handle:
+                handle.seek(self._offset)
+                chunk = handle.read()
+                self._offset = handle.tell()
+        except OSError:
+            return []
+
+        lines = (self._partial + chunk.decode("utf-8", "replace")).split("\n")
+        self._partial = lines.pop()
+        events: list[dict] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+        return events
+
+
+def _compact(value: str) -> str:
+    """Collapse a value to one short single-line fragment."""
+    text = " ".join(str(value).split())
+    if len(text) > _STREAM_FIELD_CHARS:
+        text = text[:_STREAM_FIELD_CHARS] + "…"
+    return text
+
+
+def _format_stream_event(event: dict) -> str:
+    """One compact line for one daemon event.
+
+    Redacted first with the same policy ``_emit_json`` applies, so a tool
+    argument preview carrying a credential-shaped key is not printed in the
+    clear just because it arrived through the live tail instead of the final
+    snapshot.
+    """
+    event = _redact_preserving_nulls(event)
+    parts = [str(event.get("event") or "event")]
+    for key in ("name", "status", "stream", "turn"):
+        value = event.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}={value}")
+    for key in ("args_preview", "text", "message", "detail", "result_path"):
+        value = event.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(_compact(value))
+            break
+    return "· " + " ".join(parts)
+
+
+def _read_result_text(snapshot: dict) -> str:
+    """The run's full terminal result, falling back to the stored preview.
+
+    ``result.txt`` is the complete text; ``result_preview`` in ``daemon.json``
+    is capped by the writer.  Preferring the file means ``run-sync`` prints the
+    whole answer, and falling back means a run that recorded a preview but no
+    file (or whose file is unreadable) still prints what it has.
+    """
+    path = snapshot.get("result_path")
+    if isinstance(path, str) and path:
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except OSError:
+            pass
+    preview = snapshot.get("result_preview")
+    return preview if isinstance(preview, str) else ""
+
+
+def _poll_until_terminal(agent_dir: Path, em_id: str, *, poll_interval: float,
+                         deadline: float | None, stream: bool) -> tuple[dict, bool]:
+    """Block until the run is terminal, returning ``(snapshot, timed_out)``.
+
+    The status source is the *same* read-only ``check`` binding
+    ``lingtai-agent daemon check`` uses — one ``_ReadOnlyDaemonView`` built
+    once and reused, so a poll loop of any length still creates, repairs, and
+    reaps nothing.  Terminal states come from ``DaemonRunDir._TERMINAL_STATES``
+    rather than a restated tuple.
+
+    ``timed_out`` is the CLI's own wall-clock ceiling expiring, which is not
+    the same event as the run reaching state ``timeout`` — the daemon keeps
+    running under its own watchdog; only this command stops waiting.
+    """
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    view = _ReadOnlyDaemonView(_CliDaemonAgent.for_inspection(agent_dir))
+    tail: _EventTail | None = None
+
+    while True:
+        snapshot = view._handle_check(em_id)
+        if snapshot.get("status") == "error":
+            raise CliDaemonError(str(snapshot.get("message", "check failed")))
+        if stream:
+            if tail is None and isinstance(snapshot.get("path"), str):
+                tail = _EventTail(Path(snapshot["path"]) / "logs" / "events.jsonl")
+            if tail is not None:
+                for event in tail.drain():
+                    print(_format_stream_event(event), file=sys.stderr, flush=True)
+        if snapshot.get("state") in DaemonRunDir._TERMINAL_STATES:
+            return snapshot, False
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return snapshot, True
+        time.sleep(poll_interval if remaining is None else min(poll_interval, remaining))
+
+
+def _handle_run_sync(args) -> int:
+    from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
+
+    if args.poll_interval <= 0:
+        raise CliDaemonError(
+            f"--poll-interval must be > 0 (got {args.poll_interval})"
+        )
+    started = time.monotonic()
+    agent_dir = _resolve_agent_dir(args.agent_dir)
+    preset = _resolve_run_sync_preset(args)
+
+    agent = _CliDaemonAgent.for_dispatch(
+        agent_dir, journal=PosixJsonlEventJournalAdapter(agent_dir),
+    )
+    # Before any capability is instantiated: a preset this agent does not allow
+    # must not get as far as deciding the default tool surface.
+    _enforce_preset_allowlist(agent, [{"preset": preset}] if preset else [])
+
+    tools = _parse_tools_flag(args.tools)
+    explicit_tools = tools is not None
+    if tools is None:
+        tools = _default_run_sync_tools(agent)
+
+    payload = {
+        "tasks": [{
+            "task": args.prompt,
+            "tools": tools,
+            # Omitted, not null, when absent — omission is the engine's
+            # documented inherit-the-parent path.
+            **({"preset": preset} if preset else {}),
+        }],
+        "max_turns": args.max_turns,
+        "timeout": args.timeout,
+    }
+    # The same validator, preset gate, and capability gate ``emanate`` runs,
+    # against the same schema objects — a request built in memory is held to
+    # exactly what a tasks file is held to.
+    tasks = _validate_emanate_input(payload, source="run-sync")
+    _enforce_preset_allowlist(agent, tasks)
+    _enforce_capability_policy(agent, tasks)
+    if explicit_tools:
+        agent.install_tool_surface(set(tools))
+
+    dispatched = _dispatch_through_tool_family(agent, "emanate", {
+        "tasks": tasks,
+        "backend": None,
+        "max_turns": args.max_turns,
+        "timeout": args.timeout,
+    })
+    if dispatched.get("status") != "dispatched":
+        raise CliDaemonError(str(dispatched.get("message", "emanate failed")))
+    ids = dispatched.get("ids") or []
+    if not ids:
+        raise CliDaemonError("emanate reported no daemon id to wait on")
+    em_id = ids[0]
+
+    deadline = None if args.timeout is None else started + float(args.timeout)
+    snapshot, waited_out = _poll_until_terminal(
+        agent_dir, em_id,
+        poll_interval=args.poll_interval,
+        deadline=deadline,
+        stream=args.stream,
+    )
+    return _report_run_sync(args, snapshot, em_id, agent_dir, tools, preset, waited_out)
+
+
+def _report_run_sync(args, snapshot: dict, em_id: str, agent_dir: Path,
+                     tools: list[str], preset: str | None, waited_out: bool) -> int:
+    """Print the terminal result per ``--output-format`` and pick the exit code.
+
+    ``text`` is deliberately bare — the result and nothing else on stdout, so
+    ``run-sync ... > answer.txt`` and shell substitution both work.  Every
+    diagnostic (the failure reason, the wall-clock give-up notice, the
+    ``--stream`` tail) goes to stderr for the same reason.
+    """
+    state = "timeout" if waited_out else str(snapshot.get("state") or "unknown")
+    result_text = _read_result_text(snapshot)
+
+    if args.output_format == "json":
+        _emit_json({
+            "status": state,
+            "id": em_id,
+            "run_id": snapshot.get("run_id"),
+            "agent_dir": str(agent_dir),
+            "backend": snapshot.get("backend"),
+            "preset": preset,
+            "tools": tools,
+            "result": result_text,
+            "result_path": snapshot.get("result_path"),
+            "error": snapshot.get("error"),
+            "turn": snapshot.get("turn"),
+            "elapsed_s": snapshot.get("elapsed_s"),
+            "finished_at": snapshot.get("finished_at"),
+            "tokens": snapshot.get("tokens", {}),
+            "events_total": snapshot.get("events_total"),
+            "path": snapshot.get("path"),
+            "gave_up_waiting": waited_out,
+        })
+    elif result_text:
+        print(result_text)
+
+    if waited_out:
+        print(
+            f"error: gave up waiting after --timeout {args.timeout}s; daemon "
+            f"{em_id} is still running under its own watchdog — inspect it with "
+            f"'lingtai-agent daemon check {em_id} --agent-dir {agent_dir}' or stop "
+            f"it with 'lingtai-agent daemon reclaim --agent-dir {agent_dir}'",
+            file=sys.stderr,
+        )
+    elif state != "done":
+        detail = snapshot.get("error") or snapshot.get("result_preview") or ""
+        print(
+            f"error: daemon {em_id} finished {state}"
+            + (f": {_compact(str(detail))}" if detail else ""),
+            file=sys.stderr,
+        )
+    return 0 if state == "done" and not waited_out else 1
+
+
 _HANDLERS = {
     "emanate": _handle_emanate,
     "list": _handle_list,
     "check": _handle_check,
     "reclaim": _handle_reclaim,
+    "run-sync": _handle_run_sync,
 }
 
 
@@ -1062,6 +1421,72 @@ def add_daemon_parser(sub: "argparse._SubParsersAction") -> None:
         type=Path,
         required=True,
         help="Agent working directory containing init.json",
+    )
+
+    run_sync = daemon_sub.add_parser(
+        "run-sync",
+        help="Run one prompt as a daemon, block until it finishes, print the result",
+    )
+    run_sync.add_argument(
+        "prompt",
+        help="The task for the daemon, as a single string",
+    )
+    run_sync.add_argument(
+        "--agent-dir",
+        type=Path,
+        required=True,
+        help="Agent working directory containing init.json",
+    )
+    run_sync.add_argument(
+        "--tools",
+        default=None,
+        help=(
+            "Comma-separated capability names, e.g. 'file,shell'. Omit for "
+            "this agent's granted share of the host tool floor; pass an empty "
+            "value for a result-only daemon with no tools"
+        ),
+    )
+    run_sync.add_argument(
+        "--preset",
+        default=None,
+        help=(
+            f"Preset file path, as listed by system(action='presets'). "
+            f"Defaults to ${_RUN_SYNC_PRESET_ENV}; with neither, the daemon "
+            f"inherits this agent's own model and tool surface"
+        ),
+    )
+    run_sync.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Max LLM tool-loop turns for this daemon (default: the parent ceiling)",
+    )
+    run_sync.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help=(
+            "Wall-clock ceiling in seconds for the whole command, and the "
+            "daemon's own watchdog timeout (default: no CLI ceiling, engine "
+            "default watchdog)"
+        ),
+    )
+    run_sync.add_argument(
+        "--poll-interval",
+        type=float,
+        default=_RUN_SYNC_POLL_INTERVAL_S,
+        help=f"Seconds between status polls (default: {_RUN_SYNC_POLL_INTERVAL_S})",
+    )
+    run_sync.add_argument(
+        "--output-format",
+        choices=("text", "json"),
+        default="text",
+        help="'text' prints the result alone; 'json' prints the full envelope",
+    )
+    run_sync.add_argument(
+        "--stream",
+        action="store_true",
+        help="Tail the run's events to stderr while waiting",
     )
 
     check = daemon_sub.add_parser("check", help="Inspect one daemon run (read-only)")
