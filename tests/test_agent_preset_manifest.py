@@ -171,6 +171,15 @@ def test_safe_llm_from_service_exposes_codex_responses_service_tier():
     assert _safe_llm_from_service(agent)["service_tier"] == "fast"
 
 
+def test_safe_llm_from_service_labels_omitted_codex_service_tier_default():
+    agent = MagicMock()
+    svc = _mock_service("codex-pool", "gpt-5.6-terra", None)
+    svc._provider_defaults = {"codex-pool": {}}
+    agent.service = svc
+
+    assert _safe_llm_from_service(agent)["service_tier"] == "default"
+
+
 def test_safe_llm_from_service_with_no_service():
     agent = MagicMock()
     agent.service = None
@@ -370,6 +379,7 @@ def test_wrapper_manifest_includes_preset_from_init(tmp_path):
         "provider": "codex",
         "model": "gpt-5.5",
         "base_url": "https://chatgpt.com/backend-api/codex",
+        "service_tier": "default",
     }
     agent.stop(timeout=1.0)
 
