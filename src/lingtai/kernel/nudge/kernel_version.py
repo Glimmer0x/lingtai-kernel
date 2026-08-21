@@ -117,8 +117,9 @@ def _start_fetch(agent) -> None:
     """Start the remote probe on a daemon worker and return immediately.
 
     The heartbeat tick must never block on the network (#730): a slow or
-    stalled fetch would hold the 1s tick past the 2s ``is_alive`` threshold
-    and make a live agent look dead. Single-flight is guaranteed because a
+    stalled fetch would hold the 1s tick past the regression's 2s heartbeat-cadence
+    responsiveness bound and make a live agent look dead. That test/cadence budget is
+    independent of the configurable ``is_alive`` liveness policy. Single-flight is guaranteed because a
     slot exists from spawn until consume/abandon, and ``check`` is gated by
     the 60s fast interval.
     """
@@ -226,8 +227,9 @@ def check(agent) -> None:
     # behavior belongs to the shared global Nudge policy, not this producer.
 
     # The remote probe must never run on the heartbeat thread (#730): a slow
-    # or stalled fetch would hold the 1s tick past the 2s is_alive threshold
-    # and make a live agent look dead. The fetch runs on a daemon worker;
+    # or stalled fetch would hold the 1s tick past the regression's 2s heartbeat-cadence
+    # responsiveness bound and make a live agent look dead. That test/cadence budget is
+    # independent of the configurable is_alive liveness policy. The fetch runs on a daemon worker;
     # each tick either starts one or consumes a finished one.
     pending = _fetch_slot(agent)
     if pending is None:

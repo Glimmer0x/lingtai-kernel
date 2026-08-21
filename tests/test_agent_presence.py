@@ -16,6 +16,7 @@ These pin the exact semantics moved out of ``kernel.handshake`` and
 """
 from __future__ import annotations
 
+import importlib
 import math
 import time
 from pathlib import Path
@@ -153,8 +154,36 @@ def test_is_alive_custom_threshold():
     assert is_alive(hb, agent, wall_now=now, threshold=2.0) is False
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, 10.0),
+        ("", 10.0),
+        ("   ", 10.0),
+        ("not-a-number", 10.0),
+        ("NaN", 10.0),
+        ("Inf", 10.0),
+        ("-Inf", 10.0),
+        ("0", 10.0),
+        ("-1", 10.0),
+        ("7.5", 7.5),
+    ],
+)
+def test_heartbeat_liveness_env_uses_safe_shared_default(monkeypatch, raw, expected):
+    """Kernel config matches the TUI/Portal env name and safe fallback policy."""
+    if raw is None:
+        monkeypatch.delenv("LINGTAI_AGENT_ALIVE_THRESHOLD_SEC", raising=False)
+    else:
+        monkeypatch.setenv("LINGTAI_AGENT_ALIVE_THRESHOLD_SEC", raw)
+    try:
+        assert importlib.reload(config).HEARTBEAT_LIVENESS_SECONDS == expected
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
+
+
 def test_default_threshold_derived_from_kernel_constant():
-    """The liveness window is the kernel-fixed contract, not a local 2.0."""
+    """The liveness window is the shared kernel config contract, not a local value."""
     assert DEFAULT_LIVENESS_THRESHOLD_SECONDS == config.HEARTBEAT_LIVENESS_SECONDS
 
 
@@ -337,7 +366,7 @@ def test_foreign_observation_is_alive_fresh(tmp_path, make_agent_dir):
 
 def test_foreign_observation_is_alive_stale(tmp_path, make_agent_dir):
     d = make_agent_dir(
-        tmp_path, name="", heartbeat=True, heartbeat_ts=time.time() - 5.0,
+        tmp_path, name="", heartbeat=True, heartbeat_ts=time.time() - 10.0,
         manifest={"agent_name": "t", "admin": {}},
     )
     store = PosixAgentPresenceStoreAdapter(d)

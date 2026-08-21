@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lingtai.kernel import config
 from lingtai.kernel.base_agent import BaseAgent
 from lingtai.kernel.state import AgentState
 from tests._workdir_lease_helpers import make_test_lease
@@ -267,15 +268,16 @@ class TestCPRLingtai:
         fake_proc.poll.return_value = None
         log_path = target / "logs" / "cpr_relaunch.log"
 
-        # The fake clock enters one poll iteration then reaches the 10-second
-        # boundary. The final values drive the required final observation.
+        # The fake clock enters one poll iteration then reaches the derived
+        # twice-liveness confirmation boundary. The final values drive the
+        # required final observation.
         with (
             patch.object(reviver, "_log") as log,
             patch("subprocess.Popen", return_value=fake_proc),
             patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
             patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
             patch("lingtai.kernel.agent_presence.observe_alive", return_value=False) as observe_alive,
-            patch("time.time", side_effect=[0.0, 0.0, 0.0, 10.0, 10.0]),
+            patch("time.time", side_effect=[0.0, 0.0, 0.0, 2 * config.HEARTBEAT_LIVENESS_SECONDS, 2 * config.HEARTBEAT_LIVENESS_SECONDS]),
             patch("time.sleep"),
         ):
             resuscitated = reviver._cpr_agent(str(target))
@@ -341,7 +343,7 @@ class TestCPRLingtai:
             patch("lingtai.venv_resolve.resolve_venv", return_value=Path("/fake/venv")),
             patch("lingtai.venv_resolve.venv_python", return_value="/fake/venv/bin/python"),
             patch("lingtai.kernel.agent_presence.observe_alive", return_value=False) as observe_alive,
-            patch("time.time", side_effect=[0.0, 0.0, 0.0, 10.0, 10.0]),
+            patch("time.time", side_effect=[0.0, 0.0, 0.0, 2 * config.HEARTBEAT_LIVENESS_SECONDS, 2 * config.HEARTBEAT_LIVENESS_SECONDS]),
             patch("time.sleep"),
         ):
             result = reviver._cpr_agent(str(target))

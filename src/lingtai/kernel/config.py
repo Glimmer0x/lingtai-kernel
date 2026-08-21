@@ -183,21 +183,36 @@ def tool_prose_section_enabled() -> bool:
 # prompts, status, or tool metadata.
 IDLE_SLEEP_TIMEOUT_SECONDS = 86400.0
 
-# Heartbeat cadence and liveness (kernel-fixed, cross-process contract).
-# _heartbeat_loop stamps .agent.heartbeat every HEARTBEAT_TICK_SECONDS; a reader
-# considers the agent alive if the stamp is younger than
-# HEARTBEAT_LIVENESS_SECONDS. Headroom is deliberate: the writer thread shares
-# the GIL/disk with agent work, so a single tick can be delayed by seconds under
-# load. 5x the tick tolerates four consecutive missed ticks before flapping to
-# "dead". Kernel-fixed rather than agent-configurable: the numbers are read
-# cross-process by peers, mail, and maintenance tooling that do not share the
-# writer's config, and an agent must not be able to widen its own liveness
-# window.
+# Heartbeat cadence and shared cross-process liveness. _heartbeat_loop
+# stamps .agent.heartbeat every HEARTBEAT_TICK_SECONDS; a reader considers the
+# agent alive if the stamp is younger than HEARTBEAT_LIVENESS_SECONDS. The
+# resolver runs when this module is imported, so every participating process
+# must be started (or its config module reloaded) after an environment change.
+# Ten ticks of default headroom tolerate delayed writer scheduling without
+# flapping to "dead"; explicit positive finite overrides remain operator policy.
 HEARTBEAT_TICK_SECONDS = 1.0
-HEARTBEAT_LIVENESS_SECONDS = 5 * HEARTBEAT_TICK_SECONDS
+HEARTBEAT_LIVENESS_ENV_VAR = "LINGTAI_AGENT_ALIVE_THRESHOLD_SEC"
+DEFAULT_HEARTBEAT_LIVENESS_SECONDS = 10.0
+
+
+def _resolve_heartbeat_liveness_seconds() -> float:
+    """Read the shared heartbeat threshold with a safe 10-second fallback."""
+    raw = os.environ.get(HEARTBEAT_LIVENESS_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_HEARTBEAT_LIVENESS_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_HEARTBEAT_LIVENESS_SECONDS
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_HEARTBEAT_LIVENESS_SECONDS
+    return value
+
+
+HEARTBEAT_LIVENESS_SECONDS = _resolve_heartbeat_liveness_seconds()
 # Retention is report-only and must over-estimate liveness so it never
-# classifies a live agent's files as stale; keep 2x extra margin. Value stays
-# 10.0 (unchanged) but is now derived from the heartbeat contract.
+# classifies a live agent's files as stale; keep 2x extra margin. The default
+# is therefore 20.0 seconds when heartbeat liveness uses its 10-second default.
 RETENTION_LIVE_HEARTBEAT_SECONDS = 2 * HEARTBEAT_LIVENESS_SECONDS
 
 

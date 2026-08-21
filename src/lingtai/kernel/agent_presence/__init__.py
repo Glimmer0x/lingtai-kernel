@@ -137,11 +137,11 @@ class HeartbeatObservation:
         return cls(kind=HeartbeatKind.PRESENT, wall_seconds=wall_seconds)
 
 
-# Default non-human freshness window (seconds). Kernel-fixed cross-process
-# contract derived in ``lingtai.kernel.config`` from the heartbeat tick cadence
-# (``HEARTBEAT_TICK_SECONDS``) with deliberate headroom; it is Core policy,
-# never an adapter or agent concern. Back-compat name kept as a re-export so
-# existing importers and explicit-threshold callers keep working unchanged.
+# Default non-human freshness window (seconds). Shared cross-process config,
+# resolved from ``LINGTAI_AGENT_ALIVE_THRESHOLD_SEC`` when
+# ``lingtai.kernel.config`` loads; it is Core policy, never an adapter or agent
+# concern. Back-compat name kept as a re-export so existing importers and
+# explicit-threshold callers keep working unchanged.
 DEFAULT_LIVENESS_THRESHOLD_SECONDS: float = HEARTBEAT_LIVENESS_SECONDS
 
 

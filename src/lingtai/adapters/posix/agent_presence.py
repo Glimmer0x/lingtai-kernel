@@ -17,8 +17,9 @@ Behavior is a faithful move of the former ``kernel.handshake`` presence readers
 and the ``base_agent/lifecycle`` heartbeat writer/withdrawer: manifest presence
 is decided by file existence (a malformed ``.agent.json`` still counts as an
 agent), a heartbeat that is missing or unreadable/unparseable is dead, and the
-heartbeat withdrawal swallows filesystem errors. This adapter deliberately does
-not adopt retention's separate 10-second / symlink policy.
+heartbeat withdrawal swallows filesystem errors. Report-only retention is a
+derived ``2 * HEARTBEAT_LIVENESS_SECONDS`` safety margin (20 seconds at the
+default and scaling with a valid override), not a separate adapter policy.
 """
 from __future__ import annotations
 

@@ -96,10 +96,13 @@ else a strict `wall_now - wall_seconds < threshold` freshness check on a present
 heartbeat. `observe_alive(store, wall_now, threshold)` is the mechanism-neutral
 Core use case: it observes manifest first, returns human-always-alive without
 observing heartbeat, and only then observes heartbeat for non-humans before
-delegating to pure `is_alive`. The default threshold is the kernel-fixed
-`HEARTBEAT_LIVENESS_SECONDS` (derived in `lingtai.kernel.config` from the
-heartbeat tick cadence, 5x the tick); callers may still pass their own explicit
-threshold when a deviation is genuinely needed — CPR deliberately uses
+delegating to pure `is_alive`. The default threshold is `HEARTBEAT_LIVENESS_SECONDS`, resolved by
+`lingtai.kernel.config` from the shared `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC`
+environment variable: it defaults to 10 seconds, and missing, blank, malformed,
+non-finite, zero, or negative values safely fall back to 10. The kernel resolves
+that value when its config module loads, so participating kernel processes must
+be restarted or reloaded after a change; callers may still pass their own
+explicit threshold when a deviation is genuinely needed. CPR deliberately uses
 the shared default so its relaunch poll and karma's CPR gate see one window.
 
 ## Adapters
@@ -111,8 +114,10 @@ Bound to a working directory via `workdir_layout`, it owns `.agent.json` /
 mapping into observations, byte-exact `str(wall_seconds)` heartbeat writes, and
 the best-effort `unlink(missing_ok=True)` withdrawal. It is a faithful move of
 the former `handshake` presence readers and the `base_agent/lifecycle` heartbeat
-writer/withdrawer and does not adopt retention's separate 10-second / symlink
-policy. A conforming in-memory fake lives in `tests/_agent_presence_helpers.py`.
+writer/withdrawer. Report-only retention is a derived
+`2 * HEARTBEAT_LIVENESS_SECONDS` safety margin (20 seconds at the default and
+scaling with a valid override), not a separate adapter policy. A conforming
+in-memory fake lives in `tests/_agent_presence_helpers.py`.
 Core never imports the adapter package.
 
 ## Contract rules
@@ -144,8 +149,9 @@ Core never imports the adapter package.
 `tests/test_agent_presence.py` runs the shared fake/production conformance suite
 and locks the observation tri-states, `is_agent`/`is_human`/`is_alive` policy,
 manifest-first `observe_alive` ordering (including never observing heartbeat for
-a valid human), the strict freshness threshold, malformed/absent heartbeats as
-dead, the NaN/±inf/future characterization, exact
+a valid human), the strict freshness threshold, shared environment resolution
+with its 10-second default and invalid-value fallback, malformed/absent
+heartbeats as dead, the NaN/±inf/future characterization, exact
 `str(wall_seconds)`-no-newline heartbeat bytes, and best-effort idempotent
 withdrawal. `tests/test_handshake.py` locks removal of the former presence API;
 `tests/test_lifecycle_daemon_shutdown.py` locks manifest-persist →

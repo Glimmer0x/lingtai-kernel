@@ -38,7 +38,7 @@ from the repo root with the project's Python (any interpreter that resolves
 4. Publish a heartbeat with `wall_seconds=123.0` through the adapter and read back the `.agent.heartbeat` bytes with a hexdump.
 
 ### Expected evidence
-- [ ] Step 1: the shared fake/production conformance suite passes, pinning the tri-state classification, human-always-alive, strict freshness threshold, and byte-exact heartbeat writes.
+- [ ] Step 1: the shared fake/production conformance suite passes, pinning the tri-state classification, human-always-alive, strict freshness threshold, shared environment resolution (10-second default and invalid-value fallback), and byte-exact heartbeat writes.
 - [ ] Step 2: the malformed manifest is classified `MALFORMED`, not absent, and still counts as an agent (`is_agent` true).
 - [ ] Step 3: a valid manifest with `admin` missing-or-null is always alive, and the heartbeat file was never read for that observation.
 - [ ] Step 4: `.agent.heartbeat` contains exactly `123.0` with no trailing newline.
