@@ -179,6 +179,72 @@ def test_read_agent_record_missing_and_corrupt_return_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Published Agent Record lifecycle classification
+# ---------------------------------------------------------------------------
+
+
+def _published_agent_record(state: str, health: dict) -> dict:
+    return {
+        "schema": session_stats.AGENT_RECORD_SCHEMA,
+        "schema_version": session_stats.AGENT_RECORD_VERSION,
+        "session": {"state": state},
+        "health": health,
+    }
+
+
+def test_published_agent_record_liveness_boundary_is_strict():
+    heartbeat_at = 100.0
+    record = _published_agent_record("active", {
+        "heartbeat_at": heartbeat_at,
+        "liveness": "fresh",
+    })
+
+    assert session_stats.classify_published_agent_record(
+        record,
+        wall_now=heartbeat_at + session_stats.HEARTBEAT_LIVENESS_SECONDS - 0.001,
+    ) == "active"
+    assert session_stats.classify_published_agent_record(
+        record,
+        wall_now=heartbeat_at + session_stats.HEARTBEAT_LIVENESS_SECONDS,
+    ) == "offline"
+
+
+@pytest.mark.parametrize("health", [
+    {"liveness": "fresh"},
+    {"heartbeat_at": float("nan"), "liveness": "fresh"},
+    {"heartbeat_at": float("inf"), "liveness": "fresh"},
+])
+def test_published_agent_record_missing_or_nonfinite_heartbeat_is_offline(health):
+    assert session_stats.classify_published_agent_record(
+        _published_agent_record("idle", health), wall_now=100.0,
+    ) == "offline"
+
+
+@pytest.mark.parametrize("state", ["stuck", "suspended"])
+def test_published_agent_record_keeps_explicit_terminal_state(state):
+    assert session_stats.classify_published_agent_record(
+        _published_agent_record(state, {"heartbeat_at": 0.0}), wall_now=10_000.0,
+    ) == state
+
+
+@pytest.mark.parametrize(
+    ("record", "expected"),
+    [
+        (_published_agent_record("active", {"heartbeat_at": 100.0}), "active"),
+        (_published_agent_record("idle", {"heartbeat_at": 90.0}), "offline"),
+        (_published_agent_record("stuck", {"heartbeat_at": 0.0}), "stuck"),
+        (_published_agent_record("suspended", {"heartbeat_at": 0.0}), "suspended"),
+        ({}, "unavailable"),
+    ],
+)
+def test_query_published_agent_liveness_is_the_complete_consumer_dict(record, expected):
+    assert session_stats.query_published_agent_liveness(
+        record,
+        wall_now=100.0,
+    ) == {"liveness": expected}
+
+
+# ---------------------------------------------------------------------------
 # should_refresh_agent_record / env var validation
 # ---------------------------------------------------------------------------
 

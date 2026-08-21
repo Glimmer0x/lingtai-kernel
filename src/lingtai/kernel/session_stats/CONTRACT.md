@@ -5,6 +5,7 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/session_stats/ANATOMY.md
   - src/lingtai/kernel/session_stats/__init__.py
+  - src/lingtai/cli.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/kernel/base_agent/lifecycle.py
@@ -18,6 +19,7 @@ related_files:
   - src/lingtai/mcp_servers/local_commands/core.py
   - ENVIRONMENT_VARIABLES.md
   - tests/test_session_stats.py
+  - tests/test_cli_liveness.py
   - tests/test_daemon_run_dir.py
   - tests/test_status_snapshot.py
   - tests/test_architecture_documents.py
@@ -115,6 +117,18 @@ Telegram bot username) and MCP integration labels from
 pattern rather than inventing a second composition mechanism (a callback
 attribute, a service locator, or a hidden Core import).
 
+Consumers MUST use `query_published_agent_liveness(record, wall_now=...)`
+for current lifecycle presentation rather than duplicating record-shape or
+heartbeat-age logic. It always returns exactly `{"liveness": <value>}`:
+`active`/`idle`/`asleep` for a strictly fresh recognized heartbeat, `stuck` or
+`suspended` for an explicit published state, `offline` for a recognized running
+or sleeping state with missing/non-finite/expired heartbeat, and `unavailable`
+for a missing/malformed/unrecognized record. Its underlying classifier defaults
+to the canonical `HEARTBEAT_LIVENESS_SECONDS` and ignores frozen
+`health.liveness`. Cross-process consumers MUST invoke the read-only
+`lingtai-agent liveness --agent-dir <agent-dir>` command and consume its JSON
+instead of parsing record fields, environment variables, or legacy sources.
+
 ## Shapes
 
 Agent record (`system/agent_record.json`, schema
@@ -184,7 +198,9 @@ this module nor its aggregation ever writes to a token ledger.
 `tests/test_session_stats.py` locks: atomic-write behavior (temp-sibling +
 `os.replace`, no partial reads) for both record types; `schema`/
 `schema_version`/`generated_at` presence; the Agent-record redaction
-allowlist (no working-dir path, no secrets, no prompts); `should_refresh_agent_record`'s
+allowlist (no working-dir path, no secrets, no prompts); published-record
+classification's strict freshness boundary, missing/non-finite heartbeat, and
+explicit terminal-state invariants; `should_refresh_agent_record`'s
 throttle/first-write/backwards-clock behavior; `session_stats_refresh_seconds`/
 `session_stats_daemon_limit` fallback on missing/blank/non-numeric/zero/
 negative values; `aggregate_daemon_records`'s bounded newest-first scan,

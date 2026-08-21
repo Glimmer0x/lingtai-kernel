@@ -30,7 +30,7 @@ import logging
 import threading
 
 from lingtai.kernel._frontmatter import strip_frontmatter
-from lingtai.kernel.session_stats import read_agent_record
+from lingtai.kernel.session_stats import query_published_agent_liveness, read_agent_record
 from lingtai.kernel.state import AgentState
 from lingtai.tools.bash._async_supervisor import load_state
 from lingtai.mcp_servers.task_card import (
@@ -2940,53 +2940,18 @@ class TelegramManager:
         return out or None
 
     def _task_card_agent_lifecycle_status(self) -> str | None:
-        """Read this agent's own canonical lifecycle for the footer.
+        """Classify this agent's published record for the automatic footer.
 
-        Sources the owning agent's published Agent record
-        (``session.state`` / ``health.heartbeat_at`` — see
-        ``lingtai.kernel.session_stats``), the same redacted live snapshot
-        ``BaseAgent`` publishes on every turn, instead of reading
-        ``.status.json``/presence files directly — Telegram curates and
-        renders the record, it does not re-collect underlying facts itself.
-        Only for the non-terminal ``active``/``idle``/``asleep`` states is
-        heartbeat freshness consulted, catching a process that died without
-        ever writing ``stuck``. ``stuck`` and ``suspended`` are trusted
-        as-is: both are the process explicitly reporting its own state, and
-        a stale heartbeat proves nothing more in either case.
-
-        The record's own ``health.liveness`` string is a write-time snapshot
-        baked in by the agent that was alive when it wrote the record; it
-        never changes once that process dies, so it cannot be trusted here.
-        Freshness is instead recomputed against the *current* wall clock from
-        ``health.heartbeat_at`` using the same ``HEARTBEAT_LIVENESS_SECONDS``
-        threshold the writer used, so a dead process's last record correctly
-        reads as offline once the heartbeat goes stale. A missing record,
-        missing blocks, or an unrecognized state degrades to ``None`` — no
-        line is rendered rather than fabricating a state.
+        Telegram reads and curates the redacted Agent Record rather than
+        re-collecting status or heartbeat files. The kernel helper owns the
+        lifecycle/heartbeat policy, including rejection of frozen
+        ``health.liveness`` snapshots.
         """
-        from lingtai.kernel.config import HEARTBEAT_LIVENESS_SECONDS
-
-        record = read_agent_record(self._working_dir)
-        if record is None:
-            return None
-        session = record.get("session")
-        if not isinstance(session, dict):
-            return None
-        state = session.get("state")
-        if state not in _TASK_CARD_AGENT_STATES:
-            return None
-        if state in (AgentState.SUSPENDED.value, AgentState.STUCK.value):
-            return state
-        health = record.get("health")
-        heartbeat_at = health.get("heartbeat_at") if isinstance(health, dict) else None
-        if not isinstance(heartbeat_at, (int, float)) or isinstance(heartbeat_at, bool):
-            return state
-        if not math.isfinite(heartbeat_at):
-            return state
-        age = time.time() - heartbeat_at
-        if not math.isfinite(age):
-            return state
-        return state if age < HEARTBEAT_LIVENESS_SECONDS else "offline"
+        liveness = query_published_agent_liveness(
+            read_agent_record(self._working_dir),
+            wall_now=time.time(),
+        )["liveness"]
+        return None if liveness == "unavailable" else liveness
 
     def _task_card_active_seconds(self) -> float | None:
         """Seconds since the agent's last API call while it is active.

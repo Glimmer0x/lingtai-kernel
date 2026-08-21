@@ -641,10 +641,10 @@ def test_lifecycle_status_fresh_heartbeat_wins_over_frozen_stale_liveness(tmp_pa
     assert mgr._task_card_agent_lifecycle_status() == "idle"
 
 
-def test_lifecycle_status_missing_heartbeat_falls_back_to_raw_state(tmp_path):
+def test_lifecycle_status_missing_heartbeat_becomes_offline(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
     _write_agent_record(tmp_path, state="idle")
-    assert mgr._task_card_agent_lifecycle_status() == "idle"
+    assert mgr._task_card_agent_lifecycle_status() == "offline"
 
 
 # ---------------------------------------------------------------------------
@@ -665,7 +665,7 @@ def test_event_metadata_snapshot_none_when_nothing_available(tmp_path):
 
 def test_event_metadata_snapshot_adds_lifecycle_alone(tmp_path):
     mgr, _ = _integration_manager(tmp_path)
-    _write_agent_record(tmp_path, state="active", liveness="fresh")
+    _write_agent_record(tmp_path, state="active", liveness="fresh", heartbeat_at=time.time())
     snapshot = mgr._task_card_event_metadata_snapshot()
     assert snapshot["agent_lifecycle"] == "active"
     assert "device_short_name" in snapshot
@@ -700,7 +700,7 @@ def test_event_metadata_snapshot_adds_current_model(tmp_path):
         _json.dumps({"llm": {"model": "deepseek-v4-flash"}}), encoding="utf-8"
     )
     mgr, _ = _integration_manager(tmp_path)
-    _write_agent_record(tmp_path, state="active", liveness="fresh")
+    _write_agent_record(tmp_path, state="active", liveness="fresh", heartbeat_at=time.time())
     snapshot = mgr._task_card_event_metadata_snapshot()
     assert snapshot["agent_lifecycle"] == "active"
     assert snapshot["model"] == "deepseek-v4-flash"
