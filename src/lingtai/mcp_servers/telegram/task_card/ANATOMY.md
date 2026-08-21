@@ -14,6 +14,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_telegram_task_card_display_expression.py
   - src/lingtai/mcp_servers/telegram/task_card/__init__.py
   - src/lingtai/mcp_servers/telegram/task_card/_family.py
   - src/lingtai/mcp_servers/telegram/task_card/controller.py
@@ -47,9 +48,32 @@ onto its one tracked resident Task Card target per account+chat.
   events to the shared projection core, and implements compound-ID binding,
   high-water supersession, Telegram API classification, real transport,
   resident persistence, and programmable file projection callbacks.
+  `_taskcard_display_expression()` reads the durable declarative display
+  expression from `TelegramService` at each automatic projection tick
+  (`_broadcast_task_card_event_window`, `_ensure_task_card_resident`) and
+  passes it into `TaskCardEventProjection.render_event_groups`.
+- `service.py` — besides the enabled/normal_rows/max_refreshes/locale
+  presentation preferences, owns the durable `display_expression` field of
+  `<agent-workdir>/telegram/taskcard.json`: `taskcard_display_expression()` /
+  `set_taskcard_display_expression()`, validated through
+  `TaskCardEventProjection.validate_display_expression`, and
+  `_maybe_reload_taskcard_state()`, which hot-reloads the whole file (bounded
+  to one `stat` per call, re-parsing only on a changed mtime) so a direct
+  atomic external edit becomes visible at the next projection tick without a
+  process restart. Every persistence setter also calls
+  `_maybe_reload_taskcard_state()` under `self._taskcard_lock` before
+  deriving the siblings it writes back, so a setter invoked with no
+  preceding getter can never overwrite an unseen external edit with a stale
+  in-memory copy of the other fields.
 - `../../task_card/event_projection.py` — the channel-neutral pure core for safe
   event allowlisting, redaction, API-call grouping, budgets, metadata, and text
   rendering. It owns no journal I/O, route, resident, or transport state.
+  `DISPLAY_SLOTS`/`DEFAULT_DISPLAY_EXPRESSION`/`validate_display_expression`/
+  `compose_display` define and enforce the small declarative display-expression
+  grammar: an ordered, allowlisted selection of the fragments
+  (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`)
+  `format_rows_task_card_text` already renders, never arbitrary interpolated
+  data.
 - `SKILL.md` — packaged Telegram-facing manual/procedure material for this
   component.
 - Retained legacy files in this package (`controller.py`, `_family.py`,
@@ -89,6 +113,13 @@ onto its one tracked resident Task Card target per account+chat.
 - In-memory resident channel frames and per-route delivery locks owned by the
   shared core instance
 - Durable Telegram resident message ids in each account's `task_cards` map
+- Durable agent-wide presentation preferences (`taskcard` enabled,
+  `normal_rows`, `max_refreshes`, `locale`, `display_expression`) in
+  `<agent-workdir>/telegram/taskcard.json`, owned by `TelegramService`;
+  hot-reloaded (mtime-bounded) so an external edit lands at the next
+  automatic projection tick. This file is distinct from the bootstrap
+  `.secrets/telegram.json` account/token config, which never carries
+  presentation settings.
 - No programmable renderer state of its own; producer state lives under
   `<workdir>/taskcard/`
 

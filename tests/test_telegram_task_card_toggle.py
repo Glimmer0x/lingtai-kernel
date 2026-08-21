@@ -113,6 +113,7 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
         "normal_rows": 1,
         "max_refreshes": 1000,
         "locale": "en",
+        "display_expression": None,
     }
     assert _service(tmp_path, "main").taskcard_enabled() is False
 
@@ -122,6 +123,7 @@ def test_taskcard_state_persists_false_and_true_across_service_instances(tmp_pat
         "normal_rows": 1,
         "max_refreshes": 1000,
         "locale": "en",
+        "display_expression": None,
     }
     assert _service(tmp_path, "main").taskcard_enabled() is True
 
@@ -737,6 +739,7 @@ def test_taskcard_normal_rows_persist_and_are_shared_across_accounts(tmp_path: P
         "normal_rows": 7,
         "max_refreshes": 1000,
         "locale": "en",
+        "display_expression": None,
     }
     restored = _service(tmp_path, "one")
     assert restored.taskcard_enabled() is True

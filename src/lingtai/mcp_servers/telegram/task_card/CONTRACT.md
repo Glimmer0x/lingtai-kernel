@@ -1,6 +1,6 @@
 ---
 name: telegram-task-card-projection
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -16,6 +16,7 @@ related_files:
   - tests/test_telegram_task_card_programmable.py
   - tests/test_telegram_task_card_toggle.py
   - tests/test_telegram_task_card_event_tail.py
+  - tests/test_telegram_task_card_display_expression.py
   - tests/test_mcp_skill_manuals.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md. Keep related
@@ -66,6 +67,26 @@ semantics live here. The public producer contract lives in
    commit-after-success, edit-first delivery, conservative old-first rotation,
    peer adoption, and failure-state projection. It invokes Telegram only through
    `TaskCardResidentTransport` callbacks.
+8. The automatic channel's on-screen layout is a durable, hot-swappable
+   `display_expression` stored alongside the other agent-wide presentation
+   preferences in `<agent-workdir>/telegram/taskcard.json` (owned by
+   `TelegramService`, never the bootstrap `.secrets/telegram.json`
+   account/token config). The expression is only an ordered, allowlisted
+   selection of the fragments `TaskCardEventProjection` already renders
+   (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`);
+   composing it never evaluates code, interpolates arbitrary
+   workdir/config/event/prompt data, or scrapes a regex match. The documented
+   default order is Jason's approved footer-first presentation. A
+   direct atomic external edit of `taskcard.json` becomes visible at the next
+   automatic projection tick without a process restart; an unset, malformed,
+   or unknown-slot expression fails closed to the documented default without
+   corrupting sibling durable settings or the last valid in-memory state. This
+   guarantee also holds when a local `/taskcard`-style setter fires before any
+   getter or projection tick has observed the external edit: every
+   persistence setter reloads current disk state under the same lock before
+   deriving its siblings, so it can only ever apply its own requested field
+   change on top of the freshly observed file — it never writes back a stale
+   in-memory copy of an unseen edit's other fields.
 
 ## Port
 
@@ -100,6 +121,22 @@ There is no public MCP `task_card` family in this component.
    provider authorization and exact route binding stay adapter responsibilities.
 8. This package's manual and governed docs remain explicitly packaged through
    `pyproject.toml`.
+9. `TaskCardEventProjection.validate_display_expression` is the single
+   allowlist gate for `display_expression`: a non-list, empty, oversized,
+   non-string-element, or unknown-slot value is rejected wholesale (never
+   partially accepted) and the caller falls back to
+   `DEFAULT_DISPLAY_EXPRESSION`. `TelegramService` re-validates on every hot
+   reload and never lets an invalid `display_expression` reset `taskcard`,
+   `normal_rows`, `max_refreshes`, or `locale` to their own defaults.
+10. Every `TelegramService` persistence setter (`set_taskcard_enabled`,
+    `set_taskcard_normal_rows`, `set_taskcard_max_refreshes`,
+    `set_taskcard_locale`, `set_taskcard_display_expression`) calls
+    `_maybe_reload_taskcard_state()` under `self._taskcard_lock` before
+    deriving the sibling fields it persists, and `set_taskcard_enabled`
+    computes its `changed`/listener decision only after that reload. A setter
+    must never rewrite the file from a cache older than the file it is about
+    to overwrite; only genuinely concurrent writers overlapping at the same
+    instant remain last-writer-wins.
 
 ## Tests
 
@@ -115,4 +152,14 @@ There is no public MCP `task_card` family in this component.
   byte compatibility with Telegram's established render surface.
 - `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
   old-first rotation, peer adoption, and partial-failure state transitions.
+- `tests/test_telegram_task_card_display_expression.py` covers the
+  `display_expression` grammar allowlist, approved footer-first default
+  rendering, a valid changed expression reordering/dropping slots end-to-end
+  through `TelegramManager`, hot JSON reload without a process restart,
+  malformed/unsafe-expression fallback that never corrupts sibling durable
+  settings, and (contract rule 10) that every persistence setter reloads
+  before persisting: an unrelated setter invoked with no preceding getter
+  after a valid atomic external replace preserves the external
+  `normal_rows`/`locale`/`display_expression`/`max_refreshes` siblings in both
+  the persisted file and the next manager projection tick.
 - `tests/test_mcp_skill_manuals.py` covers packaged docs for this subpackage.
