@@ -176,8 +176,10 @@ matching behavior entry and this clause together.
 
 ### CPR launch confirmation
 
-After `cpr` spawns its detached child, it waits at most 10 seconds for a fresh
-heartbeat as confirmation. At that boundary it makes one final heartbeat
+After `cpr` spawns its detached child, it waits for a fresh heartbeat for the
+shared confirmation interval `max(10 seconds, 2 * HEARTBEAT_LIVENESS_SECONDS)`:
+20 seconds at the shared 10-second default and scaled by a valid
+`LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` override. At that boundary it makes one final heartbeat
 observation and checks the child process: an observed exit (including exit code
 zero) returns the existing launch-failure error with its relaunch-log tail; a
 still-running child with no fresh heartbeat is logged as `cpr_launch_unconfirmed`

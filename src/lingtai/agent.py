@@ -20,6 +20,7 @@ from lingtai.kernel.base_agent.prompt import _refresh_meta_guidance_section
 from lingtai.kernel._frontmatter import strip_frontmatter as _strip_frontmatter
 from lingtai.kernel.config import (
     AgentConfig,
+    HEARTBEAT_LIVENESS_SECONDS,
     THINKING_OWNED_PROVIDERS,
     THINKING_PROVIDERS,
 )
@@ -1329,14 +1330,12 @@ class Agent(BaseAgent):
                 message += f"\n\nLast log output:\n{tail}"
             return {"error": True, "message": message, "exit_code": code, "log": str(log_path)}
 
-        # Poll with the kernel-fixed liveness window (shared default), NOT a
-        # local 3.0: karma's CPR gate and this relaunch poll must use the same
-        # threshold, so a heartbeat fresh enough to satisfy the poll is by
-        # construction newer than the gate check and must have been written by
-        # the relaunched process. (The 10s deadline still exceeds the liveness
-        # window; if HEARTBEAT_LIVENESS_SECONDS is ever raised past ~5s, derive
-        # this deadline too, e.g. max(10.0, 2 * HEARTBEAT_LIVENESS_SECONDS).)
-        deadline = time.time() + 10.0
+        # Poll with the shared liveness window, not a local value: karma's
+        # CPR gate and this relaunch poll must use the same threshold, so a
+        # heartbeat satisfying the poll is newer than the gate check and was
+        # written by the relaunched process. Keep the startup confirmation
+        # deadline at least 10 seconds and at least twice that shared window.
+        deadline = time.time() + max(10.0, 2 * HEARTBEAT_LIVENESS_SECONDS)
         while time.time() < deadline:
             if _presence_observe_alive(
                 target_presence,

@@ -42,9 +42,11 @@ heartbeat, plus the agent's own heartbeat publication and withdrawal.
   `wall_seconds`) are the technology-neutral typed evidence values
   (`src/lingtai/kernel/agent_presence/__init__.py`).
 - Pure Core policy `is_agent` / `is_human` / `is_alive` (default threshold
-  `DEFAULT_LIVENESS_THRESHOLD_SECONDS`, derived in
-  `lingtai.kernel.config` as `HEARTBEAT_LIVENESS_SECONDS` — 5x the heartbeat
-  tick cadence) derives presence, human, and freshness decisions from
+  `DEFAULT_LIVENESS_THRESHOLD_SECONDS`, resolved in
+  `lingtai.kernel.config` as `HEARTBEAT_LIVENESS_SECONDS` from the shared
+  `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` environment variable — 10 seconds by
+  default with invalid values safely falling back) derives presence, human, and
+  freshness decisions from
   observations. Core use case `observe_alive` preserves
   manifest-first ordering and skips heartbeat observation for valid humans
   (`src/lingtai/kernel/agent_presence/__init__.py`).
@@ -87,8 +89,9 @@ to `publish_heartbeat` unchanged.
 
 ## Notes
 
-The store does not own address resolution, mail routing, retention's separate
-10-second / symlink policy, or lifecycle clocks. It is bound to one directory
+The store does not own address resolution, mail routing, retention's report-only
+`2 * HEARTBEAT_LIVENESS_SECONDS` window (20 seconds by default and scaled by
+valid `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` overrides), or lifecycle clocks. It is bound to one directory
 (no address argument), does not split foreign observation from own-heartbeat
 persistence, and is not a generic filesystem, KV, or service-locator abstraction.
 A present-but-malformed manifest still counts as an agent; a JSON manifest value

@@ -34,10 +34,10 @@ def _is_agent(target) -> bool:
 def _is_alive(target, threshold: float = DEFAULT_LIVENESS_THRESHOLD_SECONDS) -> bool:
     """Foreign-address liveness check via the presence store + Core policy.
 
-    The default threshold is the kernel-fixed liveness window
+    The default threshold is the shared config liveness window
     (``DEFAULT_LIVENESS_THRESHOLD_SECONDS`` in ``lingtai.kernel.agent_presence``,
-    derived from the heartbeat tick cadence), so karma gates and the CPR
-    relaunch poll share one window instead of the historical 2.0/3.0 split.
+    resolved from ``LINGTAI_AGENT_ALIVE_THRESHOLD_SEC``), so karma gates and the
+    CPR relaunch poll share one window instead of the historical 2.0/3.0 split.
     """
     return _presence_observe_alive(
         _presence_for(target),

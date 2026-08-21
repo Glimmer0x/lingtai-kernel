@@ -302,8 +302,9 @@ class TestHeartbeatNeverBlocksOnNetwork:
 
     def test_slow_kernel_version_fetch_does_not_stall_heartbeat(self, tmp_path, monkeypatch):
         """#730 regression: the kernel_version remote probe runs off the
-        heartbeat thread, so a fetch slower than the 2s is_alive threshold
-        never makes a live agent look dead."""
+        heartbeat thread, so a fetch exceeding this test's 2s heartbeat-cadence
+        responsiveness budget never makes a live agent look dead. That budget is
+        independent of the configurable ``is_alive`` liveness policy."""
         import time
         from lingtai.kernel import BaseAgent
         from lingtai.kernel.nudge import kernel_version as kv
@@ -320,7 +321,7 @@ class TestHeartbeatNeverBlocksOnNetwork:
             "_runtime_info",
             lambda: kv._RuntimeInfo("0.17.0", "0.17.0", None),
         )
-        # A fetch slower than the 2s is_alive threshold.
+        # A fetch slower than this test's 2s heartbeat-cadence responsiveness budget.
         monkeypatch.setattr(
             kv,
             "_fetch_latest_version",

@@ -350,8 +350,8 @@ def test_live_window_derived_from_kernel_constant():
         == config.RETENTION_LIVE_HEARTBEAT_SECONDS
     )
     assert config.RETENTION_LIVE_HEARTBEAT_SECONDS >= config.HEARTBEAT_LIVENESS_SECONDS
-    # Effective value is unchanged (back-compat): 10.0.
-    assert retention.DEFAULT_LIVE_HEARTBEAT_SECONDS == 10.0
+    # The 2x report-only safety margin tracks the shared 10-second default.
+    assert retention.DEFAULT_LIVE_HEARTBEAT_SECONDS == 20.0
 
 
 def _set_tz(monkeypatch, tz: str) -> None:

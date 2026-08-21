@@ -188,8 +188,10 @@ succeeds with only karma privilege.
   `tests/test_karma.py::TestCPRLingtai::test_cpr_agent_reports_exit_observed_at_confirmation_deadline`
 - **runner**: an agent with `admin: {"karma": true}` and the hermetic CPR-launch harness
 - **prerequisites**: a disposable non-human target agent directory with `init.json`; the
-  harness can hold its heartbeat observation false, advance the 10-second confirmation
-  interval without wall-clock waiting, and control the detached child's `poll()` result
+  harness can hold its heartbeat observation false, advance the runtime-policy
+  confirmation interval (`max(10 seconds, 2 * HEARTBEAT_LIVENESS_SECONDS)`;
+  20 seconds by default and scaled by valid `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` overrides)
+  without wall-clock waiting, and control the detached child's `poll()` result
 - **estimate**: 1 min
 
 ### Steps
@@ -205,8 +207,10 @@ succeeds with only karma privilege.
   `cpr_launch_unconfirmed`; it does not record `cpr_timeout` or return a launch error.
 - [ ] The observed-exit case returns an error with the exact `exit_code`, relaunch-log
   path, and bounded log-tail diagnostic; it does not report `resuscitated`.
-- [ ] Both cases retain the bounded 10-second confirmation interval; the live-child
-  receipt is not evidence of continuing health after CPR returns.
+- [ ] Both cases retain the bounded confirmation interval derived from
+  `max(10 seconds, 2 * HEARTBEAT_LIVENESS_SECONDS)` (20 seconds by default and scaled by
+  valid `LINGTAI_AGENT_ALIVE_THRESHOLD_SEC` overrides); the live-child receipt is not
+  evidence of continuing health after CPR returns.
 
 ### Pass / Fail
 Pass when absence of heartbeat evidence is distinguished from an observed child exit as

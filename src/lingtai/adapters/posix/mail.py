@@ -126,7 +126,10 @@ class PosixFilesystemMailAdapter(MailTransportPort):
 
         Handshake:
         1. ``{address}/.agent.json`` must exist.
-        2. ``{address}/.agent.heartbeat`` must be fresh (< 2 s).
+        2. ``{address}/.agent.heartbeat`` must be fresh under the shared
+           ``HEARTBEAT_LIVENESS_SECONDS`` policy (10 seconds by default; a
+           valid ``LINGTAI_AGENT_ALIVE_THRESHOLD_SEC`` override is resolved
+           when ``lingtai.kernel.config`` loads).
 
         Then stage the whole message (attachments + ``message.json``) in a
         hidden ``.<id>.staging`` directory inside the recipient's inbox and
@@ -148,8 +151,9 @@ class PosixFilesystemMailAdapter(MailTransportPort):
         # --- handshake ------------------------------------------------
         # Observe the recipient's presence through a target-bound presence store
         # and apply Core policy (a malformed manifest still counts as an agent;
-        # a fresh non-human heartbeat under the kernel liveness window
-        # (HEARTBEAT_LIVENESS_SECONDS, derived from the tick cadence) counts
+        # a fresh non-human heartbeat under the shared liveness window
+        # (HEARTBEAT_LIVENESS_SECONDS, resolved from
+        # LINGTAI_AGENT_ALIVE_THRESHOLD_SEC when lingtai.kernel.config loads) counts
         # as alive).
         recipient_presence = _presence_store_for(recipient_dir)
         if not _presence_is_agent(recipient_presence.observe_manifest()):
