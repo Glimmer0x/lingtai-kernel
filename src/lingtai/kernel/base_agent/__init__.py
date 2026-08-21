@@ -86,6 +86,39 @@ def _notification_source_signatures(payloads: Mapping[str, object]) -> dict[str,
     return signatures
 
 
+# Typed daemon event kinds and their durable idempotency-key prefixes. A run's
+# mini-channel multiplexes checkpoints, follow-up (`ask`) results, and the one
+# terminal outcome; only the terminal outcome retires the run.
+_DAEMON_TERMINAL_KIND = "daemon_terminal"
+_DAEMON_FOLLOWUP_KIND = "daemon_followup"
+_DAEMON_TERMINAL_KEY_PREFIX = "daemon-terminal:"
+_DAEMON_FOLLOWUP_KEY_PREFIX = "daemon-followup:"
+_DAEMON_FOLLOWUP_STATUS_PREFIX = "follow-up"
+
+
+def _is_terminal_daemon_event(event: Mapping) -> bool:
+    """Return True iff *event* is a run's terminal outcome.
+
+    Follow-up (`ask`) results are explicitly not terminal: the run stays active
+    and can be asked again. They are recognised by their typed kind first, then
+    by the two legacy shapes that already exist on disk — a detached follow-up's
+    ``daemon-followup:`` idempotency key, and an in-process follow-up which
+    carried no key at all and only its ``follow-up ...`` status.
+    """
+    kind = event.get("kind")
+    key = event.get("idempotency_key")
+    key = key if isinstance(key, str) else ""
+    status = event.get("status")
+    status = status if isinstance(status, str) else ""
+    if (
+        kind == _DAEMON_FOLLOWUP_KIND
+        or key.startswith(_DAEMON_FOLLOWUP_KEY_PREFIX)
+        or status.startswith(_DAEMON_FOLLOWUP_STATUS_PREFIX)
+    ):
+        return False
+    return kind == _DAEMON_TERMINAL_KIND or key.startswith(_DAEMON_TERMINAL_KEY_PREFIX)
+
+
 def _daemon_notification_summary(payload: object) -> dict | None:
     """Summarize the aggregate daemon mini-channel payload without raw events."""
     if not isinstance(payload, Mapping):
@@ -106,13 +139,7 @@ def _daemon_notification_summary(payload: object) -> dict | None:
         if not isinstance(run_id, str) or not run_id:
             continue
         runs.add(run_id)
-        idempotency_key = event.get("idempotency_key")
-        kind = event.get("kind")
-        if not (
-            kind == "daemon_terminal"
-            or isinstance(idempotency_key, str)
-            and idempotency_key.startswith("daemon-terminal:")
-        ):
+        if not _is_terminal_daemon_event(event):
             continue
         terminal_runs.add(run_id)
         status = event.get("status")
@@ -133,6 +160,43 @@ def _daemon_notification_summary(payload: object) -> dict | None:
         "terminal_by_status": dict(sorted(terminal_by_status.items())),
         "latest_terminal": latest_terminal[-3:],
     }
+
+
+_DAEMON_DELTA_FIELDS = ("event_count", "run_count", "terminal_run_count")
+
+
+def _daemon_summary_count(source: object, field: str) -> int:
+    """Return one non-negative count from a daemon summary, defaulting to 0."""
+    value = source.get(field) if isinstance(source, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def _daemon_summary_delta(previous: object, current: Mapping) -> dict:
+    """Return the daemon wake deltas between two bounded summaries.
+
+    A delta answers "how much of this is new since the model last saw the
+    channel". Dismissal, a whole-channel clear, and a batch reset all shrink the
+    aggregate below the delivered baseline, and subtracting a larger baseline
+    reported a negative delta — a count that cannot exist. A shrunk aggregate is
+    not a smaller change, it is a *different* batch: the delivered baseline is
+    dropped, every remaining count is reported as new, and ``baseline_reset``
+    names the reason. No extra durable state is needed — the shrink itself is
+    the evidence.
+    """
+    reset = any(
+        _daemon_summary_count(previous, field) > _daemon_summary_count(current, field)
+        for field in _DAEMON_DELTA_FIELDS
+    )
+    delta: dict[str, object] = {}
+    for field in _DAEMON_DELTA_FIELDS:
+        baseline = 0 if reset else _daemon_summary_count(previous, field)
+        delta[f"{field}_delta"] = _daemon_summary_count(current, field) - baseline
+    delta["latest_terminal"] = current.get("latest_terminal")
+    if reset:
+        delta["baseline_reset"] = True
+    return delta
 
 
 def _block_type_name(block: object) -> str:
@@ -1526,6 +1590,16 @@ class BaseAgent:
         raw_fp = observed.raw_fp
         fp = observed.masked_fp
 
+        # Stable current state, refreshed on every coherent read — including the
+        # quiet paths below (masked sub-threshold arrivals, a delayed daemon
+        # channel, an unchanged fingerprint). Attention decides whether to wake;
+        # it never decides what is true, so the newest meta envelope reports
+        # current bounded daemon progress even when nothing is delivered.
+        daemon_summary = _daemon_notification_summary(
+            observed.payloads.get(DAEMON_CHANNEL)
+        )
+        self._notification_daemon_summary = daemon_summary
+
         # Resolve the "never synced yet" baseline through the same mask. An
         # agent starts at `()`, but with a threshold configured the masked
         # fingerprint of an empty directory is not `()` — it is the virtual
@@ -1618,10 +1692,6 @@ class BaseAgent:
         # would describe bytes the agent never delivered.
         notifications = observed.payloads
         source_signatures = _notification_source_signatures(notifications)
-        daemon_summary = _daemon_notification_summary(notifications.get(DAEMON_CHANNEL))
-        # Stable current state: the newest meta envelope can report bounded
-        # daemon progress even when the attention lane itself overflows.
-        self._notification_daemon_summary = daemon_summary
 
         def _delivery_provenance(*, waking: bool) -> dict:
             previous_signatures = getattr(
@@ -1644,15 +1714,9 @@ class BaseAgent:
                 )
                 if not isinstance(previous_daemon, Mapping):
                     previous_daemon = {}
-                provenance["daemon"] = {
-                    "event_count_delta": daemon_summary["event_count"]
-                    - int(previous_daemon.get("event_count", 0) or 0),
-                    "run_count_delta": daemon_summary["run_count"]
-                    - int(previous_daemon.get("run_count", 0) or 0),
-                    "terminal_run_count_delta": daemon_summary["terminal_run_count"]
-                    - int(previous_daemon.get("terminal_run_count", 0) or 0),
-                    "latest_terminal": daemon_summary["latest_terminal"],
-                }
+                provenance["daemon"] = _daemon_summary_delta(
+                    previous_daemon, daemon_summary
+                )
             telegram = notifications.get("mcp.telegram")
             telegram_data = telegram.get("data") if isinstance(telegram, Mapping) else None
             message_ids = telegram_data.get("message_ids") if isinstance(telegram_data, Mapping) else None

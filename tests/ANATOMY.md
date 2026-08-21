@@ -105,6 +105,7 @@ related_files:
   - tests/test_context_pressure_streak.py
   - tests/test_custom_responses_stateless.py
   - tests/test_daemon.py
+  - tests/test_daemon_attention_delay.py
   - tests/test_daemon_backend_options.py
   - tests/test_daemon_check.py
   - tests/test_daemon_check_historical.py

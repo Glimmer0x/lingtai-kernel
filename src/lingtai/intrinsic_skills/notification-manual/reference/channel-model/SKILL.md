@@ -104,6 +104,10 @@ the live holder belong to kernel synchronization, not to the `manual` action.
 
 ## Consumer delay filtering
 
+The `daemon` target is masked, not filtered: its payload and byte version stay
+visible while its attention entry collapses to a constant token, so daemon
+arrivals stay readable but do not wake until the delay expires.
+
 `notification(action='delay', input={'channel': ..., 'seconds': 0 or a live configured cap})` is
 not a producer operation. Its private `.notification/.delay_state.json` record
 causes the coherent consumer snapshot, delivery fingerprint, synthetic wake, and

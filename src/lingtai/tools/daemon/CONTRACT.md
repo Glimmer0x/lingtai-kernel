@@ -479,16 +479,29 @@ suppress concurrent callbacks, but `daemon.json.terminal_notified=true` is a
 receipt and may be written only after `_publish_daemon_notification` succeeds or
 an idempotent retry observes an already-published daemon-channel event. Every
 new terminal event is typed with `kind="daemon_terminal"` and its terminal
-`status`, rather than requiring consumers to parse its human-readable body.
+`status`, rather than requiring consumers to parse its human-readable body. A
+follow-up (`ask`) result is not a terminal outcome: both publishers type it
+`kind="daemon_followup"`, and a consumer counts an event as terminal only when
+it is typed terminal or carries a `daemon-terminal:` idempotency key — never
+when it is typed follow-up, carries a `daemon-followup:` key, or (the legacy
+in-process shape already on disk) reports a `follow-up ...` status.
+Guarded by: [D009](BEHAVIORS.md#behavior-d009)
 
 The parent metadata projection carries a bounded current `agent_state.daemon`
 summary derived from the same coherent mini-channel aggregate (run/event/active/
-terminal counts, terminal-status counts, and at most three latest terminals).
+terminal counts, terminal-status counts, and at most three latest terminals). It
+is refreshed on every stable coherent read — including quiet, masked, and
+delayed reads that deliver nothing — so current daemon truth never lags
+attention.
 When an ASLEEP parent is actually woken by a synthesized notification pair, that
 pair additionally carries one-shot `agent_state.notification_wake` provenance:
 changed channels plus bounded daemon deltas/latest terminals and, when relevant,
 Telegram message ids. It is cleared before later ordinary tool results; a mixed
-wake is labeled `source_kind="mixed"` rather than attributed by guesswork.
+wake is labeled `source_kind="mixed"` rather than attributed by guesswork. Daemon
+deltas are counts of what is new and are never negative: when a dismissal,
+clear, or batch reset leaves the aggregate below the delivered baseline, the
+baseline is dropped, the remaining counts are reported as new, and
+`baseline_reset: true` names the reason.
 
 Failed enqueue must clear the pending claim and leave the terminal run
 retryable. Startup reconciliation retries only new-schema terminal run dirs that
@@ -513,6 +526,19 @@ batch so a later crossing can alarm again. Absent a valid threshold, every
 terminal notice wakes the parent as before. Per-run `daemons/<id>/daemon.json`
 and result files remain the terminal source of truth regardless of attention
 state; the top-level `.notification/daemon.json` is only the derived report.
+
+A consumer `notification(action="delay")` whose target is `daemon` reuses that
+same one attention seam for its bounded window. It suppresses daemon *attention*
+only, never daemon truth or storage: mini-files, receipts, `daemon.json`, and the
+aggregate payload are untouched and stay readable, while the daemon attention
+entry collapses to one constant token so no daemon arrival wakes or injects.
+Independent channels — including registered hook channels — keep byte-exact
+change detection and wake the parent normally throughout, and delay expiry lifts
+the mask and publishes the `delay-alarm` mirror in the same sync cycle, so a
+delayed daemon channel cannot strand an ASLEEP parent. The delay action itself —
+targets, cap, replacement/cancellation, expiry mirror, and fail-open state — is
+owned by [`../notification/CONTRACT.md`](../notification/CONTRACT.md) (`delay`).
+Guarded by: [N004](../notification/BEHAVIORS.md#behavior-n004)
 
 ### 7. LingTai task mapping and self-compact are separate from provider compaction
 

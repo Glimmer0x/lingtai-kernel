@@ -4099,7 +4099,8 @@ def test_ask_claude_code_reclaim_suppresses_followup_notification(tmp_path, monk
     published: list[tuple] = []
     monkeypatch.setattr(
         mgr, "_publish_daemon_notification",
-        lambda em_id, *, status, text, run_dir=None: published.append((em_id, status)),
+        lambda em_id, *, status, text, run_dir=None, kind="daemon_terminal":
+        published.append((em_id, status, kind)),
     )
     logged: list[tuple] = []
     real_log = mgr._log
@@ -4158,8 +4159,8 @@ def _run_silent_subprocess_ask_test(tmp_path, monkeypatch, backend: str):
     published: list[tuple] = []
     monkeypatch.setattr(
         mgr, "_publish_daemon_notification",
-        lambda em_id, *, status, text, run_dir=None:
-            published.append((em_id, status, text)),
+        lambda em_id, *, status, text, run_dir=None, kind="daemon_terminal":
+            published.append((em_id, status, text, kind)),
     )
     logged: list[tuple] = []
     real_log = mgr._log
@@ -4210,6 +4211,8 @@ def _run_silent_subprocess_ask_test(tmp_path, monkeypatch, backend: str):
     failures = [p for p in published if p[1] == "follow-up failed"]
     assert failures, f"expected a follow-up failed notification, got {published}"
     assert "timed out" in failures[0][2]
+    # A follow-up result is typed as such, never as the run's terminal outcome.
+    assert failures[0][3] == "daemon_followup"
 
     # No post-reclaim log — reclaim didn't happen, the entry is still live.
     post_reclaim_logs = [e for e, _ in logged if e == "daemon_ask_post_reclaim"]
@@ -4244,8 +4247,8 @@ def test_ask_stream_workers_reuse_shared_stderr_drainer(tmp_path, monkeypatch):
     published: list[tuple] = []
     monkeypatch.setattr(
         mgr, "_publish_daemon_notification",
-        lambda em_id, *, status, text, run_dir=None:
-            published.append((em_id, status, text)),
+        lambda em_id, *, status, text, run_dir=None, kind="daemon_terminal":
+            published.append((em_id, status, text, kind)),
     )
 
     drains = []

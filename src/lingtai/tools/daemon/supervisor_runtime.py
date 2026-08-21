@@ -233,6 +233,7 @@ def run_resume_owner(manifest_path: str, run_id: str, generation: str,
             _publish_daemon_notification(
                 run_dir, manifest, status=f"follow-up {status}",
                 state=state, idempotency_key=f"daemon-followup:{run_id}:{generation}",
+                kind="daemon_followup",
             )
         except Exception:
             pass
@@ -490,7 +491,10 @@ def _publish_terminal_notification_if_needed(run_dir, manifest: dict) -> None:
 _NOTIFICATION_PREVIEW_MAX = 500
 
 
-def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state: dict, idempotency_key: str) -> bool:
+def _publish_daemon_notification(
+    run_dir, manifest: dict, *, status: str, state: dict, idempotency_key: str,
+    kind: str = "daemon_terminal",
+) -> bool:
     """Publish the terminal event directly via the notification store Port.
 
     Mirrors ``DaemonManager._publish_daemon_notification``'s body/text
@@ -499,7 +503,9 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
     ``.notification/daemon/<daemon-id>.json``; the sibling
     ``.notification/daemon.json`` is only a derived run-state report and is not
     part of notification delivery. The parent's alarm-threshold attention mask
-    reads the mini-file aggregate's ``data.daemon`` state.
+    reads the mini-file aggregate's ``data.daemon`` state. ``kind`` types the
+    event: a resume follow-up publishes ``daemon_followup`` so it is never
+    counted as the run's terminal outcome.
     """
     from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
     from lingtai.kernel.notification_store import UNCONDITIONAL
@@ -578,7 +584,7 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
             "body": body,
             "at": received_at,
             "idempotency_key": idempotency_key,
-            "kind": "daemon_terminal",
+            "kind": kind,
             "status": status,
         }
         events.append(event)

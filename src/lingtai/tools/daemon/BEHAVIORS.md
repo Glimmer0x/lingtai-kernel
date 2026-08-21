@@ -17,13 +17,19 @@ related_files:
   - tests/test_daemon_claude_p_submanual.py
   - tests/test_daemon_qwen_code_submanual.py
   - tests/test_daemon_per_batch_limits.py
+  - tests/test_daemon_attention_delay.py
+  - src/lingtai/kernel/base_agent/__init__.py
+  - src/lingtai/tools/daemon/supervisor_runtime.py
 maintenance: |
   Written by the daemon CONVERT_BEHAVIOR migration (2026-08). Keep in sync
   with CONTRACT.md clauses this file guards and ANATOMY.md entries for the
   daemon tool family; when CONTRACT.md or the daemon manual changes in a way
   that affects agent-observable behavior (check JSON contract, per-batch
   emanate limits, CLI-backend submanual routing), update the matching LABT
-  here in the same change.
+  here in the same change. D009 guards the typed terminal/follow-up event
+  contract and the non-negative daemon wake deltas in CONTRACT.md § 6; update it
+  whenever event typing, terminal classification, or the bounded
+  `agent_state.daemon` projection changes.
 ---
 # Daemon Behavior Tests
 
@@ -412,3 +418,58 @@ LingTai surface, and unchanged terminal fields all hold. Fail on chat-style or
 preemptive delivery, message redelivery/loss, a terminal checkpoint, a false
 backend capability claim, or any checkpoint that satisfies or mutates the
 terminal completion receipt.
+
+## Behavior D009 — a follow-up result never retires its run
+
+- **id**: D009
+- **title**: an `ask` follow-up notice is typed `daemon_followup` and leaves its
+  run active in the parent's bounded daemon summary, and daemon wake deltas are
+  never negative after a dismissal
+- **guards**: `daemon-contract` § 6. Terminal notifications use published
+  receipts, not attempted claims
+  ([CONTRACT.md](CONTRACT.md#6-terminal-notifications-use-published-receipts-not-attempted-claims))
+- **supersedes**: `tests/test_daemon_attention_delay.py` (classification and
+  delta tables)
+- **runner**: any LingTai agent with the `daemon`, `notification`, and `file`
+  tools
+- **prerequisites**: an agent working dir; a backend whose runs accept
+  `daemon(action="ask")` (claude-code, codex, opencode/oh-my-pi, or cursor) with
+  its CLI installed and authenticated
+- **estimate**: 10 min
+
+### Steps
+1. Emanate one run on an ask-capable backend, e.g.
+   `daemon(action="emanate", input={"tasks": [{"task": "Reply with exactly:
+   READY", "backend": "codex"}]}, reasoning="probe")`. Record `ids[0]` as
+   `<id>` and wait for its terminal notice.
+2. Call `daemon(action="ask", input={"id": "<id>", "message": "Reply with
+   exactly: FOLLOWUP"}, reasoning="probe")` and wait for the follow-up notice.
+3. Read `.notification/daemon/<id>.json` with the `file` tool and inspect the
+   appended events.
+4. Read the newest tool result's `_meta.agent_meta.agent_state.daemon` summary
+   (or `notification(action="check", input={}, reasoning="probe")` plus the same
+   metadata on the next result).
+5. Call `notification(action="dismiss", input={"channel": "daemon"},
+   reasoning="probe")`, emanate one more trivial run, let the parent go ASLEEP
+   and be woken by it, then read
+   `_meta.agent_meta.agent_state.notification_wake.daemon` on the injected
+   result.
+
+### Expected evidence
+- [ ] Step 3: the terminal event carries `"kind": "daemon_terminal"`; the
+      follow-up event carries `"kind": "daemon_followup"` with a
+      `follow-up ...` status, and both live in the same `<id>` mini-file.
+- [ ] Step 4: the run is counted once — `run_count` includes `<id>` once,
+      `terminal_run_count` counts it once, and `latest_terminal` still names the
+      run's original terminal status rather than `follow-up completed`.
+- [ ] Step 5: every `*_delta` in the wake provenance is `>= 0`, and the shrunk
+      baseline is reported as `"baseline_reset": true` rather than a negative
+      count.
+- [ ] `daemons/<id>/daemon.json` keeps its terminal state and receipt unchanged
+      throughout.
+
+### Pass / Fail
+Pass when all evidence is observed and no forbidden side effect occurs. Fail if
+a follow-up is typed or counted as terminal, if it adds a second terminal for
+the same run, if `latest_terminal` reports a follow-up status, or if any wake
+delta is negative; record the evidence trail in the task report.

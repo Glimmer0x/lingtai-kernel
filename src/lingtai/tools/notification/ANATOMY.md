@@ -18,6 +18,7 @@ related_files:
   - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
   - tests/test_notification_tool.py
   - tests/test_notification_delay_alarm.py
+  - tests/test_daemon_attention_delay.py
   - tests/test_system_dismiss.py
   - src/lingtai/tools/notification/glossary-en.md
   - src/lingtai/tools/notification/glossary-zh.md
@@ -178,10 +179,16 @@ action values are unchanged; the four hook-registry actions are new.
   notification mirrors or remove targeted system events while leaving producer
   canonical state untouched.
 - Delay owns no producer state. Core atomically records its private delay state
-  under the Store-native lock, omits only the active target in
-  `coherent_attention_read`, and at timer/heartbeat expiry writes a stable
-  high-priority `delay-alarm` mirror before re-exposing the target. Corrupt or
-  unreadable state is ignored (visible, not silent).
+  under the Store-native lock, suppresses only the active target in
+  `coherent_attention_read` (`src/lingtai/kernel/notifications.py:1013`), and at
+  timer/heartbeat expiry writes a stable high-priority `delay-alarm` mirror
+  before re-exposing the target. Corrupt or unreadable state is ignored
+  (visible, not silent). A `daemon` target is masked rather than hidden there:
+  the aggregate payload and raw version stay in the read and only the daemon
+  attention entry becomes `DAEMON_DELAYED_ATTENTION_TOKEN`
+  (`src/lingtai/kernel/notifications.py:911`), reusing the alarm-threshold mask
+  seam `apply_daemon_attention_mask`
+  (`src/lingtai/kernel/notifications.py:945`).
 - Hook-registry handlers own no state directly either. Through notification
   Core they read/mutate `.notification/hooks.json` (Store family 8) and refresh
   the module-level registered-hook channel mirror that widens the allow

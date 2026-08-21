@@ -1,6 +1,6 @@
 ---
 name: notification-tool
-contract_version: 5
+contract_version: 6
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/agent.py
   - tests/test_notification_tool.py
   - tests/test_notification_delay_alarm.py
+  - tests/test_daemon_attention_delay.py
   - tests/test_system_dismiss.py
   - tests/test_tools_package_data.py
   - src/lingtai/tools/notification/glossary-en.md
@@ -183,7 +184,18 @@ Observable action contracts are:
   a diagnostic fallback to 600 rather than permitting unbounded silence. Delay
   never rewrites or clears the target producer file: while live, the coherent
   consumer snapshot/fingerprint omits only that target (including voluntary
-  `check`), while all other channels stay normal. At expiry/recovery it stops
+  `check`), while all other channels stay normal. The aggregate `daemon`
+  channel is the one target delay suppresses *attention* for instead of hiding:
+  its payload, byte-exact delivered version, and bounded `agent_state.daemon`
+  summary stay current and readable (snapshot, `check`, delivery, non-forced
+  dismissal), while its attention entry collapses to the single constant token
+  `daemon:delayed=1` so daemon appends, alarm crossings, and clears cannot move
+  the wake fingerprint. Registered hook channels and every other channel keep
+  byte-exact change detection and wake normally throughout. The durable
+  `alarm_fired` latch is unchanged, so a crossing during the delay alarms when
+  it expires — deferred, never dropped. Guards
+  [N004](BEHAVIORS.md#behavior-n004) (daemon delay masks attention only while
+  independent channels still wake). At expiry/recovery it stops
   filtering and writes exactly one high-priority latest-only `delay-alarm`
   mirror identifying target, requested/actual duration, byte-level changed/no-
   change, and only conservative producer-reported/retained-event statistics.
@@ -292,7 +304,11 @@ is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
-- `contract_version` is `5`: `delay` now resolves its nonzero duration cap live
+- `contract_version` is `6`: a `delay` whose target is the aggregate `daemon`
+  channel now masks that channel's attention token instead of omitting it from
+  the coherent consumer read, so daemon truth, delivered version, and dismissal
+  keep working while it is delayed. Non-daemon targets are unchanged.
+- `contract_version` `5`: `delay` resolves its nonzero duration cap live
   from `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default 600) rather than a
   static schema maximum, so callers must use the current action contract rather
   than cache a fixed bound. Version `4` added the consumer-only closed-enum
@@ -310,7 +326,7 @@ fixed path, no-double-wrap flattening, read-only state/log behavior, check
 placeholder shape, all atomic dismiss semantics, hook add/drop/edit/list
 lifecycle and whitelist gating, null-optional defaulting,
 cross-action rejection before I/O, `_tc_id` tolerance, the kernel summarize
-allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_notification_delay_alarm.py`
+allowlist entry, Core guards, and absence of system compatibility aliases. `tests/test_daemon_attention_delay.py` covers the daemon-target attention mask, hook-channel wake independence, bounded expiry wake, and fail-open delay state. `tests/test_notification_delay_alarm.py`
 proves consumer filtering for coherent/voluntary reads, early cancellation,
 replacement, durable expiry/recovery idempotence, alarm priority and conservative
 statistics, and `delay-alarm` refusal. `tests/test_system_dismiss.py` protects shared

@@ -61,7 +61,9 @@ alarm records target, requested/actual duration, changed/no-change, and only
 conservative current measurements: producer-reported counts and retained event
 entries are never asserted to be an exact total for overwritten/capped mirrors.
 Handle the re-exposed target, then dismiss `delay-alarm` as a mirror when done.
-`delay-alarm` itself cannot be delayed. A damaged private delay record fails open
+Delaying `daemon` is the one exception to hiding: the daemon channel stays
+readable (check, snapshot, and the bounded daemon summary keep working) and only
+stops waking you until the delay ends. `delay-alarm` itself cannot be delayed. A damaged private delay record fails open
 (target visible) rather than silently suppressing notification delivery.
 
 ## Root `summarize`

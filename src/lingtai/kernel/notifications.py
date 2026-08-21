@@ -183,6 +183,18 @@ def _invalidate_allow_predicates() -> None:
 # delay-alarm mirror and immediately stops filtering the target.  The state and
 # alarm use the same native lock as NotificationStore mutations, so independently
 # composed processes cannot race a timer/recovery into two alarm publications.
+#
+# The `daemon` channel is the one target delay suppresses *attention* for
+# instead of hiding: it is an aggregate of independent per-run mini-channels
+# that already owns an attention token (the alarm-threshold mask below), and
+# hiding it would also hide daemon truth — the payload the model reads, the
+# bounded `agent_state.daemon` summary, and the delivered byte version a
+# non-forced daemon dismissal compares against.  A live daemon delay therefore
+# collapses the daemon entry to one constant attention token (readable, but it
+# cannot move the wake fingerprint) while every other channel — including
+# registered hook channels — keeps byte-exact change detection and wakes the
+# parent normally.  Expiry lifts the mask and publishes the same delay-alarm
+# mirror, so a delayed daemon channel can never strand an ASLEEP parent.
 
 DELAY_ALARM_CHANNEL = "delay-alarm"
 _DELAY_STATE_FILENAME = ".delay_state.json"
@@ -517,10 +529,13 @@ def _read_active_notification_delay(workdir: str | Path | None) -> dict[str, Any
 def delayed_notification_target(
     workdir: str | Path | None, store: NotificationStorePort
 ) -> str | None:
-    """Return the one currently hidden target, failing open on bad state.
+    """Return the one currently delayed target, failing open on bad state.
 
     Expiry recovery runs first so a due target becomes visible and its alarm is
-    created before this consumer snapshot begins.
+    created before this consumer snapshot begins. Consumers decide how the
+    target is suppressed: ordinary channels are omitted from the coherent read,
+    while ``daemon`` keeps its payload and is masked to a constant attention
+    token (see ``coherent_attention_read``).
     """
     reconcile_notification_delay(workdir, store)
     active = _read_active_notification_delay(workdir)
@@ -584,8 +599,10 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
     """Start, replace, or cancel the one consumer delay for ``agent``.
 
     Only delay state changes here; the target producer file is neither cleared
-    nor rewritten.  On cancellation the next coherent read immediately exposes
-    the target again.
+    nor rewritten.  On cancellation the next coherent read immediately restores
+    the target's ordinary consumer behaviour: an ordinary channel becomes
+    visible again, and the ``daemon`` channel — which stays readable throughout
+    the delay — regains its ability to move the attention fingerprint.
     """
     workdir = _delay_workdir_key(getattr(agent, "_working_dir", None))
     store = agent._notification_store
@@ -891,11 +908,24 @@ def next_daemon_batch_state(
     return {"count": count, "alarm_fired": bool(alarm_fired)}
 
 
-def daemon_attention_token(payload: object, threshold: int | None) -> str | None:
+DAEMON_DELAYED_ATTENTION_TOKEN = "daemon:delayed=1"
+
+
+def daemon_attention_token(
+    payload: object, threshold: int | None, *, delayed: bool = False
+) -> str | None:
     """Return the attention token for a daemon payload, or ``None`` to pass through.
 
-    ``None`` (no configured threshold) keeps the raw content hash, so every
-    terminal notice wakes exactly as it did before this channel existed.
+    ``None`` (no configured threshold, no live delay) keeps the raw content
+    hash, so every terminal notice wakes exactly as it did before this channel
+    existed.
+
+    ``delayed`` is the live consumer delay whose target is the daemon channel.
+    It wins over the threshold and collapses the entry to one constant token
+    for the whole bounded delay window: appends, crossings, and clears stay
+    readable but cannot move the wake fingerprint. The durable ``alarm_fired``
+    latch lives in the payload, so a crossing that happens while delayed still
+    alarms once the delay expires — silence is deferred, never dropped.
 
     With a threshold, the token depends only on whether the strict
     ``count > threshold`` alarm edge has been crossed — never on the event
@@ -903,6 +933,8 @@ def daemon_attention_token(payload: object, threshold: int | None) -> str | None
     identical (readable, but no wake); the crossing flips the token exactly
     once, and a clear drops the file so the next batch starts over.
     """
+    if delayed:
+        return DAEMON_DELAYED_ATTENTION_TOKEN
     if threshold is None:
         return None
     count, alarm_fired = daemon_batch_state(payload)
@@ -911,15 +943,20 @@ def daemon_attention_token(payload: object, threshold: int | None) -> str | None
 
 
 def apply_daemon_attention_mask(
-    fingerprint: tuple, snapshot_payload: object, threshold: int | None
+    fingerprint: tuple,
+    snapshot_payload: object,
+    threshold: int | None,
+    *,
+    delayed: bool = False,
 ) -> tuple:
     """Replace the daemon entry's content hash with its attention token.
 
     ``fingerprint`` is the Store's ``(name, size, sha256)`` tuple sequence. Only
     the ``daemon.json`` entry is rewritten, and only when a threshold is
-    configured; every other channel keeps byte-exact change detection.
+    configured or a live consumer delay targets the daemon channel; every other
+    channel keeps byte-exact change detection.
     """
-    token = daemon_attention_token(snapshot_payload, threshold)
+    token = daemon_attention_token(snapshot_payload, threshold, delayed=delayed)
     if token is None:
         return tuple(fingerprint)
     name = f"{DAEMON_CHANNEL}.json"
@@ -933,31 +970,6 @@ def apply_daemon_attention_mask(
     if not any(entry and entry[0] == name for entry in masked):
         masked.append((name, 0, token))
     return tuple(sorted(masked, key=lambda entry: entry[0]))
-
-
-def mask_daemon_attention_fingerprint(
-    store, fingerprint: tuple, workdir: str | None
-) -> tuple:
-    """Apply the daemon attention mask to an already-computed ``fingerprint``.
-
-    This is the single seam every wake/delivery comparison goes through, so the
-    daemon channel's below-threshold silence is decided in exactly one place.
-    Costs nothing on the default path: with no configured threshold the
-    fingerprint is returned untouched. With a configured threshold, a virtual
-    quiet token exists even before daemon.json, preventing the first sub-threshold
-    append from changing tuple shape and waking. Falls back to raw if a payload
-    cannot be read — failing toward waking, never toward silence.
-    """
-    threshold = daemon_alarm_threshold(workdir)
-    if threshold is None:
-        return tuple(fingerprint)
-    try:
-        payload = store.snapshot(lambda ch: ch == DAEMON_CHANNEL).get(
-            DAEMON_CHANNEL
-        )
-    except Exception:
-        return tuple(fingerprint)
-    return apply_daemon_attention_mask(fingerprint, payload, threshold)
 
 
 def attention_fingerprint(store, allow_channel, workdir: str | None) -> tuple:
@@ -1017,7 +1029,9 @@ def coherent_attention_read(
       matches the fingerprint it is rewriting. Reading the payload separately
       lets an alarmed write be observed by the fingerprint pass and a clear by
       the payload pass, rewriting the alarmed entry to the quiet token — the
-      alarm edge would vanish with no file left to replay it.
+      alarm edge would vanish with no file left to replay it. A live daemon
+      delay uses that same one seam, so daemon quiet has exactly one
+      implementation whatever asked for it.
 
     Verify-and-retry supplies the missing atomicity without a Port change and
     without a lock on the read path: fingerprint, snapshot, then fingerprint
@@ -1037,9 +1051,16 @@ def coherent_attention_read(
     # off before this single consumer observation is built, so target visibility
     # and the high-priority alarm arrive in the same sync/wake cycle.
     delayed_target = delayed_notification_target(workdir, store)
+    # A delayed `daemon` target is masked, not hidden: it keeps its payload and
+    # its byte-exact raw entry (truth, the bounded summary, and the delivered
+    # version a non-forced dismissal compares against) and only loses its
+    # ability to move the wake-deciding fingerprint. Every other target keeps
+    # the established hide-the-channel delay semantics.
+    daemon_delayed = delayed_target == DAEMON_CHANNEL
+    hidden_target = None if daemon_delayed else delayed_target
 
     def _consumer_allow(channel: str) -> bool:
-        return allow_channel(channel) and channel != delayed_target
+        return allow_channel(channel) and channel != hidden_target
 
     threshold = daemon_alarm_threshold(workdir)
     raw_fp: tuple = ()
@@ -1064,9 +1085,9 @@ def coherent_attention_read(
     # the last attempt rather than a confirmed one, and callers are told so.
     masked_fp = (
         tuple(raw_fp)
-        if threshold is None
+        if threshold is None and not daemon_delayed
         else apply_daemon_attention_mask(
-            raw_fp, payloads.get(DAEMON_CHANNEL), threshold
+            raw_fp, payloads.get(DAEMON_CHANNEL), threshold, delayed=daemon_delayed
         )
     )
     return CoherentAttentionRead(tuple(raw_fp), masked_fp, payloads, stable)
@@ -1088,11 +1109,20 @@ def masked_empty_attention_fp(workdir: str | None) -> tuple:
     already past ``count > N``) a genuine change, because its token is
     ``daemon:alarm=1``. Absent a configured threshold there is no virtual entry
     and the empty baseline stays ``()``.
+
+    A live daemon delay resolves the same way through the same mask, so a
+    refresh/restart during the bounded delay window does not wake the agent for
+    the daemon state it just asked to stay quiet about. The delay record is
+    read directly (never reconciled here): the caller's coherent read already
+    published any owed alarm, and an expiry racing this baseline only fails
+    toward waking.
     """
     threshold = daemon_alarm_threshold(workdir)
-    if threshold is None:
+    active = _read_active_notification_delay(workdir)
+    delayed = bool(active) and active.get("target") == DAEMON_CHANNEL
+    if threshold is None and not delayed:
         return ()
-    return apply_daemon_attention_mask((), None, threshold)
+    return apply_daemon_attention_mask((), None, threshold, delayed=delayed)
 
 
 def agent_attention_fingerprint(agent) -> tuple:
