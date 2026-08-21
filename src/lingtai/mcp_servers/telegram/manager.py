@@ -918,6 +918,21 @@ class TelegramManager:
             return "en"
         return TaskCardEventProjection.normalize_locale(getter())
 
+    def _taskcard_display_expression(self) -> tuple[str, ...] | None:
+        """Read the current declarative display expression at projection time.
+
+        ``None`` (missing getter, or an unset/invalid persisted value) means
+        the projection composes with its documented default order. Falls back
+        to ``None`` for narrow test/third-party service doubles.
+        """
+        getter = getattr(self._service, "taskcard_display_expression", None)
+        if not callable(getter):
+            return None
+        value = getter()
+        return TaskCardEventProjection.validate_display_expression(
+            list(value) if value is not None else None
+        )
+
     @staticmethod
     def _parse_compound_id(compound_id: str) -> tuple[str, int, int]:
         """Parse '{account}:{chat_id}:{message_id}' → (account, chat_id, message_id)."""
@@ -3566,6 +3581,7 @@ class TelegramManager:
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=normal_rows,
             locale=self._taskcard_locale(),
+            display_expression=self._taskcard_display_expression(),
         )
         fingerprint = self._task_card_automatic_fingerprint(automatic)
         for account, chat_id in self._resident_task_card_targets():
@@ -3744,6 +3760,7 @@ class TelegramManager:
             metadata=self._task_card_event_metadata_snapshot(),
             normal_rows=self._taskcard_normal_rows(),
             locale=self._taskcard_locale(),
+            display_expression=self._taskcard_display_expression(),
         )
         return self._deliver_channel_frame(
             account,

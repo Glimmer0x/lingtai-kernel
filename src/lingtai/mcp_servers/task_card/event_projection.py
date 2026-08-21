@@ -118,6 +118,80 @@ class TaskCardEventProjection:
     METADATA_DIVIDER = "────────"
     _ASYNC_STATUS_KEYS = _ASYNC_STATUS_KEYS
 
+    # ------------------------------------------------------------------
+    # Display expression: a small, safe, declarative composition grammar.
+    #
+    # A "display expression" is an ordered tuple of tokens drawn only from
+    # ``DISPLAY_SLOTS``. Each token names one preformatted presentation
+    # fragment this projection already renders (the header line, the
+    # composed activity rows, the footer, ...); composing an expression is
+    # pure concatenation of those fragments in the chosen order. It never
+    # evaluates code, reads workdir/config/event/prompt data, or scrapes a
+    # regex match -- it only rearranges output this class already produced.
+    # ``DEFAULT_DISPLAY_EXPRESSION`` reproduces the exact byte layout this
+    # renderer has always produced (Jason 2026-08-20: Telegram
+    # 14302/14306/14314/14316 -- a hot-swappable declarative display with a
+    # documented default, not a data-scraping template language).
+    DISPLAY_SLOTS: tuple[str, ...] = (
+        "header",
+        "rows",
+        "blank",
+        "footer",
+        "divider",
+        "metadata",
+        "time",
+        "ask_agent",
+    )
+    DEFAULT_DISPLAY_EXPRESSION: tuple[str, ...] = DISPLAY_SLOTS
+    MAX_DISPLAY_EXPRESSION_LENGTH = 32
+
+    @classmethod
+    def validate_display_expression(cls, value: object) -> tuple[str, ...] | None:
+        """Validate a raw (e.g. JSON-decoded) display expression.
+
+        Returns the normalized token tuple, or ``None`` when ``value`` is
+        ``None`` (meaning "use ``DEFAULT_DISPLAY_EXPRESSION``") or invalid.
+        Anything other than a non-empty, bounded-length list of strings each
+        drawn from ``DISPLAY_SLOTS`` is rejected wholesale -- there is no
+        partial/best-effort acceptance -- so a malformed or unknown-slot
+        expression fails closed to the caller's documented default instead of
+        composing a degraded layout.
+        """
+        if value is None:
+            return None
+        if (
+            not isinstance(value, list)
+            or not value
+            or len(value) > cls.MAX_DISPLAY_EXPRESSION_LENGTH
+        ):
+            return None
+        tokens: list[str] = []
+        for item in value:
+            if not isinstance(item, str) or item not in cls.DISPLAY_SLOTS:
+                return None
+            tokens.append(item)
+        return tuple(tokens)
+
+    @classmethod
+    def compose_display(
+        cls,
+        slots: dict[str, list[str]],
+        expression: tuple[str, ...] | None = None,
+    ) -> str:
+        """Join preformatted fragments per the declarative display expression.
+
+        ``slots`` maps each ``DISPLAY_SLOTS`` token to the zero-or-more lines
+        already rendered for it. ``expression`` selects and orders which
+        slots appear; an absent/empty expression uses
+        ``DEFAULT_DISPLAY_EXPRESSION``. Composition is pure concatenation --
+        no slot's content is interpreted, evaluated, or re-derived here.
+        """
+        tokens = expression if expression else cls.DEFAULT_DISPLAY_EXPRESSION
+        lines: list[str] = []
+        for token in tokens:
+            lines.extend(slots.get(token, ()))
+        return "\n".join(lines)
+
     @classmethod
     def footer(cls, normal_rows: int, locale: str = "en") -> str:
         if cls.normalize_locale(locale) == "zh":
@@ -515,6 +589,7 @@ class TaskCardEventProjection:
         metadata: dict[str, Any] | None = None,
         now: datetime | None = None,
         locale: str = "en",
+        display_expression: tuple[str, ...] | None = None,
     ) -> str:
         rows: list[dict[str, Any]] = []
         for group in groups[-normal_rows:]:
@@ -565,6 +640,7 @@ class TaskCardEventProjection:
             normal_rows=normal_rows,
             now=now,
             locale=locale,
+            display_expression=display_expression,
         )
         return text[: cls.TEXT_LIMIT] if len(text) > cls.TEXT_LIMIT else text
 
@@ -622,6 +698,7 @@ class TaskCardEventProjection:
         normal_rows: int = DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
         locale: str = "en",
+        display_expression: tuple[str, ...] | None = None,
     ) -> str:
         if rows is None:
             return cls.format_scalar_task_card_text(tool, action, reasoning, locale=locale)
@@ -631,6 +708,7 @@ class TaskCardEventProjection:
             normal_rows=normal_rows,
             now=now,
             locale=locale,
+            display_expression=display_expression,
         )
 
     @classmethod
@@ -1014,6 +1092,7 @@ class TaskCardEventProjection:
         normal_rows: int = DEFAULT_NORMAL_ROWS,
         now: datetime | None = None,
         locale: str = "en",
+        display_expression: tuple[str, ...] | None = None,
     ) -> str:
         footer = cls.footer(normal_rows, locale)
         tool_prepared: list[tuple[int, str, str, str, bool, str | None]] = []
@@ -1068,12 +1147,19 @@ class TaskCardEventProjection:
 
         metadata_lines = cls.format_metadata(metadata, locale)
         time_line = f"{cls.time_prefix(locale)}{cls.render_time(now)}"
+        ask_agent_line = cls._locale_text("ask_agent", locale)
         if not tool_prepared and not text_prepared and not api_prepared:
-            lines = [cls.header(locale), "", footer, cls.METADATA_DIVIDER]
-            lines.extend(metadata_lines)
-            lines.append(time_line)
-            lines.append(cls._locale_text("ask_agent", locale))
-            return "\n".join(lines)
+            slots = {
+                "header": [cls.header(locale)],
+                "rows": [],
+                "blank": [""],
+                "footer": [footer],
+                "divider": [cls.METADATA_DIVIDER],
+                "metadata": metadata_lines,
+                "time": [time_line],
+                "ask_agent": [ask_agent_line],
+            }
+            return cls.compose_display(slots, display_expression)
 
         api_scaffold = sum(len(line) + 1 for _, line in api_prepared)
         text_scaffold = sum(len(text) + 4 for _, text in text_prepared)
@@ -1123,15 +1209,17 @@ class TaskCardEventProjection:
         for idx, line in api_prepared:
             by_idx[idx] = line
 
-        lines = [cls.header(locale)]
-        lines.extend(by_idx[index] for index in sorted(by_idx))
-        lines.append("")
-        lines.append(footer)
-        lines.append(cls.METADATA_DIVIDER)
-        lines.extend(metadata_lines)
-        lines.append(time_line)
-        lines.append(cls._locale_text("ask_agent", locale))
-        return "\n".join(lines)
+        slots = {
+            "header": [cls.header(locale)],
+            "rows": [by_idx[index] for index in sorted(by_idx)],
+            "blank": [""],
+            "footer": [footer],
+            "divider": [cls.METADATA_DIVIDER],
+            "metadata": metadata_lines,
+            "time": [time_line],
+            "ask_agent": [ask_agent_line],
+        }
+        return cls.compose_display(slots, display_expression)
 
     @classmethod
     def render_time(cls, now: datetime | None) -> str:
