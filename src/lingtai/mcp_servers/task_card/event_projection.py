@@ -128,10 +128,9 @@ class TaskCardEventProjection:
     # pure concatenation of those fragments in the chosen order. It never
     # evaluates code, reads workdir/config/event/prompt data, or scrapes a
     # regex match -- it only rearranges output this class already produced.
-    # ``DEFAULT_DISPLAY_EXPRESSION`` reproduces the exact byte layout this
-    # renderer has always produced (Jason 2026-08-20: Telegram
-    # 14302/14306/14314/14316 -- a hot-swappable declarative display with a
-    # documented default, not a data-scraping template language).
+    # ``DEFAULT_DISPLAY_EXPRESSION`` encodes Jason's approved footer-first
+    # presentation (Telegram 14343) while retaining the same safe, preformatted
+    # fragments and hot-swappable declarative grammar.
     DISPLAY_SLOTS: tuple[str, ...] = (
         "header",
         "rows",
@@ -142,7 +141,16 @@ class TaskCardEventProjection:
         "time",
         "ask_agent",
     )
-    DEFAULT_DISPLAY_EXPRESSION: tuple[str, ...] = DISPLAY_SLOTS
+    DEFAULT_DISPLAY_EXPRESSION: tuple[str, ...] = (
+        "footer",
+        "header",
+        "rows",
+        "blank",
+        "divider",
+        "metadata",
+        "time",
+        "ask_agent",
+    )
     MAX_DISPLAY_EXPRESSION_LENGTH = 32
 
     @classmethod
@@ -424,6 +432,7 @@ class TaskCardEventProjection:
         if not isinstance(session, dict):
             return {}
         supported = (
+            "input_tokens",
             "session_cache_rate",
             "cache_miss_tokens",
             "cache_miss_budget",
@@ -800,6 +809,9 @@ class TaskCardEventProjection:
             session_parts.append(
                 f"ctx {context}/{window}" if window is not None else f"ctx {context}"
             )
+        tokens = cls.format_count(metadata.get("input_tokens"))
+        if tokens is not None:
+            session_parts.append(f"tokens {tokens}")
         cache_rate = metadata.get("session_cache_rate")
         if (
             type(cache_rate) in {int, float}

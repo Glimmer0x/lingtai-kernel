@@ -76,7 +76,7 @@ semantics live here. The public producer contract lives in
    (`header`/`rows`/`blank`/`footer`/`divider`/`metadata`/`time`/`ask_agent`);
    composing it never evaluates code, interpolates arbitrary
    workdir/config/event/prompt data, or scrapes a regex match. The documented
-   default order reproduces the prior hard-coded layout byte-for-byte. A
+   default order is Jason's approved footer-first presentation. A
    direct atomic external edit of `taskcard.json` becomes visible at the next
    automatic projection tick without a process restart; an unset, malformed,
    or unknown-slot expression fails closed to the documented default without
@@ -153,7 +153,7 @@ There is no public MCP `task_card` family in this component.
 - `tests/test_task_card_resident_shared.py` pins provider-neutral route/slot,
   old-first rotation, peer adoption, and partial-failure state transitions.
 - `tests/test_telegram_task_card_display_expression.py` covers the
-  `display_expression` grammar allowlist, default-compatible byte-identical
+  `display_expression` grammar allowlist, approved footer-first default
   rendering, a valid changed expression reordering/dropping slots end-to-end
   through `TelegramManager`, hot JSON reload without a process restart,
   malformed/unsafe-expression fallback that never corrupts sibling durable

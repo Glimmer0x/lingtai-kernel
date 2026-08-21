@@ -253,7 +253,8 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
                     if ln == divider or (ln.startswith(divider + " ") and ln.endswith(" " + divider))]
     footer_idx = next(i for i, ln in enumerate(rendered.splitlines()) if "Don't reply to this Task Card." in ln)
     assert len(api_dividers) == 2
-    assert rendered.splitlines()[footer_idx + 1] == TaskCardEventProjection.METADATA_DIVIDER
+    assert footer_idx == 0
+    assert rendered.splitlines()[footer_idx + 1] == TaskCardEventProjection.header("en")
     assert all(value in rendered for value in ("text one", "• bash.run:", "text two", "• read.read:"))
     assert len(rendered) <= manager._TASK_CARD_TEXT_LIMIT
     assert all(secret not in rendered for secret in (
@@ -267,7 +268,10 @@ def test_provider_groups_count_calls_and_exclude_unprojected_fields(tmp_path):
     latest_api_dividers = [ln for ln in latest_lines
                            if ln == divider or (ln.startswith(divider + " ") and ln.endswith(" " + divider))]
     latest_footer_idx = next(i for i, ln in enumerate(latest_lines) if "Don't reply to this Task Card." in ln)
-    assert len(latest_api_dividers) == 1 and latest_lines[latest_footer_idx + 1] == TaskCardEventProjection.METADATA_DIVIDER and "text two" in latest and "• read.read:" in latest
+    assert len(latest_api_dividers) == 1
+    assert latest_footer_idx == 0
+    assert latest_lines[latest_footer_idx + 1] == TaskCardEventProjection.header("en")
+    assert "text two" in latest and "• read.read:" in latest
     assert "text one" not in latest and "• bash.run:" not in latest
 
 
@@ -764,6 +768,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
 
     event_ts = 1752600000.0
     session = {
+        "input_tokens": 2_345_678,
         "session_cache_rate": 0.87803,
         "cache_miss_tokens": 170631,
         "cache_miss_budget": 1_000_000,
@@ -828,6 +833,7 @@ def test_event_log_final_carrier_projects_session_telemetry_into_final_render(tm
         f"\n{manager._TASK_CARD_API_CALL_DIVIDER} {expected_stamp} {manager._TASK_CARD_API_CALL_DIVIDER}\n"
         in f"\n{rendered}"
     )
+    assert "tokens 2.3M" in rendered
     assert "cache 87.8% · miss 170.6k/1.0M · calls 13" in rendered
     assert "ctx 63% · 171.2k/272.0k" in rendered
     assert "calls 888" not in rendered

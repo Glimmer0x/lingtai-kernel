@@ -5,8 +5,8 @@ Telegram 14302/14306/14314/14316 (Jason 2026-08-20): the resident automatic
 frame's layout becomes a hot-swappable ``display_expression`` durably stored
 in the existing agent-wide ``<workdir>/telegram/taskcard.json`` presentation
 state owned by ``TelegramService`` (never the bootstrap ``.secrets/telegram.json``
-account/token config), with a documented default that reproduces the prior
-hard-coded layout exactly. The expression is only an ordered selection from a
+account/token config), with Jason's approved footer-first documented default.
+The expression is only an ordered selection from a
 fixed allowlist of preformatted fragments the projection already renders
 (header/rows/blank/footer/divider/metadata/time/ask_agent) -- it never
 evaluates code, interpolates arbitrary workdir/config/event/prompt data, or
@@ -75,29 +75,40 @@ def test_validate_display_expression_grammar(value, expected) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Default compatibility: byte-identical to the prior hard-coded layout
+# Approved default: footer-first safe-slot layout
 # ---------------------------------------------------------------------------
 
-def test_default_expression_reproduces_prior_layout_with_rows() -> None:
+def test_default_expression_uses_footer_first_layout_with_rows() -> None:
     implicit = TaskCardEventProjection.format_rows_task_card_text(_rows(), normal_rows=1)
     explicit = TaskCardEventProjection.format_rows_task_card_text(
         _rows(), normal_rows=1,
         display_expression=TaskCardEventProjection.DEFAULT_DISPLAY_EXPRESSION,
     )
+    assert TaskCardEventProjection.DEFAULT_DISPLAY_EXPRESSION == (
+        "footer",
+        "header",
+        "rows",
+        "blank",
+        "divider",
+        "metadata",
+        "time",
+        "ask_agent",
+    )
     assert explicit == implicit
-    assert implicit.startswith("\U0001f4cb ACTIVITIES\n")
-    assert "Don't reply to this Task Card" in implicit
+    assert implicit.startswith("Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("\U0001f4cb ACTIVITIES")
     assert "Ask agent for \"Task Card\"" in implicit
 
 
-def test_default_expression_reproduces_prior_layout_with_empty_rows() -> None:
+def test_default_expression_uses_footer_first_layout_with_empty_rows() -> None:
     implicit = TaskCardEventProjection.format_rows_task_card_text([], normal_rows=1)
     explicit = TaskCardEventProjection.format_rows_task_card_text(
         [], normal_rows=1,
         display_expression=TaskCardEventProjection.DEFAULT_DISPLAY_EXPRESSION,
     )
     assert explicit == implicit
-    assert implicit.startswith("\U0001f4cb ACTIVITIES\n")
+    assert implicit.startswith("Don't reply to this Task Card.")
+    assert implicit.index("Don't reply to this Task Card") < implicit.index("\U0001f4cb ACTIVITIES")
 
 
 def test_service_display_expression_defaults_to_none(tmp_path: Path) -> None:
@@ -213,7 +224,8 @@ def test_hot_reload_reaches_the_live_manager_projection(
     manager._ensure_task_card_resident("main", 123)
     assert calls[-1][0] == "send"
     default_text = calls[-1][2]
-    assert default_text.startswith(TaskCardEventProjection.header("en"))
+    assert default_text.startswith("Don't reply to this Task Card.")
+    assert default_text.splitlines()[1] == TaskCardEventProjection.header("en")
 
     state_path = tmp_path / "telegram" / "taskcard.json"
     data = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
