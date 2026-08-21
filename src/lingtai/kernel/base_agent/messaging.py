@@ -79,10 +79,11 @@ def _enqueue_system_notification(
     """Append a system event to ``.notification/<channel>.json``.
 
     The system intrinsic owns this single file and multiplexes its
-    event types inside (mail bounces, daemon notices, MCP-bridged
-    events, future kernel events).  Each call merges a new event into
-    the existing list, capped at the 20 most recent entries so a noisy
-    producer can't blow the agent's context window.
+    event types inside (mail bounces, MCP-bridged events, future kernel
+    events). Daemon notices use a separate per-daemon mini-channel under
+    ``.notification/daemon/<daemon-id>.json``; each mini-channel retains its
+    full append history until its human dismissal lifecycle deletes the file.
+    Non-daemon channels retain their established latest mirror semantics.
 
     The merge is read-modify-write on the same channel, so concurrent
     arrivals (e.g. a burst of bounces) need atomicity to avoid losing
@@ -113,11 +114,12 @@ def _enqueue_system_notification(
         extra: Optional structured event fields merged into this event only
             (e.g. severity, artifact path, recommended_action).
         channel: Target notification channel. Defaults to ``"system"``. The
-            daemon tool passes ``"daemon"`` so terminal notices land on their
-            own channel, where the alarm-threshold attention policy applies;
-            that channel additionally carries durable batch state under
-            ``data.daemon``. Event shape, capping and idempotency are
-            identical on every channel.
+            daemon tool passes ``"daemon"`` so terminal notices land in an
+            independent ``.notification/daemon/<daemon-id>.json`` mini-channel,
+            where the alarm-threshold attention policy applies. Each mini-channel
+            carries durable batch state under ``data.daemon`` and retains every
+            same-run event until its dismissal removes that run file; non-daemon
+            channels retain their established mirror policies.
 
     Returns:
         An identifier for the event (for logging and back-compat with
@@ -166,8 +168,11 @@ def _enqueue_system_notification(
         if isinstance(extra, dict):
             event.update(extra)
         events.append(event)
-        # Cap at the 20 most recent.
-        events = events[-20:]
+        # Daemon events live in their per-run mini-file and must remain
+        # unbounded for that run. Every other legacy single-file channel keeps
+        # its established bounded mirror.
+        if channel != DAEMON_CHANNEL:
+            events = events[-20:]
 
         # Envelope priority is high if this call asked for it, or if any
         # retained event carries a high severity/priority field.
@@ -185,10 +190,13 @@ def _enqueue_system_notification(
         if channel == DAEMON_CHANNEL:
             # Durable batch state for the alarm-threshold attention policy.
             # Counted inside the compare-and-update mutator so concurrent
-            # terminal arrivals cannot lose an increment.
+            # terminal arrivals cannot lose an increment.  The run id is an
+            # adapter routing marker inside each mini-file; aggregate snapshots
+            # rebuild ``data`` and never expose it.
             data[DAEMON_CHANNEL] = next_daemon_batch_state(
                 current, daemon_alarm_threshold(_workdir_key(agent))
             )
+            data["daemon_id"] = ref_id
 
         label = "daemon" if channel == DAEMON_CHANNEL else "system"
         payload = {
@@ -203,6 +211,10 @@ def _enqueue_system_notification(
         }
         return payload, True, event_id
 
+    # Daemon and ordinary notices use the same typed Port operation. The
+    # production adapter recognizes the daemon payload's run-id marker and
+    # writes the corresponding mini-channel; Core never probes an adapter-only
+    # capability.
     result = store.compare_update_channel(channel, UNCONDITIONAL, _mutator)
     applied_event_id = result.value if isinstance(result.value, str) else ""
     if not applied_event_id:

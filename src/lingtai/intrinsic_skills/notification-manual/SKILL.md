@@ -7,9 +7,9 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.9.1
-tags: [lingtai, notifications, channels, dismiss, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-13"
+version: 0.10.0
+tags: [lingtai, notifications, channels, dismiss, delay, alarm, manual, force, stale, nudge, hooks, whitelist]
+last_changed_at: "2026-08-20"
 related_files:
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
@@ -30,7 +30,7 @@ operation either — that is `context(action='summarize')`.
 
 ## Quick start
 
-The resident tool schema is the source of truth for the nine actions, their
+The resident tool schema is the source of truth for the ten actions, their
 per-action `input` fields, and the `action` + `input` + `reasoning` envelope
 (arguments live inside `input`, never at the root). What it does not say:
 
@@ -41,6 +41,28 @@ per-action `input` fields, and the `action` + `input` + `reasoning` envelope
   post-molt acknowledgement requirement.
 - After handling a notification, use the narrowest correct dismiss action and end
   the turn; do not voluntarily call `check` again merely to confirm the clear.
+
+## Consumer delay and expiry alarm
+
+`notification(action='delay', input={'channel': '<allowed>', 'seconds': 1..LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS},
+reasoning='...')` hides **only consumer delivery** for one allowed target while
+the timer is live. The nonzero cap is read live from
+`LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` (default `600` seconds), so a current
+environment setting applies to each action without restart; blank, invalid, zero,
+or negative values log a fallback to `600`. It does not clear, rewrite, or pause
+the producer; target messages keep accumulating in their original channel file. Every other channel
+continues delivering normally. A nonzero call explicitly replaces the one prior
+live delay. Use `seconds: 0` with that same channel to cancel early and
+re-expose it.
+
+At expiry (including after a refresh/restart recovery) the target becomes visible
+in the same consumer sync that adds one high-priority `delay-alarm` mirror. The
+alarm records target, requested/actual duration, changed/no-change, and only
+conservative current measurements: producer-reported counts and retained event
+entries are never asserted to be an exact total for overwritten/capped mirrors.
+Handle the re-exposed target, then dismiss `delay-alarm` as a mirror when done.
+`delay-alarm` itself cannot be delayed. A damaged private delay record fails open
+(target visible) rather than silently suppressing notification delivery.
 
 ## Root `summarize`
 
@@ -101,7 +123,7 @@ the next sync without a restart.
 - `name` — unique hook identifier (required).
 - `channel` — the `.notification/<channel>.json` stem this hook owns
   (required; must be unique across hooks). It must not be a built-in static
-  channel (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`tool_loop_guard`)
+  channel (`system`/`email`/`soul`/`goal`/`molt`/`nudge`/`post-molt`/`bash`/`btw`/`cron`/`daemon`/`delay-alarm`/`tool_loop_guard`)
   nor a Store-reserved non-channel stem (`hooks`/`large_result_acks`); `add`
   refuses those with a clear error.
 - `source` — what the hook polls (required, e.g. `G:`).
@@ -232,6 +254,7 @@ delivered.
 | Channel names; `.notification/*.json`; allowlist; `mcp.` channels; envelope fields; `instructions`; nudge/update checks; `_meta.agent_meta.notifications.attention`; voluntary `check`; producer state versus mirror | `reference/channel-model/SKILL.md` |
 | `notification_persistent` and `notification.attention` block size cap; `LINGTAI_NOTIFICATION_MAX_CHARS` (floor `2048` / ceiling `10000`); `notification-overflow-<ts>.json` and `notification-attention-overflow-<digest8>.json` spill files; compacted copy; message-id preservation; marker-only degradation | this section (`Block size cap (persistent and attention lanes)`) |
 | External-hook registration; `.notification/hooks.json`; `add`/`drop`/`edit`/`list`; whitelist gate; warn-and-flag on blocked channels | this section (`Hooks & whitelist`) + `reference/channel-model/SKILL.md` (effective allowlist) |
+| Temporarily hide one channel; `delay`; 0 or live configured seconds (default cap 600); replacement/cancellation; expiry, restart recovery, or `delay-alarm` | this section (`Consumer delay and expiry alarm`) + `reference/channel-model/SKILL.md` |
 | Which dismiss action; producer-specific handling; guarded/stale mirror; `force`; protected `goal`; post-molt reason; legacy `large_tool_result` event | `reference/dismissal-safety/SKILL.md` |
 | Tool-result ranking, digest quality, `context(action='summarize')`, recovery by `tool_call_id`, summarize versus molt | `../context-manual/reference/summarize-manual/SKILL.md` |
 | Active goal source-of-truth and cancellation/completion | `../system-manual/reference/goal-manual/SKILL.md` |

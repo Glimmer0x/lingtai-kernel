@@ -87,6 +87,8 @@ Scope:
 - The `_meta.agent_meta.notifications.persistent` communication-context lane when a producer
   has one (currently Telegram, WeChat, Feishu, WhatsApp, and built-in email).
 - Producer-owned read/reply/dismiss state that remains the source of truth.
+- Consumer-only delay filtering, which may temporarily suppress one projected
+  channel without changing its LICC event/inbox/producer file or persistent state.
 
 Non-scope: the low-level Telegram Bot API, IMAP protocol semantics, frontend UI
 rendering, and unrelated notification producers such as `soul` or `goal` except
@@ -332,7 +334,20 @@ For source-of-truth mirrors (email today), prefer producer-specific
 the producer tool, generic `notification.dismiss_channel("mcp.<name>")` may clear
 the high-attention hook.
 
-### 6. Secret and volume boundaries are part of the contract
+### 6. Consumer delay never changes LICC production or authority
+
+`notification(action='delay')` is a per-agent consumer policy: its private
+`.notification/.delay_state.json` record omits one allowed target only from the
+coherent transient delivery/fingerprint while the delay is live. It does not
+rewrite `.mcp_inbox/`, the coalesced `.notification/mcp.<server>.json` producer
+mirror, persistent message context, read state, event identity, or producer tool
+authority. On expiry/recovery the target is re-projected and a separate,
+dismissable high-priority `delay-alarm` mirror is delivered in the same sync. The
+alarm's counts are explicitly conservative current-mirror observations, never a
+LICC total. Thus delay is an intentional temporary consumer visibility exception,
+not a loss, acknowledgement, or source-of-truth transition.
+
+### 7. Secret and volume boundaries are part of the contract
 
 Producer metadata copied into `.notification` or `_meta.agent_meta.notifications.persistent`
 MUST be bounded and secret-safe. The MCP inbox copies only allowlisted scalar IM

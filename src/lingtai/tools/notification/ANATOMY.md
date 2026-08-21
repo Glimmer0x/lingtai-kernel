@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
   - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
   - tests/test_notification_tool.py
+  - tests/test_notification_delay_alarm.py
   - tests/test_system_dismiss.py
   - src/lingtai/tools/notification/glossary-en.md
   - src/lingtai/tools/notification/glossary-zh.md
@@ -38,9 +39,9 @@ maintenance: |
 # Notification Tool Anatomy
 
 `src/lingtai/tools/notification/` is the mandatory agent-callable notification
-surface. It composes nine actions: four hook-registry actions (`add`, `drop`,
-`edit`, `list`), `check`, three atomic dismissal actions, and the strictly
-read-only `manual` action. Notification Core owns mirror guards and Store use;
+surface. It composes ten actions: four hook-registry actions (`add`, `drop`,
+`edit`, `list`), `check`, three atomic dismissal actions, consumer-only `delay`,
+and the strictly read-only `manual` action. Notification Core owns mirror guards and Store use;
 the tool owns only schema composition, envelope dispatch, the check
 placeholder, argument adaptation, hook-manifest forwarding, and installed-manual
 presentation.
@@ -64,7 +65,7 @@ action values are unchanged; the four hook-registry actions are new.
   no `get_schema`.
 - `_schema_only_family()` / `_FAMILY` build the import-time `ToolFamily` used
   only to compose the schema; constructing it at import proves the fixed
-  nine-child registry has no duplicate or reserved-`manual` collision
+  ten-child registry has no duplicate or reserved-`manual` collision
   (`src/lingtai/tools/notification/__init__.py:95-122`).
 - `get_schema()` returns the composed family schema and substitutes
   notification's own action prose for the generic composer's neutral
@@ -93,6 +94,9 @@ action values are unchanged; the four hook-registry actions are new.
 - `_dismiss_event()` and `_dismiss_ref()` adapt targeted system-event removal
   while defaulting the channel to `system`
   (`src/lingtai/tools/notification/__init__.py:245-288`).
+- `_delay()` delegates to `notifications.delay_notification_channel()`, which
+  persists one active private `.notification/.delay_state.json` record, arms a
+  request-id-guarded process timer, and never mutates the target producer file.
 - `_add_hook()`, `_drop_hook()`, `_edit_hook()`, and `_list_hooks()` adapt the
   hook-registry actions and delegate to
   `lingtai.kernel.notifications.add_hook` / `drop_hook` / `edit_hook` /
@@ -148,7 +152,8 @@ action values are unchanged; the four hook-registry actions are new.
   per-Agent manager, this intrinsic builds its dispatching family per call
   because `agent` only arrives per call.
 - **Core dependency:** `src/lingtai/kernel/notifications.py` and the notification
-  Store behind it. The four hook-registry actions (`add`/`drop`/`edit`/`list`)
+  Store behind it. `delay` uses the same native mutation lock directly for its
+  private dotfile plus `delay-alarm` mirror, without widening the Store Port. The four hook-registry actions (`add`/`drop`/`edit`/`list`)
   mutate the Store's family-8 hook-manifest registry
   (`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
   `.notification/hooks.json`);
@@ -172,6 +177,11 @@ action values are unchanged; the four hook-registry actions are new.
 - Dismiss handlers own no state directly. Through notification Core they clear
   notification mirrors or remove targeted system events while leaving producer
   canonical state untouched.
+- Delay owns no producer state. Core atomically records its private delay state
+  under the Store-native lock, omits only the active target in
+  `coherent_attention_read`, and at timer/heartbeat expiry writes a stable
+  high-priority `delay-alarm` mirror before re-exposing the target. Corrupt or
+  unreadable state is ignored (visible, not silent).
 - Hook-registry handlers own no state directly either. Through notification
   Core they read/mutate `.notification/hooks.json` (Store family 8) and refresh
   the module-level registered-hook channel mirror that widens the allow

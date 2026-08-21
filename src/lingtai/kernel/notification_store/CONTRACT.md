@@ -49,10 +49,20 @@ wake ordering, live-holder behavior, and model-visible lanes.
 
 Runtime and coding agents MUST use the injected Port rather than construct
 storage paths in Core. They MUST preserve the established external
-`.notification/<channel>.json` protocol, treat non-force dismiss conflicts as
-stale refusals, and retain unrelated current events during event/ref updates.
-They MUST NOT add a nullable/no-op Store, Path-or-Port overload, locator, hidden
-Core construction, ninth operation family, or caller-held transaction lock.
+`.notification/<channel>.json` protocol for every non-daemon channel. The daemon
+channel is the sole exception: producers persist independent mini-channels at
+`.notification/daemon/<daemon-id>.json`, while Store snapshot/fingerprint expose
+one aggregate `daemon` channel. The sibling `.notification/daemon.json` is a
+report containing only mini-file-derived run/state statistics; it is not a
+channel event source. Non-force dismiss conflicts remain stale refusals, and
+event/ref daemon dismissal deletes the matching mini-file only. A daemon channel
+dismissal must compare the delivered aggregate version before unlinking any
+mini-file, so a mini-file arriving after delivery is preserved. Existing root
+event facts may be retained only under report migration metadata and MUST NOT
+be delivered. Daemon append routing uses the existing typed channel mutator
+payload and does not add a Store operation. They MUST NOT add a nullable/no-op
+Store, Path-or-Port overload, locator, hidden Core construction, ninth operation
+family, or caller-held transaction lock.
 
 ## Port
 
@@ -86,13 +96,23 @@ and hook-manifest mutations across threads and independently composed processes.
 The selector provides `flock` on POSIX and byte-range locking on Windows. Agent,
 CLI, daemon supervisor, and Telegram server composition roots construct the Store
 adapter. External LICC/direct `mcp.*` producers keep the same filesystem path and
-envelope.
+envelope. The POSIX adapter stores daemon events in per-id mini-files under
+`.notification/daemon/`; its aggregate snapshot and synthetic aggregate
+fingerprint cover only those mini-files, including additions, removals, and
+appends. It writes the sibling `.notification/daemon.json` as a derived report
+of run/state statistics; the report is excluded from snapshot, fingerprint, and
+dismissal, and old root facts are migration metadata only.
 
 ## Contract rules
 
 - Snapshot and fingerprint skip missing, malformed, or unreadable entries and
   apply the live Core allow-predicate; fingerprints are sorted SHA-256 entries of
-  filename, byte size, and bytes, not mtime.
+  filename, byte size, and bytes, not mtime. For daemon, the single aggregate
+  fingerprint is derived from every nested mini-file's name and bytes, so a
+  mini-file addition, removal, or same-file append changes the aggregate version;
+  `.notification/daemon.json` never changes it. New per-run appends carry their
+  daemon id in the pure payload marker consumed by the adapter; the marker is
+  not included in the aggregate projection.
 - Publish is atomic sibling-temp replacement. Publish and clear hold the Store's
   in-process and cross-process mutation locks. Clear returns `False` only for
   absence; other clear and write errors propagate unless a Core best-effort
@@ -140,7 +160,9 @@ envelope.
   predicate except through Core's registered-hook mirror.
 - Core acknowledgement union and purge MUST use family 7, never split family 6
   read from a later write. System, nudge, Telegram, and daemon-terminal mutations
-  decide from the current payload inside compare-update; force uses
+  decide from the current payload inside compare-update; daemon event/ref removal
+  removes the matching mini-file rather than rewriting another daemon's file.
+  Force uses
   `UNCONDITIONAL`, while non-force dismiss uses the delivered fingerprint entry
   including explicit absence.
 - `.notification/.store.lock` is coordination metadata, not notification state or
@@ -156,7 +178,9 @@ atomic same-process and spawned-process channel updates, atomic acknowledgement
 union/purge, atomic hook-manifest append/clear, required injection, outer
 composition, stale dismiss refusal,
 unrelated-event survival,
-nudge updates, and Telegram current-mirror clearing. Production adapter tests
+daemon mini-channel isolation/append, aggregate fingerprint changes, targeted
+mini-file deletion, and late-file stale-CAS preservation, nudge updates, and
+Telegram current-mirror clearing. Production adapter tests
 must use only an explicitly authorized persistent scratch path when deletion is
 separately authorized.
 

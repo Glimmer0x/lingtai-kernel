@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import functools
+import hashlib
 import json
 import queue
 import threading
@@ -69,6 +70,70 @@ logger = get_logger()
 # ``lingtai.tools.task_card``; Telegram only projects its artifact read-only.
 # Keep this only while legacy cleanup paths still reference the historical name.
 _TASK_CARD_TOOL = "_lingtai_telegram_task_card"
+
+
+def _notification_source_signatures(payloads: Mapping[str, object]) -> dict[str, str]:
+    """Return bounded deterministic signatures for an observed channel snapshot."""
+    signatures: dict[str, str] = {}
+    for source, payload in payloads.items():
+        try:
+            material = json.dumps(
+                payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            material = repr(payload).encode("utf-8", "replace")
+        signatures[str(source)] = hashlib.sha256(material).hexdigest()
+    return signatures
+
+
+def _daemon_notification_summary(payload: object) -> dict | None:
+    """Summarize the aggregate daemon mini-channel payload without raw events."""
+    if not isinstance(payload, Mapping):
+        return None
+    data = payload.get("data")
+    events = data.get("events") if isinstance(data, Mapping) else None
+    if not isinstance(events, list):
+        return None
+
+    runs: set[str] = set()
+    terminal_runs: set[str] = set()
+    terminal_by_status: dict[str, int] = {}
+    latest_terminal: list[dict[str, str]] = []
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        run_id = event.get("ref_id")
+        if not isinstance(run_id, str) or not run_id:
+            continue
+        runs.add(run_id)
+        idempotency_key = event.get("idempotency_key")
+        kind = event.get("kind")
+        if not (
+            kind == "daemon_terminal"
+            or isinstance(idempotency_key, str)
+            and idempotency_key.startswith("daemon-terminal:")
+        ):
+            continue
+        terminal_runs.add(run_id)
+        status = event.get("status")
+        if not isinstance(status, str) or not status:
+            status = "unknown"
+        terminal_by_status[status] = terminal_by_status.get(status, 0) + 1
+        at = event.get("at")
+        latest_terminal.append(
+            {"run_id": run_id, "status": status, "at": at if isinstance(at, str) else ""}
+        )
+
+    latest_terminal.sort(key=lambda item: (item["at"], item["run_id"]))
+    return {
+        "run_count": len(runs),
+        "event_count": len(events),
+        "active_run_count": len(runs - terminal_runs),
+        "terminal_run_count": len(terminal_runs),
+        "terminal_by_status": dict(sorted(terminal_by_status.items())),
+        "latest_terminal": latest_terminal[-3:],
+    }
+
 
 def _block_type_name(block: object) -> str:
     """Return a compact, safe block type label for diagnostics."""
@@ -1395,6 +1460,7 @@ class BaseAgent:
         from ..notifications import (
             DAEMON_CHANNEL,
             _workdir_key,
+            arm_notification_delay_timer,
             coherent_attention_read,
             flag_unregistered_channel,
             is_channel_allowed,
@@ -1434,6 +1500,11 @@ class BaseAgent:
 
         def _allow(channel: str) -> bool:
             return is_channel_allowed(channel, workdir=_workdir_key(self))
+
+        # Re-arm the durable consumer-delay timer after refresh/restart.  The
+        # helper also recovers an overdue delay before the coherent read, so its
+        # target becomes visible together with the delay-alarm mirror.
+        arm_notification_delay_timer(self)
 
         # One coherent observation: the fingerprint, the daemon-attention mask
         # derived from it, and the payloads all describe the same instant
@@ -1546,6 +1617,65 @@ class BaseAgent:
         # match the fingerprint about to be committed, so the committed version
         # would describe bytes the agent never delivered.
         notifications = observed.payloads
+        source_signatures = _notification_source_signatures(notifications)
+        daemon_summary = _daemon_notification_summary(notifications.get(DAEMON_CHANNEL))
+        # Stable current state: the newest meta envelope can report bounded
+        # daemon progress even when the attention lane itself overflows.
+        self._notification_daemon_summary = daemon_summary
+
+        def _delivery_provenance(*, waking: bool) -> dict:
+            previous_signatures = getattr(
+                self, "_notification_delivered_source_signatures", {}
+            )
+            if not isinstance(previous_signatures, Mapping):
+                previous_signatures = {}
+            changed_channels = sorted(
+                source
+                for source in set(previous_signatures) | set(source_signatures)
+                if previous_signatures.get(source) != source_signatures.get(source)
+            )
+            provenance: dict[str, object] = {
+                "kind": "wake" if waking else "delivery",
+                "changed_channels": changed_channels,
+            }
+            if DAEMON_CHANNEL in changed_channels and isinstance(daemon_summary, dict):
+                previous_daemon = getattr(
+                    self, "_notification_delivered_daemon_summary", None
+                )
+                if not isinstance(previous_daemon, Mapping):
+                    previous_daemon = {}
+                provenance["daemon"] = {
+                    "event_count_delta": daemon_summary["event_count"]
+                    - int(previous_daemon.get("event_count", 0) or 0),
+                    "run_count_delta": daemon_summary["run_count"]
+                    - int(previous_daemon.get("run_count", 0) or 0),
+                    "terminal_run_count_delta": daemon_summary["terminal_run_count"]
+                    - int(previous_daemon.get("terminal_run_count", 0) or 0),
+                    "latest_terminal": daemon_summary["latest_terminal"],
+                }
+            telegram = notifications.get("mcp.telegram")
+            telegram_data = telegram.get("data") if isinstance(telegram, Mapping) else None
+            message_ids = telegram_data.get("message_ids") if isinstance(telegram_data, Mapping) else None
+            if "mcp.telegram" in changed_channels and isinstance(message_ids, list):
+                provenance["telegram"] = {
+                    "message_ids": [str(item) for item in message_ids[-5:]],
+                }
+            if len(changed_channels) > 1:
+                provenance["source_kind"] = "mixed"
+            elif changed_channels:
+                provenance["source_kind"] = changed_channels[0]
+            else:
+                provenance["source_kind"] = "unknown"
+            return provenance
+
+        def _inject_with_wake_provenance() -> bool:
+            self._notification_wake_provenance = _delivery_provenance(waking=True)
+            try:
+                return self._inject_notification_pair(notifications)
+            finally:
+                # One synthesized result consumes this cause. Future ordinary
+                # tool results keep only the stable daemon summary.
+                self._notification_wake_provenance = None
 
         if not notifications:
             if _skip_poisoned_sync(phase="before_empty_skeletonize"):
@@ -1598,14 +1728,14 @@ class BaseAgent:
             # remains uncommitted for retry.
             if _skip_poisoned_sync(phase="asleep_before_inject"):
                 return
-            inject_ok = self._inject_notification_pair(notifications)
+            inject_ok = _inject_with_wake_provenance()
             if not inject_ok:
                 if _skip_poisoned_sync(phase="asleep_before_heal"):
                     return
                 self._heal_pending_tool_calls(reason="wake_inject_blocked")
                 if _skip_poisoned_sync(phase="asleep_before_reinject"):
                     return
-                inject_ok = self._inject_notification_pair(notifications)
+                inject_ok = _inject_with_wake_provenance()
             if inject_ok:
                 if _skip_poisoned_sync(phase="asleep_before_wake_enqueue"):
                     return
@@ -1713,6 +1843,10 @@ class BaseAgent:
             self._notification_fp = fp
             self._notification_raw_fp = raw_fp
             self._notification_deferred_log_fp = ()
+            # Provenance compares against the last notification snapshot the
+            # model actually received, never against a deferred ACTIVE read.
+            self._notification_delivered_source_signatures = source_signatures
+            self._notification_delivered_daemon_summary = daemon_summary
         elif self._state in (AgentState.STUCK, AgentState.SUSPENDED):
             self._notification_fp = fp
             self._notification_raw_fp = raw_fp

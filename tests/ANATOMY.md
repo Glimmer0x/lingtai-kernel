@@ -252,6 +252,7 @@ related_files:
   - tests/test_network.py
   - tests/test_notification_attention_cap.py
   - tests/test_notification_cap_doc_parity.py
+  - tests/test_notification_delay_alarm.py
   - tests/test_notification_persistent_cap.py
   - tests/test_notification_schema_wire_scrub.py
   - tests/test_notification_store.py

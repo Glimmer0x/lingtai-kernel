@@ -56,6 +56,7 @@ ACTION_ORDER = (
     "drop",
     "edit",
     "list",
+    "delay",
     "manual",
 )
 
@@ -174,6 +175,30 @@ _LIST_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+_DELAY_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "channel": {
+            "type": "string",
+            "description": (
+                "Allowed notification channel whose consumer delivery is temporarily "
+                "hidden. delay-alarm is an alarm mirror and cannot be delayed."
+            ),
+        },
+        "seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "Delay duration. 0 cancels the currently delayed channel; a nonzero "
+                "value is bounded by live LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS "
+                "(default 600 seconds)."
+            ),
+        },
+    },
+    "required": ["channel", "seconds"],
+    "additionalProperties": False,
+}
+
 _DISMISS_CHANNEL_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -239,6 +264,7 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "drop": _DROP_INPUT_SCHEMA,
     "edit": _EDIT_INPUT_SCHEMA,
     "list": _LIST_INPUT_SCHEMA,
+    "delay": _DELAY_INPUT_SCHEMA,
     "check": _CHECK_INPUT_SCHEMA,
     "dismiss_channel": _DISMISS_CHANNEL_INPUT_SCHEMA,
     "dismiss_event": _DISMISS_EVENT_INPUT_SCHEMA,
@@ -283,6 +309,11 @@ ACTION_ENUM_DESCRIPTION = (
     "list: return the registered hook manifests (input={}). Shows what is " +
     "whitelisted and how each hook is modified/cancelled." +
 
+    "delay: temporarily hide one allowed target channel from consumer delivery " +
+    "(input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}). 0 cancels the current " +
+    "matching delay. Target producer state is never changed; expiry re-exposes " +
+    "it and raises one high-priority delay-alarm mirror." +
+
     "manual: call notification(action='manual', input={}) to return the " +
     "installed notification-manual skill body. This action is strictly " +
     "read-only and does not read or change notification state."
@@ -290,7 +321,7 @@ ACTION_ENUM_DESCRIPTION = (
 
 
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='delay', input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}, reasoning='...') to temporarily suppress only consumer delivery for one allowed channel (0 cancels); delay-alarm cannot be targeted and expiry raises a high-priority delay-alarm mirror. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
 
 
 # NOTE: ``get_schema`` is deliberately NOT defined here. The model-facing

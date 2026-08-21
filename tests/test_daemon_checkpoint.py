@@ -18,6 +18,7 @@ from mcp import Client
 
 from lingtai.adapters.posix.notification_store import PosixNotificationStoreAdapter
 from lingtai.kernel.daemon_supervisor.manifest import build_manifest
+from lingtai.kernel.notifications import DAEMON_CHANNEL, daemon_batch_state
 from lingtai.mcp_servers.daemon_common.server import build_server
 from lingtai.tools.daemon.execution_host import DetachedDaemonExecutionHost
 from lingtai.tools.daemon.run_dir import DaemonRunDir
@@ -176,6 +177,34 @@ async def test_active_cli_ask_is_delivered_once_at_checkpoint_without_terminal_m
     assert all(event.get("source") == "daemon" for event in notifications)
     assert all(event.get("kind") == "daemon_checkpoint" for event in notifications)
     assert all(event.get("terminal") is False for event in notifications)
+    # Cooperative daemon_common checkpoints share the singular daemon channel,
+    # not the legacy system channel, and participate in the durable daemon batch
+    # state used by terminal attention masking.
+    all_channels = PosixNotificationStoreAdapter(agent._working_dir).snapshot(
+        lambda channel: channel in {DAEMON_CHANNEL, "system"}
+    )
+    assert "system" not in all_channels
+    assert daemon_batch_state(all_channels[DAEMON_CHANNEL]) == (2, False)
+
+    terminal_key = f"daemon-terminal:{run_dir.run_id}"
+    assert manager._publish_daemon_notification(
+        run_dir.run_id,
+        status="done",
+        text="terminal receipt body",
+        run_dir=run_dir,
+        idempotency_key=terminal_key,
+    ) is True
+    all_channels = PosixNotificationStoreAdapter(agent._working_dir).snapshot(
+        lambda channel: channel in {DAEMON_CHANNEL, "system"}
+    )
+    assert "system" not in all_channels
+    daemon_events = all_channels[DAEMON_CHANNEL]["data"]["events"]
+    assert [event["idempotency_key"] for event in daemon_events] == [
+        f"daemon-checkpoint:{run_dir.run_id}:1",
+        f"daemon-checkpoint:{run_dir.run_id}:2",
+        terminal_key,
+    ]
+    assert daemon_batch_state(all_channels[DAEMON_CHANNEL]) == (3, False)
 
     # Detached LingTai rebuilds the same reserved contract as local tools rather
     # than connecting the external daemon_common server.  The checkpoint must

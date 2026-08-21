@@ -393,7 +393,8 @@ and an opaque `message_id`; one RunDir transaction increments/stores the
 checkpoint, drains that ID-bearing correction once, appends an event, and
 touches heartbeat; the tool response returns the message; `daemon.check`
 projects the latest checkpoint plus only a pending count; a unique nonterminal
-system event wakes the parent; terminal state, result, receipt, and `finish`
+event on the singular built-in `daemon` channel wakes the parent and advances
+its durable batch state; terminal state, result, receipt, and `finish`
 requirements remain unchanged. A backend without the common-MCP loader stays
 `busy` while active. A wake-publication failure reports that the checkpoint was
 recorded and still returns the drained message rather than hiding it.
