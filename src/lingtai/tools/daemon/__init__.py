@@ -4842,6 +4842,7 @@ class DaemonManager:
         run_state: dict | None = None,
         run_path: Path | None = None,
         idempotency_key: str | None = None,
+        kind: str = "daemon_terminal",
     ) -> bool:
         """Publish a compact daemon terminal event via its run mini-channel.
 
@@ -4865,7 +4866,8 @@ class DaemonManager:
         Terminal callers pass an idempotency key and persist a durable receipt
         only after this method returns True. Follow-up (``ask``) notifications
         intentionally reuse this same compact format without terminal receipt
-        state.
+        state, but carry ``kind="daemon_followup"`` so a consumer never reads a
+        still-running run as terminal.
         """
         preview = text or ""
         if len(preview) > self._NOTIFICATION_PREVIEW_MAX:
@@ -4912,7 +4914,7 @@ class DaemonManager:
                 body=body,
                 idempotency_key=idempotency_key,
                 skip_if_idempotency_key_exists=bool(idempotency_key),
-                extra={"kind": "daemon_terminal", "status": status},
+                extra={"kind": kind, "status": status},
                 channel=DAEMON_NOTIFICATION_CHANNEL,
             )
         except Exception as e:
@@ -4949,6 +4951,7 @@ class DaemonManager:
             return
         self._publish_daemon_notification(
             em_id, status=status, text=text, run_dir=run_dir,
+            kind="daemon_followup",
         )
 
     def _on_ask_done(self, em_id: str, future) -> None:

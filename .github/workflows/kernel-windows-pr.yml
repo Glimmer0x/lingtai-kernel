@@ -60,6 +60,7 @@ jobs:
             tests/test_portable_adapter_encoding.py `
             tests/test_agent_presence.py `
             tests/test_notification_store.py `
+            tests/test_daemon_attention_delay.py `
             tests/test_mail_transport.py `
             tests/test_kernel_migrate.py `
             tests/test_git_init.py `

@@ -9,13 +9,18 @@ related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/kernel/notifications.py
+  - tests/test_daemon_attention_delay.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
   notification tool behavior clause changes, update the guarding LABT here in
   the same change. N001-N003 guard the notification hook-registry clauses
   added by PR #1337 (unregistered channel blocked, registered channel
-  passes through, lifecycle validation).
+  passes through, lifecycle validation). N004 guards the `delay` clause for the
+  aggregate `daemon` target (attention masked, truth readable, independent
+  channels still wake, expiry restores attention); update it whenever that
+  clause or `coherent_attention_read`'s daemon mask changes.
 ---
 # Notification Tool Behavior Tests
 
@@ -90,3 +95,32 @@ Pass when the registered channel's event is reported. Fail if it is blocked or d
 
 ### Pass / Fail
 Pass when add/edit/drop behave as above and the manifest stays valid. Fail on silent acceptance of duplicates or a manifest left inconsistent; record the evidence trail in the task report.
+
+## Behavior N004 — delaying `daemon` masks attention only
+
+- **id**: N004
+- **title**: a live `delay` on the aggregate `daemon` channel keeps daemon truth readable and lets independent channels wake the parent, and its expiry restores daemon attention with one `delay-alarm` mirror
+- **guards**: `notification-tool` § Behavior (`delay`)
+  ([CONTRACT.md](CONTRACT.md#behavior))
+- **supersedes**: `tests/test_daemon_attention_delay.py` (mask, hook-wake, and expiry assertions)
+- **runner**: any LingTai agent with the `notification`, `daemon`, and `file` tools
+- **prerequisites**: an agent working dir with a writable `.notification/`; no live delay (call `notification(action="delay", input={"channel": "daemon", "seconds": 0}, reasoning="reset")` first if unsure); no `channels.daemon.alarm_threshold` in `<workdir>/notification.json`
+- **estimate**: ≈ 5 minutes
+
+### Steps
+1. Call `daemon(action="emanate", input={"tasks": [{"task": "Reply with exactly: DONE", "tools": []}]}, reasoning="probe")`; record `ids[0]` as `<id1>` and wait for its terminal notice.
+2. Call `notification(action="delay", input={"channel": "daemon", "seconds": 60}, reasoning="probe")`.
+3. Call `notification(action="add", input={"name": "probe", "channel": "probe", "source": "external", "description": "carrier", "how_to_modify": "edit the manifest", "how_to_cancel": "stop the writer"}, reasoning="probe")`.
+4. Emanate a second identical task as `<id2>`. While the delay is live, call `notification(action="check", input={}, reasoning="probe")` and list `.notification/daemon/` with the `file` tool.
+5. Write one event to `.notification/probe.json` (the registered hook channel) and observe whether it is delivered/injected.
+6. Wait out the remaining 60-second window (the heartbeat/timer publishes expiry), then call `notification(action="check", input={}, reasoning="probe")` and read `.notification/delay-alarm.json` with the `file` tool.
+
+### Expected evidence
+- [ ] Step 2 returns `{"status": "ok", "action": "delayed", "channel": "daemon", ...}`.
+- [ ] Step 4: `check` still reports the daemon channel and both `<id1>.json` and `<id2>.json` exist under `.notification/daemon/`; the `<id2>` arrival injected no notification pair and did not wake the agent.
+- [ ] Step 5: the `probe` hook-channel event is delivered normally while the daemon delay is still live.
+- [ ] Step 6: `.notification/delay-alarm.json` holds exactly one high-priority mirror naming target `daemon` with its requested/actual duration, and daemon attention is restored (a further daemon arrival wakes/injects again).
+- [ ] No daemon mini-file, terminal receipt, or `daemons/<id>/daemon.json` was rewritten or removed at any step.
+
+### Pass / Fail
+Pass when all evidence is observed and no forbidden side effect occurs. Fail if the daemon channel disappears from `check`/`.notification/daemon/` while delayed, if a daemon arrival wakes or injects during the window, if the registered hook channel is suppressed too, or if expiry leaves the mask in place or publishes no `delay-alarm`; record the evidence trail in the task report.
