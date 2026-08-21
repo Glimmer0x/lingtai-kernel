@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -56,6 +58,7 @@ def _publish(agent, ref_id: str) -> str:
         body=f"Daemon {ref_id} done.",
         idempotency_key=f"daemon-terminal:{ref_id}",
         skip_if_idempotency_key_exists=True,
+        extra={"kind": "daemon_terminal", "status": "done"},
         channel=DAEMON_CHANNEL,
     )
 
@@ -113,6 +116,8 @@ def test_terminal_notice_lands_on_the_daemon_channel_not_system(tmp_path):
     events = snapshot[DAEMON_CHANNEL]["data"]["events"]
     assert [e["ref_id"] for e in events] == ["em-1"]
     assert events[0]["source"] == "daemon"
+    assert events[0]["kind"] == "daemon_terminal"
+    assert events[0]["status"] == "done"
 
 
 def test_root_report_is_not_a_daemon_event_source(tmp_path):
@@ -689,6 +694,13 @@ def _make_daemon_sync_agent(tmp_path):
         def __init__(self, workdir):
             self._working_dir = workdir
             self._notification_store = notification_store_for(workdir)
+            self._config = SimpleNamespace(
+                time_awareness=False,
+                timezone_awareness=False,
+                context_limit=0,
+                cache_miss_budget=None,
+                language="en",
+            )
             self._state = AgentState.IDLE
             self._notification_fp = ()
             self._notification_raw_fp = ()
@@ -696,6 +708,8 @@ def _make_daemon_sync_agent(tmp_path):
             self._notification_block_id = None
             self._notification_live_holder = None
             self._notification_inject_seq = 0
+            self._asleep = threading.Event()
+            self._cancel_event = threading.Event()
             self._chat_stub = chat
             self._logs: list = []
             self.agent_name = "daemon-sync-stub"
@@ -714,13 +728,46 @@ def _make_daemon_sync_agent(tmp_path):
         def _wake_nap(self, *_a, **_kw):
             pass
 
-        def _set_state(self, *_a, **_kw):
-            pass
+        def _set_state(self, state, *_a, **_kw):
+            self._state = state
 
         def _reset_uptime(self):
             pass
 
     return _Agent(workdir)
+
+
+def test_asleep_terminal_wake_has_bounded_daemon_stats_and_cause(tmp_path):
+    """A daemon-only ASLEEP wake carries stable stats plus one-shot cause."""
+    from lingtai.kernel.state import AgentState
+
+    agent = _make_daemon_sync_agent(tmp_path)
+    agent._state = AgentState.ASLEEP
+    agent._asleep.set()
+    _publish(agent, "em-terminal")
+
+    agent._sync_notifications()
+
+    result = agent._chat_stub.interface.entries[-1].content[0]
+    state = result.metadata["agent_meta"]["agent_state"]
+    assert state["daemon"] == {
+        "run_count": 1,
+        "event_count": 1,
+        "active_run_count": 0,
+        "terminal_run_count": 1,
+        "terminal_by_status": {"done": 1},
+        "latest_terminal": [
+            {"run_id": "em-terminal", "status": "done", "at": state["daemon"]["latest_terminal"][0]["at"]}
+        ],
+    }
+    wake = state["notification_wake"]
+    assert wake["kind"] == "wake"
+    assert wake["source_kind"] == DAEMON_CHANNEL
+    assert wake["changed_channels"] == [DAEMON_CHANNEL]
+    assert wake["daemon"]["event_count_delta"] == 1
+    assert wake["daemon"]["terminal_run_count_delta"] == 1
+    assert wake["daemon"]["latest_terminal"][0]["run_id"] == "em-terminal"
+    assert getattr(agent, "_notification_wake_provenance", None) is None
 
 
 def test_first_subthreshold_arrival_never_injects_or_wakes(tmp_path):

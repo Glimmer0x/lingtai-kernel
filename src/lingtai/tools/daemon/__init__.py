@@ -4912,6 +4912,7 @@ class DaemonManager:
                 body=body,
                 idempotency_key=idempotency_key,
                 skip_if_idempotency_key_exists=bool(idempotency_key),
+                extra={"kind": "daemon_terminal", "status": status},
                 channel=DAEMON_NOTIFICATION_CHANNEL,
             )
         except Exception as e:

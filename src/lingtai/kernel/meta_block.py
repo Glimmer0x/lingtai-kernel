@@ -2025,6 +2025,20 @@ def build_meta(agent) -> dict:
 
     meta["current_tool_result_chars"] = current_tool_result_chars(agent)
 
+    daemon_summary = getattr(agent, "_notification_daemon_summary", None)
+    if isinstance(daemon_summary, dict):
+        # Bounded current daemon state, derived from the same coherent
+        # mini-channel snapshot that drives notification delivery. It stays
+        # available even if the attention lane spills its raw event payload.
+        meta["daemon"] = daemon_summary
+
+    wake_provenance = getattr(agent, "_notification_wake_provenance", None)
+    if isinstance(wake_provenance, dict):
+        # Set only while an ASLEEP notification pair is being synthesized; the
+        # caller clears it immediately afterwards, so ordinary later results do
+        # not repeat or blur the causal wake record.
+        meta["notification_wake"] = wake_provenance
+
     comment = dynamic_adapter_comment(agent)
     if comment:
         # Only the slim dynamic view rides on the tail; the static adapter rules

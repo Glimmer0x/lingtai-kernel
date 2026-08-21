@@ -578,6 +578,8 @@ def _publish_daemon_notification(run_dir, manifest: dict, *, status: str, state:
             "body": body,
             "at": received_at,
             "idempotency_key": idempotency_key,
+            "kind": "daemon_terminal",
+            "status": status,
         }
         events.append(event)
         envelope_priority = (

@@ -476,7 +476,18 @@ route to the run's mini-file and never fall back to the root. The run directory
 may write a temporary `daemon.json.terminal_notification_claim` before publication to
 suppress concurrent callbacks, but `daemon.json.terminal_notified=true` is a
 receipt and may be written only after `_publish_daemon_notification` succeeds or
-an idempotent retry observes an already-published daemon-channel event.
+an idempotent retry observes an already-published daemon-channel event. Every
+new terminal event is typed with `kind="daemon_terminal"` and its terminal
+`status`, rather than requiring consumers to parse its human-readable body.
+
+The parent metadata projection carries a bounded current `agent_state.daemon`
+summary derived from the same coherent mini-channel aggregate (run/event/active/
+terminal counts, terminal-status counts, and at most three latest terminals).
+When an ASLEEP parent is actually woken by a synthesized notification pair, that
+pair additionally carries one-shot `agent_state.notification_wake` provenance:
+changed channels plus bounded daemon deltas/latest terminals and, when relevant,
+Telegram message ids. It is cleared before later ordinary tool results; a mixed
+wake is labeled `source_kind="mixed"` rather than attributed by guesswork.
 
 Failed enqueue must clear the pending claim and leave the terminal run
 retryable. Startup reconciliation retries only new-schema terminal run dirs that
