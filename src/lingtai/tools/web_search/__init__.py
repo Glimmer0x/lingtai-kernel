@@ -12,11 +12,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
-from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 from ._spill import spill_if_over_threshold
+from .descriptor import WebActionDescriptor, WebToolDescriptor
 from .settings import (
     OutputSettingsSnapshot,
     SettingsSnapshot,
@@ -158,56 +156,39 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The single source of truth for web's own children: one ``(name, schema,
-# title)`` triple per child, consumed both by the module-level schema-only
-# family below and by ``WebManager.__init__``, which binds real handlers to
-# the same specs. The reserved ``manual`` child is not listed here: its schema
-# is the owner-exported ``MANUAL_INPUT_SCHEMA`` and its real child comes from
-# ``build_manual_child``.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any], str], ...] = (
-    ("search", _SEARCH_INPUT_SCHEMA, "search input"),
-    ("browse", _BROWSE_INPUT_SCHEMA, "browse input"),
-)
-
-
-def _schema_only_family() -> ToolFamily:
-    # A throwaway ``ToolFamily`` used only to compose the model-facing schema
-    # and to prove the fixed three-child registry has no duplicate or
-    # reserved-name collision (``ToolFamilyError`` would raise here, at
-    # import time, rather than shipping silently). ``WebManager`` builds its
-    # own per-instance ``ToolFamily`` in ``__init__`` with real handlers
-    # bound to that instance; this module-level one never dispatches.
-    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
-        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-    return ToolFamily(
-        "web",
-        [
-            *(ChildTool(name, schema, _unused, title=title) for name, schema, title in _CHILD_SPECS),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
-        ],
-    )
-
-
-_FAMILY = _schema_only_family()
-
-
-def get_description(lang: str = "en") -> str:
-    return (
+# ``WEB_TOOL_DESCRIPTOR`` is the package-local public-root declaration. Both
+# the schema-only family and each per-Agent dispatch family consume these same
+# strict action schemas; manual keeps the generic ManualTool input/result
+# protocol while the descriptor owns the installed ``web`` destination.
+WEB_TOOL_DESCRIPTOR = WebToolDescriptor(
+    name="web",
+    description=(
         "Unified web capability. Use web(action='search', input={'query': '...'}, "
         "reasoning='discover current sources') for current discovery, then "
         "web(action='browse', input={'link_ref': '...'}, reasoning='read the "
         "selected source') for a known result. Use web(action='manual', input={}, "
         "reasoning='load web guidance') for the procedure and settings guidance."
-    )
+    ),
+    manual_skill_name="web",
+    actions=(
+        WebActionDescriptor("search", _SEARCH_INPUT_SCHEMA, "search input"),
+        WebActionDescriptor("browse", _BROWSE_INPUT_SCHEMA, "browse input"),
+    ),
+)
+
+# Construct at import time so ToolFamily still proves the fixed registry has no
+# duplicate/reserved-name collision before this capability can be registered.
+# It composes model schema only; ``WebManager`` builds its own handler-bound
+# family through the same descriptor for every Agent.
+_FAMILY = WEB_TOOL_DESCRIPTOR.build_schema_family()
+
+
+def get_description(lang: str = "en") -> str:
+    return WEB_TOOL_DESCRIPTOR.description
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
-    # Composed by the generic ToolFamily infra from each child's own
-    # canonical ``input_schema`` (``_SEARCH_INPUT_SCHEMA`` etc. above), rather
-    # than hand-assembled — verified field-equivalent to the pre-migration
-    # schema, except the documented authorized differences, by
-    # ``tests/test_tool_family_web_migration_parity.py``.
+    """Compose the strict public ``web`` schema from the local descriptor."""
     return _FAMILY.build_schema()
 
 
@@ -251,23 +232,11 @@ class WebManager:
         self._services: dict[str, Any] = {}
         self._service_errors: dict[str, str] = {}
         handlers = {"search": self._dispatch_search, "browse": self._dispatch_browse}
-        self._family = ToolFamily(
-            "web",
-            [
-                *(
-                    ChildTool(name, schema, handlers[name], title=title)
-                    for name, schema, title in _CHILD_SPECS
-                ),
-                # Registered directly, unwrapped: ``ToolFamily.handle()`` must
-                # dispatch this child's own canonical MCP-compatible result
-                # verbatim for ``action="manual"`` (no double wrap). Web's
-                # flat public shape is reconstructed from that canonical
-                # result strictly *after* ``self._family.handle(...)``
-                # returns, in ``handle()`` below — never inside a registered
-                # child.
-                build_manual_child(agent, "web"),
-            ],
-        )
+        # The descriptor binds the same strict schemas used by ``get_schema``
+        # to these per-Agent action handlers, then registers the generic manual
+        # child directly and unwrapped. ``handle()`` below remains the sole
+        # post-dispatch adapter for Web's preserved flat manual result.
+        self._family = WEB_TOOL_DESCRIPTOR.build_dispatch_family(agent, handlers)
 
     @property
     def browser_engine(self) -> BrowserEngine:
@@ -597,14 +566,6 @@ class WebManager:
                 spilled[key] = payload[key]
         spilled.update(artifact)
         return spilled
-
-    def manual(self, diagnostic: dict[str, Any]) -> dict[str, Any]:
-        # This path never reads settings/web.search.json and performs no
-        # provider construction or search operation, even when settings are
-        # malformed: manual does not own that file.
-        loaded = load_installed_manual(self._agent, "web")
-        loaded.update({"action": "manual", "current_setting": diagnostic})
-        return loaded
 
     def _adapt_manual_result(self, mcp_result: dict[str, Any]) -> dict[str, Any]:
         # ``self._family.handle(...)`` has already dispatched to the
@@ -949,8 +910,10 @@ def setup(
         agent, browser_port, specs=specs, default_engine=chosen,
         default_source=source, legacy_fallback_from=legacy_fallback_from,
     )
+    # Host registration remains here; the package-local descriptor supplies
+    # only the canonical root identity it registers under.
     agent.add_tool(
-        "web", schema=get_schema(), handler=manager.handle,
+        WEB_TOOL_DESCRIPTOR.name, schema=get_schema(), handler=manager.handle,
         description=get_description(), glossary_package=__package__,
     )
     return manager

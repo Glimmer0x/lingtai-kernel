@@ -6,6 +6,7 @@ related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/descriptor.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
@@ -35,9 +36,13 @@ maintenance: |
 `web` is exactly one model-facing capability with explicit `search`, `browse`,
 and metadata-only `manual` actions. It is implemented in the retained
 `tools.web_search` composition owner; browser and SearchService are internal
-subcomponents. `web` is the first family migrated to the LingTai Tool Protocol
-v2 shape defined in `src/lingtai/tools/CONTRACT.md`, and the first family to
-build its schema composition and envelope dispatch on the generic
+subcomponents. Its package-local `WebToolDescriptor` owns only the fixed root
+metadata, strict action schemas, and installed `web` manual destination that
+both schema and per-Agent dispatch consume; host capability registration,
+provider composition, and browser-transport injection stay outside it. `web`
+is the first family migrated to the LingTai Tool Protocol v2 shape defined in
+`src/lingtai/tools/CONTRACT.md`, and the first family to build its schema
+composition and envelope dispatch on the generic
 `src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool`);
 using it changed no observable promise in this file.
 

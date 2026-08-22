@@ -7,6 +7,7 @@ version: 8.2.0
 last_changed_at: "2026-08-05T08:40:00-07:00"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/descriptor.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/ANATOMY.md
@@ -14,8 +15,9 @@ related_files:
   - src/lingtai/tools/web_search/manual/scripts/extract_page.py
   - src/lingtai/tools/browser/core.py
 maintenance: |
-  This is the sole installed web-manual source. Keep the search-first route,
-  settings schema, bounded browse contract, root `summarize` guidance, and one
+  This is the sole installed web-manual source and the `web` descriptor's
+  manual destination. Keep the search-first route, settings schema, bounded
+  browse contract, root `summarize` guidance, and one
   explicit legacy fallback in sync; retain useful scripts and references under
   this bundle. Never create a second public browser or web-search manual.
 ---

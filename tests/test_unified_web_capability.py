@@ -58,6 +58,51 @@ def test_registry_has_one_web_surface_and_preserves_opaque_identity():
     assert normalized == {"web": {"search_service": service, "browser_port": port}}
 
 
+def test_package_descriptor_drives_web_root_schema_dispatch_and_manual(tmp_path):
+    from lingtai.tools.web_search import WEB_TOOL_DESCRIPTOR, get_description, get_schema
+
+    descriptor = WEB_TOOL_DESCRIPTOR
+    assert descriptor.name == "web"
+    assert descriptor.manual_skill_name == "web"
+    assert descriptor.action_names == ("search", "browse", "manual")
+    assert get_description() == descriptor.description
+
+    schema = get_schema()
+    assert schema["properties"]["action"]["enum"] == list(descriptor.action_names)
+    assert [branch["title"] for branch in schema["properties"]["input"]["oneOf"]] == [
+        "search input", "browse input", "manual input",
+    ]
+
+    manual_path = tmp_path / ".library" / "intrinsic" / "capabilities" / "web" / "SKILL.md"
+    manual_path.parent.mkdir(parents=True)
+    manual_path.write_text("descriptor-owned web manual", encoding="utf-8")
+    agent = _Agent(tmp_path)
+    manager = setup(agent, search_service=_Search(), browser_port=_Port())
+
+    # Host registration retains ownership, but it consumes the local descriptor
+    # rather than a second root string or a host-level plugin registry.
+    assert agent.tool_name == descriptor.name
+    assert agent.schema == schema
+    assert manager._family.name == descriptor.name
+    assert manager._family.child_names == descriptor.action_names
+
+    # The descriptor binds the real generic ManualTool child directly. Its
+    # canonical result exists at dispatch before Web's public flat adaptation.
+    child = manager._family.handle({"action": "manual", "input": {}})
+    assert child == {
+        "status": "ok",
+        "content": [{"type": "text", "text": "descriptor-owned web manual"}],
+        "structuredContent": {"manual_path": str(manual_path)},
+    }
+    assert manager.handle({"action": "manual", "input": {}}) == {
+        "status": "ok",
+        "manual": "descriptor-owned web manual",
+        "manual_path": str(manual_path),
+        "action": "manual",
+        "current_setting": manager._no_settings_diagnostic(),
+    }
+
+
 def test_search_link_ref_browse_uses_same_agent_state(tmp_path):
     agent = _Agent(tmp_path)
     search = _Search()

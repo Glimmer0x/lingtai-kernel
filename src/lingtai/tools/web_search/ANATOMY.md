@@ -7,6 +7,7 @@ related_files:
   - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/descriptor.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
@@ -67,14 +68,18 @@ action implementations, settings, and diagnostics.
 
 ## Components
 
-- `WebManager`, `setup()`, and the single `web` schema — builds a per-instance
-  `ToolFamily` (`lingtai.tools.tool_family`) with `search`/`browse` handlers
-  bound to instance state and a `manual` child from
-  `tool_family.manual.build_manual_child`; `handle()` delegates envelope
-  validation and dispatch to that `ToolFamily` and stamps
-  `current_setting`/`action` onto envelope-level failures; lazy engine
-  composition, settings diagnostics, and registration
-  (`src/lingtai/tools/web_search/__init__.py:1-426`).
+- `descriptor.py::WebToolDescriptor` plus
+  `__init__.py::WEB_TOOL_DESCRIPTOR` — package-local declaration of the
+  canonical `web` root, its strict `search`/`browse` child schemas, description,
+  and installed `web` manual destination. Its schema-only and handler-bound
+  family builders consume those same declarations; the latter registers the
+  generic manual child directly, never a second manual wrapper.
+- `WebManager`, `setup()`, and the single `web` schema — obtains its
+  per-instance `ToolFamily` from that descriptor with `search`/`browse` handlers
+  bound to instance state; `handle()` delegates envelope validation and dispatch
+  then adapts only Web's public manual result, while `setup()` retains host
+  registration, lazy engine composition, and settings diagnostics
+  (`src/lingtai/tools/web_search/__init__.py`).
 - `_EngineSpec`, `_specs_from_kwargs`, `_canonical_default_specs()` —
   immutable operator engine wiring. `_specs_from_kwargs` rejects a retired
   provider name (`minimax`, `zhipu` — `_RETIRED_PROVIDERS`) supplied via the
