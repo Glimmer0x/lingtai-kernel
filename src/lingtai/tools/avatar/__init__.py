@@ -32,7 +32,7 @@ import os
 import re
 import shutil
 import time
-from importlib import resources
+from importlib import resources as resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -41,9 +41,9 @@ from lingtai.kernel.i18n import t
 from ..tool_family import ToolFamily
 from ._descriptor import (
     AVATAR_TOOL_DESCRIPTOR,
-    _CHILD_SPECS,
-    _RULES_INPUT_SCHEMA,
-    _SPAWN_INPUT_SCHEMA,
+    _CHILD_SPECS as _CHILD_SPECS,
+    _RULES_INPUT_SCHEMA as _RULES_INPUT_SCHEMA,
+    _SPAWN_INPUT_SCHEMA as _SPAWN_INPUT_SCHEMA,
 )
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
