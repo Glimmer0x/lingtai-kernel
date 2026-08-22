@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 from lingtai.adapters.posix.event_journal import PosixJsonlEventJournalAdapter
@@ -502,6 +503,17 @@ def main() -> None:
 
     sub.add_parser("check-caps", help="Output capability provider metadata as JSON")
 
+    liveness_parser = sub.add_parser(
+        "liveness",
+        help="Emit the kernel-owned published-Agent liveness result as JSON",
+    )
+    liveness_parser.add_argument(
+        "--agent-dir",
+        type=Path,
+        required=True,
+        help="Agent working directory to inspect without booting it",
+    )
+
     log_parser = sub.add_parser("log", help="Inspect the additive SQLite log index")
     log_sub = log_parser.add_subparsers(dest="log_command", required=True)
 
@@ -565,6 +577,19 @@ def main() -> None:
     elif args.command == "check-caps":
         from lingtai.tools.registry import get_all_providers
         print(json.dumps(get_all_providers()))
+    elif args.command == "liveness":
+        agent_dir = args.agent_dir.resolve()
+        if not agent_dir.is_dir():
+            print(f"error: {agent_dir} is not a directory", file=sys.stderr)
+            sys.exit(1)
+        from lingtai.kernel.session_stats import (
+            query_published_agent_liveness,
+            read_agent_record,
+        )
+        _emit_json(query_published_agent_liveness(
+            read_agent_record(agent_dir),
+            wall_now=time.time(),
+        ))
     elif args.command == "log":
         _handle_log_command(args)
     elif args.command == "daemon":

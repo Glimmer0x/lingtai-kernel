@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from .._fsutil import atomic_write_json
+from ..config import HEARTBEAT_LIVENESS_SECONDS
 
 # ---------------------------------------------------------------------------
 # Schema / filenames
@@ -299,6 +300,70 @@ def read_agent_record(working_dir: Path | str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def classify_published_agent_record(
+    record: object,
+    *,
+    wall_now: float,
+    liveness_seconds: float = HEARTBEAT_LIVENESS_SECONDS,
+) -> str | None:
+    """Classify a published Agent Record against an injected wall-clock value.
+
+    ``health.liveness`` is a write-time snapshot, so consumers must not treat it
+    as live evidence. Explicit ``stuck`` and ``suspended`` states remain
+    authoritative. The running states require a finite heartbeat with an age
+    strictly below ``liveness_seconds``; otherwise they are offline. Missing or
+    unrecognized records return ``None`` for an unavailable presentation.
+    """
+    if not isinstance(record, dict):
+        return None
+    if (
+        record.get("schema") != AGENT_RECORD_SCHEMA
+        or record.get("schema_version") != AGENT_RECORD_VERSION
+    ):
+        return None
+
+    session = record.get("session")
+    if not isinstance(session, dict):
+        return None
+    state = session.get("state")
+    if state not in {"active", "idle", "asleep", "stuck", "suspended"}:
+        return None
+    if state in {"stuck", "suspended"}:
+        return state
+
+    health = record.get("health")
+    heartbeat_at = health.get("heartbeat_at") if isinstance(health, dict) else None
+    if isinstance(heartbeat_at, bool) or not isinstance(heartbeat_at, (int, float)):
+        return "offline"
+    if not math.isfinite(heartbeat_at):
+        return "offline"
+    if isinstance(wall_now, bool) or not isinstance(wall_now, (int, float)):
+        return "offline"
+    if not math.isfinite(wall_now):
+        return "offline"
+
+    age = wall_now - heartbeat_at
+    if not math.isfinite(age) or age >= liveness_seconds:
+        return "offline"
+    return state
+
+
+def query_published_agent_liveness(
+    record: object,
+    *,
+    wall_now: float,
+) -> dict[str, str]:
+    """Project the canonical published-record liveness decision as one dict.
+
+    The result is always exactly ``{"liveness": <value>}``, where a malformed
+    or unavailable record becomes ``"unavailable"``. This is the consumer
+    contract: callers must not read legacy status sources or reconstruct the
+    heartbeat policy from record fields.
+    """
+    lifecycle = classify_published_agent_record(record, wall_now=wall_now)
+    return {"liveness": lifecycle if lifecycle is not None else "unavailable"}
+
+
 # ---------------------------------------------------------------------------
 # Daemon self-record — written by DaemonRunDir on every daemon turn
 # ---------------------------------------------------------------------------
@@ -462,6 +527,7 @@ __all__ = [
     "session_stats_refresh_seconds", "session_stats_daemon_limit",
     "should_refresh_agent_record",
     "agent_record_path", "build_agent_record", "write_agent_record", "read_agent_record",
+    "classify_published_agent_record", "query_published_agent_liveness",
     "daemon_record_path", "build_daemon_record", "write_daemon_record",
     "aggregate_daemon_records",
 ]

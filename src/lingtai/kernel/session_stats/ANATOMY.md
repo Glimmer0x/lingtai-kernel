@@ -2,6 +2,9 @@
 related_files:
   - src/lingtai/kernel/session_stats/CONTRACT.md
   - src/lingtai/kernel/session_stats/__init__.py
+  - src/lingtai/cli.py
+  - tests/test_session_stats.py
+  - tests/test_cli_liveness.py
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/kernel/base_agent/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
@@ -40,9 +43,16 @@ state (confirmed alignment: Telegram 14238/14242/14248).
 
 ## Components
 
-- `build_agent_record` / `write_agent_record` / `read_agent_record`
-  (`__init__.py`) — the Agent record projector, atomic writer, and best-effort
-  reader. Publishes to `system/agent_record.json`.
+- `build_agent_record` / `write_agent_record` / `read_agent_record` /
+  `classify_published_agent_record` / `query_published_agent_liveness`
+  (`__init__.py`) — the Agent record projector, atomic writer, best-effort
+  reader, pure classifier, and one-key consumer dict projection. The projection
+  receives the reader's current wall time, ignores persisted `health.liveness`,
+  maps a stale active/idle/asleep record to `offline`, and makes malformed or
+  absent records `unavailable`. `lingtai-agent liveness --agent-dir <dir>`
+  (`cli.py`) is the read-only cross-process JSON wrapper around that projection;
+  neither Python nor cross-process consumers reconstruct heartbeat semantics.
+  Publishes to `system/agent_record.json`.
 - `build_daemon_record` / `write_daemon_record` (`__init__.py`) — the compact
   daemon self-record projector and atomic writer. Publishes to
   `<run_dir>/session_stats.json`, a sibling of `daemon.json`.
@@ -77,10 +87,12 @@ state (confirmed alignment: Telegram 14238/14242/14248).
   tool dispatch, CLI output/usage, terminal markers, …); it now also calls
   `write_daemon_record`, so the daemon self-record refreshes on every daemon
   turn without a second scattered set of call sites.
-- `TelegramManager._task_card_agent_lifecycle_status` /
-  `_task_card_active_seconds` (`mcp_servers/telegram/manager.py`) and
+- `TelegramManager._task_card_agent_lifecycle_status` delegates the automatic
+  Task Card lifecycle to `classify_published_agent_record` after
+  `read_agent_record`; `_task_card_active_seconds`
+  (`mcp_servers/telegram/manager.py`) and
   `LocalCommandCore.collect_kanban_data` (`mcp_servers/local_commands/core.py`)
-  read `read_agent_record` instead of `.status.json`/token-ledger scans.
+  read the record instead of `.status.json`/token-ledger scans.
 
 ## Composition
 
