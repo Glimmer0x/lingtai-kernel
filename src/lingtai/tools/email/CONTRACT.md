@@ -8,11 +8,14 @@ related_files:
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_email_migration.py
   - tests/test_tool_family_email_wire_parity.py
+  - tests/test_email_real_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -137,9 +140,18 @@ this exact rejection — not the generic unknown-action result — is what a dir
 invocation gets. When `boot()` has not run, `handle()` returns
 `{error: "Internal: email manager not initialized..."}`.
 
-`manual` is the reserved, family-owned child. It is registered directly and
-unwrapped, so `ToolFamily.handle()` returns the canonical ManualTool result
-verbatim (full `SKILL.md` body at `content[0].text`, host-local path at
+`manual` is the reserved, **plugin-owned** child. Email ships an Agent Plugins
+v1.0.0 package (`agent_plugin/`, manifest name `lingtai-email`) whose one Agent
+Skill is `email-manual` — the kernel's own `services/plugin_registry.read_plugin`
+accepts it, `scan_plugin_root`/`read_plugins` discover it, and `register_plugins`
+mounts its skill. `EMAIL_PLUGIN` appends the `manual` child from it and raises if
+this package tries to declare, re-schema, or rebind the reserved action. The plugin declares no MCP server — the family executes in the
+host process — so declaring it registers a skill and never a launcher, and
+installation of that skill stays the host's (`Agent._install_intrinsic_manuals`
+writes it to `.library/intrinsic/capabilities/email/`, the unchanged
+`manual_path`). It is registered directly and unwrapped, so
+`ToolFamily.handle()` returns the canonical ManualTool result verbatim (full
+`SKILL.md` body at `content[0].text`, host-local path at
 `structuredContent.manual_path`, no double wrap). Email's own public result is
 unchanged from `load_installed_manual`'s pre-migration flat shape — exactly
 `{status, manual, manual_path}` (+ `error` when degraded) — produced strictly
@@ -206,6 +218,8 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
 | The model-facing root is the closed LTP v2 envelope and nothing else | `src/lingtai/tools/email/__init__.py:get_schema` | `tests/test_tool_family_email_migration.py::test_root_is_the_closed_ltp_v2_envelope_and_nothing_else` |
 | All 14 public action values and their order are unchanged | `src/lingtai/tools/email/_family_schema.py:ACTION_ORDER` | `tests/test_tool_family_email_migration.py::test_public_action_values_and_order_are_unchanged` |
+| Email ships a real Agent Plugin the kernel's own registry validates, discovers, and mounts | `src/lingtai/tools/email/agent_plugin/plugin.json` | `tests/test_email_real_plugin_package.py::test_email_ships_a_plugin_directory_the_kernel_registry_accepts`, `::test_the_plugin_is_discoverable_through_the_ordinary_scan_paths`, `::test_declaring_the_plugin_mounts_its_skill_and_launches_nothing` |
+| The reserved `manual` is appended by the plugin from the skill it owns, never declared by the package | `src/lingtai/tools/email/plugin.py:EMAIL_DECLARED_ACTIONS` | `tests/test_email_real_plugin_package.py::test_the_package_declares_its_own_actions_and_the_plugin_appends_manual`, `::test_manual_returns_the_plugin_owned_document_in_emails_pinned_shape` |
 | One child registry drives both the advertised schema and dispatch | `src/lingtai/tools/email/__init__.py:_build_family` | `tests/test_tool_family_email_migration.py::test_one_canonical_child_registry_drives_schema_and_dispatch` |
 | A cross-action key is rejected before any mailbox I/O or delivery | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_email_migration.py::test_cross_action_key_is_rejected_before_any_mailbox_io`, `::test_send_fields_cannot_be_smuggled_through_a_read_call` |
 | Reserved `unread` keeps its exact rejection and is not a public child | `src/lingtai/tools/email/__init__.py:handle` | `tests/test_tool_family_email_migration.py::test_reserved_unread_keeps_its_exact_rejection_before_dispatch` |

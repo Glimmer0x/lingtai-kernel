@@ -13,7 +13,11 @@ related_files:
   - src/lingtai/tools/email/glossary-en.md
   - src/lingtai/tools/email/glossary-zh.md
   - src/lingtai/tools/email/glossary-wen.md
-  - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/tools/email/plugin.py
+  - src/lingtai/tools/email/agent_plugin/plugin.json
+  - src/lingtai/tools/email/agent_plugin/skills/email-manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/services/plugin_registry.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
   ANATOMY.md files so the anatomy graph stays connected rather than isolated;
@@ -34,15 +38,17 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 - `__init__.py` — Package surface and the LTP v2 family boundary. Re-exports the full public API of the former monolithic `email.py` for backward compatibility: all primitives, schema functions, and `EmailManager`. Registers the `email` generic-dismiss guard at import because `.notification/email.json` mirrors durable unread state. Owns the family composition and the module-level intrinsic protocol:
   - `_schema_only_family()` / `_FAMILY` — the module-level schema-only `ToolFamily`. Email is an *intrinsic* (module-level `get_schema()`/`handle(agent, args)`, no per-Agent manager object to hang a family off at import), so this one never dispatches; constructing it at import is still load-bearing as the registry's duplicate/reserved-`manual`-collision check.
   - `get_schema()` — the composed model-facing schema. Shadows the legacy flat `schema.get_schema` (re-exported as `get_flat_schema`) and replaces the generic composer's neutral `action` description with Email's own `ACTION_ENUM_DESCRIPTION`.
-  - `_build_family(agent)` — the per-call dispatching family. Every non-`manual` child re-enters `EmailManager.handle` with its unchanged historical flat shape; `manual` is `build_manual_child(agent, "email")`, registered directly and unwrapped.
+  - `_build_family(agent)` — the per-call dispatching family. Every non-`manual` child re-enters `EmailManager.handle` with its unchanged historical flat shape; only `EMAIL_DECLARED_ACTIONS` are built here and `EMAIL_PLUGIN.build_family()` appends the reserved `manual` child from the plugin-owned skill, registered directly and unwrapped.
   - `_strip_nulls()` — turns provider-sent explicit `null`s back into absent keys so the manager's `args.get(...)`/`in args` defaulting is preserved.
   - `_adapt_manual_result()` — Host/presentation-only flattening of the canonical ManualTool result to Email's pinned `{status, manual, manual_path}` public shape, strictly *after* dispatch.
   - `handle(agent, args)` — strips `_tc_id`, renders the reserved `unread` rejection before dispatch, delegates to the family, then adapts `manual` and restores Email's own unknown/absent-action results.
   - `boot(agent)` — idempotent boot hook wiring a fresh `EmailManager` onto the agent.
 
-- `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
+- `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order) and `INPUT_SCHEMAS`, both composed by `EMAIL_PLUGIN` from Email's own thirteen declared branches plus the plugin-appended reserved `manual`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives`; the reserved branch comes from the canonical `MANUAL_INPUT_SCHEMA` via the plugin rather than being restated here.
 
-- `manual/SKILL.md` — the installed `email-manual` bundle the reserved `manual` child returns; `Agent._install_intrinsic_manuals()` copies it to `.library/intrinsic/capabilities/email/`.
+- `agent_plugin/` — the Agent Plugins v1.0.0 package this tool **is**: `plugin.json` (manifest name `lingtai-email`) plus `skills/email-manual/SKILL.md`, the manual the plugin owns. `Agent._install_intrinsic_manuals()` finds it through `tools/_plugin.py::owned_skill_dir()` and installs it to `.library/intrinsic/capabilities/email/` — the same destination, and therefore the same pinned `manual_path`, as the retired `manual/` bundle. No `mcp.json`: the `email` family executes in the host process, so registering this plugin mounts a skill and never a launcher.
+
+- `plugin.py` — the descriptor. `EMAIL_PLUGIN` (an `IntrinsicToolPlugin`) checks `agent_plugin/`'s manifest identity and owned skill at import, defers the full Agent Plugins v1.0.0 validation to `services/plugin_registry.read_plugin` behind the lazy `plugin_record` property, and states the tool name, the manifest name, the owned skill, and the installed-manual directory once. `EMAIL_DECLARED_ACTIONS` is Email's own thirteen actions with `manual` deliberately absent; `EMAIL_ACTIONS` is the plugin-composed public list.
 
 - `primitives.py` — Mailbox I/O and display helpers. Module-level functions operating on the agent's `mailbox/` directory tree.
   - ID and path helpers: `_new_mailbox_id` (re-exported from the kernel mail service — `primitives.py:20` imports `from lingtai.kernel.services.mail import _new_mailbox_id`), `mode_field` (`primitives.py:29-35`), `_mailbox_dir` / `_inbox_dir` / `_outbox_dir` / `_sent_dir` (`primitives.py:38-51`).

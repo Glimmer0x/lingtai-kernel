@@ -143,6 +143,12 @@ exclude = [
     "*/glossary-zh.md",
     "*/glossary-wen.md",
 ]
+# A tool that is a real Agent Plugin ships its plugin.json + skills/ tree
+# instead of a plain manual/ bundle, so the manual/ glob above does not reach
+# it. Without this entry the wheel installs the email tool and silently drops
+# the plugin it is — construction would fail at import, not merely at the first
+# `manual` call.
+"lingtai.tools.email" = ["agent_plugin/plugin.json", "agent_plugin/skills/**/*"]
 lingtai = [
     "mcp_catalog.json",
     "init.jsonc",

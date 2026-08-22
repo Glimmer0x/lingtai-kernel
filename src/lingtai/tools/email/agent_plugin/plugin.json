@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "lingtai-email",
+  "version": "1.1.0",
+  "description": "LingTai internal email. Owns the email-manual Agent Skill that the intrinsic `email` tool's reserved `manual` action serves; ships no MCP server because the tool executes in the host process.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/Lingtai-AI/lingtai-kernel",
+  "keywords": ["lingtai", "email", "intrinsic", "agent-plugins"]
+}

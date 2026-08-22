@@ -386,6 +386,7 @@ related_files:
   - tests/test_tool_family_avatar_migration.py
   - tests/test_tool_family_context_migration.py
   - tests/test_tool_family_daemon_migration.py
+  - tests/test_email_real_plugin_package.py
   - tests/test_tool_family_email_migration.py
   - tests/test_tool_family_email_wire_parity.py
   - tests/test_tool_family_generic.py

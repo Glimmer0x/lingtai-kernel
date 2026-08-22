@@ -42,7 +42,8 @@ from typing import Any, Mapping
 from lingtai.kernel.notifications import register_generic_dismiss_guard
 from .._manual import load_installed_manual  # noqa: F401  (public re-export)
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+# ``build_manual_child`` is no longer called here: ``EMAIL_PLUGIN`` builds the
+# reserved child from the skill its shipped Agent Plugin owns.
 
 register_generic_dismiss_guard(
     "email",
@@ -93,6 +94,10 @@ from .schema import get_schema as get_flat_schema  # noqa: F401
 # Canonical per-action data driving the composed model-facing schema.
 from ._family_schema import ACTION_ENUM_DESCRIPTION, ACTION_ORDER, INPUT_SCHEMAS
 
+# The shipped Agent Plugin this tool *is*: its manifest identity, the
+# ``email-manual`` Agent Skill it owns, and the reserved-``manual`` append.
+from .plugin import EMAIL_ACTIONS, EMAIL_DECLARED_ACTIONS, EMAIL_PLUGIN  # noqa: F401
+
 # Manager
 from .manager import EmailManager  # noqa: F401
 
@@ -102,8 +107,9 @@ from .manager import EmailManager  # noqa: F401
 # ---------------------------------------------------------------------------
 
 # The installed intrinsic-skill directory ``manual`` reads. Unchanged from the
-# pre-migration ``load_installed_manual(agent, "email")`` call.
-_MANUAL_SKILL_NAME = "email"
+# pre-migration ``load_installed_manual(agent, "email")`` call — but now stated
+# once, by the plugin that owns the skill installed there.
+_MANUAL_SKILL_NAME = EMAIL_PLUGIN.manual_skill
 
 # The exact pre-migration reserved-action rejection for ``unread``. It is a
 # kernel-synthesized digest action, NOT a public child: it is absent from
@@ -136,16 +142,20 @@ def _schema_only_family() -> ToolFamily:
     duplicate and no reserved-name collision on ``manual``
     (``ToolFamilyError`` raises here, at import, rather than shipping
     silently).
+
+    Composition goes through ``EMAIL_PLUGIN``: only Email's own thirteen
+    actions are built here and the plugin appends the reserved ``manual``, so
+    the schema-only family and the real one in :func:`_build_family` cannot
+    disagree about the public action list.
     """
 
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
-    return ToolFamily(
-        "email",
+    return EMAIL_PLUGIN.schema_family(
         [
             ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
-            for action in ACTION_ORDER
+            for action in EMAIL_DECLARED_ACTIONS
         ],
     )
 
@@ -253,7 +263,10 @@ def _build_family(agent) -> ToolFamily:
     selected action's own branch before the handler runs, so no cross-action
     field can reach the flat dispatcher.
 
-    The reserved ``manual`` child is registered directly and unwrapped, per
+    The reserved ``manual`` child is appended by ``EMAIL_PLUGIN`` — the plugin
+    that owns the ``email-manual`` skill the host installed — rather than
+    registered by this loop, so no change here can drop it or rebind it to
+    other material. It is still registered directly and unwrapped, per
     ``tool_family/CONTRACT.md``: ``ToolFamily.handle()`` returns its canonical
     ``content``/``structuredContent`` result verbatim, and
     :func:`_adapt_manual_result` reshapes it afterwards in :func:`handle`.
@@ -273,20 +286,16 @@ def _build_family(agent) -> ToolFamily:
 
         return _dispatch
 
-    children = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
-            )
-    return ToolFamily("email", children)
+    children = [
+        ChildTool(
+            action,
+            INPUT_SCHEMAS[action],
+            _bind(action),
+            title=f"{action} input",
+        )
+        for action in EMAIL_DECLARED_ACTIONS
+    ]
+    return EMAIL_PLUGIN.build_family(agent, children)
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -154,10 +155,31 @@ capability names and lazy adapters.
   `_lingtai_load` composes character during canonical reconstruction; generic
   durable mutation is owned by `file` (`src/lingtai/tools/lingtai/ANATOMY.md`).
 - `email/` — the filesystem-based `email` intrinsic: mailbox I/O, composition,
-  search, contacts, and delivery, migrated to the LTP v2 family envelope
+  search, contacts, and delivery, migrated to the LTP v2 family envelope, and
+  the first intrinsic that *is* a real Agent Plugin — it ships
+  `email/agent_plugin/` and owns the `email-manual` skill
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — intrinsic-tool **plugin packaging**: `IntrinsicToolPlugin`
+  binds one host tool's identity to the Agent Plugins v1.0.0 directory its own
+  package ships. Validation is split by the import DAG
+  (`tests/test_kernel_isolation.py`): construction does the dependency-light
+  half (manifest identity, the owned `SKILL.md`, no shipped `mcp.json`) from the
+  filesystem plus the kernel-owned frontmatter parser, and `plugin_record`
+  reads the real `lingtai.services.plugin_registry.read_plugin` on first access
+  with the import inside the call — so a first-party plugin is held to the same
+  contract a third-party one is without `lingtai.tools` pulling
+  `lingtai.services` at import. It also owns the reserved
+  `manual` promise (`actions()`, `action_input_schemas()`, `build_family()`,
+  `schema_family()`): a package declares only its own actions and `manual` is
+  appended from the plugin-owned skill, raising `IntrinsicToolPluginError` on
+  any attempt to declare, re-schema, or rebind it. An intrinsic's plugin MUST
+  declare no MCP server — its family executes in the host process — so
+  registering one mounts a skill and can never make anything spawnable.
+  `owned_skill_dir()` is the filesystem-only lookup the Agent's manual
+  installer uses to find a plugin-owned skill without importing tool modules
+  (`src/lingtai/tools/_plugin.py`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).

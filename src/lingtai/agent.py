@@ -563,6 +563,7 @@ class Agent(BaseAgent):
         import shutil
         import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
+        from lingtai.tools._plugin import owned_skill_dir
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -585,7 +586,18 @@ class Agent(BaseAgent):
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
                     continue
+                # Two shapes of shipped manual, one destination. Most tools
+                # bundle a plain ``manual/`` directory. A tool that is a real
+                # Agent Plugin (``tools/email/agent_plugin/``) instead *owns*
+                # its manual as an Agent Skill inside its plugin, so the source
+                # is that skill's directory — the host still decides where it
+                # lands, which is what keeps installation a host concern and
+                # the plugin a declaration.
                 src = entry / "manual"
+                if not src.is_dir():
+                    owned = owned_skill_dir(entry)
+                    if owned is not None:
+                        src = owned
                 if src.is_dir():
                     # Retained implementation directories map to canonical
                     # model-facing names exactly once.

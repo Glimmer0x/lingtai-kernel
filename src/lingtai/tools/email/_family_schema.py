@@ -36,17 +36,19 @@ from __future__ import annotations
 from typing import Any
 
 from .primitives import mode_field
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+# ``MANUAL_INPUT_SCHEMA`` is no longer named here: the reserved branch is
+# appended by ``EMAIL_PLUGIN`` from that same canonical literal (see
+# ``.._plugin``), which is what makes re-schema-ing it locally impossible.
+from .plugin import EMAIL_ACTIONS, EMAIL_DECLARED_ACTIONS, EMAIL_PLUGIN
 
 # The canonical public action order. Identical to the pre-migration flat
 # ``schema.py`` ``action`` enum, in the same order, including the reserved
-# family-owned ``manual`` last.
-ACTION_ORDER: tuple[str, ...] = (
-    "send", "check", "read", "dismiss", "reply", "reply_all",
-    "search", "archive", "delete",
-    "contacts", "add_contact", "remove_contact", "edit_contact",
-    "manual",
-)
+# family-owned ``manual`` last — but composed rather than restated: the package
+# declares its own thirteen actions in ``plugin.py`` and ``EMAIL_PLUGIN``
+# appends ``manual`` from the plugin-owned skill, so this list cannot lose or
+# rebind the reserved action.
+DECLARED_ACTIONS: tuple[str, ...] = EMAIL_DECLARED_ACTIONS
+ACTION_ORDER: tuple[str, ...] = EMAIL_ACTIONS
 
 # --- Shared field descriptions, verbatim from the pre-migration flat schema ---
 
@@ -382,13 +384,15 @@ _EDIT_CONTACT_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-#: One strict ``input_schema`` per public action. The reserved ``manual``
-#: child references the exported canonical ``MANUAL_INPUT_SCHEMA`` literal
+#: One strict ``input_schema`` per public action. Email declares only its own
+#: thirteen; ``EMAIL_PLUGIN.action_input_schemas`` appends the reserved
+#: ``manual`` branch from the exported canonical ``MANUAL_INPUT_SCHEMA`` literal
 #: rather than restating it (``tool_family/CONTRACT.md``: families MUST NOT
 #: restate it locally), so the schema-only family composed here and the real
 #: dispatching family in ``__init__.py`` — which registers the shared
-#: ManualTool child — advertise byte-identical ``manual`` input.
-INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+#: ManualTool child — advertise byte-identical ``manual`` input, and a package
+#: that tried to re-schema ``manual`` here would raise at import.
+INPUT_SCHEMAS: dict[str, dict[str, Any]] = EMAIL_PLUGIN.action_input_schemas({
     "send": _SEND_INPUT_SCHEMA,
     "check": _CHECK_INPUT_SCHEMA,
     "read": _READ_INPUT_SCHEMA,
@@ -402,8 +406,7 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "add_contact": _ADD_CONTACT_INPUT_SCHEMA,
     "remove_contact": _REMOVE_CONTACT_INPUT_SCHEMA,
     "edit_contact": _EDIT_CONTACT_INPUT_SCHEMA,
-    "manual": MANUAL_INPUT_SCHEMA,
-}
+})
 
 # The canonical ``action`` enum prose. Reuses the pre-migration flat schema's
 # own action description verbatim, with the envelope's ``input=`` call form

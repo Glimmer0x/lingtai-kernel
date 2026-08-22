@@ -72,7 +72,11 @@ from . import email, system, context, soul, notification  # noqa: E402  (lingtai
 from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
-    "email": {"module": email},
+    # ``email`` is a shipped Agent Plugin (``tools/email/agent_plugin/``): the
+    # name the host registers is read off the plugin descriptor that also owns
+    # the family's action list and its ``email-manual`` skill, so the mounted
+    # tool name cannot drift from the plugin that supplies it.
+    email.EMAIL_PLUGIN.name: {"module": email},
     "system": {"module": system},
     "context": {"module": context},
     "psyche": {"module": psyche},
