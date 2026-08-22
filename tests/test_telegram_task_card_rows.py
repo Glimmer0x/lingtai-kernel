@@ -864,7 +864,9 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
     assert snap["input_tokens"] == 1000 + 2000 + 3000
     assert snap["output_tokens"] == 500 + 700 + 100
     assert snap["cached_tokens"] == 800 + 1500 + 0
-    assert snap["cli_calls"] == 1
+    # In-window selected ledgers: LingTai tokens 3 + external fallback tokens 4 + CLI ledger 1.
+    # em-4 is outside the window and its 99 calls remain excluded.
+    assert snap["cli_calls"] == 8
     # Only actual LingTai backend model values are eligible; external and
     # backend-less records remain visible in their existing lanes but are not
     # misrepresented as LingTai model statistics.
@@ -954,7 +956,7 @@ def test_async_work_snapshot_mixes_daemon_and_shell_lanes(tmp_path, monkeypatch)
     assert "daemon" in snapshot and "shell" in snapshot
 
 
-def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_calls_not_fabricated(tmp_path):
+def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_api_calls_use_tokens(tmp_path):
     import datetime as _datetime
     daemons = tmp_path / "daemons"
     daemons.mkdir()
@@ -971,7 +973,7 @@ def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_calls_not_fabrica
     kernel.mkdir()
     (kernel / "daemon.json").write_text(json.dumps({
         "state": "running", "backend": "lingtai",
-        "tokens": {"input": 9, "output": 4, "cached": 2},
+        "tokens": {"input": 9, "output": 4, "cached": 2, "calls": 4},
         "tool_call_count": 17,
     }), encoding="utf-8")
     mgr, _ = _integration_manager(tmp_path)
@@ -979,4 +981,5 @@ def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_calls_not_fabrica
     assert snapshot["input_tokens"] == 109
     assert snapshot["output_tokens"] == 44
     assert snapshot["cached_tokens"] == 22
-    assert snapshot["cli_calls"] == 3
+    # 3 external CLI calls + 4 LingTai API calls; tool_call_count 17 is not an API ledger.
+    assert snapshot["cli_calls"] == 7

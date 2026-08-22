@@ -2807,11 +2807,9 @@ class TelegramManager:
                 if isinstance(usage, dict):
                     for source_key, total_key in (("input", "input"), ("output", "output"), ("cached", "cached")):
                         totals[total_key] += _task_card_nonnegative_count(usage.get(source_key))
-                # API call statistics are meaningful only for the external CLI
-                # ledger; daemon tool_call_count is deliberately not substituted.
-                cli_calls += _task_card_nonnegative_count(
-                    cli_tokens.get("calls") if cli_tokens is not None else None
-                )
+                    # API calls come from the same selected ledger as the displayed
+                    # token totals. daemon tool_call_count is deliberately not substituted.
+                    cli_calls += _task_card_nonnegative_count(usage.get("calls"))
             except (OSError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
         if not included:
