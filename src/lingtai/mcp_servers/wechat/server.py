@@ -1,9 +1,11 @@
 """LingTai WeChat MCP server.
 
-Exposes one independent public LTP-v2 family, ``wechat``. Actions dispatch to
-WechatManager for all 10 actions (send, check, read, reply, search, contacts,
-add_contact, remove_contact, accounts, manual). Inbound WeChat events flow
-into the host agent's inbox via LICC.
+Exposes one independent public LTP-v2 family, ``wechat``. WeChat's own nine
+actions (send, check, read, reply, search, contacts, add_contact,
+remove_contact, accounts) dispatch to WechatManager; the reserved ``manual``
+action is appended by ``WECHAT_PLUGIN`` and answered directly from the
+packaged ``SKILL.md``. Inbound WeChat events flow into the host agent's inbox
+via LICC.
 
 Configuration:
     LINGTAI_WECHAT_CONFIG  — path to ``config.json``. ``credentials.json``
@@ -55,6 +57,7 @@ from . import api
 from ._family import handle_wechat
 from .licc import push_inbox_event
 from .manager import WechatManager, SCHEMA, DESCRIPTION
+from .plugin import WECHAT_ACTIONS, WECHAT_PLUGIN
 
 log = logging.getLogger("lingtai.mcp_servers.wechat")
 
@@ -333,11 +336,11 @@ def _profile_manifest(
     return {
         "schema": "lingtai.mcp.profile.v1",
         "server": {
-            "name": "lingtai-wechat",
-            "registry_name": "wechat",
+            "name": WECHAT_PLUGIN.server_name,
+            "registry_name": WECHAT_PLUGIN.name,
             "version": _package_version(),
             "summary": "WeChat client via iLink Bot API with LICC inbox callback.",
-            "homepage": "https://github.com/Lingtai-AI/lingtai-wechat",
+            "homepage": WECHAT_PLUGIN.homepage,
         },
         "ownership": {
             "configuration": "This MCP owns WeChat config fields, QR login/bootstrap caveats, session diagnostics, and iLink runtime status.",
@@ -347,13 +350,12 @@ def _profile_manifest(
         "resources": _RESOURCE_INDEX,
         "tools": [
             {
-                "name": "wechat",
+                "name": WECHAT_PLUGIN.name,
                 "description": "Strict WeChat LTP-v2 family.",
-                "actions": [
-                    "send", "check", "read", "reply", "search",
-                    "contacts", "add_contact", "remove_contact", "accounts",
-                    "manual",
-                ],
+                # Sourced from the plugin descriptor so the advertised action
+                # list cannot drift from the family the server actually serves
+                # (``manual`` included, because the plugin always appends it).
+                "actions": list(WECHAT_ACTIONS),
             }
         ],
         "agent_entrypoints": {
@@ -886,7 +888,7 @@ def build_server(
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="wechat",
+                    name=WECHAT_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -897,7 +899,7 @@ def build_server(
         _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        if params.name != "wechat":
+        if params.name != WECHAT_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
 
@@ -942,7 +944,7 @@ def build_server(
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-wechat",
+        WECHAT_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,

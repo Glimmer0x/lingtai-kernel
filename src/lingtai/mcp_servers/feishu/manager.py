@@ -47,6 +47,7 @@ from .account import (
     FeishuInboundEvent,
 )
 from .control_cards import FeishuControlCards, FeishuControlEventStore
+from .plugin import FEISHU_PLUGIN
 from .task_card import (
     FeishuProgrammableTaskCardPoller,
     FeishuTaskCardJournal,
@@ -71,8 +72,16 @@ _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 # Bundled usage manual (skill format) — SKILL.md ships in this package folder.
 # action='manual' reads the full body; the YAML frontmatter name/description are
 # injected into the tool schema as a progressive-disclosure catalog entry.
-_SKILL_NAME = "feishu-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
+#
+# The package's plugin descriptor already loaded and validated that SKILL.md, so
+# these names alias its single copy rather than re-reading the file. The public
+# family answers ``manual`` from the same descriptor without entering this
+# manager at all; the flat ``_manual()`` below stays for the legacy internal
+# action boundary.
+_SKILL_NAME = FEISHU_PLUGIN.skill_name
+_SKILL_FRONTMATTER = FEISHU_PLUGIN.skill_frontmatter
+_SKILL_BODY = FEISHU_PLUGIN.skill_body
+_SKILL_PATH = FEISHU_PLUGIN.skill_path
 
 # Emoji reactions for different states
 # Feishu supported emoji types: OK, THUMBSUP, SMILE, HEART, THANKS, etc.

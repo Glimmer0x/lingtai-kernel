@@ -27,6 +27,7 @@ from .._results import unknown_resource_error as _unknown_resource
 from .._results import unknown_tool_error as _unknown_tool
 from ._family import handle_whatsapp
 from .manager import WhatsAppManager, SCHEMA, DESCRIPTION
+from .plugin import WHATSAPP_PLUGIN
 from .resources import resource_text
 
 log = logging.getLogger("lingtai.mcp_servers.whatsapp")
@@ -178,7 +179,7 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="whatsapp",
+                    name=WHATSAPP_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -193,7 +194,7 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
         arguments = params.arguments or {}
-        if params.name != "whatsapp":
+        if params.name != WHATSAPP_PLUGIN.name:
             # A lookup miss is a caller-fixable parameter error (-32602), never
             # a wrapped success payload.
             raise _unknown_tool(params.name)
@@ -226,7 +227,7 @@ def build_server(manager: WhatsAppManager | None = None) -> Server:
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-whatsapp",
+        WHATSAPP_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,

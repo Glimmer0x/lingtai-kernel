@@ -24,6 +24,7 @@ from . import api
 from . import _family
 from . import media as media_mod
 from .lockfile import AccountLock, PollerLockBusy
+from .plugin import WECHAT_PLUGIN
 from .. import _identity, _skill
 from .._outbound_files import OutboundFileError, resolve_outbound_file
 
@@ -48,8 +49,16 @@ _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 # Bundled usage manual (skill format) — SKILL.md ships in this package folder.
 # action='manual' reads the full body; the YAML frontmatter name/description are
 # injected into the tool schema as a progressive-disclosure catalog entry.
-_SKILL_NAME = "wechat-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
+#
+# The package's plugin descriptor already loaded and validated that SKILL.md, so
+# these names alias its single copy rather than re-reading the file. The public
+# family answers ``manual`` from the same descriptor without entering this
+# manager at all; the flat ``_handle_manual()`` below stays for the legacy
+# internal action boundary.
+_SKILL_NAME = WECHAT_PLUGIN.skill_name
+_SKILL_FRONTMATTER = WECHAT_PLUGIN.skill_frontmatter
+_SKILL_BODY = WECHAT_PLUGIN.skill_body
+_SKILL_PATH = WECHAT_PLUGIN.skill_path
 
 TEXT_CHUNK_LIMIT = 4000
 SESSION_EXPIRED_ERRCODE = -14
