@@ -234,17 +234,20 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
         assert then_input == {k: v for k, v in branch.items() if k != "title"}, action
 
 
-def test_manual_branch_matches_the_shared_manual_child_schema() -> None:
-    """The advertised ``manual`` input equals the child that actually dispatches.
+def test_manual_branch_matches_the_descriptor_selected_manual_child_schema() -> None:
+    """The advertised ``manual`` input equals the child dispatch uses.
 
-    ``schema.py`` declares ``_MANUAL_INPUT_SCHEMA`` for composition while
-    ``handle`` registers ``tool_family.manual.build_manual_child``. If those
-    two ever drift, the model would be shown an input shape dispatch does not
-    enforce.
+    The active package descriptor supplies both the manual's installed
+    destination and the shared manual child. If it drifted from ``schema.py``,
+    the model would be shown an input shape dispatch does not enforce.
     """
+    from lingtai.tools.notification.descriptor import NOTIFICATION_TOOL
     from lingtai.tools.tool_family.manual import build_manual_child
 
-    child = build_manual_child(object(), "notification-manual")
+    assert NOTIFICATION_TOOL.name == "notification"
+    assert NOTIFICATION_TOOL.manual_skill_name == "notification"
+    assert NOTIFICATION_TOOL.action_order == tuple(_ACTIONS)
+    child = build_manual_child(object(), NOTIFICATION_TOOL.manual_skill_name)
     assert notif_intrinsic.INPUT_SCHEMAS["manual"] == dict(child.input_schema)
 
 
@@ -344,7 +347,7 @@ def _notification_manual_path(workdir: Path) -> Path:
         / ".library"
         / "intrinsic"
         / "capabilities"
-        / "notification-manual"
+        / "notification"
         / "SKILL.md"
     )
 

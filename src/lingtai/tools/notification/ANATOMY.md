@@ -5,7 +5,11 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/descriptor.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/notifications.py
@@ -13,9 +17,6 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/agent.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
   - tests/test_notification_tool.py
   - tests/test_notification_delay_alarm.py
   - tests/test_daemon_attention_delay.py
@@ -64,37 +65,42 @@ action values are unchanged; the four hook-registry actions are new.
   `get_description()` hold the canonical-English prose
   (`src/lingtai/tools/notification/schema.py:48-178`). It deliberately defines
   no `get_schema`.
-- `_schema_only_family()` / `_FAMILY` build the import-time `ToolFamily` used
-  only to compose the schema; constructing it at import proves the fixed
-  ten-child registry has no duplicate or reserved-`manual` collision
-  (`src/lingtai/tools/notification/__init__.py:95-122`).
+- `descriptor.py::NOTIFICATION_TOOL` is the active package-local root record:
+  its canonical `ACTION_ORDER`/`INPUT_SCHEMAS` input drives both schema-only
+  and agent-bound family construction, while `manual_skill_name="notification"`
+  selects the installed destination for the shared dispatched manual child.
+  Its complete-handler check prevents an advertised operational action from
+  losing a bound dispatcher (`src/lingtai/tools/notification/descriptor.py`).
+- `_FAMILY` is the descriptor-built import-time schema-only `ToolFamily`;
+  constructing it proves the fixed ten-child registry has no duplicate or
+  reserved-`manual` collision.
 - `get_schema()` returns the composed family schema and substitutes
   notification's own action prose for the generic composer's neutral
-  placeholder (`src/lingtai/tools/notification/__init__.py:125-140`).
-- `_build_family()` builds the per-call dispatching `ToolFamily` with handlers
-  bound to the calling `agent`, registering the shared `manual` child directly
-  and unwrapped (`src/lingtai/tools/notification/__init__.py:362-410`).
+  placeholder (`src/lingtai/tools/notification/__init__.py:100-115`).
+- `_build_family()` binds existing operation handlers to the calling `agent`
+  and asks `NOTIFICATION_TOOL` to build the per-call dispatching `ToolFamily`,
+  including the shared manual child directly and unwrapped.
 - `handle()` strips kernel-injected `_tc_id`, delegates envelope validation and
   dispatch to that family, adapts the `manual` child result, and normalizes the
   generic `ACTION_REQUIRED` error back to the pinned unknown-action shape
-  (`src/lingtai/tools/notification/__init__.py:412-451`).
+  (`src/lingtai/tools/notification/__init__.py:376-415`).
 - `_strip_nulls()` converts explicit `null` optionals back to absent so the
   handlers' `args.get(..., default)` defaulting is preserved
-  (`src/lingtai/tools/notification/__init__.py:143-153`).
+  (`src/lingtai/tools/notification/__init__.py:118-128`).
 - `_check()` returns the dict-shaped placeholder onto which the turn loop can
   stamp the current notification payload
-  (`src/lingtai/tools/notification/__init__.py:156-161`).
+  (`src/lingtai/tools/notification/__init__.py:131-136`).
 - `_adapt_manual_result()` flattens the shared ManualTool child's canonical
   `content`/`structuredContent` result to notification's pinned public
   `status`/`notification_manual`/`manual_path` shape, restating the exact
   contract-pinned degraded sentence
-  (`src/lingtai/tools/notification/__init__.py:164-197`).
+  (`src/lingtai/tools/notification/__init__.py:139-166`).
 - `_dismiss_channel()` adapts a whole-channel request and retains the inner
   event/ref rejection as defense in depth behind the envelope's earlier,
-  no-I/O rejection (`src/lingtai/tools/notification/__init__.py:200-239`).
+  no-I/O rejection (`src/lingtai/tools/notification/__init__.py:169-211`).
 - `_dismiss_event()` and `_dismiss_ref()` adapt targeted system-event removal
   while defaulting the channel to `system`
-  (`src/lingtai/tools/notification/__init__.py:245-288`).
+  (`src/lingtai/tools/notification/__init__.py:214-257`).
 - `_delay()` delegates to `notifications.delay_notification_channel()`, which
   persists one active private `.notification/.delay_state.json` record, arms a
   request-id-guarded process timer, and never mutates the target producer file.
@@ -103,7 +109,7 @@ action values are unchanged; the four hook-registry actions are new.
   `lingtai.kernel.notifications.add_hook` / `drop_hook` / `edit_hook` /
   `list_hooks`, which validate manifests, enforce name/channel uniqueness, and
   write `.notification/hooks.json` through Store family 8
-  (`src/lingtai/tools/notification/__init__.py:291-359`).
+  (`src/lingtai/tools/notification/__init__.py:265-333`).
 - `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
   to email, system, context, pad, lingtai, and soul
   (`src/lingtai/tools/registry.py:48-69`).
@@ -127,11 +133,11 @@ action values are unchanged; the four hook-registry actions are new.
   `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which own manifest
   validation, uniqueness, and the family-8 Store writes
   (`src/lingtai/kernel/notifications.py:358-512`).
-- `Agent._install_intrinsic_manuals()` copies the kernel-shipped
-  `system-manual` skill tree into the per-agent intrinsic library that the
-  `manual` child reads through `tool_family.manual.build_manual_child` and the
-  shared `tools/_manual.py::load_installed_manual` loader
-  (`src/lingtai/agent.py:311-372`).
+- The unchanged generic `Agent._install_intrinsic_manuals()` discovers this
+  package's `manual/` tree and copies it to
+  `.library/intrinsic/capabilities/notification/`; the descriptor passes that
+  same destination to `tool_family.manual.build_manual_child`, which reads it
+  through the shared `tools/_manual.py::load_installed_manual` loader.
 - `base_agent.tools._dispatch_tool()` injects `_tc_id` into every intrinsic's
   args; only `context.molt` consumes it, so `handle()` strips it before the
   closed envelope is validated (`src/lingtai/kernel/base_agent/tools.py:28-35`).

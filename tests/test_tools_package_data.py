@@ -81,9 +81,9 @@ _BACKEND_MANUAL = (
 )
 
 _NOTIFICATION_MANUAL_FILES = (
-    "lingtai/intrinsic_skills/notification-manual/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md",
+    "lingtai/tools/notification/manual/SKILL.md",
+    "lingtai/tools/notification/manual/reference/channel-model/SKILL.md",
+    "lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md",
 )
 
 # The three per-tool glossary languages that each package must ship.
@@ -240,9 +240,9 @@ def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):
     assert not missing, "daemon backend manuals missing from wheel: %r" % missing
 
 
-def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
+def test_wheel_ships_package_local_notification_manual(wheel_entries: set[str]):
     missing = [path for path in _NOTIFICATION_MANUAL_FILES if path not in wheel_entries]
-    assert not missing, "notification manual files missing from wheel: %r" % missing
+    assert not missing, "notification package manual files missing from wheel: %r" % missing
 
 
 # ---------------------------------------------------------------------------

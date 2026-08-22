@@ -56,14 +56,14 @@ from typing import Any, Mapping
 # Schema data — canonical per-action input schemas and registration prose.
 # ``get_schema`` is composed below from ``INPUT_SCHEMAS``; ``schema.py``
 # deliberately defines no second one.
+from .descriptor import NOTIFICATION_TOOL
 from .schema import (  # noqa: F401
     ACTION_ENUM_DESCRIPTION,
     ACTION_ORDER,
     INPUT_SCHEMAS,
     get_description,
 )
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family import ToolFamily
 
 # Single-source delegate — the canonical dismissal helper.  No notification
 # logic is reimplemented here.
@@ -90,39 +90,11 @@ _MANUAL_MISSING_ERROR = (
     "capability not installed correctly"
 )
 
-# The installed intrinsic-skill directory ``manual`` reads. This is the
-# ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "notification-manual"
-
-
-def _schema_only_family() -> ToolFamily:
-    """Build the module-level ``ToolFamily`` used only to compose the schema.
-
-    Notification is an *intrinsic*: the kernel imports this module once and
-    calls ``get_schema()``/``handle(agent, args)`` on the module itself, so
-    unlike ``web`` there is no per-Agent manager instance to hang a family
-    off.  The real handlers need an ``agent``, which only arrives per call,
-    so :func:`handle` builds a per-call family with bound handlers and this
-    module-level one never dispatches.  Constructing it at import time is
-    still load-bearing: it proves the fixed ten-child registry has no
-    duplicate and no reserved-name collision on ``manual``
-    (``ToolFamilyError`` raises here, at import, rather than shipping
-    silently).
-    """
-
-    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
-        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-    return ToolFamily(
-        "notification",
-        [
-            ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
-            for action in ACTION_ORDER
-        ],
-    )
-
-
-_FAMILY = _schema_only_family()
+# The package-owned ``manual/`` tree is installed under this descriptor's
+# matching capability name by the existing generic Agent installer.  The
+# descriptor is also the exact value the real ToolFamily manual child reads;
+# keeping this mapping package-local avoids a registry or lifecycle exception.
+_FAMILY = NOTIFICATION_TOOL.build_schema_family()
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -178,17 +150,11 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
     this Host-owned adapter runs strictly *after* dispatch, in :func:`handle`
     — never inside a registered child.
 
-    The degraded ``error`` sentence is restated here rather than forwarded.
-    The shared loader builds it as ``f"{skill_name} manual missing — ..."``
-    from the *installed directory* name, which for this family is
-    ``notification-manual`` — so forwarding it verbatim would silently change
-    the contract-pinned sentence from "notification manual missing" to
-    "notification-manual manual missing". Restating the exact pinned text is
-    Host presentation of an unchanged fact (the manual is absent), not a
-    rewrite of the child's canonical result, which stays canonical and
-    untouched. The alternative — renaming the loader's argument or its
-    message — would change every other family's error text, which no evidence
-    supports.
+    The descriptor installs and reads the manual as ``notification``.  The
+    shared loader therefore already reports the contract-pinned missing-manual
+    sentence (``notification manual missing — ...``).  Restating that exact
+    sentence keeps this family's historical flat presentation while the
+    dispatched child's canonical result remains untouched.
     """
     flat: dict[str, Any] = {
         "status": mcp_result.get("status", "ok"),
@@ -402,20 +368,9 @@ def _build_family(agent) -> ToolFamily:
 
         return _dispatch
 
-    children = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
-            )
-    return ToolFamily("notification", children)
+    return NOTIFICATION_TOOL.build_dispatch_family(
+        {action: _bind(action) for action in dismiss_handlers}, agent
+    )
 
 
 def handle(agent, args: dict) -> dict:

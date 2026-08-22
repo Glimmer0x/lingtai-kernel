@@ -1,11 +1,15 @@
 ---
 name: notification-tool
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/descriptor.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -22,9 +26,6 @@ related_files:
   - src/lingtai/tools/notification/glossary-zh.md
   - src/lingtai/tools/notification/glossary-wen.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
@@ -138,7 +139,7 @@ Observable action contracts are:
   on successful (`cleared: true`) dismissals, and stale-version refusals remain
   a `status: "error"` contract without `cause`.
 - `manual` reads only
-  `<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md`.
+  `<agent>/.library/intrinsic/capabilities/notification/SKILL.md`.
   Success contains exactly `{status: "ok", notification_manual, manual_path}`.
   Absence contains exactly `{status: "degraded", notification_manual: "",
   manual_path, error}`, where `error` is `notification manual missing —
@@ -243,16 +244,22 @@ installer) — and marks a workdir seeded only after a successful load, logging 
 transient failure (`notification_hook_registry_error`, `phase=...`) for retry on
 the next sync.
 
-The `manual` action is the reserved family child built by
-`tool_family.manual.build_manual_child` over the shared
+`descriptor.py::NOTIFICATION_TOOL` is the package-local composition
+record: it names the public root, consumes `schema.py`'s canonical action order
+and strict input schemas for both schema and dispatch families, and names the
+installed manual destination `notification`. Its dispatch builder refuses a
+partial operational handler map, so the descriptor cannot advertise an action
+that no bound family child handles. The `manual` action is the reserved family
+child built by `tool_family.manual.build_manual_child` over the shared
 `tools/_manual.py::load_installed_manual` loader: one `is_file` check and one
-UTF-8 read at the fixed path. It does not call notification Core,
-`NotificationStorePort`, the post-hook, or a producer. That child's canonical
-`content`/`structuredContent` result is returned by the family dispatcher
-verbatim; flattening it to this Port's pinned `notification_manual` shape is a
-Host presentation step that runs strictly after dispatch, never inside the
-child. Agent initialization copies the bundled first-level
-`notification-manual` skill tree into the installed per-agent intrinsic library.
+UTF-8 read at that descriptor-selected fixed path. It does not call notification
+Core, `NotificationStorePort`, the post-hook, or a producer. That child's
+canonical `content`/`structuredContent` result is returned by the family
+dispatcher verbatim; flattening it to this Port's pinned
+`notification_manual` shape is a Host presentation step that runs strictly
+after dispatch, never inside the child. The existing generic Agent initializer
+copies this package's bundled `notification/manual/` tree into that destination;
+there is no registry, host lifecycle, or activation-path change.
 
 `handle()` strips the kernel-injected `_tc_id` before envelope validation.
 `base_agent.tools._dispatch_tool` adds that field to every intrinsic's args as
@@ -304,6 +311,9 @@ is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
+- `contract_version` `7`: the package-owned manual tree installs and dispatches
+  under the root-matching `notification` destination through the active
+  descriptor; the former standalone manual remains outside this focused change.
 - `contract_version` is `6`: a `delay` whose target is the aggregate `daemon`
   channel now masks that channel's attention token instead of omitting it from
   the coherent consumer read, so daemon truth, delivered version, and dismissal
@@ -321,7 +331,8 @@ is not a second inbound adapter.
 ordered ten-action schema, the closed LTP v2 root, each action's strict input
 branch and its `allOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical
-description, absent aggregate actions, manual success/degraded envelopes, delay schema ordering, and
+description, descriptor-backed schema/dispatch/manual projection, absent aggregate actions,
+manual success/degraded envelopes, delay schema ordering, the descriptor-selected
 fixed path, no-double-wrap flattening, read-only state/log behavior, check
 placeholder shape, all atomic dismiss semantics, hook add/drop/edit/list
 lifecycle and whitelist gating, null-optional defaulting,
