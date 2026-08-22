@@ -30,6 +30,7 @@ related_files:
   - src/lingtai/mcp_servers/imap/_family.py
   - src/lingtai/mcp_servers/imap/plugin.py
   - tests/test_imap_toolfamily_ltpv2.py
+  - tests/test_imap_curated_mcp_plugin_package.py
   - src/lingtai/mcp_servers/telegram/account.py
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/render.py
@@ -174,7 +175,7 @@ Curated and built-in MCP server package implementations shipped inside the `ling
 
 - Catalog/script launchers (`pyproject.toml:43-49`) start these servers as subprocess MCPs; agents activate them through the generic MCP capability (`src/lingtai/tools/mcp/ANATOMY.md`).
 - Manager schemas include `manual` in each action enum and use `_skill.manual_action_description()` to advertise the bundled skill without loading the full body into the resident schema.
-- Telegram and IMAP are the two packages wired through `_plugin.py` today: `telegram/plugin.py` → `telegram/_family.py` (public schema, dispatch, plugin-appended `manual` child), `telegram/server.py` (`Server` name, listed tool name, `lingtai://manifest` server identity and advertised action list), and `telegram/manager.py` (`_SKILL_*` alias the descriptor's single loaded copy); `imap/plugin.py` → `imap/_family.py`, `imap/server.py` (`Server` name, listed tool name, and profile server identity/homepage), and `imap/manager.py` (`_SKILL_*` alias) follow the identical shape. The other curated MCPs still declare these facts inline and are unchanged. `tests/test_curated_mcp_plugin_package.py` pins the packaging invariants and the equality between `TELEGRAM_PLUGIN.mcp_declaration()`/`IMAP_PLUGIN.mcp_declaration()` and their shipped `mcp_catalog.json` entries.
+- Telegram and IMAP are the two packages wired through `_plugin.py` today: `telegram/plugin.py` → `telegram/_family.py` (public schema, dispatch, plugin-appended `manual` child), `telegram/server.py` (`Server` name, listed tool name, `lingtai://manifest` server identity and advertised action list), and `telegram/manager.py` (`_SKILL_*` alias the descriptor's single loaded copy); `imap/plugin.py` → `imap/_family.py`, `imap/server.py` (`Server` name, listed tool name, and profile server identity/homepage), and `imap/manager.py` (`_SKILL_*` alias) follow the identical shape. The other curated MCPs still declare these facts inline and are unchanged. `tests/test_curated_mcp_plugin_package.py` pins the generic/Telegram packaging invariants and `TELEGRAM_PLUGIN.mcp_declaration()` catalog equality; `tests/test_imap_curated_mcp_plugin_package.py` pins the corresponding IMAP descriptor and `mcp_catalog.json` equality.
 - Feishu's Agent-facing manual routes operational questions to `feishu/reference/{setup,diagnostics,capability-matrix}.md`. The sidecars ship through the existing package-data glob and deliberately remain absent from the `manual` tool payload.
 - Tests pin the manual contract, package-data sidecar support, and Telegram parity in `tests/test_mcp_skill_manuals.py` and `tests/test_telegram_rich_formatting.py`.
 - `local_commands/core.py` is injected workdir-bound by each provider's composition root. Telegram's existing renderers preserve their slash-command byte surface; Feishu consumes the same semantic results through `control_cards.py` without depending on Telegram.
