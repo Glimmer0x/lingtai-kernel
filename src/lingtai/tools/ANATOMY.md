@@ -41,6 +41,9 @@ related_files:
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/adapters/browser_transport.py
+  - src/lingtai/mcp_servers/_plugin.py
+  - src/lingtai/services/plugin_registry.py
+  - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/tools/registry.py
   - src/lingtai/tools/glossary_validator.py
   - ENVIRONMENT_VARIABLES.md
@@ -62,6 +65,11 @@ maintenance: |
   future family migration may adopt, not a second registry. context is its
   thirteenth consumer and the fifth migrated intrinsic. Update
   structural claims with code and keep reciprocal graph edges valid.
+  The curated-MCP packaging, Agent Plugins, and host tool-registration entries
+  in related_files are navigation to the precedent the paired Contract's
+  `### Tool-to-MCP Plugin Contract` names as a future migration target; they are
+  not a claim that any family here is wrapped today, and the normative rules
+  stay in the Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -75,7 +83,12 @@ capability names and lazy adapters.
 
 - `CONTRACT.md` — the LingTai Tool Protocol (LTP): the future canonical
   model-facing tool call contract, the two-level family/action settings
-  addressing and ownership rules, and the explicit per-tool migration boundary.
+  addressing and ownership rules, the explicit per-tool migration boundary, and
+  `### Tool-to-MCP Plugin Contract`, the additive future target for wrapping
+  each first-party family in an MCP-style plugin package that owns its manual.
+- `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
+  LP002 guards the Tool-to-MCP Plugin Contract's status, graph, and
+  current-evidence claims.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:39-344`).
@@ -203,13 +216,30 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 `taskcard/status` and `taskcard/taskcard.md`; consumer-specific reading,
 polling, and projection stay outside this package.
 
+The route the paired Contract's `### Tool-to-MCP Plugin Contract` targets is
+not wired here today. These are the roles it separates, and the nearest
+existing precedent for each. `registry.py` is the current first-party
+composition point — it imports no `lingtai.mcp_servers` packaging, so no family
+here is wrapped.
+`src/lingtai/mcp_servers/_plugin.py` is the existing *packaging* precedent:
+one curated package binding its server, bundled `SKILL.md`, declaration, and
+reserved `manual` child, and it is explicitly not a plugin runtime.
+`src/lingtai/services/plugin_registry.py` is the existing *declaration and
+boot-registration* precedent for external Agent Plugins, with activation kept
+separate (the rendering tool is `src/lingtai/tools/plugin/ANATOMY.md`).
+`src/lingtai/kernel/base_agent/tools.py` is the *host* mount point whose
+`_add_tool` replaces a schema of the same name, which is why the Contract
+records live tool-name collision policy as an open decision rather than a
+promise. Read the Contract for the rules; this file only names the route.
+
 ## Composition
 
 The parent [`src/lingtai/ANATOMY.md`](../ANATOMY.md) owns Agent composition.
 The paired tools Contract owns LTP: the future canonical `action` / `input` /
 `reasoning` / `summarize` public call shape, family/action settings ownership,
-and the migration boundary. Read it there; this Anatomy does not restate those
-promises. The web Contract specializes
+the migration boundary, and the Tool-to-MCP Plugin Contract. Read it there;
+this Anatomy does not restate those promises, and `BEHAVIORS.md` LP002 owns
+their verification. The web Contract specializes
 that promise for the first real implementation; its Anatomy and the internal
 browser Anatomy provide progressive disclosure. Other tool packages retain their
 existing public shapes until explicitly migrated.
