@@ -48,7 +48,8 @@ from .._results import unknown_tool_error as _unknown_tool
 from .. import _config
 from .licc import push_inbox_event
 from .manager import FeishuManager, SCHEMA, DESCRIPTION
-from ._family import handle_feishu
+from ._family import FEISHU_ACTIONS, handle_feishu
+from .plugin import FEISHU_PLUGIN
 from .service import FeishuService
 
 log = logging.getLogger("lingtai.mcp_servers.feishu")
@@ -214,11 +215,11 @@ def _profile_manifest(manager: FeishuManager | None) -> dict[str, Any]:
     return {
         "schema": "lingtai.mcp.profile.v1",
         "server": {
-            "name": "lingtai-feishu",
-            "registry_name": "feishu",
+            "name": FEISHU_PLUGIN.server_name,
+            "registry_name": FEISHU_PLUGIN.name,
             "version": _package_version(),
             "summary": "Feishu/Lark Open API client with LICC inbox callback.",
-            "homepage": "https://github.com/Lingtai-AI/lingtai-feishu",
+            "homepage": FEISHU_PLUGIN.homepage,
         },
         "ownership": {
             "configuration": "This MCP owns Feishu config fields, Open API caveats, and diagnostics.",
@@ -228,13 +229,12 @@ def _profile_manifest(manager: FeishuManager | None) -> dict[str, Any]:
         "resources": _RESOURCE_INDEX,
         "tools": [
             {
-                "name": "feishu",
+                "name": FEISHU_PLUGIN.name,
                 "description": "Omnibus Feishu tool for messages, reactions, contacts, accounts, and its manual.",
-                "actions": [
-                    "send", "check", "read", "reply", "react", "search",
-                    "delete", "edit", "contacts", "add_contact",
-                    "remove_contact", "accounts", "manual",
-                ],
+                # Sourced from the plugin descriptor so the advertised action
+                # list cannot drift from the family the server actually serves
+                # (``manual`` included, because the plugin always appends it).
+                "actions": list(FEISHU_ACTIONS),
             }
         ],
         "agent_entrypoints": {
@@ -681,7 +681,7 @@ def build_server(manager: FeishuManager | None) -> Server:
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="feishu",
+                    name=FEISHU_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -692,7 +692,7 @@ def build_server(manager: FeishuManager | None) -> Server:
         _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        if params.name != "feishu":
+        if params.name != FEISHU_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
         if manager is None:
@@ -718,7 +718,7 @@ def build_server(manager: FeishuManager | None) -> Server:
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-feishu",
+        FEISHU_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,

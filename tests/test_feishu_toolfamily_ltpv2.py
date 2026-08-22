@@ -118,11 +118,18 @@ def test_feishu_remove_contact_schema_accepts_exactly_one_of_alias_or_open_id():
     assert not _basic_validate({"alias": "friend", "open_id": "ou_1"}, remove_contact)
 
 
-def test_family_manual_action_returns_manager_manual_result_verbatim():
+def test_family_manual_action_answers_from_the_packaged_skill_without_entering_the_manager():
+    """``manual`` is reserved and plugin-owned (``CuratedMcpPlugin``): it never
+    routes through the manager, even when one is present — see
+    ``tests/test_feishu_curated_mcp_plugin_package.py`` for the full packaging
+    coverage this mirrors from the Telegram reference slice."""
     manager = _CountingManager()
     manager.handle = lambda args: {"status": "ok", "action": "manual", "manual": "body"}
     result = handle_feishu(manager, {"action": "manual", "input": {}, "reasoning": "x"})
-    assert result == {"status": "ok", "action": "manual", "manual": "body"}
+    assert manager.calls == []
+    assert result["status"] == "ok"
+    assert result["skill"] == "feishu-mcp-manual"
+    assert result["manual"] != "body"
 
 
 def test_family_manual_action_without_manager_uses_bundled_skill():
