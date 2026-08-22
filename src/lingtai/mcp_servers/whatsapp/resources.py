@@ -4,15 +4,20 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .plugin import WHATSAPP_ACTIONS, WHATSAPP_PLUGIN
+
 
 def manifest() -> dict[str, Any]:
     return {
-        "name": "lingtai-whatsapp",
+        "name": WHATSAPP_PLUGIN.server_name,
         "profile": "lingtai-mcp-v1",
         "summary": "Personal-account WhatsApp MCP for LingTai via a local whatsapp-web.js bridge (QR-code pairing).",
         "transport": "stdio MCP plus a local Node child process (whatsapp-web.js)",
         "backend": "personal_account_whatsapp_web",
-        "tools": {"name": "whatsapp", "actions": ["send", "check", "read", "reply", "react", "search", "contacts", "add_contact", "remove_contact", "get_qr", "logout", "status", "manual"]},
+        # Sourced from the plugin descriptor so the advertised action list
+        # cannot drift from the family the server actually serves (``manual``
+        # included, because the plugin always appends it).
+        "tools": {"name": WHATSAPP_PLUGIN.name, "actions": list(WHATSAPP_ACTIONS)},
         "resources": [
             "lingtai://manifest", "lingtai://skills/whatsapp", "lingtai://docs/configuration", "lingtai://docs/troubleshooting", "lingtai://status", "lingtai://onboarding/whatsapp", "lingtai://onboarding/html-template",
         ],

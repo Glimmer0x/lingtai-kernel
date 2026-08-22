@@ -3,6 +3,12 @@
 This module owns only the public WhatsApp envelope and action branches. The
 manager remains the legacy result/business boundary behind the validated
 family, mirroring ``lingtai.mcp_servers.telegram._family``.
+
+Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
+this module declares WhatsApp's own actions and their strict `input` branches,
+and `WHATSAPP_PLUGIN` appends the reserved `manual` action from the packaged
+`SKILL.md`. `manual` therefore never routes through the manager and cannot be
+omitted, re-schema'd, or rebound to other material from here.
 """
 from __future__ import annotations
 
@@ -11,19 +17,12 @@ from typing import Any
 
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
-from .. import _skill
+from .plugin import WHATSAPP_ACTIONS, WHATSAPP_DECLARED_ACTIONS, WHATSAPP_PLUGIN
 
-# Kept local to avoid importing the manager (which consumes this schema).
-_SKILL_NAME = "whatsapp-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
-    "lingtai.mcp_servers.whatsapp"
-)
-
-_ACTIONS = (
-    "send", "check", "read", "reply", "react", "search", "contacts",
-    "add_contact", "remove_contact", "get_qr", "logout", "status",
-    "manual",
-)
+# The package's own actions plus the plugin-appended reserved ``manual``. Kept
+# local to avoid importing the manager (which consumes this schema).
+_DECLARED_ACTIONS = WHATSAPP_DECLARED_ACTIONS
+_ACTIONS = WHATSAPP_ACTIONS
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
@@ -97,7 +96,7 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
         required=["message_id", "emoji"],
     )
     contact_target = [{"required": ["wa_id"]}, {"required": ["to"]}]
-    return {
+    return WHATSAPP_PLUGIN.action_input_schemas({
         "send": send,
         "check": _object(
             {
@@ -145,17 +144,15 @@ def _whatsapp_input_schemas() -> dict[str, dict[str, Any]]:
         "get_qr": _object({}),
         "logout": _object({}),
         "status": _object({}),
-        "manual": _object({}),
-    }
+    })
 
 
 def _schema_only_family() -> ToolFamily:
     schemas = _whatsapp_input_schemas()
-    return ToolFamily(
-        "whatsapp",
+    return WHATSAPP_PLUGIN.build_family(
         [
             ChildTool(action, schemas[action], lambda _input: {})
-            for action in _ACTIONS
+            for action in _DECLARED_ACTIONS
         ],
     )
 
@@ -175,7 +172,7 @@ def whatsapp_schema() -> dict[str, Any]:
     schema["properties"]["action"]["description"] = (
         "WhatsApp action. Each action owns a strict input branch. WhatsApp "
         "Call manual "
-        + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
+        + WHATSAPP_PLUGIN.manual_action_description()
     )
     return schema
 
@@ -242,24 +239,25 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_whatsapp_family(manager: Any | None) -> ToolFamily:
+    """Compose the public family: manager-backed declared actions + plugin manual.
+
+    Only WhatsApp's own actions are built here. ``manual`` is appended by
+    ``WHATSAPP_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
+    with or without a live manager — the same payload the manager's own
+    ``_manual()`` returns, minus the possibility of the business boundary
+    replacing it.
+    """
     schemas = _whatsapp_input_schemas()
-    children: list[ChildTool] = []
-    for action in _ACTIONS:
-        if action == "manual":
-            handler = (
-                (lambda _input: manager.handle({"action": "manual"}))
-                if manager is not None
-                else lambda _input: _skill.manual_payload(
-                    _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
-                )
-            )
-        else:
-            handler = (
-                (lambda input_, action=action: manager.handle({"action": action, **dict(input_)}))
-                if manager is not None else (lambda _input: {})
-            )
-        children.append(ChildTool(action, schemas[action], handler))
-    return ToolFamily("whatsapp", children)
+    children = [
+        ChildTool(
+            action,
+            schemas[action],
+            (lambda input_, action=action: manager.handle({"action": action, **dict(input_)}))
+            if manager is not None else (lambda _input: {})
+        )
+        for action in _DECLARED_ACTIONS
+    ]
+    return WHATSAPP_PLUGIN.build_family(children)
 
 
 def handle_whatsapp(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -282,4 +280,5 @@ def handle_whatsapp(manager: Any | None, args: Mapping[str, Any] | None) -> dict
 
 
 WHATSAPP_SCHEMA = whatsapp_schema()
-WHATSAPP_ACTIONS = _ACTIONS
+# ``WHATSAPP_ACTIONS`` is re-exported from ``plugin.py`` (imported above) so the
+# public action list has exactly one definition.
