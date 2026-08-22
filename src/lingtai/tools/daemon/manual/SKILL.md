@@ -6,8 +6,8 @@ description: >
   hunch, understand `daemon(action="list", input={})`, use CLI backends and `backend_options`,
   and clean up daemon footprint. Read this after dispatching daemon work that is
   slow, failed, timed out, exited 143 / SIGTERM, or needs backend-specific reasoning.
-version: 0.12.2
-last_changed_at: 2026-08-18T00:00:00Z
+version: 0.12.3
+last_changed_at: 2026-08-22T00:00:00Z
 related_files:
 - src/lingtai/tools/daemon/CONTRACT.md
 - src/lingtai/tools/daemon/ANATOMY.md
@@ -214,6 +214,9 @@ Behavior notes:
 - Keep daemon lightweight. If the task needs long-lived persona, molt/pad,
   durable knowledge, or ongoing ownership, spawn an avatar/agent instead of
   stretching daemon.
+- **Do not set a small `max_turns` merely because a task looks simple.** Omit it
+  to use the default, or set it only when a concrete operational boundary still
+  leaves enough turns for unexpected investigation, validation, and a truthful finish.
 - Every LingTai daemon receives a short package-owned operating prompt before
   the parent task. It tells the worker to read a relevant manual before first
   using a tool/workflow that has one, use a visible result tool's `summary=true`
