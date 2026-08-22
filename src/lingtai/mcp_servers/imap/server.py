@@ -54,6 +54,7 @@ from ._migrate import migrate_legacy_state
 from .bridge import FilesystemMailBridge
 from .licc import push_inbox_event
 from .manager import IMAPMailManager, SCHEMA, DESCRIPTION
+from .plugin import IMAP_PLUGIN
 from .service import IMAPMailService
 
 log = logging.getLogger("lingtai.mcp_servers.imap")
@@ -141,12 +142,12 @@ def lingtai_profile(manager: IMAPMailManager | None = None) -> dict[str, Any]:
         "schema": "https://lingtai.ai/schemas/mcp-profile/v1",
         "schema_version": "1.0",
         "server": {
-            "name": "imap",
+            "name": IMAP_PLUGIN.name,
             "package": "lingtai-imap",
             "version": _package_version(),
             "title": "LingTai IMAP",
             "summary": "Real email via IMAP/SMTP with multi-account support.",
-            "homepage": "https://github.com/Lingtai-AI/lingtai-imap",
+            "homepage": IMAP_PLUGIN.homepage,
         },
         "philosophy": {
             "mcp_owns": [
@@ -163,7 +164,9 @@ def lingtai_profile(manager: IMAPMailManager | None = None) -> dict[str, Any]:
         "interfaces": {
             "human_frontend": "/mcp",
             "agent_entrypoints": {
-                "tools": ["imap"],
+                # Sourced from the plugin descriptor so the advertised tool
+                # name cannot drift from the one the server actually serves.
+                "tools": [IMAP_PLUGIN.name],
                 "resources": [
                     _MANIFEST_URI,
                     _SKILL_URI,
@@ -605,7 +608,7 @@ def build_server(manager: IMAPMailManager | None) -> Server:
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="imap",
+                    name=IMAP_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -616,7 +619,7 @@ def build_server(manager: IMAPMailManager | None) -> Server:
         _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        if params.name != "imap":
+        if params.name != IMAP_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
         try:
@@ -643,7 +646,7 @@ def build_server(manager: IMAPMailManager | None) -> Server:
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-imap",
+        IMAP_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,
