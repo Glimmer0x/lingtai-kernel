@@ -120,6 +120,21 @@ _WEB_SEARCH_MANUAL_FILES = (
 _GLOSSARY_LANGS = ("en", "zh", "wen")
 _BROWSER_MANUAL_FILES = ("lingtai/tools/browser/manual/SKILL.md",)
 
+# The `mcp` tool ships as an Agent Plugins v1.0.0 package: a plugin.json
+# manifest plus its manual as an owned skill under skills/. The manifest
+# reaches the wheel through the "*/*.json" glob and the skill through
+# "*/skills/**/*"; dropping either ships a manifest that declares a skills/
+# directory the archive does not contain, and the boot-time mount then finds
+# nothing to install.
+_MCP_PLUGIN_FILES = (
+    "lingtai/tools/mcp/plugin.json",
+    "lingtai/tools/mcp/skills/mcp-manual/SKILL.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md",
+    "lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py",
+)
+
 
 def _build_wheel(dest: Path) -> Path:
     """Build a pure-Python wheel (Rust sidecar skipped) into ``dest``.
@@ -203,6 +218,13 @@ def test_wheel_ships_vision_manual(wheel_entries: set[str]):
 def test_wheel_ships_browser_manual(wheel_entries: set[str]):
     missing = [path for path in _BROWSER_MANUAL_FILES if path not in wheel_entries]
     assert not missing, "browser manual files missing from wheel: %r" % missing
+
+
+def test_wheel_ships_the_mcp_tool_plugin_package(wheel_entries: set[str]):
+    missing = [path for path in _MCP_PLUGIN_FILES if path not in wheel_entries]
+    assert not missing, "mcp plugin package files missing from wheel: %r" % missing
+    # The retired manual/ layout must not linger beside the owned skill.
+    assert "lingtai/tools/mcp/manual/SKILL.md" not in wheel_entries
 
 
 def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
