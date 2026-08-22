@@ -1,4 +1,4 @@
-"""Curated-MCP plugin packaging invariants, proven on the Telegram reference slice.
+"""Curated-MCP plugin packaging invariants, proven on the Telegram and WeChat slices.
 
 A curated MCP is a plugin-style package: the same folder ships the server, the
 bundled ``SKILL.md``, and the stdio MCP declaration the curated catalog
@@ -7,10 +7,10 @@ and owns the one promise a package must not be able to break — the reserved
 ``manual`` action, appended from the packaged skill rather than declared by the
 package.
 
-These tests pin the packaging promise and the *unchanged* public Telegram
-surface around it. They make no network call and stand up no account: the
-manual is account-independent and the family's dispatch boundary rejects every
-invalid envelope before any manager I/O.
+These tests pin the packaging promise and the *unchanged* public Telegram and
+WeChat surfaces around it. They make no network call and stand up no account:
+the manual is account-independent and each family's dispatch boundary rejects
+every invalid envelope before any manager I/O.
 """
 from __future__ import annotations
 
@@ -28,6 +28,13 @@ from lingtai.mcp_servers.telegram.plugin import (
     TELEGRAM_DECLARED_ACTIONS,
     TELEGRAM_PLUGIN,
 )
+from lingtai.mcp_servers.wechat import _family as wechat_family, server as wechat_server
+from lingtai.mcp_servers.wechat import manager as wechat_mgr
+from lingtai.mcp_servers.wechat.plugin import (
+    WECHAT_ACTIONS,
+    WECHAT_DECLARED_ACTIONS,
+    WECHAT_PLUGIN,
+)
 from lingtai.services import mcp_registry
 from lingtai.tools.tool_family import ChildTool
 
@@ -35,7 +42,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _RecordingManager:
-    """Stands in for TelegramManager; records every flat action it is handed."""
+    """Stands in for TelegramManager/WechatManager; records every flat call."""
 
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -192,6 +199,114 @@ def test_server_profile_manifest_is_sourced_from_the_plugin_descriptor(monkeypat
             "name": "telegram",
             "description": "Strict Telegram LTP-v2 family.",
             "actions": list(TELEGRAM_ACTIONS),
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
+# WeChat parity slice — the same packaging invariants, proven independently
+# ---------------------------------------------------------------------------
+
+def test_wechat_package_declaration_matches_the_shipped_curated_catalog_entry():
+    """The package owns its launcher; mcp_catalog.json publishes exactly it."""
+    catalog = json.loads(
+        (_REPO_ROOT / "src/lingtai/mcp_catalog.json").read_text(encoding="utf-8")
+    )
+    assert catalog["wechat"] == WECHAT_PLUGIN.mcp_declaration()
+
+
+def test_wechat_declaration_launches_the_declaring_package_and_validates_as_a_record():
+    declaration = WECHAT_PLUGIN.mcp_declaration()
+    assert declaration["transport"] == "stdio"
+    assert declaration["command"] == _plugin.PYTHON_PLACEHOLDER
+    assert declaration["args"] == ["-m", "lingtai.mcp_servers.wechat"]
+    assert declaration["source"] == _plugin.CURATED_SOURCE
+    assert mcp_registry.validate_record(declaration) == (True, None)
+
+
+def test_wechat_package_does_not_declare_manual_and_the_plugin_appends_it_last():
+    assert _plugin.MANUAL_ACTION not in WECHAT_DECLARED_ACTIONS
+    assert WECHAT_ACTIONS == (*WECHAT_DECLARED_ACTIONS, "manual")
+    assert WECHAT_ACTIONS[-1] == "manual"
+
+
+def test_wechat_composed_family_always_carries_a_manual_child_with_a_strict_empty_input():
+    family = wechat_family.build_wechat_family(None)
+    assert family.has_manual()
+    assert family.child_names == WECHAT_ACTIONS
+    assert wechat_family._wechat_input_schemas()["manual"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+
+def test_wechat_manual_answers_from_the_packaged_skill_without_entering_the_manager():
+    manager = _RecordingManager()
+    result = wechat_family.handle_wechat(
+        manager, {"action": "manual", "input": {}, "reasoning": "read the manual"}
+    )
+    assert manager.calls == []
+    assert result == WECHAT_PLUGIN.manual_payload()
+    assert result["status"] == "ok"
+    assert result["action"] == "manual"
+    assert result["skill"] == "wechat-mcp-manual"
+    skill_path = Path(result["path"])
+    assert skill_path.is_absolute() and skill_path.name == "SKILL.md"
+    assert result["manual"] == WECHAT_PLUGIN.skill_body
+
+
+def test_wechat_manual_payload_is_the_same_document_the_legacy_manager_action_returns():
+    """Routing manual through the plugin preserves the existing public result."""
+    bare = object.__new__(wechat_mgr.WechatManager)
+    assert bare._handle_manual() == WECHAT_PLUGIN.manual_payload()
+
+
+def test_wechat_manual_still_requires_root_reasoning_like_every_other_action():
+    manager = _RecordingManager()
+    rejected = wechat_family.handle_wechat(manager, {"action": "manual", "input": {}})
+    assert rejected["status"] == "failed"
+    assert rejected["error_code"] == "INVALID_ARGUMENT"
+    assert rejected["message"] == "reasoning is required"
+    assert wechat_family.handle_wechat(
+        manager, {"action": "manual", "input": {"topic": "send"}, "reasoning": "x"}
+    )["status"] == "failed"
+    assert manager.calls == []
+
+
+def test_wechat_public_schema_keeps_the_strict_action_family_shape():
+    schema = wechat_family.WECHAT_SCHEMA
+    assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
+    assert schema["required"] == ["action", "input", "reasoning"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["action"]["enum"] == list(WECHAT_ACTIONS)
+    assert len(schema["allOf"]) == len(WECHAT_ACTIONS)
+    assert "wechat-mcp-manual" in schema["properties"]["action"]["description"]
+    branch_titles = [b["title"] for b in schema["properties"]["input"]["anyOf"]]
+    assert branch_titles == [f"{action} input" for action in WECHAT_ACTIONS]
+
+
+def test_wechat_declared_actions_still_dispatch_flat_into_the_manager():
+    manager = _RecordingManager()
+    result = wechat_family.handle_wechat(
+        manager,
+        {"action": "accounts", "input": {}, "reasoning": "probe"},
+    )
+    assert result["status"] == "ok"
+    assert manager.calls == [{"action": "accounts"}]
+
+
+def test_wechat_server_profile_manifest_is_sourced_from_the_plugin_descriptor(monkeypatch):
+    monkeypatch.delenv("LINGTAI_WECHAT_CONFIG", raising=False)
+    manifest = wechat_server._profile_manifest(None)
+    assert manifest["server"]["name"] == WECHAT_PLUGIN.server_name == "lingtai-wechat"
+    assert manifest["server"]["registry_name"] == WECHAT_PLUGIN.name == "wechat"
+    assert manifest["server"]["homepage"] == WECHAT_PLUGIN.homepage
+    assert manifest["tools"] == [
+        {
+            "name": "wechat",
+            "description": "Strict WeChat LTP-v2 family.",
+            "actions": list(WECHAT_ACTIONS),
         }
     ]
 
