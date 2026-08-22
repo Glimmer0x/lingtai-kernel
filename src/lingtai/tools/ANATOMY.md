@@ -46,6 +46,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -90,7 +91,8 @@ capability names and lazy adapters.
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
   with canonical `analyze`/`manual` children over the existing direct
-  provider routing (`src/lingtai/tools/vision/ANATOMY.md`).
+  provider routing, and the reference slice wired through `_plugin.py`
+  (`src/lingtai/tools/vision/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
@@ -158,6 +160,25 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — local-tool **plugin packaging** descriptor
+  (`src/lingtai/tools/_plugin.py:1-435`): `LocalToolPlugin`
+  binds one built-in tool package's identity, its packaged `manual/SKILL.md`
+  (read and frontmatter-checked at construction with the skills catalog's own
+  parser), and its capability declaration — `capability_declaration()`, the
+  record shape `registry.py` publishes in `BUILTIN_TOOLS`/`CORE_DEFAULTS`. It
+  owns two promises: `actions()`/`action_input_schemas()`/`build_family()`
+  append the reserved `manual` and refuse a package that declares, re-schemas,
+  or hands in a handler for it (`build_family` takes an *agent*, never a
+  child), and the install destination is derived with
+  `Agent._install_intrinsic_manuals`'s own rename rule and required to equal
+  the public name, so `manual` cannot be bound to another capability's skill.
+  `mount()` is the one registration point: it stamps name, wire schema, and
+  glossary package from the descriptor and refuses a foreign family, a
+  manual-less family, or a description that does not advertise the packaged
+  skill. Declarative otherwise — no discovery, import-by-name, or config
+  reading; boot, activation, and lifecycle stay with `registry.py` and
+  `Agent`. The `lingtai.tools` sibling of `lingtai.mcp_servers._plugin`
+  (separate modules because the import direction is one-way).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -222,6 +243,16 @@ observations. No process-global environment mutation or cross-Agent state is
 owned here.
 
 ## Notes
+
+Local-tool plugin packaging is declarative, not a runtime. `_plugin.py` adds
+no in-process plugin runtime, no config flag, and no second registry: a
+`LocalToolPlugin` is a package-local descriptor its own package imports
+explicitly. `registry.py` remains the file the host reads for what boots, and
+`Agent._install_intrinsic_manuals` remains the installer that copies each
+`manual/` bundle — the descriptor is what those must agree with, proven by
+`tests/test_local_tool_plugin_package.py` rather than by generating either at
+runtime. `vision/` is the one package wired through it today; every other
+tool still declares these facts inline and is unchanged.
 
 Retained physical legacy directories (`bash/`, `web_search/`) and
 provider-native wire strings remain for compatibility. They must not become

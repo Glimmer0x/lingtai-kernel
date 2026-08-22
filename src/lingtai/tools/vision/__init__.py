@@ -32,14 +32,23 @@ values are unchanged; only the call envelope moved from flat arguments to
 ``action``/``input``/``reasoning``/``summarize``.
 Provider routing, credential/identity resolution, and every analyze/manual
 result shape are untouched by that migration.
+
+This package is also packaged as a **local-tool plugin** (``plugin.py``,
+``lingtai.tools._plugin``): ``VISION_PLUGIN`` owns vision's identity, its
+packaged ``manual/SKILL.md``, the reserved ``manual`` action, the capability
+declaration ``tools/registry.py`` publishes, and the mount that registers the
+one public tool on an agent. This module keeps everything the plugin is
+deliberately blind to: provider selection, credential/identity resolution,
+security boundaries, and every fail-closed manual-guidance route.
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
+from .._plugin import LocalToolPluginError
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .plugin import VISION_ACTIONS, VISION_DECLARED_ACTIONS, VISION_PLUGIN
 
 
 if TYPE_CHECKING:
@@ -256,40 +265,75 @@ _LIST_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+#: Vision's own declared children, keyed by the plugin-declared action name.
+#: ``manual`` is deliberately absent — ``VISION_PLUGIN`` appends it.
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "analyze": _ANALYZE_INPUT_SCHEMA,
+    "check": _CHECK_INPUT_SCHEMA,
+    "list": _LIST_INPUT_SCHEMA,
+}
+
+
 def _build_family(
     analyze_handler: Any = _unused,
     check_handler: Any = _unused,
     list_handler: Any = _unused,
-    manual_child: ChildTool | None = None,
+    agent: Any | None = None,
 ) -> ToolFamily:
     """Build vision's family from the one canonical child declaration.
 
-    The single source of truth for vision's children: both the module-level
-    schema-only family (which composes the model-facing schema and proves at
-    import time that the registry has no duplicate or reserved-name collision)
-    and each ``VisionManager``'s dispatching family come from here, so child
-    names, schemas, titles, and order cannot drift between the wire surface
-    and the dispatcher. Defaults build the non-dispatching variant; the
-    manager passes its bound ``analyze``/``check``/``list`` handlers and the
-    real reserved ``manual`` child from ``build_manual_child``.
+    The single source of truth for vision's *own* children: both the
+    module-level schema-only family (which composes the model-facing schema and
+    proves at import time that the registry has no duplicate or reserved-name
+    collision) and each ``VisionManager``'s dispatching family come from here,
+    so child names, schemas, titles, and order cannot drift between the wire
+    surface and the dispatcher.
+
+    Composition itself belongs to the package's plugin descriptor: this
+    function declares only ``analyze``/``check``/``list`` and hands them to
+    ``VISION_PLUGIN.build_family``, which appends the reserved ``manual``
+    child from vision's own packaged skill. Passing ``agent`` selects the real
+    installed-manual child; omitting it selects the schema-only one. Vision
+    never builds, names, or hands in a ``manual`` handler, so no change here
+    can drop it, re-schema it, or rebind it to other material.
     """
-    return ToolFamily(
-        "vision",
+    handlers = {
+        "analyze": analyze_handler,
+        "check": check_handler,
+        "list": list_handler,
+    }
+    return VISION_PLUGIN.build_family(
         [
-            ChildTool("analyze", _ANALYZE_INPUT_SCHEMA, analyze_handler, title="analyze input"),
-            ChildTool("check", _CHECK_INPUT_SCHEMA, check_handler, title="check input"),
-            ChildTool("list", _LIST_INPUT_SCHEMA, list_handler, title="list input"),
-            manual_child
-            or ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            ChildTool(
+                action,
+                _DECLARED_INPUT_SCHEMAS[action],
+                handlers[action],
+                title=f"{action} input",
+            )
+            for action in VISION_DECLARED_ACTIONS
         ],
+        agent,
     )
 
 
 _FAMILY = _build_family()
 
+# The composed family and the plugin's declared action list are one fact, not
+# two that happen to agree: adding a child here without declaring it in
+# ``plugin.py`` (or declaring one that is never built) fails at import rather
+# than shipping a public action list that disagrees with the wire schema.
+if _FAMILY.child_names != VISION_ACTIONS:
+    raise LocalToolPluginError(
+        f"vision family {_FAMILY.child_names!r} does not match the plugin's "
+        f"declared actions {VISION_ACTIONS!r}"
+    )
+
 
 def get_description(lang: str = "en") -> str:
-    return (
+    # The manual catalog line is appended by the plugin from vision's own
+    # packaged ``manual/SKILL.md`` frontmatter, so the registered description
+    # advertises the skill it actually serves.
+    return VISION_PLUGIN.describe(
         "Analyze an image with the active preset. Use vision(action='analyze', "
         "input={'image_path': '...', 'question': null}, reasoning='read the "
         "image') for the direct request; the optional input preset field "
@@ -322,13 +366,15 @@ class VisionManager:
         self._vision_service = vision_service
         self._manual_reason = manual_reason
         # Same canonical child declaration the module-level schema-only family
-        # uses, with this instance's bound analyze/check/list handlers and the
-        # real reserved ``manual`` child registered directly (unwrapped).
+        # uses, with this instance's bound analyze/check/list handlers. Passing
+        # the agent makes ``VISION_PLUGIN`` append the real reserved ``manual``
+        # child (registered directly, unwrapped) bound to vision's own
+        # installed skill.
         self._family = _build_family(
             self._dispatch_analyze,
             self._dispatch_check,
             self._dispatch_list,
-            build_manual_child(agent, "vision"),
+            agent,
         )
 
     def _build_service_from_preset(self, preset_ref: str) -> tuple[Any, str]:
@@ -1055,5 +1101,10 @@ def setup(
         manual_reason = "No direct vision provider was configured; use vision(action='manual', input={}, reasoning='no direct vision provider is configured')."
 
     mgr = VisionManager(agent, vision_service=vision_service, manual_reason=manual_reason)
-    agent.add_tool("vision", schema=get_schema(), handler=mgr.handle, description=get_description(), glossary_package=__package__)
+    # The plugin performs the registration: the public name, the wire schema
+    # (composed from the dispatching family, so what is advertised is exactly
+    # what dispatches), and the glossary package all come from the descriptor,
+    # and a family that lost its reserved ``manual`` child is refused rather
+    # than mounted. Vision supplies only its own handler and prose.
+    VISION_PLUGIN.mount(agent, mgr._family, mgr.handle, get_description())
     return mgr

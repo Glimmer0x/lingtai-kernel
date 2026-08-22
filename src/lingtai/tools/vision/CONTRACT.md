@@ -4,6 +4,8 @@ tool: vision
 contract_version: 1
 related_files:
   - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
@@ -14,6 +16,9 @@ maintenance: |
   vision's schema composition and envelope dispatch build on the generic
   tool_family package; keep that link current when either side's boundary
   changes.
+  vision is also packaged as a local-tool plugin; keep the Packaging and mount
+  section aligned with plugin.py, _plugin.py, and registry.py whenever the
+  identity, the declared actions, or the default-boot facts change.
 ---
 # Vision capability contract
 
@@ -69,6 +74,50 @@ OpenAI/Anthropic identity. A real request failure is returned as a sanitized
 vision tool error that points to
 `vision(action="manual", input={}, reasoning="...")` for explicit
 alternatives, without silently switching model/provider or invoking MCP.
+
+## Packaging and mount
+Guarded by: [VN002](BEHAVIORS.md#behavior-vn002)
+
+`vision` is packaged as a local-tool plugin. `plugin.py`'s `VISION_PLUGIN` is
+the single place the package states its identity — the capability/tool name
+`vision`, the module `lingtai.tools.vision`, the summary and homepage, the owned
+skill `vision-manual`, and the default-boot facts (registered on every agent,
+with empty default kwargs). `VISION_DECLARED_ACTIONS` is exactly `analyze`,
+`check`, `list`; the reserved `manual` is deliberately absent and is appended by
+the plugin, so `VISION_ACTIONS` is the one public action list and the composed
+family is required at import to equal it.
+
+The packaged `manual/SKILL.md` is vision's own skill. It is read and
+frontmatter-checked at construction with the skills catalog's own parser: a
+manual whose frontmatter `name` is not `vision-manual`, whose `description` is
+missing, or whose body is empty fails at import rather than shipping a
+capability whose manual is foreign or degraded. The installed destination
+`.library/intrinsic/capabilities/vision/` is *derived* from the package with the
+kernel installer's own rename rule and required to equal the public name, so the
+`manual` action cannot be bound to another capability's installed skill. The
+plugin builds that child itself from an agent — never from a caller-supplied
+child or handler — so no change in this package can drop, re-schema, or rebind
+it. What `manual` returns is unchanged: the installed body and its host-local
+path, or the loader's honest `degraded` result.
+
+`VISION_PLUGIN.capability_declaration()` is this package's mount record and MUST
+equal what `src/lingtai/tools/registry.py` publishes: `BUILTIN_TOOLS["vision"]`
+resolves to `lingtai.tools.vision`, and `CORE_DEFAULTS["vision"]` is `{}`.
+Declaring it here registers and boots nothing — `registry.py` stays the runtime
+source the host reads, `setup_capability` stays the importer, and
+`Agent._install_intrinsic_manuals` stays the installer. `setup` mounts through
+`VISION_PLUGIN.mount`, which stamps the public name, the wire schema composed
+from the dispatching family, and the glossary package from the descriptor, and
+refuses to publish a family that is not vision's, a family without the reserved
+`manual` action, or a description that does not advertise the packaged skill.
+The registered description therefore always carries the owned skill's catalog
+line, and calling `vision(action="manual", input={}, reasoning="...")` is what
+loads the full body.
+
+The plugin owns none of the rest of this contract: provider selection,
+credential and identity resolution, the security boundaries below, and every
+fail-closed manual-guidance route stay in `__init__.py`, which the plugin never
+enters.
 
 ## Current identity and wires
 
@@ -138,6 +187,11 @@ provider and exception type.
   `tests/test_tool_family_vision_migration.py`.
 - The installed manual body/path round-trip alongside every other manual-owning
   tool: `tests/test_intrinsic_manual_actions.py`.
+- Plugin packaging — the declaration's agreement with `registry.py`, the
+  reserved-`manual` refusals, the packaged-skill → installed-skill → `manual`
+  result chain including the `degraded` case, the mount refusals, and the
+  absence of any provider/credential material in the plugin modules:
+  `tests/test_local_tool_plugin_package.py`.
 - Endpoint identity is sanitized by `sanitize_endpoint` and drops userinfo,
   query, fragment, malformed ports, and non-URLs: `tests/test_agent_preset_manifest.py`.
 - Provider construction and exact OpenAI Responses shape are covered in
@@ -146,5 +200,6 @@ provider and exception type.
   `manual/SKILL.md`.
 
 Run `python -m pytest tests/test_vision_capability.py tests/test_vision_services.py
-tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py -q`
+tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py
+tests/test_local_tool_plugin_package.py -q`
 and the glossary validator before merging.
