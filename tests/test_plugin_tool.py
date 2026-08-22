@@ -539,9 +539,31 @@ def test_both_actions_declare_the_canonical_strict_empty_input():
 
 def test_schema_only_and_dispatching_families_declare_identical_children(tmp_path):
     from lingtai.tools.plugin import _FAMILY, _build_family
+    from lingtai.tools.plugin.descriptor import PLUGIN_TOOL
 
     agent, _workdir = _mk_agent(tmp_path)
-    assert _build_family(agent).child_names == _FAMILY.child_names == ("info", "manual")
+    assert PLUGIN_TOOL.actions == ("info", "manual")
+    assert _build_family(agent).child_names == _FAMILY.child_names == PLUGIN_TOOL.actions
+
+
+def test_descriptor_binds_the_direct_manual_child_to_the_host_installed_skill(tmp_path):
+    """The package descriptor owns the binding; the Host still owns loading."""
+    from lingtai.tools.plugin import _build_family
+
+    agent, workdir = _mk_agent(tmp_path)
+    canonical = _build_family(agent).handle({
+        "action": "manual", "input": {}, "reasoning": "inspect the direct child",
+    })
+
+    # This is the direct ToolFamily child result, before plugin's outer adapter
+    # flattens it. Its path proves the descriptor did not read package source or
+    # sidestep the Host-installed intrinsic manual lifecycle.
+    assert canonical["status"] == "ok"
+    assert "declaration is what mounts" in canonical["content"][0]["text"]
+    assert canonical["structuredContent"]["manual_path"] == str(
+        workdir / ".library" / "intrinsic" / "capabilities" / "plugin" / "SKILL.md"
+    )
+    assert "plugin_manual" not in canonical
 
 
 def test_info_returns_catalog_snapshot(tmp_path):

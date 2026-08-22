@@ -29,6 +29,7 @@ version: 2.1.0
 last_changed_at: 2026-08-08T00:00:00Z
 related_files:
 - src/lingtai/tools/plugin/__init__.py
+- src/lingtai/tools/plugin/descriptor.py
 - src/lingtai/tools/plugin/ANATOMY.md
 - src/lingtai/tools/plugin/CONTRACT.md
 - src/lingtai/services/plugin_registry.py

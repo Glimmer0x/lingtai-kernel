@@ -4,6 +4,7 @@ tool: plugin
 contract_version: 1
 related_files:
   - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/descriptor.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/services/plugin_registry.py
   - src/lingtai/tools/CONTRACT.md
@@ -169,8 +170,12 @@ alone still reports its health here. `problems` entries are
 `plugin_manual` and an `error` string when
 `.library/intrinsic/capabilities/plugin/SKILL.md` is missing.
 
-`manual` is the family-owned reserved child, registered directly from
-`tool_family.manual.build_manual_child(agent, "plugin")`. `ToolFamily.handle()`
+`descriptor.py` owns the package's fixed `info` identity and the binding of
+its reserved `manual` child to the Host-installed `plugin` skill destination;
+it composes the family by registering
+`tool_family.manual.build_manual_child(agent, "plugin")` directly and unwrapped.
+The descriptor does not read the package source manual itself: the generic Host
+builder retains installed skill/prompt lifecycle ownership. `ToolFamily.handle()`
 returns that child's canonical `content`/`structuredContent` result verbatim
 (no double wrap); the flat public shape — body under the tool-specific key
 `plugin_manual`, matching the `mcp_manual` precedent — is reconstructed by the

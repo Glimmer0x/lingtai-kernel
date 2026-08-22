@@ -3,6 +3,7 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/plugin/BEHAVIORS.md
   - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/descriptor.py
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/tools/plugin/manual/SKILL.md
   - src/lingtai/tools/plugin/glossary-en.md
@@ -60,26 +61,23 @@ registry-level only: a registered server is registered, never running.
 
 ## Components
 
-- `plugin/__init__.py` — the tool slice (~351 lines). One model-facing LTP v2
-  family: public tool name `plugin`, public actions `info`/`manual`, carried in
-  the canonical `action` + `input` + `reasoning` + `summarize` envelope composed
-  by the generic `lingtai.tools.tool_family` infrastructure
-  (`src/lingtai/tools/tool_family/ANATOMY.md`).
-  `get_description` (`src/lingtai/tools/plugin/__init__.py:287`),
-  `get_schema` (`src/lingtai/tools/plugin/__init__.py:291`) returns
-  `ToolFamily.build_schema()` with the family's own `action` description
-  substituted, and `_build_family`
-  (`src/lingtai/tools/plugin/__init__.py:250`) is the single source of the
-  two-child registry — called with `None` at import for the module-level
-  schema-only family `_FAMILY` (`src/lingtai/tools/plugin/__init__.py:284`),
-  which fails loudly on a duplicate/reserved-name collision and never
-  dispatches, and called with the agent from `setup`
-  (`src/lingtai/tools/plugin/__init__.py:300`) for the real dispatching family
-  whose `manual` child comes straight from
-  `tool_family.manual.build_manual_child`. Both children share the one
-  `_EMPTY_INPUT` literal (`src/lingtai/tools/plugin/__init__.py:237`)
-  re-exported from `tool_family.manual.MANUAL_INPUT_SCHEMA`, so the advertised
-  and validated shapes cannot drift. `_reconcile`
+- `plugin/descriptor.py` — the package-local declarative public-family owner.
+  `PLUGIN_TOOL` fixes the `plugin` identity, its read-only `info` action, and
+  its `manual` binding to the Host-installed `plugin` skill destination. It
+  composes the actual strict two-child `ToolFamily`, registering the generic
+  `build_manual_child` directly and unwrapped; it does not read package manual
+  source, discover paths, mount plugins, touch MCP records, or activate a
+  server.
+- `plugin/__init__.py` — the tool slice. One model-facing LTP v2 family: public
+  tool name `plugin`, public actions `info`/`manual`, carried in the canonical
+  `action` + `input` + `reasoning` + `summarize` envelope composed by the
+  generic `lingtai.tools.tool_family` infrastructure
+  (`src/lingtai/tools/tool_family/ANATOMY.md`). `get_schema` returns
+  `ToolFamily.build_schema()` with the family's action description substituted;
+  `_build_family` binds the read-only `info` handler and delegates the fixed
+  child inventory to `PLUGIN_TOOL`, both for the import-time schema-only family
+  and agent-bound dispatch. The generic builder retains installed
+  skill/prompt-lifecycle ownership for `manual`. `_reconcile`
   (`src/lingtai/tools/plugin/__init__.py:144`) backs the `info` child: it reads
   the boot snapshot off `agent._plugin_registration`, re-scans discovery live,
   splits the result into the registered and discovered tiers, and renders both.
@@ -223,6 +221,12 @@ my-plugin/
 ## Internal Module Layout
 
 ```
+plugin/descriptor.py
+  ├── PLUGIN_TOOL               — package identity, info/manual action inventory
+  ├── info_child()              — strict-empty read-only info child
+  ├── manual_child()            — direct Host-installed manual child binding
+  └── build_family()            — descriptor-owned strict two-child composition
+
 plugin/__init__.py
   ├── Path collection
   │   └── _collect_paths()          — own ∪ declared ∪ skills paths, in that order, deduped
@@ -316,7 +320,9 @@ services/plugin_registry.py
 
 ## Dependencies
 
-- `lingtai.tools.tool_family` — `ChildTool` / `ToolFamily` / `build_manual_child`
+- `lingtai.tools.tool_family` — `ChildTool` / `ToolFamily` /
+  `build_manual_child`, consumed by `plugin/descriptor.py` for strict family
+  composition and the Host-installed manual child
 - `lingtai.services.plugin_registry` — lazily imported inside `_reconcile`
   (the `lingtai.tools → lingtai` back-edge)
 - `lingtai.services.mcp_registry` — lazily imported inside the registration

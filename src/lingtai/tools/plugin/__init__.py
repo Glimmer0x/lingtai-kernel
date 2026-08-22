@@ -47,8 +47,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
 
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from ..tool_family import ToolFamily
+from .descriptor import PLUGIN_TOOL
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -234,14 +234,6 @@ _DESCRIPTION = (
     "uninstall, remove it from that list and refresh."
 )
 
-# Both actions are flagpost-only reads that take no arguments at all, so both
-# children share the one canonical strict-empty ``input`` — the same literal
-# the generic ``manual`` child registers, reused rather than hand-copied so the
-# schema-only and dispatching families cannot advertise different shapes.
-# ``ToolFamily.build_schema`` deep-copies per child, and dispatch reads only
-# ``properties``, so one shared object is safe.
-_EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
-
 _ACTION_DESCRIPTION = (
     "info: read-only action; re-scans the configured plugin paths and returns "
     "the boot registration snapshot (registered plugins with what mounted and "
@@ -254,37 +246,24 @@ _ACTION_DESCRIPTION = (
 
 
 def _build_family(agent: "BaseAgent | None", paths: list[str] | None = None) -> ToolFamily:
-    """Build the two-child ``plugin`` family; the registry is declared exactly once.
+    """Build the descriptor-owned strict ``plugin`` family.
 
-    With an ``agent``, children are bound to real handlers for dispatch. With
-    ``None``, the module-level schema-only family is built: its handlers raise
-    if ever called, and constructing it at import time proves the fixed
-    registry has no duplicate or reserved-name collision (``ToolFamilyError``
-    raises here rather than shipping silently). Both paths declare the same
-    ordered children, so the composed schema and the dispatching family can
-    never drift apart.
+    With an ``agent``, ``info`` is bound to the read-only reconciliation handler.
+    With ``None``, its handler is deliberately unreachable and import-time family
+    construction proves the fixed descriptor has no duplicate/reserved-name
+    collision. In both cases ``PLUGIN_TOOL`` registers the same ``info`` child
+    and its direct, Host-installed ``manual`` child, so schema and dispatch
+    cannot drift. The descriptor merely binds the manual destination; the Host
+    generic builder retains installed skill/prompt lifecycle ownership.
     """
     if agent is None:
-        def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+        def info_handler(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-        info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
     else:
-        info_handler = lambda _input: _reconcile(agent, paths)  # noqa: E731
-        # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
-        # this child's own canonical MCP-compatible result verbatim (no double
-        # wrap). This capability's flat public shape is reconstructed from that
-        # canonical result strictly *after* dispatch, in ``handle_plugin`` —
-        # never inside a registered child.
-        manual_child = build_manual_child(agent, "plugin")
-    return ToolFamily(
-        "plugin",
-        [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
-            manual_child,
-        ],
-    )
+        def info_handler(_input: Mapping[str, Any]) -> dict[str, Any]:
+            return _reconcile(agent, paths)
+
+    return PLUGIN_TOOL.build_family(agent, info_handler)
 
 
 _FAMILY = _build_family(None)
