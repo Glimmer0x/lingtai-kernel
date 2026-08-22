@@ -38,8 +38,13 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from ..tool_family import ToolFamily
+from ._descriptor import (
+    AVATAR_TOOL_DESCRIPTOR,
+    _CHILD_SPECS,
+    _RULES_INPUT_SCHEMA,
+    _SPAWN_INPUT_SCHEMA,
+)
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
 
 
@@ -98,101 +103,14 @@ if TYPE_CHECKING:
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
-# Canonical, strict per-action input schemas. Optionals are expressed as
-# nullable required properties because that is what strict OpenAI-style
-# validators demand of a closed object; null means "absent" to the action
-# implementations (see ``_strip_nulls``).
-#
-# The spawn mission brief is deliberately NOT a property here: it is root
-# ``reasoning``, and nested ``input`` must never carry
-# ``reasoning``/``_reasoning``/``summarize``.
-_SPAWN_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {
-            "type": "string",
-            "description": (
-                "True name for the avatar. Also the working-directory basename "
-                "under .lingtai/. Single segment: letters/digits/underscore/"
-                "hyphen, max 64 chars."
-            ),
-        },
-        "type": {
-            "type": ["string", "null"],
-            "enum": ["shallow", "deep", None],
-            "description": (
-                "'shallow' (default): blank slate — init.json only. 'deep': "
-                "full copy of character, pad, and codex. Null for the default."
-            ),
-        },
-        "comment": {
-            "type": ["string", "null"],
-            "description": (
-                "Persistent system note in the avatar's prompt (survives molt/"
-                "refresh/wake). Not inherited. Null or empty unless you have "
-                "something the avatar must never forget."
-            ),
-        },
-        "dry_run": {
-            "type": ["boolean", "null"],
-            "description": (
-                "Preview the spawn without creating a process. Use to "
-                "sanity-check before committing. Null for the default false."
-            ),
-        },
-        "confirm": {
-            "type": ["boolean", "null"],
-            "description": (
-                "Confirm you have reviewed the mission and intend to spawn. "
-                "Required when the mission looks empty/short/test-like. Null "
-                "for the default false."
-            ),
-        },
-    },
-    "required": ["name", "type", "comment", "dry_run", "confirm"],
-    "additionalProperties": False,
-}
-
-_RULES_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "rules_content": {
-            "type": "string",
-            "description": (
-                "Plain text, one rule per line. Non-negotiable constraints "
-                "distributed to self and all descendants. Requires karma."
-            ),
-        },
-    },
-    "required": ["rules_content"],
-    "additionalProperties": False,
-}
-
-# The one child spec: canonical action name → its own strict input schema, in
-# model-facing enum order. Both the module-level schema-only family and each
-# manager's handler-bound family are built from this single source by
-# ``_build_family`` below, so the two listings cannot drift apart.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("spawn", _SPAWN_INPUT_SCHEMA),
-    ("rules", _RULES_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
-)
-
-
 def _build_family(handlers: Mapping[str, Any]) -> ToolFamily:
-    """Build avatar's family, binding each spec'd action to *handlers[name]*.
+    """Bind Avatar's package-local descriptor to instance-specific handlers.
 
-    Construction validates the registry, so a duplicate or reserved-name
-    collision raises ``ToolFamilyError`` here — at import time for ``_FAMILY``
-    — rather than shipping silently.
+    The descriptor owns the strict model-facing child declarations; the manager
+    retains all host-side spawn, privilege, lifecycle, and process behavior in
+    the handlers it supplies here.
     """
-    return ToolFamily(
-        "avatar",
-        [
-            ChildTool(name, schema, handlers[name], title=f"{name} input")
-            for name, schema in _CHILD_SPECS
-        ],
-    )
+    return AVATAR_TOOL_DESCRIPTOR.bind_family(handlers)
 
 
 def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
@@ -201,21 +119,13 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
 
 # Composes the model-facing schema only; ``AvatarManager`` builds its own
 # per-instance family with real handlers bound to that instance.
-_FAMILY = _build_family({name: _unused for name, _ in _CHILD_SPECS})
+_FAMILY = _build_family(
+    {name: _unused for name in AVATAR_TOOL_DESCRIPTOR.action_names}
+)
 
 
 def get_description(lang: str = "en") -> str:
-    return (
-        "Spawn an independent agent (他我), set network rules for descendants, "
-        "or read the avatar manual. Requires an explicit action — no default. "
-        "avatar(action='spawn', input={'name': 'researcher', ...}, "
-        "reasoning='<the avatar's mission>'): inherits init.json, boots on "
-        "default preset; your reasoning becomes the avatar's first prompt. "
-        "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
-        "distribute rules to self + all descendants (requires karma). "
-        "avatar(action='manual', input={}, reasoning='...'): return the "
-        "avatar-manual skill body. See avatar-manual skill for full guidance."
-    )
+    return AVATAR_TOOL_DESCRIPTOR.description()
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -299,31 +209,8 @@ class AvatarManager:
         return self._manual()
 
     def _manual(self) -> dict:
-        """Return the exact packaged avatar-manual body; performs no mutation.
-
-        Avatar's manual ships inside this package (``manual/SKILL.md``) rather
-        than in the agent's installed ``.library`` catalog, so this action owns
-        its own loader instead of the shared
-        ``load_installed_manual``/``build_manual_child`` pair — reusing that
-        builder here would report a ``.library`` path this family never reads.
-        """
-        resource = resources.files(__package__).joinpath("manual/SKILL.md")
-        try:
-            body = resource.read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError, OSError):
-            return {
-                "status": "degraded",
-                "action": "manual",
-                "manual": "",
-                "manual_path": str(resource),
-                "error": "avatar manual missing",
-            }
-        return {
-            "status": "ok",
-            "action": "manual",
-            "manual": body,
-            "manual_path": str(resource),
-        }
+        """Return Avatar's descriptor-owned packaged manual without mutation."""
+        return AVATAR_TOOL_DESCRIPTOR.manual_result()
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)

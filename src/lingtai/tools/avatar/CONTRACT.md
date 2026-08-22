@@ -4,6 +4,7 @@ tool: avatar
 contract_version: 4
 related_files:
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/_descriptor.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/manual/SKILL.md
@@ -76,6 +77,17 @@ choice, not a contract requirement: per that package's "Implementation
 independence" rule, avatar could hand-write an equivalent `handle()` without
 changing any promise in this file.
 
+## Ownership boundaries
+
+`src/lingtai/tools/avatar/_descriptor.py` owns only static package-local
+model-facing metadata: the `avatar` root name/description, its strict action
+schemas and action order, and the package-manual resource lookup/result shape.
+`AvatarManager` remains the host-side owner of every supplied action handler:
+agent/network directory construction, inherited-init and parent-prompt
+boundaries, privilege checks, ledger/rules I/O, boot observation, and launcher
+lifecycle. `setup()` remains the one host registration call. The descriptor
+never activates a tool, constructs an agent, or manages a process.
+
 ## Routing Card
 Guarded by: [AV001](BEHAVIORS.md#behavior-av001)
 
@@ -121,11 +133,11 @@ storage; detached-process launch -> §Cross-platform invariants.
 - `action="manual"` is read-only: it returns the exact packaged
   `src/lingtai/tools/avatar/manual/SKILL.md` body plus its host-local
   `manual_path`, and performs no filesystem mutation (no spawn, no ledger
-  write, no `.rules` write). Avatar's manual ships inside this package rather
-  than being installed into the agent's `.library` intrinsic catalog, so this
-  action owns its own loader instead of the shared
-  `load_installed_manual`/`build_manual_child` pair — that builder would
-  report a `.library` path this family never reads.
+  write, no `.rules` write). Avatar's package-local `AvatarToolDescriptor`
+  owns that resource lookup and flat result shape because the manual ships
+  inside this package rather than in the agent's `.library` intrinsic catalog.
+  It must not use the shared `load_installed_manual`/`build_manual_child` pair:
+  that builder would report a `.library` path this family never reads.
 
 **Non-goals:** the parent holds no in-process handle to the avatar — liveness is
 checked purely via the filesystem handshake. The tool does not manage the
