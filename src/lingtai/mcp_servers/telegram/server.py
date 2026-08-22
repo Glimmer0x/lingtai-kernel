@@ -53,6 +53,7 @@ from .. import _config
 from .licc import push_inbox_event
 from .manager import TelegramManager, SCHEMA, DESCRIPTION
 from ._family import handle_telegram
+from .plugin import TELEGRAM_ACTIONS, TELEGRAM_PLUGIN
 from .service import TelegramService
 
 log = logging.getLogger("lingtai.mcp_servers.telegram")
@@ -219,11 +220,11 @@ def _profile_manifest(manager: TelegramManager | None) -> dict[str, Any]:
     return {
         "schema": "lingtai.mcp.profile.v1",
         "server": {
-            "name": "lingtai-telegram",
-            "registry_name": "telegram",
+            "name": TELEGRAM_PLUGIN.server_name,
+            "registry_name": TELEGRAM_PLUGIN.name,
             "version": _package_version(),
             "summary": "Telegram Bot API client with LICC inbox callback.",
-            "homepage": "https://github.com/Lingtai-AI/lingtai-telegram",
+            "homepage": TELEGRAM_PLUGIN.homepage,
         },
         "ownership": {
             "configuration": "This MCP owns Telegram config fields, Bot API caveats, and diagnostics.",
@@ -233,12 +234,12 @@ def _profile_manifest(manager: TelegramManager | None) -> dict[str, Any]:
         "resources": _RESOURCE_INDEX,
         "tools": [
             {
-                "name": "telegram",
+                "name": TELEGRAM_PLUGIN.name,
                 "description": "Strict Telegram LTP-v2 family.",
-                "actions": [
-                    "send", "check", "read", "reply", "search", "delete", "edit",
-                    "contacts", "add_contact", "remove_contact", "accounts", "manual",
-                ],
+                # Sourced from the plugin descriptor so the advertised action
+                # list cannot drift from the family the server actually serves
+                # (``manual`` included, because the plugin always appends it).
+                "actions": list(TELEGRAM_ACTIONS),
             },
         ],
         "agent_entrypoints": {
@@ -715,7 +716,7 @@ def build_server(manager: TelegramManager | None) -> Server:
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="telegram",
+                    name=TELEGRAM_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -732,7 +733,7 @@ def build_server(manager: TelegramManager | None) -> Server:
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
         arguments = params.arguments or {}
-        if params.name != "telegram":
+        if params.name != TELEGRAM_PLUGIN.name:
             # A lookup miss is a caller-fixable parameter error (-32602), never
             # a wrapped success payload.
             raise _unknown_tool(params.name)
@@ -765,7 +766,7 @@ def build_server(manager: TelegramManager | None) -> Server:
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-telegram",
+        TELEGRAM_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,

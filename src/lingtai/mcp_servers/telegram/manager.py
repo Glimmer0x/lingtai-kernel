@@ -44,6 +44,7 @@ from .. import _skill
 from .._outbound_files import OutboundFileError, resolve_outbound_file
 from . import _family
 from . import updates as tg_updates
+from .plugin import TELEGRAM_PLUGIN
 from .account import TelegramRateLimitError
 
 if TYPE_CHECKING:
@@ -82,10 +83,18 @@ def _load_notification_header_template() -> str:
 # action='manual' reads the full body; the YAML frontmatter is parsed and the
 # name/description are injected into the tool schema as a progressive-disclosure
 # catalog entry, while the full body stays behind action='manual'.
+#
+# The package's plugin descriptor already loaded and validated that SKILL.md, so
+# these names alias its single copy rather than re-reading the file. The public
+# family answers ``manual`` from the same descriptor without entering this
+# manager at all; the flat ``_manual()`` below stays for the legacy internal
+# action boundary.
 # ---------------------------------------------------------------------------
 
-_SKILL_NAME = "telegram-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
+_SKILL_NAME = TELEGRAM_PLUGIN.skill_name
+_SKILL_FRONTMATTER = TELEGRAM_PLUGIN.skill_frontmatter
+_SKILL_BODY = TELEGRAM_PLUGIN.skill_body
+_SKILL_PATH = TELEGRAM_PLUGIN.skill_path
 
 
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
