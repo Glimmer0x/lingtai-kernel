@@ -1,6 +1,6 @@
 ---
 related_files:
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 - tests/test_skills.py
 maintenance: |
   Consequential-molt summary scaffold referenced by context-manual/SKILL.md and asserted on by tests/test_skills.py; keep its 9-section structure and heading text synced with both, since the test pins exact section headings verbatim.

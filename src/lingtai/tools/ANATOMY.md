@@ -46,6 +46,10 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/context/plugin.py
+  - src/lingtai/agent.py
+  - tests/test_intrinsic_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -158,6 +162,18 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — intrinsic-tool **plugin packaging** descriptor and the
+  model-facing twin of `src/lingtai/mcp_servers/_plugin.py`.
+  `IntrinsicToolPlugin` binds one package's identity, its bundled `manual/`
+  skill (loaded and name-checked at construction), and the registration record
+  `registry.INTRINSICS` publishes (`intrinsic_declaration()`), plus the mount
+  that package expects from the host installer (`manual_mount()`). It also owns
+  the reserved-action promise: `actions()`, `action_input_schemas()`, and
+  `build_family()` append `manual` from the packaged bundle and raise
+  `IntrinsicToolPluginError` if a package declares, re-schemas, or rebinds it.
+  Declarative only — no discovery, import-by-name, boot, registration, or
+  install; the mapping in `registry.py`, capability setup, and
+  `Agent._install_intrinsic_manuals` stay the host's.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -169,6 +185,18 @@ capability names and lazy adapters.
   (`src/lingtai/tools/i18n/__init__.py:1-14`).
 
 ## Connections
+
+`context/` is the reference slice wired through `_plugin.py` today:
+`context/plugin.py` → `context/__init__.py` (root name, `ACTION_ORDER`,
+`_MANUAL_SKILL_NAME`, and every family composed through
+`CONTEXT_PLUGIN.build_family`) plus the package-owned `context/manual/` bundle.
+`Agent._install_intrinsic_manuals`'s `install_from` scan is the discovery half
+and `Agent._MANUAL_MOUNT_NAMES` the mount half — `context` installs as the
+established `context-manual` skill, so packaging the manual into its owner moved
+the document without renaming it. The other tool packages still declare these
+facts inline and are unchanged. `tests/test_intrinsic_tool_plugin_package.py`
+pins the packaging invariants, the real install, and the equality between
+`CONTEXT_PLUGIN.intrinsic_declaration()` and the shipped `INTRINSICS` entry.
 
 `Agent` calls registry setup. The public `web` row imports
 `lingtai.tools.web_search` lazily. That owner imports the browser Core and

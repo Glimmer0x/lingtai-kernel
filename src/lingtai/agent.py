@@ -548,6 +548,26 @@ class Agent(BaseAgent):
             # honestly, rather than half-mounted and silent.
             self._log("plugin_register_failed", reason=str(e))
 
+    #: Tool packages whose installed manual directory name is not the package
+    #: directory name. Two reasons appear here, and only these two:
+    #:
+    #: * ``bash``/``web_search`` are retained *implementation* directories that
+    #:   map onto their canonical model-facing capability names exactly once.
+    #: * ``context`` ships a package-owned bundle whose skill name is
+    #:   ``context-manual`` — the name already written into the prompt corpus,
+    #:   the rendered skills catalog, and every cross-manual reference. Its
+    #:   package owns the document; the mount keeps the established name.
+    #:
+    #: This mapping is the host's, not a plugin's: a tool package declares the
+    #: mount it expects (``IntrinsicToolPlugin.manual_mount()``) and this
+    #: installer decides. ``tests/test_intrinsic_tool_plugin_package.py`` pins
+    #: the two against each other so neither side can drift alone.
+    _MANUAL_MOUNT_NAMES: dict[str, str] = {
+        "bash": "shell",
+        "web_search": "web",
+        "context": "context-manual",
+    }
+
     def _install_intrinsic_manuals(self) -> None:
         """Wipe and rewrite ``.library/intrinsic/`` from kernel-shipped manuals.
 
@@ -587,14 +607,12 @@ class Agent(BaseAgent):
                     continue
                 src = entry / "manual"
                 if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
-                        destination_name = "shell"
-                    elif entry.name == "web_search":
-                        destination_name = "web"
-                    else:
-                        destination_name = entry.name
+                    # A package directory whose installed skill name differs
+                    # maps through the one declared table; everything else
+                    # installs under its own name.
+                    destination_name = self._MANUAL_MOUNT_NAMES.get(
+                        entry.name, entry.name
+                    )
                     destination = intrinsic_dir / subdir / destination_name
                     if destination.exists():
                         continue
@@ -619,10 +637,16 @@ class Agent(BaseAgent):
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
-        # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan; tools without a manual/ (the
-        # file tools, the non-email intrinsics whose manuals ship as
-        # intrinsic_skills bundles below) are simply skipped.
+        # namespace, with ``_MANUAL_MOUNT_NAMES`` above the only place a
+        # package's installed name differs from its directory name. Scanning
+        # the consolidated ``lingtai.tools`` package replaces the former core/ +
+        # capabilities/ dual scan; tools without a manual/ (the file tools, the
+        # intrinsics whose manuals still ship as intrinsic_skills bundles
+        # below) are simply skipped. This scan is also the discovery half of
+        # the tool-plugin mount contract: a package that owns its manual — as
+        # ``email`` and ``context`` do — is mounted from its own folder, and
+        # its ``IntrinsicToolPlugin.manual_mount()`` is what this install must
+        # agree with.
         install_from(tools_pkg, "capabilities")
         install_skills_from(skills_pkg, "capabilities")
 

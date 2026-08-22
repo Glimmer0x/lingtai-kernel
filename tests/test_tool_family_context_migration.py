@@ -638,12 +638,14 @@ def test_kernel_detects_the_migrated_molt_call_shape():
 
 def test_manual_child_returns_the_canonical_result_unwrapped(tmp_path):
     """`ToolFamily.handle()` returns the reserved child's result verbatim."""
-    from lingtai.tools.context import _build_children
-    from lingtai.tools.tool_family import ToolFamily
+    from lingtai.tools.context import _build_declared_children
+    from lingtai.tools.context.plugin import CONTEXT_PLUGIN
 
     agent = _agent(tmp_path)
     try:
-        family = ToolFamily("psyche", _build_children(agent))
+        # The reserved child is the plugin's: the package builds only its own
+        # three children and the descriptor appends `manual` from its bundle.
+        family = CONTEXT_PLUGIN.build_family(_build_declared_children(agent), agent)
         raw = family.handle({"action": "manual", "input": {}})
         # Canonical ManualTool shape — full body + host-local path, no flatten.
         assert raw["content"][0]["text"]

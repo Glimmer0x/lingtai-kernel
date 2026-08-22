@@ -1,6 +1,6 @@
 ---
 related_files:
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 - src/lingtai/tools/context/_session_journal.py
 - src/lingtai/tools/context/ANATOMY.md
 maintenance: |

@@ -17,7 +17,12 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
+  - src/lingtai/tools/context/plugin.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/registry.py
+  - tests/test_intrinsic_tool_plugin_package.py
   - tests/test_context_ownership_redesign.py
   - tests/test_tool_family_context_migration.py
   - tests/test_deep_refresh.py
@@ -70,6 +75,36 @@ Schema and dispatch derive from one child registry.
 Unknown actions and branch/root shape errors fail before handler I/O. `_tc_id` is
 stripped from the closed root and reaches `molt` only. No retired Pad/LingTai or
 system-summarize spelling is accepted.
+
+## Plugin packaging
+
+`context` is packaged as an intrinsic tool plugin (`../_plugin.py`). Three
+promises follow, and each is pinned by
+`tests/test_intrinsic_tool_plugin_package.py`:
+
+1. **The package declares its own registration.**
+   `CONTEXT_PLUGIN.intrinsic_declaration()` names this package as the module
+   implementing the public root `context`. `lingtai.tools.registry.INTRINSICS`
+   remains the mapping the kernel reads; the declaration is what that entry must
+   agree with. Nothing in the descriptor registers, boots, or activates.
+2. **The manual is a package-owned skill.** The `context-manual` bundle ships at
+   `manual/` inside this package — `SKILL.md`, its two `assets/`, and the
+   `reference/summarize-manual/` sub-skill.
+   `Agent._install_intrinsic_manuals` discovers it by the same `manual/` scan
+   every tool package uses and mounts it at
+   `.library/intrinsic/capabilities/context-manual/`, the destination
+   `CONTEXT_PLUGIN.manual_mount()` declares and `Agent._MANUAL_MOUNT_NAMES`
+   decides. The skill name is unchanged: `action='manual'` still reads the
+   **installed** copy and still returns that host-local `manual_path`.
+3. **`manual` is reserved and plugin-owned.** This package declares only
+   `molt | summarize | rebuild`; the plugin appends `manual` last and raises
+   `IntrinsicToolPluginError` if the package declares, re-schemas, or rebinds
+   it. `ACTION_ORDER` is the plugin-composed list, and the child registry is
+   pinned against `CONTEXT_DECLARED_ACTIONS` at import.
+
+Packaging changed no model-facing text: the composed schema, the tool
+description, the action order, and the flat `manual` result shape are byte-for-
+byte what they were.
 
 ## Full reconstruction ordering
 
@@ -138,10 +173,13 @@ Focused verification:
 ```bash
 python -m pytest -q tests/test_context_ownership_redesign.py \
   tests/test_tool_family_context_migration.py tests/test_deep_refresh.py \
-  tests/test_pad_lingtai_split.py
+  tests/test_pad_lingtai_split.py tests/test_intrinsic_tool_plugin_package.py \
+  tests/test_intrinsic_manual_actions.py
 ```
 
 Evidence pins public action sets and strict retirement; file and append no-hot-
 load; bare zero-pending reconstruction; compose-before-summary-before-provider
 ordering (including provider replay observing the new prompt); all canonical
-durable sources; one shared refresh/molt hook; manual strictness; provider-wire parity; and existing molt refusal/lifecycle semantics.
+durable sources; one shared refresh/molt hook; manual strictness; the plugin
+packaging promises above (declaration/registry agreement, the real bundle mount,
+and the reserved `manual`); provider-wire parity; and existing molt refusal/lifecycle semantics.

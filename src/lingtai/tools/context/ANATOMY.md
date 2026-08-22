@@ -1,7 +1,13 @@
 ---
 related_files:
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/context/manual/assets/molt-template.md
+  - src/lingtai/tools/context/manual/assets/session-journal-entry-template.md
+  - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
+  - src/lingtai/tools/context/plugin.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/registry.py
+  - tests/test_intrinsic_tool_plugin_package.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/context/BEHAVIORS.md
@@ -34,8 +40,27 @@ Context lifecycle family with exact public actions
 reconstruction operation; refresh and molt invoke the same internal contract as
 passive lifecycle scenarios.
 
+This package is also the model-facing reference slice for **intrinsic tool
+plugin packaging** (`../_plugin.py`): one folder ships the tool code, the
+`manual/` skill bundle the host installs, and the registration record
+`registry.INTRINSICS` publishes — so the public action list, the manual, and the
+registry entry cannot drift apart.
+
 ## Components
 
+- `plugin.py` — this package's plugin descriptor. `CONTEXT_PLUGIN` states the
+  registry name, the implementation module, the summary/homepage, and the
+  packaged skill name `context-manual`; `CONTEXT_DECLARED_ACTIONS` lists
+  Context's own three actions with `manual` deliberately absent, and
+  `CONTEXT_ACTIONS` is the plugin-composed public list. Consumed by
+  `__init__.py` for the root name, `ACTION_ORDER`, `_MANUAL_SKILL_NAME`, and
+  family composition.
+- `manual/` — the package-owned `context-manual` skill bundle: `SKILL.md`,
+  `assets/molt-template.md`, `assets/session-journal-entry-template.md`, and the
+  nested `reference/summarize-manual/SKILL.md` sub-skill. Mounted by
+  `Agent._install_intrinsic_manuals` into
+  `.library/intrinsic/capabilities/context-manual/`; the installed copy — not
+  the wheel-internal one — is what `manual` reads and hands the model a path to.
 - `__init__.py`
   - strict per-action schemas, including genuinely optional `rebuild.items` so
     bare `{}` is schema-valid;
@@ -43,8 +68,12 @@ passive lifecycle scenarios.
   - `_rebuild_action` calls `agent._reconstruct_context` before invoking the
     private summary engine, handles reconstruction failures as result dicts, and
     marks successful engine results `prompt_reconstructed: true`;
-  - `_CHILD_SPECS`, `_build_children`, `_FAMILY`, `get_schema`, `handle` provide
-    single-registry schema/dispatch and isolate `_tc_id` to molt;
+  - `_CHILD_SPECS`, `_build_declared_children`, `_FAMILY`, `get_schema`,
+    `handle` provide single-registry schema/dispatch and isolate `_tc_id` to
+    molt; `_CHILD_SPECS` is pinned against `CONTEXT_DECLARED_ACTIONS` at import
+    so the registry and the descriptor stay one list, and every family is
+    composed through `CONTEXT_PLUGIN.build_family`, which appends the reserved
+    `manual` child itself;
   - manual adaptation resolves `context-manual` once after dispatch.
 - `../system/summarize.py` — private history-summary engine. It records pending
   marker replacements, marks the applied set done, persists history, and only
@@ -62,7 +91,13 @@ passive lifecycle scenarios.
   - `_reconstruct_context` wraps that composer and performs the final full
     prompt flush;
   - `_setup_from_init` routes refresh through this method and registers exactly
-    this method as the one post-molt hook.
+    this method as the one post-molt hook;
+  - `_install_intrinsic_manuals` is the discovery/mount half of the plugin
+    contract: its `install_from` scan finds this package's `manual/` bundle and
+    `_MANUAL_MOUNT_NAMES` maps `context` to the installed skill name
+    `context-manual`. The host decides the mount; `CONTEXT_PLUGIN.manual_mount()`
+    declares what it expects, and `tests/test_intrinsic_tool_plugin_package.py`
+    pins the two against each other and against the real install.
 - `kernel/base_agent/prompt.py::_flush_system_prompt` calls the virtual
   `agent._build_system_prompt`, preserving Agent-owned `base_prompt` and tool
   composition in the published/provider-visible prompt.

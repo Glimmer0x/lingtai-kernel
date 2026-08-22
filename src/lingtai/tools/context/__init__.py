@@ -45,7 +45,18 @@ Per-action behavior, inputs, and result/error shapes live in ``CONTRACT.md``;
 the model-facing text lives in the schema descriptions below and in the
 ``context-manual`` skill. Neither is restated here.
 
+This package is packaged as an intrinsic tool plugin (``.._plugin``): the same
+folder ships the tool code, the ``manual/`` bundle the host installs as the
+``context-manual`` skill, and the registration record ``registry.INTRINSICS``
+publishes. ``plugin.py`` states all three; ``CONTRACT.md`` "Plugin packaging"
+carries the promises. Packaging changed no model-facing text — the composed
+schema, the description, the action order, and the flat ``manual`` result are
+byte-for-byte what they were.
+
 Sub-modules:
+    plugin.py     — This package's plugin descriptor: registry name, packaged
+                    skill, declared actions.
+    manual/       — The package-owned ``context-manual`` skill bundle.
     _snapshots.py — Snapshot and summary persistence for the molt machinery.
     _molt.py      — Context molt core and the system-initiated forced molt.
 """
@@ -65,9 +76,12 @@ from ..tool_family import (
     TRIGGER_UNSUPPORTED_INPUT_FIELD,
     ChildTool,
     DiagnosticDescriptor,
-    ToolFamily,
 )
-from ..tool_family.manual import build_manual_child
+
+# The package's own plugin descriptor: registry name, implementation module,
+# packaged ``manual/`` bundle, and the reserved-``manual`` composition helpers.
+# Every public identity fact below is read from it rather than respelled here.
+from .plugin import CONTEXT_ACTIONS, CONTEXT_DECLARED_ACTIONS, CONTEXT_PLUGIN
 
 # The summarize/rebuild engine. It stays in ``system/summarize.py`` — moving
 # the ~700-line engine and its marker constants is not required to move public
@@ -280,20 +294,34 @@ def _rebuild_action(agent, args: dict) -> dict:
 # branch order: the lifecycle operation first, then the two context-hygiene
 # operations in the order they are used (record, then apply).
 #
-# ``manual`` is absent: ``build_manual_child`` owns that child's schema and
-# handler, and :func:`_build_children` appends it last.
+# ``manual`` is absent: the plugin owns that child, appending it from the
+# packaged ``manual/`` bundle, and rejects any attempt to declare it here.
 _CHILD_SPECS: tuple[tuple[str, dict[str, Any], Any], ...] = (
     ("molt", _MOLT_INPUT_SCHEMA, _context_molt),
     ("summarize", _SUMMARIZE_INPUT_SCHEMA, _summarize_action),
     ("rebuild", _REBUILD_INPUT_SCHEMA, _rebuild_action),
 )
 
-#: Public action order, derived from the one registry (``manual`` last).
-ACTION_ORDER: tuple[str, ...] = tuple(name for name, _s, _h in _CHILD_SPECS) + ("manual",)
+# The registry above and the plugin's declared action list are the same list
+# stated twice — one carries schemas and handlers, one is this package's public
+# declaration. Pinning them at import time is what keeps them one list: a spec
+# added or reordered without updating ``plugin.py`` fails here rather than
+# shipping a family whose public order disagrees with its descriptor.
+if tuple(name for name, _s, _h in _CHILD_SPECS) != CONTEXT_DECLARED_ACTIONS:
+    raise RuntimeError(
+        "context child registry disagrees with CONTEXT_DECLARED_ACTIONS: "
+        f"{tuple(name for name, _s, _h in _CHILD_SPECS)} != {CONTEXT_DECLARED_ACTIONS}"
+    )
 
-#: The installed intrinsic-skill directory ``manual`` reads. This is the
-#: ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "context-manual"
+#: Public action order — the plugin's composed list (``manual`` last).
+ACTION_ORDER: tuple[str, ...] = CONTEXT_ACTIONS
+
+#: The installed intrinsic-skill directory ``manual`` reads — the
+#: ``load_installed_manual`` skill name, not the family name. Retained as the
+#: package-local spelling its sibling intrinsics all use, but aliased to the
+#: descriptor's single declared value rather than restated, so this name and the
+#: packaged bundle it was installed from cannot name two different skills.
+_MANUAL_SKILL_NAME = CONTEXT_PLUGIN.skill_name
 
 #: Envelope metadata the family threads to a handler out-of-band rather than
 #: as action ``input``. ``_tc_id`` is the wire tool_use_id
@@ -322,8 +350,14 @@ def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in action_input.items() if value is not None}
 
 
-def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
-    """Build the four children from the one canonical registry.
+def _build_declared_children(
+    agent, envelope: Mapping[str, Any] | None = None
+) -> list[ChildTool]:
+    """Build this package's own three children from the one canonical registry.
+
+    Only the declared actions: the reserved ``manual`` child is the plugin's,
+    appended by :meth:`IntrinsicToolPlugin.build_family` from the packaged
+    bundle, so no edit here can drop or rebind it.
 
     ``agent`` may be ``None`` for the module-level schema-only family, whose
     children are never dispatched — only their schemas are read.
@@ -357,16 +391,17 @@ def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[Ch
             diagnostics=_CHILD_DIAGNOSTICS.get(name),
         )
         for name, schema, handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, _MANUAL_SKILL_NAME)]
+    ]
 
 
 # Composes the model-facing schema. Building it at import time is also the
 # registry's duplicate/reserved-name collision check: a collision raises
-# ``ToolFamilyError`` here rather than shipping silently. It never dispatches —
-# ``context`` is an intrinsic *module*, not a per-Agent manager object, so
-# there is no instance to hang a family off; ``handle()`` binds one to the
-# passed agent per call from this same registry.
-_FAMILY = ToolFamily("context", _build_children(None))
+# ``ToolFamilyError`` (or, for the reserved ``manual``,
+# ``IntrinsicToolPluginError``) here rather than shipping silently. It never
+# dispatches — ``context`` is an intrinsic *module*, not a per-Agent manager
+# object, so there is no instance to hang a family off; ``handle()`` binds one
+# to the passed agent per call from this same registry.
+_FAMILY = CONTEXT_PLUGIN.build_family(_build_declared_children(None), None)
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +500,9 @@ def handle(agent, args: dict) -> dict:
             raw[key] = envelope[key]
 
     action = raw.get("action")
-    result = ToolFamily("context", _build_children(agent, envelope)).handle(raw)
+    result = CONTEXT_PLUGIN.build_family(
+        _build_declared_children(agent, envelope), agent
+    ).handle(raw)
 
     if action == "manual" and "content" in result:
         return _adapt_manual_result(result)
@@ -474,7 +511,8 @@ def handle(agent, args: dict) -> dict:
         # generic envelope failure.
         return {
             "error": (
-                f"Unknown context action: {action if action is not None else ''}. "
+                f"Unknown {CONTEXT_PLUGIN.name} action: "
+                f"{action if action is not None else ''}. "
                 f"Must be one of: {', '.join(ACTION_ORDER)}."
             )
         }

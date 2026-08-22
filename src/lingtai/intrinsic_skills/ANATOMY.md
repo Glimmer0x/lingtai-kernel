@@ -7,10 +7,7 @@ related_files:
   - src/lingtai/tools/skills/ANATOMY.md
   - pyproject.toml
   - src/lingtai/intrinsic_skills/__init__.py
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/context-manual/assets/molt-template.md
-  - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
-  - src/lingtai/intrinsic_skills/context-manual/reference/summarize-manual/SKILL.md
+  - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
@@ -67,9 +64,6 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 
 - `__init__.py` — the package marker that states the contract above: one
   subdirectory per bundle, copied verbatim, for skills without companion code.
-- `context-manual/` — the `context` family's manual, with `assets/`
-  (`molt-template.md`, `session-journal-entry-template.md`) and the nested
-  `reference/summarize-manual/SKILL.md` sub-skill.
 - `system-manual/` — the largest bundle: the `system` family manual plus ten
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `how-to-change-name`, `llm-adapters`, `procedures-manual`,
@@ -101,7 +95,13 @@ for the per-tool `manual/` bundles and `install_skills_from`
 touches `.library/custom/`, which is the agent's own territory.
 `src/lingtai/tools/`
 supplies the other half of the same install — the per-tool `manual/` bundles —
-so a bundle lives here precisely when no tool package owns it.
+so a bundle lives here precisely when no tool package owns it. The
+`context-manual` bundle left this package for exactly that reason: `context` is
+a tool package, and it now ships its own manual at
+`src/lingtai/tools/context/manual/` as an owned plugin skill
+(`src/lingtai/tools/context/ANATOMY.md`). Its installed name is unchanged —
+`Agent._MANUAL_MOUNT_NAMES` maps the `context` package onto the established
+`context-manual` skill directory.
 
 After the copy, the `skills` capability re-scans `.library/` and renders the
 catalog into the `skills` prompt section
