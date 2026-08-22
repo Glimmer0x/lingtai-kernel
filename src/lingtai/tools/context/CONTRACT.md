@@ -5,6 +5,7 @@ contract_version: 5
 related_files:
   - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/_plugin.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/ANATOMY.md
@@ -70,6 +71,13 @@ Schema and dispatch derive from one child registry.
 Unknown actions and branch/root shape errors fail before handler I/O. `_tc_id` is
 stripped from the closed root and reaches `molt` only. No retired Pad/LingTai or
 system-summarize spelling is accepted.
+
+`_plugin.py::ContextToolPlugin` is the package-local model-facing ownership seam:
+the existing intrinsic module constructs it once, and its actual `get_schema`,
+`handle`, and reserved-manual-child paths serve this same `context` root. It is
+not an Agent Plugin descriptor and neither registers nor activates anything;
+Agent/global registration, prompt reconstruction, session-journal validation,
+and provider lifecycle stay in their current owners.
 
 ## Full reconstruction ordering
 

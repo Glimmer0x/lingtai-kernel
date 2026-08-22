@@ -195,6 +195,50 @@ def test_each_action_advertises_only_its_own_input():
         assert cond["then"]["properties"]["input"]["additionalProperties"] is False
 
 
+def test_context_package_plugin_is_the_live_model_facing_surface(tmp_path, monkeypatch):
+    """The package-local candidate owns actual Context entry points, not metadata.
+
+    It is intentionally not registered or activated as a separate Agent Plugin:
+    the existing intrinsic root remains ``context``.  This verifies that Context's
+    public schema and dispatch bridges call the one local surface, while that
+    surface builds the real reserved manual child used by the family dispatcher.
+    """
+    from lingtai.tools.context._plugin import ContextToolPlugin
+    from lingtai.tools.tool_family import ToolFamily
+
+    plugin = context_tool._CONTEXT_PLUGIN
+    assert isinstance(plugin, ContextToolPlugin)
+    assert plugin.root_name == "context"
+    assert plugin.action_order == ACTION_ORDER
+    assert plugin.schema_family is context_tool._FAMILY
+
+    agent = _agent(tmp_path)
+    try:
+        # The live surface builds the actual direct/unwrapped ManualTool child;
+        # the public context bridge later performs its existing flattening.
+        family = ToolFamily(plugin.root_name, plugin.build_children(agent))
+        manual = family.handle({"action": "manual", "input": {}})
+        assert manual["content"][0]["text"]
+        assert manual["structuredContent"]["manual_path"]
+
+        schema_sentinel = {"surface": "schema"}
+        dispatch_sentinel = {"surface": "dispatch"}
+        seen: list[tuple[object, object]] = []
+        monkeypatch.setattr(plugin, "get_schema", lambda lang="en": schema_sentinel)
+
+        def dispatch_spy(agent_arg, args):
+            seen.append((agent_arg, args))
+            return dispatch_sentinel
+
+        monkeypatch.setattr(plugin, "handle", dispatch_spy)
+        assert context_tool.get_schema() is schema_sentinel
+        call = {"action": "manual", "input": {}}
+        assert context_tool.handle(agent, call) is dispatch_sentinel
+        assert seen == [(agent, call)]
+    finally:
+        agent.stop(timeout=1.0)
+
+
 # ---------------------------------------------------------------------------
 # Strict schema / dispatch rejection for every action.
 # ---------------------------------------------------------------------------

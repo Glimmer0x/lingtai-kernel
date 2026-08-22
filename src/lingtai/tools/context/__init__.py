@@ -48,10 +48,11 @@ the model-facing text lives in the schema descriptions below and in the
 Sub-modules:
     _snapshots.py — Snapshot and summary persistence for the molt machinery.
     _molt.py      — Context molt core and the system-initiated forced molt.
+    _plugin.py    — package-local model-facing schema/dispatch/manual surface.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
@@ -60,14 +61,8 @@ from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_mo
 
 # Molt (the public surface)
 from ._molt import _context_molt, context_forget  # noqa: F401
-from .._manual import load_installed_manual  # noqa: F401
-from ..tool_family import (
-    TRIGGER_UNSUPPORTED_INPUT_FIELD,
-    ChildTool,
-    DiagnosticDescriptor,
-    ToolFamily,
-)
-from ..tool_family.manual import build_manual_child
+from ..tool_family import TRIGGER_UNSUPPORTED_INPUT_FIELD, DiagnosticDescriptor
+from ._plugin import ContextToolPlugin
 
 # The summarize/rebuild engine. It stays in ``system/summarize.py`` — moving
 # the ~700-line engine and its marker constants is not required to move public
@@ -295,83 +290,11 @@ ACTION_ORDER: tuple[str, ...] = tuple(name for name, _s, _h in _CHILD_SPECS) + (
 #: ``load_installed_manual`` skill name, not the family name.
 _MANUAL_SKILL_NAME = "context-manual"
 
-#: Envelope metadata the family threads to a handler out-of-band rather than
-#: as action ``input``. ``_tc_id`` is the wire tool_use_id
-#: ``base_agent._dispatch_tool`` injects into every intrinsic's args; ``molt``
-#: is the one operation that genuinely *consumes* it (it locates the molt's own
-#: ToolCallBlock in the live interface to replay it), so — unlike ``soul``/
-#: ``notification``/``system``, which merely drop it — this family strips it
-#: from the closed root and hands it to that one handler directly. Root
-#: ``reasoning``/``_reasoning`` is threaded the same way for the post-molt
-#: reminder, exactly as ``avatar`` threads its spawn mission brief.
+#: Envelope metadata Context owns out-of-band rather than as action input.
+# ``molt`` alone consumes these values; the package-local model-facing surface
+# lifts them from the closed root and threads them only to that handler.
 _MOLT_ENVELOPE_KEYS = ("_tc_id", "_reasoning", "reasoning", "_initiator")
 
-
-def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
-    """Drop explicit nulls so "absent" and "null" mean the same downstream.
-
-    Strict provider schemas express an optional field as a REQUIRED nullable
-    property, so the model sends ``{"keep_tool_calls": null, "keep_last": null}``
-    for a plain molt. ``rebuild.items`` is the one field this package leaves
-    genuinely optional (a bare ``{}`` is its ordinary call), but a provider that
-    materializes every declared property may still send ``{"items": null}``. The
-    handlers key off ``args.get(...)`` / ``"x" not in args``, so stripping nulls
-    here makes absent and null identical downstream — including ``rebuild``'s
-    no-new-items path — without touching the handlers themselves.
-    """
-    return {key: value for key, value in action_input.items() if value is not None}
-
-
-def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
-    """Build the four children from the one canonical registry.
-
-    ``agent`` may be ``None`` for the module-level schema-only family, whose
-    children are never dispatched — only their schemas are read.
-
-    ``envelope`` carries the out-of-band metadata keys in
-    :data:`_MOLT_ENVELOPE_KEYS`. ``ToolFamily`` correctly passes no envelope
-    field to any child, so the one handler that consumes transport metadata
-    (``molt``, which needs ``_tc_id`` to locate and replay its own
-    ToolCallBlock) receives it here, merged beneath the validated ``input``
-    rather than smuggled through it.
-    """
-    extra = dict(envelope or {})
-
-    def _bind(handler, name: str):
-        def _dispatch(action_input: Mapping[str, Any]) -> dict:
-            args = _strip_nulls(action_input)
-            if name == "molt":
-                # Envelope metadata never overwrites validated action input.
-                for key, value in extra.items():
-                    args.setdefault(key, value)
-            return handler(agent, args)
-
-        return _dispatch
-
-    return [
-        ChildTool(
-            name,
-            schema,
-            _bind(handler, name),
-            title=f"{name} input",
-            diagnostics=_CHILD_DIAGNOSTICS.get(name),
-        )
-        for name, schema, handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, _MANUAL_SKILL_NAME)]
-
-
-# Composes the model-facing schema. Building it at import time is also the
-# registry's duplicate/reserved-name collision check: a collision raises
-# ``ToolFamilyError`` here rather than shipping silently. It never dispatches —
-# ``context`` is an intrinsic *module*, not a per-Agent manager object, so
-# there is no instance to hang a family off; ``handle()`` binds one to the
-# passed agent per call from this same registry.
-_FAMILY = ToolFamily("context", _build_children(None))
-
-
-# ---------------------------------------------------------------------------
-# Schema / description
-# ---------------------------------------------------------------------------
 
 #: This family's own per-action routing prose. The generic composer writes a
 #: neutral "Required operation within the context family." description; the
@@ -393,89 +316,43 @@ _ACTION_ENUM_DESCRIPTION = (
     'context operation.\n'
     'Your name is not here: use system(action=\'name_set\'|\'name_nickname\').'
 )
+_CONTEXT_DESCRIPTION = "Your context: shed it, compact it, rebuild it. One tool, four actions, each with its own strict input object: context(action=..., input={...}, reasoning='why'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: re-read and recompose every canonical prompt source, then apply pending/new summaries, then replay provider context with the new prompt/history; bare input is valid even with zero pending summaries. manual: return the installed context-manual skill. Your name lives on system(action='name_set'|'name_nickname'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away."
+
+
+# The one live package-local model-facing surface.  It owns actual schema
+# composition, dispatch binding, and ManualTool adaptation; it is not an Agent
+# Plugin descriptor and performs no registration or activation.  Keeping the
+# action-spec getter live preserves the existing single source for the
+# schema-only family and every agent-bound dispatch.
+_CONTEXT_PLUGIN = ContextToolPlugin(
+    root_name="context",
+    action_specs=lambda: _CHILD_SPECS,
+    child_diagnostics=_CHILD_DIAGNOSTICS,
+    manual_skill_name=_MANUAL_SKILL_NAME,
+    molt_envelope_keys=_MOLT_ENVELOPE_KEYS,
+    action_enum_description=_ACTION_ENUM_DESCRIPTION,
+    description=_CONTEXT_DESCRIPTION,
+)
+
+# Backward-compatible private seam for focused package tests and consumers that
+# inspect the schema-only family.  Construction still occurred at import time in
+# ``ContextToolPlugin`` and remains the collision check.
+_FAMILY = _CONTEXT_PLUGIN.schema_family
+
+
+def _build_children(agent, envelope=None):
+    """Return Context's real children through its package-local surface."""
+    return _CONTEXT_PLUGIN.build_children(agent, envelope)
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Your context: shed it, compact it, rebuild it. One tool, four actions, each with its own strict input object: context(action=..., input={...}, reasoning=\'why\'). molt: 凝蜕 — shed the conversation, keep the durable stores; requires a written session journal. summarize: record compact replacements for bulky prior tool results (records only, does NOT rebuild). rebuild: re-read and recompose every canonical prompt source, then apply pending/new summaries, then replay provider context with the new prompt/history; bare input is valid even with zero pending summaries. manual: return the installed context-manual skill. Your name lives on system(action=\'name_set\'|\'name_nickname\'); your 灵台 and pad are lingtai(...) and pad(...). Note the two levels: the ACTION named summarize is this domain operation, while the optional ROOT summarize boolean is the unrelated result-presentation control — leave it false here (results are small), and call manual with summarize=false so the exact molt procedure is not summarized away.'
+    return _CONTEXT_PLUGIN.get_description(lang)
 
 
 def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema`` above, rather than hand-assembled: root ``action`` +
-    # per-action ``input`` + required ``reasoning`` + optional ``summarize``,
-    # with a root ``allOf`` correlating each ``action`` const to that exact
-    # action's ``input`` shape on both the Chat and Responses wires.
-    #
-    # ``lang`` is accepted for source compatibility and ignored: schema prose
-    # is canonical English and language-independent.
-    schema = _FAMILY.build_schema()
-    schema["properties"]["action"]["description"] = _ACTION_ENUM_DESCRIPTION
-    return schema
-
-
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
-
-
-def _adapt_manual_result(mcp_result: dict) -> dict:
-    """Flatten the reserved ``manual`` child's canonical result to this family's shape.
-
-    The reserved child is registered unwrapped, so ``ToolFamily.handle()``
-    returns its canonical ``content``/``structuredContent`` result verbatim.
-    The public manual result predates that generic contract and must stay the
-    flat ``load_installed_manual`` shape (``status``, ``manual``,
-    ``manual_path``, plus ``error`` when degraded), so this Host-owned adapter
-    runs strictly *after* dispatch — never inside the child, and never as a
-    second envelope around it.
-    """
-    flat: dict[str, Any] = {
-        "status": mcp_result.get("status", "ok"),
-        "manual": mcp_result["content"][0]["text"],
-        "manual_path": mcp_result["structuredContent"]["manual_path"],
-    }
-    if "error" in mcp_result:
-        flat["error"] = mcp_result["error"]
-    return flat
+    return _CONTEXT_PLUGIN.get_schema(lang)
 
 
 def handle(agent, args: dict) -> dict:
-    """Handle the ``context`` family root — validate the envelope, dispatch one action.
-
-    Envelope validation and cross-action rejection belong to the generic
-    dispatcher (``tool_family/CONTRACT.md``). This function owns only what is
-    context-specific: lifting the intrinsic transport/audit metadata out of the
-    closed root, and the two post-dispatch presentation adaptations below.
-
-    ``_tc_id`` is transport metadata ``base_agent._dispatch_tool`` injects into
-    EVERY intrinsic's args (capabilities like ``web`` never see it). This is
-    the one family that genuinely *consumes* it — ``molt`` locates the molt's
-    own ToolCallBlock by that wire id to replay it into the fresh session — so
-    it is stripped here, at this family's own Host boundary, and threaded to
-    that single handler out-of-band. The shared ``_ROOT_FIELDS`` set is not
-    widened for it, and no other action can observe it.
-    """
-    raw = dict(args or {})
-    envelope = {key: raw.pop(key) for key in _MOLT_ENVELOPE_KEYS if key in raw}
-    # ``reasoning``/``_reasoning`` remain admitted root fields for the generic
-    # dispatcher, so put back the public spelling it knows about; only the
-    # molt handler sees the copy in ``envelope``.
-    for key in ("reasoning", "_reasoning"):
-        if key in envelope:
-            raw[key] = envelope[key]
-
-    action = raw.get("action")
-    result = ToolFamily("context", _build_children(agent, envelope)).handle(raw)
-
-    if action == "manual" and "content" in result:
-        return _adapt_manual_result(result)
-    if result.get("error_code") == "ACTION_REQUIRED":
-        # Preserve a context-shaped unknown-action error rather than the
-        # generic envelope failure.
-        return {
-            "error": (
-                f"Unknown context action: {action if action is not None else ''}. "
-                f"Must be one of: {', '.join(ACTION_ORDER)}."
-            )
-        }
-    return result
+    """Dispatch Context through its package-local model-facing surface."""
+    return _CONTEXT_PLUGIN.handle(agent, args)

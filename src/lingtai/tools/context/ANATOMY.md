@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/_plugin.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/_snapshots.py
@@ -37,15 +38,23 @@ passive lifecycle scenarios.
 ## Components
 
 - `__init__.py`
-  - strict per-action schemas, including genuinely optional `rebuild.items` so
-    bare `{}` is schema-valid;
+  - owns the strict per-action schemas and handlers, including genuinely optional
+    `rebuild.items` so bare `{}` is schema-valid;
   - `_summarize_action` pins record-only engine mode;
   - `_rebuild_action` calls `agent._reconstruct_context` before invoking the
     private summary engine, handles reconstruction failures as result dicts, and
     marks successful engine results `prompt_reconstructed: true`;
-  - `_CHILD_SPECS`, `_build_children`, `_FAMILY`, `get_schema`, `handle` provide
-    single-registry schema/dispatch and isolate `_tc_id` to molt;
-  - manual adaptation resolves `context-manual` once after dispatch.
+  - its one `_CONTEXT_PLUGIN` construction keeps the existing intrinsic root and
+    delegates the public `get_schema`/`handle` bridges without Agent registration
+    or plugin activation.
+- `_plugin.py`
+  - `ContextToolPlugin` is Context's package-local model-facing surface: it
+    composes the schema-only and agent-bound `ToolFamily` instances from the one
+    live `_CHILD_SPECS` source, binds only validated child input, and carries the
+    intrinsic `_tc_id`/reasoning metadata only to `molt`;
+  - it registers the real unwrapped `context-manual` child and, only after
+    dispatch, restores Context's flat manual result; it owns no prompt lifecycle,
+    durable state, global registry entry, or activation descriptor.
 - `../system/summarize.py` — private history-summary engine. It records pending
   marker replacements, marks the applied set done, persists history, and only
   then calls `chat.request_history_rebuild`. It is not a public `system` action.
