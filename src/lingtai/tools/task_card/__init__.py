@@ -30,6 +30,7 @@ from lingtai.kernel._fsutil import atomic_write_json, read_json
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .descriptor import DESCRIPTOR
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -73,7 +74,6 @@ _LEGACY_CONFIG_DIR = "telegram"
 # value forward would silently cap most real agents below the new built-in
 # default instead of leaving them on it.
 _LEGACY_UNTOUCHED_MAX_REFRESHES = 1000
-_MANUAL_SKILL_NAME = "task_card"
 notifications.register_notification_channel("task_card")
 
 
@@ -123,19 +123,23 @@ _START_INPUT_SCHEMA = _object(
 _WATCH_INPUT_SCHEMA = _object({"watch_id": {"type": "string"}}, required=["watch_id"])
 _REMOVE_INPUT_SCHEMA = _object({}, required=[])
 
-_CHILDREN: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("start", _START_INPUT_SCHEMA),
-    ("inspect", _WATCH_INPUT_SCHEMA),
-    ("retry", _WATCH_INPUT_SCHEMA),
-    ("stop", _WATCH_INPUT_SCHEMA),
-    ("remove", _REMOVE_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
+_INPUT_SCHEMAS_BY_ACTION: dict[str, dict[str, Any]] = {
+    "start": _START_INPUT_SCHEMA,
+    "inspect": _WATCH_INPUT_SCHEMA,
+    "retry": _WATCH_INPUT_SCHEMA,
+    "stop": _WATCH_INPUT_SCHEMA,
+    "remove": _REMOVE_INPUT_SCHEMA,
+    "manual": MANUAL_INPUT_SCHEMA,
+}
+_CHILDREN: tuple[tuple[str, dict[str, Any]], ...] = tuple(
+    (action_name, _INPUT_SCHEMAS_BY_ACTION[action_name])
+    for action_name in DESCRIPTOR.action_names
 )
 
 
 def _schema_family() -> ToolFamily:
     return ToolFamily(
-        "task_card",
+        DESCRIPTOR.name,
         [ChildTool(name, schema, lambda _input: {}) for name, schema in _CHILDREN],
     )
 
@@ -144,32 +148,11 @@ _SCHEMA_FAMILY = _schema_family()
 
 
 def get_schema() -> dict[str, Any]:
-    schema = _SCHEMA_FAMILY.build_schema()
-    schema["properties"]["action"]["description"] = (
-        "Declarative Task Card action. start keeps one renderer watch writing the "
-        "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
-        "and stop read or control that one artifact; remove is the terminal "
-        "lifecycle cleanup; manual explains the full contract."
-    )
-    return schema
+    return DESCRIPTOR.decorate_schema(_SCHEMA_FAMILY.build_schema())
 
 
 def get_description() -> str:
-    return (
-        "Manage the intrinsic declarative Task Card artifact. Provide a Python "
-        "renderer under your working directory whose stdout is the full Task Card "
-        "body to write into taskcard/taskcard.md. The capability writes taskcard/"
-        "taskcard.md atomically, writes taskcard/status as exact active/inactive, "
-        "keeps at most one active watch per agent, and leaves projection to "
-        "channel-specific readers. Use it proactively for meaningful long-running, "
-        "multi-step, or parallel work so a human can follow progress; skip it for "
-        "quick single-step work, ritual updates, or a body you cannot keep truthful "
-        "and current. Restart a new watch when one expires mid-task. Use stop to "
-        "pause a watch while preserving its last body, and "
-        "remove once the work is completed, cancelled, or abandoned so the artifact "
-        "cannot mislead a consumer as stale. Actions: start, inspect, retry, stop, "
-        "remove, manual."
-    )
+    return DESCRIPTOR.description
 
 
 class TaskCardError(Exception):
@@ -257,9 +240,9 @@ class TaskCardManager:
             ChildTool("retry", _WATCH_INPUT_SCHEMA, self._retry_child),
             ChildTool("stop", _WATCH_INPUT_SCHEMA, self._stop_child),
             ChildTool("remove", _REMOVE_INPUT_SCHEMA, self._remove_child),
-            build_manual_child(self._agent, _MANUAL_SKILL_NAME),
+            build_manual_child(self._agent, DESCRIPTOR.manual_skill_name),
         ]
-        return ToolFamily("task_card", children)
+        return ToolFamily(DESCRIPTOR.name, children)
 
     def _start_child(self, input_: dict[str, Any]) -> dict[str, Any]:
         renderer_path = self._validate_renderer_path(input_.get("renderer_path"))
@@ -1213,7 +1196,7 @@ def setup(agent: BaseAgent, **_ignored: Any) -> TaskCardManager:
     else:
         manager._agent = agent
     agent.add_tool(
-        "task_card",
+        DESCRIPTOR.name,
         schema=get_schema(),
         handler=manager.handle,
         description=get_description(),

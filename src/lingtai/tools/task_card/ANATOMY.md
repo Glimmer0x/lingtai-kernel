@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/tools/task_card/BEHAVIORS.md
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/descriptor.py
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
@@ -45,13 +46,17 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
-- `__init__.py` — the full capability owner: schema/description, one-watch
-  lifecycle, renderer execution, atomic file writes, error/limit notifications,
-  persisted config loading/validation (`TaskCardManager._load_config`), the
-  one-way legacy-config migration (`TaskCardManager._migrate_legacy_config`),
-  and `setup(agent)` registration.
+- `descriptor.py` — static model-facing `task_card` identity, exact action
+  inventory, public prose, and manual-skill binding. It is consumed by the
+  package's schema, runtime manual, and existing registration paths; it does not
+  activate the tool or own host/channel behavior.
+- `__init__.py` — the full capability controller: one-watch lifecycle,
+  renderer execution, atomic file writes, error/limit notifications, persisted
+  config loading/validation (`TaskCardManager._load_config`), the one-way
+  legacy-config migration (`TaskCardManager._migrate_legacy_config`), and
+  `setup(agent)` registration using the local descriptor.
 - `manual/SKILL.md` — the progressive-disclosure manual for renderer authors
-  and lifecycle use.
+  and lifecycle use, bound by the local descriptor.
 
 ## Connections
 

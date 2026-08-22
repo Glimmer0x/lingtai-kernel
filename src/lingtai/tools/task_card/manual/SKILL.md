@@ -6,6 +6,7 @@ description: >
 last_changed_at: 2026-08-01T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
+- src/lingtai/tools/task_card/descriptor.py
 - src/lingtai/tools/task_card/ANATOMY.md
 - src/lingtai/tools/task_card/CONTRACT.md
 maintenance: |
@@ -50,6 +51,23 @@ on boot and leaves the card `inactive` rather than silently resurrecting a
 dead watch.
 
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
+
+## Model-facing call shape and ownership
+
+`task_card` is one LTP-v2 family: pass the selected `action` and that action's
+strict `input` object, with `reasoning` and the result-postprocessing boolean
+`summarize` only at the root. `manual` takes `{}` as its input. `summarize` is
+never a renderer, watch, or artifact option; no Task Card action consumes it.
+Leave it false when exact artifact paths, `status_value`, watch IDs, or an
+`inspect` body's exact text matters. It is normally unnecessary for the short
+lifecycle receipts, and calls to `manual` should leave it false so this procedure
+is not summarized away.
+
+The package-local `descriptor.py` owns this root's name, exact action inventory,
+model-facing prose, and this manual binding; the existing controller consumes it
+for schema composition, manual dispatch, and registration. It does not activate
+the tool or move threads, renderer subprocesses, atomic artifact writes,
+notifications, or Telegram/Feishu projection out of their current owners.
 
 ## Resident meta projection and the 2000-char cap
 

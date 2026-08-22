@@ -5,6 +5,7 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/descriptor.py
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/registry.py
@@ -153,6 +154,13 @@ declarative artifact and one active watch per agent.
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 `stop`, `remove`, and `manual`.
+
+`descriptor.py` is the package-local static owner of that root name, exact action
+inventory, model-facing prose, and the `manual/SKILL.md` binding. `__init__.py`
+consumes it for schema composition, runtime manual dispatch, and the existing
+registration call. The descriptor has no activation, host, or transport authority:
+threads, renderer subprocesses, artifact writes, notifications, and channel
+projections remain in their current owners.
 
 ## Adapters
 
