@@ -4,6 +4,7 @@ tool: system
 contract_version: 3
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/descriptor.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
@@ -100,13 +101,18 @@ storage; name semantics -> §Anchored claims.
 
 ## Tool surface
 
-Per-action `input` schemas are the data in `src/lingtai/tools/system/schema.py`
-(`ACTION_ORDER`, `INPUT_SCHEMAS`); the model-facing family schema is composed
-from them by `get_schema()` in `src/lingtai/tools/system/__init__.py`, and
-dispatch is the generic `ToolFamily.handle()` that same module delegates to.
-Every call takes `action` + `input` + `reasoning`; the "inputs" columns below
-name properties of the selected action's own `input` object, never root
-siblings.
+Per-action `input` schemas remain the data in
+`src/lingtai/tools/system/schema.py` (`ACTION_ORDER`, `INPUT_SCHEMAS`). The
+package-local `SYSTEM_TOOL_DESCRIPTOR` in `descriptor.py` owns the public
+`system` identity, installed `system-manual` skill name, and ordered references
+to that strict action metadata; `__init__.py` consumes it when composing the
+model-facing family schema, registering action children, and selecting the
+existing post-dispatch manual adapter. It is not a second registry or an
+activation declaration: Host mandatory-intrinsic registration and installed
+manual lifecycle remain unchanged. Dispatch is the generic `ToolFamily.handle()`
+that same module delegates to. Every call takes `action` + `input` +
+`reasoning`; the "inputs" columns below name properties of the selected action's
+own `input` object, never root siblings.
 
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|

@@ -19,12 +19,14 @@ no live agent is slept, suspended, cleared, or destroyed.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from lingtai.tools import system as system_tool
+from lingtai.tools.system.descriptor import SYSTEM_TOOL_DESCRIPTOR
 from lingtai.tools.system.schema import ACTION_ORDER, INPUT_SCHEMAS
 from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA
 
@@ -78,6 +80,52 @@ def test_public_tool_name_and_action_inventory_are_unchanged() -> None:
     assert ACTION_ORDER == _LEGACY_ACTIONS
     # One source for enum order, oneOf/allOf branch order, and child order.
     assert tuple(INPUT_SCHEMAS) == _LEGACY_ACTIONS
+
+
+def test_package_local_descriptor_drives_schema_metadata_and_manual_adapter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The descriptor is a consumed package boundary, not inert plugin metadata."""
+    descriptor = SYSTEM_TOOL_DESCRIPTOR
+    schema = _schema()
+
+    assert descriptor.name == "system"
+    assert descriptor.action_names == _LEGACY_ACTIONS
+    assert tuple(action.name for action in descriptor.actions) == ACTION_ORDER
+    assert tuple(action.input_schema for action in descriptor.actions) == tuple(
+        INPUT_SCHEMAS[action] for action in ACTION_ORDER
+    )
+    assert system_tool._FAMILY.name == descriptor.name
+    assert system_tool._FAMILY.child_names == descriptor.action_names
+    assert schema["properties"]["action"]["enum"] == list(descriptor.action_names)
+    assert (
+        schema["properties"]["action"]["description"]
+        == descriptor.action_enum_description
+    )
+    assert system_tool.get_description() == descriptor.description
+
+    # The per-call manual child must select its installed skill via the same
+    # descriptor, rather than retaining a second package-init literal.
+    manual_descriptor = replace(
+        descriptor, manual_skill_name="system-descriptor-manual-sentinel"
+    )
+    monkeypatch.setattr(system_tool, "SYSTEM_TOOL_DESCRIPTOR", manual_descriptor)
+    path = (
+        tmp_path
+        / ".library"
+        / "intrinsic"
+        / "capabilities"
+        / manual_descriptor.manual_skill_name
+        / "SKILL.md"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text("descriptor manual\n", encoding="utf-8")
+
+    assert system_tool.handle(_StubAgent(tmp_path), {"action": "manual", "input": {}}) == {
+        "status": "ok",
+        "manual": "descriptor manual\n",
+        "manual_path": str(path),
+    }
 
 
 def test_root_envelope_is_exactly_the_four_ltp_v2_fields() -> None:

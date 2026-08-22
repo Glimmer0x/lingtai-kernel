@@ -75,9 +75,11 @@ from .schema import (  # noqa: F401
     ACTION_ENUM_DESCRIPTION,
     ACTION_ORDER,
     INPUT_SCHEMAS,
-    get_description,
 )
-from .._manual import load_installed_manual
+from .descriptor import SYSTEM_TOOL_DESCRIPTOR
+# Historical import surface; the descriptor-backed manual child still delegates
+# to this shared Host-owned loader through ``build_manual_child``.
+from .._manual import load_installed_manual as load_installed_manual  # noqa: F401
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import build_manual_child
 
@@ -131,13 +133,10 @@ from .karma import (  # noqa: F401
 # Module-level intrinsic protocol — family composition and handle()
 # ---------------------------------------------------------------------------
 
-# The installed intrinsic-skill directory ``manual`` reads. This is the
-# ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "system-manual"
-
-# The one canonical action -> handler registry. Names and order come from
-# ``schema.ACTION_ORDER``; ``manual`` is absent because ``build_manual_child``
-# owns that child's schema and handler. Each handler keeps its historical
+# The one canonical action -> handler registry. The package-local descriptor
+# supplies the public action order and installed-manual skill name; ``manual``
+# is absent here because ``build_manual_child`` owns that child's schema and
+# handler. Each handler keeps its historical
 # ``(agent, args)`` signature and its module home, so this migration moves no
 # lifecycle, preset, or summarization logic.
 _ACTION_HANDLERS = {
@@ -190,14 +189,17 @@ def _build_children(agent) -> list[ChildTool]:
         return _dispatch
 
     children: list[ChildTool] = []
-    for action in ACTION_ORDER:
+    for action_metadata in SYSTEM_TOOL_DESCRIPTOR.actions:
+        action = action_metadata.name
         if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
+            children.append(
+                build_manual_child(agent, SYSTEM_TOOL_DESCRIPTOR.manual_skill_name)
+            )
         else:
             children.append(
                 ChildTool(
                     action,
-                    INPUT_SCHEMAS[action],
+                    action_metadata.input_schema,
                     _bind(action),
                     title=f"{action} input",
                 )
@@ -211,7 +213,7 @@ def _build_children(agent) -> list[ChildTool]:
 # ``system`` is an intrinsic *module*, not a per-Agent manager object, so there
 # is no instance to hang a family off; ``handle()`` binds one to the passed
 # agent per call from this same registry.
-_FAMILY = ToolFamily("system", _build_children(None))
+_FAMILY = ToolFamily(SYSTEM_TOOL_DESCRIPTOR.name, _build_children(None))
 
 
 def _build_family(agent) -> ToolFamily:
@@ -221,7 +223,12 @@ def _build_family(agent) -> ToolFamily:
     and building it per call keeps ``agent`` out of module state, which matters
     because one process may serve several agents.
     """
-    return ToolFamily("system", _build_children(agent))
+    return ToolFamily(SYSTEM_TOOL_DESCRIPTOR.name, _build_children(agent))
+
+
+def get_description(lang: str = "en") -> str:
+    """Return the descriptor-owned canonical model-facing system prose."""
+    return SYSTEM_TOOL_DESCRIPTOR.description
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -242,7 +249,9 @@ def get_schema(lang: str = "en") -> dict[str, Any]:
     # notification-tool pointer) is the model's only in-schema guide to *which*
     # action to pick, so it replaces that placeholder here rather than being
     # lost.
-    schema["properties"]["action"]["description"] = ACTION_ENUM_DESCRIPTION
+    schema["properties"]["action"]["description"] = (
+        SYSTEM_TOOL_DESCRIPTOR.action_enum_description
+    )
     return schema
 
 

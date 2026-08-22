@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/tools/system/CONTRACT.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/descriptor.py
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/preset.py
   - src/lingtai/tools/system/schema.py
@@ -38,11 +39,11 @@ System intrinsic — runtime, lifecycle, and identity. Provides the agent with r
 
 ## Components
 
-- `__init__.py` — Package surface, family composition, and dispatch. Re-exports all public API for backward compatibility. Contains:
-  - `get_description` (re-exported from `schema.py`) — tool registration prose.
-  - `get_schema()` (`__init__.py:226-246`) — the composed model-facing family schema. It is built here, not in `schema.py`, because composition belongs next to the child registry it is generated from; it overwrites the generic composer's neutral `action` description with system's own `ACTION_ENUM_DESCRIPTION`.
+- `__init__.py` — Package surface, family composition, and dispatch. Re-exports existing schema data for backward compatibility. Contains:
+  - `get_description()` — the descriptor-owned canonical model-facing tool prose, preserving the existing public function API.
+  - `get_schema()` — the composed model-facing family schema. It is built here, not in `schema.py`, because composition belongs next to the child registry it is generated from; it overwrites the generic composer's neutral `action` description with the descriptor's existing canonical action prose.
   - `_ACTION_HANDLERS` (`__init__.py:142-154`) — the one canonical action→handler registry (eleven entries; `manual` is absent because `build_manual_child` owns that child). Each handler keeps its historical `(agent, args)` signature and its module home. `summarize` is absent from this registry — that public action left for `context` — while `name_set`/`name_nickname` are present, bound to `name.py`.
-  - `_build_children()` (`__init__.py:171-210`) — builds the twelve `ChildTool`s from `schema.ACTION_ORDER` + `schema.INPUT_SCHEMAS`, binding each handler to the agent and appending `build_manual_child(agent, "system-manual")` for the reserved child. `agent=None` yields the schema-only children.
+  - `_build_children()` — builds the twelve `ChildTool`s from the descriptor's ordered action metadata, binding each handler to the agent and appending `build_manual_child(agent, descriptor.manual_skill_name)` for the reserved child. `agent=None` yields the schema-only children.
   - `_FAMILY` (`__init__.py:213`) — the module-level schema-only `ToolFamily`. Building it at import time is also the registry's duplicate/reserved-name collision check: a collision raises `ToolFamilyError` at import rather than shipping silently. It never dispatches.
   - `_build_family()` (`__init__.py:216-223`) — builds the per-call dispatching family bound to the passed agent. System is an intrinsic *module*, not a per-Agent manager object, so there is no instance to cache a family on; per-call construction keeps `agent` out of module state because one process may serve several agents.
   - `_strip_nulls()` (`__init__.py:157-168`) — drops explicit nulls so "absent" and "null" mean the same downstream, preserving the pre-existing handlers' `args.get(...)` defaulting exactly (notably `refresh`'s preset/revert conflict check and `clear`'s fallback to the caller's own name).
@@ -82,6 +83,8 @@ System intrinsic — runtime, lifecycle, and identity. Provides the agent with r
   - `_name_set()` (`name.py:20`) — sets the true name (真名). Refuses an empty name, and refuses a second set (`agent.set_name` raises `RuntimeError` once `agent_name` exists), so the true name is genuinely one-time.
   - `_name_nickname()` (`name.py:32`) — sets or clears the mutable nickname (别名); empty `content` clears it to `None`.
   - Both delegate to the BaseAgent identity Port (`kernel/base_agent/identity.py`), which updates live in-memory identity, writes `.agent.json` via `_build_manifest`, and rewrites the protected prompt `identity` section. Neither is init/config editing, and neither touches the agent's address or working directory — the physical rename is the operator migration workflow in `system-manual`.
+
+- `descriptor.py` — The narrow package-local model-facing descriptor. `SYSTEM_TOOL_DESCRIPTOR` owns only the canonical public `system` name, the existing installed `system-manual` skill name, ordered references to `schema.py`'s strict action inputs, and existing schema prose. `__init__.py` consumes it for its schema-only family identity, per-call child registry, public description/action prose, and manual child. It is not global registration, activation metadata, or a manual installer; those Host-owned lifecycles remain outside this package.
 
 - `schema.py` — Schema **data** only. It deliberately defines no `get_schema()`: the model-facing schema is composed from the data below by `__init__.py`, next to the child registry it is generated from.
   - `ACTION_ORDER` (`schema.py:51-65`) — the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and the child registration order. Exactly `("refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "name_set", "name_nickname", "manual")` — every lifecycle/preset action keeps its pre-migration position; `summarize` was removed (it left for `context`) and the two name actions were appended before the reserved `manual`. No `notification`/`dismiss`.
