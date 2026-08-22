@@ -17,9 +17,10 @@ description: >
   Goose, OpenHands, and Crush are shell-only harnesses with no LingTai backend
   id. This manual owns only the shell-side supervision discipline (async +
   poll, reminders, scheduling, debugging, cleanup).
-version: 1.10.0
-last_changed_at: 2026-08-07T00:00:00Z
+version: 1.10.1
+last_changed_at: 2026-08-22T00:00:00Z
 related_files:
+- src/lingtai/tools/bash/_descriptor.py
 - src/lingtai/tools/bash/__init__.py
 - src/lingtai/tools/bash/CONTRACT.md
 - src/lingtai/tools/bash/ANATOMY.md
@@ -38,6 +39,20 @@ For ordinary short, deterministic one-off shell commands, use the tool schema
 synchronously. For anything involving time, recurring work, external schedulers,
 a silent scheduled job, or a **long-running agent/coding CLI** (see the resident
 rule below), start here.
+
+## Package-local public identity
+
+`src/lingtai/tools/bash/_descriptor.py` owns the package's canonical model-facing
+identity: public name `shell`, ordered actions `run | poll | cancel | manual`,
+and installed manual destination `shell`. The strict family schema and dispatcher
+consume that descriptor, and the reserved `manual` child uses its manual
+destination to load this installed `SKILL.md`. The retained package name `bash`
+is implementation-only; it is not a second model-facing tool or manual name.
+
+The Agent/host still owns capability discovery, registration, audit metadata,
+policy guard, and process safety. This manual describes the package-owned
+model-facing surface; it does not activate shell access or weaken those host
+boundaries.
 
 ## Nested reference catalog
 

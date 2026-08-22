@@ -31,7 +31,11 @@ from typing import Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import build_manual_child
+from ._descriptor import SHELL_TOOL
 from ._shell_dialect import ShellKind
+
+
+RUN_ACTION, POLL_ACTION, CANCEL_ACTION, MANUAL_ACTION = SHELL_TOOL.action_names
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
@@ -158,7 +162,7 @@ CANCEL_INPUT_SCHEMA: dict[str, Any] = {
 # so the schema the wire advertises and the schema the dispatcher validates
 # against are the same object by construction and cannot drift apart.
 MANUAL_INPUT_SCHEMA: dict[str, Any] = dict(
-    build_manual_child(None, "shell").input_schema
+    build_manual_child(None, SHELL_TOOL.manual_skill_name).input_schema
 )
 
 
@@ -174,13 +178,14 @@ def get_description(
         f" Active shell: {kind.display_name}. {kind.sequencing_guidance}"
         if kind is not None else ""
     )
+    tool_name = SHELL_TOOL.public_name
     return (
         f"Execute a shell command and return stdout/stderr. Active shell dialect: {dialect}.{shell_prose}{host} "
         "The dialect and host OS are detected at setup time; calls cannot choose them. Any system program — scripts, git, curl, pip, data pipelines. "
-        "shell(action='run', input={'command': '...'}, reasoning='...') executes a command; "
-        "shell(action='poll', input={'job_id': '...'}, reasoning='...') checks an async job; "
-        "shell(action='cancel', input={'job_id': '...'}, reasoning='...') kills an async job; "
-        "shell(action='manual', input={}, reasoning='...') returns the installed shell-manual skill. "
+        f"{tool_name}(action='{RUN_ACTION}', input={{'command': '...'}}, reasoning='...') executes a command; "
+        f"{tool_name}(action='{POLL_ACTION}', input={{'job_id': '...'}}, reasoning='...') checks an async job; "
+        f"{tool_name}(action='{CANCEL_ACTION}', input={{'job_id': '...'}}, reasoning='...') kills an async job; "
+        f"{tool_name}(action='{MANUAL_ACTION}', input={{}}, reasoning='...') returns the installed {SHELL_TOOL.manual_skill_name}-manual skill. "
         "Returns exit_code, stdout, stderr, plus ok (bool) and command_status ('success'/'failed'). IMPORTANT: top-level status stays 'ok' even when the command FAILS — it only means the shell ran. "
         "Always check exit_code/ok and read the warning field (it names nonzero exits, Python tracebacks, and missing modules); never assume success from status alone. "
         "Avoid broad recursive scans (find … -name, rglob, os.walk, glob('**')) — they time out; prefer `rg --files`. Parse JSONL line-by-line, not as one JSON blob. "
@@ -199,12 +204,12 @@ def _schema_only_family() -> ToolFamily:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
     return ToolFamily(
-        "shell",
+        SHELL_TOOL.public_name,
         [
-            ChildTool("run", RUN_INPUT_SCHEMA, _unused, title="run input"),
-            ChildTool("poll", POLL_INPUT_SCHEMA, _unused, title="poll input"),
-            ChildTool("cancel", CANCEL_INPUT_SCHEMA, _unused, title="cancel input"),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            ChildTool(RUN_ACTION, RUN_INPUT_SCHEMA, _unused, title=f"{RUN_ACTION} input"),
+            ChildTool(POLL_ACTION, POLL_INPUT_SCHEMA, _unused, title=f"{POLL_ACTION} input"),
+            ChildTool(CANCEL_ACTION, CANCEL_INPUT_SCHEMA, _unused, title=f"{CANCEL_ACTION} input"),
+            ChildTool(MANUAL_ACTION, MANUAL_INPUT_SCHEMA, _unused, title=f"{MANUAL_ACTION} input"),
         ],
     )
 
@@ -246,12 +251,12 @@ class ShellFamilyDispatcher:
     def __init__(self, manager: Any, agent: Any) -> None:
         self._manager = manager
         self._family = ToolFamily(
-            "shell",
+            SHELL_TOOL.public_name,
             [
-                ChildTool("run", RUN_INPUT_SCHEMA, self._dispatch_run, title="run input"),
-                ChildTool("poll", POLL_INPUT_SCHEMA, self._dispatch_poll, title="poll input"),
-                ChildTool("cancel", CANCEL_INPUT_SCHEMA, self._dispatch_cancel, title="cancel input"),
-                build_manual_child(agent, "shell"),
+                ChildTool(RUN_ACTION, RUN_INPUT_SCHEMA, self._dispatch_run, title=f"{RUN_ACTION} input"),
+                ChildTool(POLL_ACTION, POLL_INPUT_SCHEMA, self._dispatch_poll, title=f"{POLL_ACTION} input"),
+                ChildTool(CANCEL_ACTION, CANCEL_INPUT_SCHEMA, self._dispatch_cancel, title=f"{CANCEL_ACTION} input"),
+                build_manual_child(agent, SHELL_TOOL.manual_skill_name),
             ],
         )
 
@@ -270,15 +275,15 @@ class ShellFamilyDispatcher:
 
     def _dispatch_run(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
         flat = self._strip_nulls(action_input)
-        flat["action"] = "run"
+        flat["action"] = RUN_ACTION
         flat.setdefault("command", "")
         return self._manager.handle(flat)
 
     def _dispatch_poll(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
-        return self._manager.handle({"action": "poll", "job_id": action_input.get("job_id", "")})
+        return self._manager.handle({"action": POLL_ACTION, "job_id": action_input.get("job_id", "")})
 
     def _dispatch_cancel(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
-        return self._manager.handle({"action": "cancel", "job_id": action_input.get("job_id", "")})
+        return self._manager.handle({"action": CANCEL_ACTION, "job_id": action_input.get("job_id", "")})
 
     def handle(self, args: Mapping[str, Any] | None) -> dict[str, Any]:
         # ``ToolFamily.handle`` validates the envelope, strips/type-checks
@@ -290,5 +295,5 @@ class ShellFamilyDispatcher:
         # (``status``/``error_code``/``message``) is left untouched.
         result = self._family.handle(args)
         if result.get("error_code") == "ACTION_REQUIRED":
-            result["message"] = "action must be one of run, poll, cancel, or manual"
+            result["message"] = SHELL_TOOL.unknown_action_message
         return result

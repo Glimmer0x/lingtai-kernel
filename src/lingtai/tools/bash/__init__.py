@@ -23,6 +23,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._descriptor import SHELL_TOOL
 from ._shell_dialect import (
     ShellDialect,
     ShellInvocation,
@@ -2106,7 +2107,7 @@ def setup(
     # so the async lifecycle and durable state stay one untouched code path.
     dispatcher = ShellFamilyDispatcher(mgr, agent)
     agent.add_tool(
-        "shell", schema=get_schema(), handler=dispatcher.handle,
+        SHELL_TOOL.public_name, schema=get_schema(), handler=dispatcher.handle,
         description=desc, glossary_package=__package__,
     )
     return mgr

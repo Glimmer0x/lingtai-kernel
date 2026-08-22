@@ -4,6 +4,7 @@ tool: shell
 contract_version: 5
 related_files:
   - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_descriptor.py
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
@@ -62,7 +63,14 @@ invariants.
 ## Scope
 
 - Canonical tool name: `shell` (the retained implementation package is `lingtai.tools.bash`).
-- One public tool exposes three actions: `run` (default), `poll`, `cancel`.
+- `bash/_descriptor.py` is the package-local source for that public name, the
+  ordered action ports `run | poll | cancel | manual`, and the installed-manual
+  destination `shell`. `_tool_family.py` consumes it for strict schema
+  composition, dispatch, and the reserved manual child; `setup()` passes its
+  public name to the existing host registration boundary. It owns neither global
+  discovery nor Agent policy, guard, or process safety.
+- One public tool exposes three execution actions: `run` (default internally),
+  `poll`, `cancel`, plus the reserved `manual` action at the public family root.
 - Policy is file-based (`bash_policy.json` is the POSIX default; Windows selects the reviewed `powershell_policy.json`). `yolo=True` at setup
   installs an allow-everything policy (unsandboxed command set) and is the
   documented default for trusted agents. Two policy modes exist: **allowlist**

@@ -28,6 +28,7 @@ import pytest
 
 from tests._notification_store_helpers import notification_store_for
 from lingtai.tools.bash import ShellManager, ShellPolicy, setup
+from lingtai.tools.bash._descriptor import SHELL_TOOL
 from lingtai.tools.bash._tool_family import (
     CANCEL_INPUT_SCHEMA,
     MANUAL_INPUT_SCHEMA,
@@ -37,7 +38,7 @@ from lingtai.tools.bash._tool_family import (
     get_schema,
 )
 
-_ACTIONS = ["run", "poll", "cancel", "manual"]
+_ACTIONS = list(SHELL_TOOL.action_names)
 
 
 def _make_manager(tmp_path: Path) -> ShellManager:
@@ -56,12 +57,16 @@ def _install_shell_manual(working_dir: Path, body: str) -> Path:
     """Install a shell manual exactly where the real initializer puts it.
 
     ``Agent._install_intrinsic_manuals`` maps the retained implementation
-    directory ``bash/`` to the canonical model-facing destination name
-    ``shell`` under ``.library/intrinsic/capabilities/`` — so
-    ``build_manual_child(agent, "shell")`` reads the same body/path the
-    pre-migration ``ShellManager.handle({"action": "manual"})`` did.
+    directory ``bash/`` to the descriptor's canonical model-facing destination
+    under ``.library/intrinsic/capabilities/`` — so
+    ``build_manual_child(agent, SHELL_TOOL.manual_skill_name)`` reads the same
+    body/path the pre-migration ``ShellManager.handle({"action": "manual"})``
+    did.
     """
-    manual_dir = working_dir / ".library" / "intrinsic" / "capabilities" / "shell"
+    manual_dir = (
+        working_dir / ".library" / "intrinsic" / "capabilities"
+        / SHELL_TOOL.manual_skill_name
+    )
     manual_dir.mkdir(parents=True)
     manual_path = manual_dir / "SKILL.md"
     manual_path.write_text(body, encoding="utf-8")
@@ -78,6 +83,18 @@ def _run(dispatcher: ShellFamilyDispatcher, **input_fields) -> dict:
 # Public identity and root envelope
 # ---------------------------------------------------------------------------
 
+def test_package_descriptor_owns_the_public_identity_actions_and_manual_destination():
+    """One package-local immutable descriptor supplies the facts consumed by
+    schema composition, dispatch diagnostics, registration, and manual lookup."""
+    assert SHELL_TOOL.public_name == "shell"
+    assert SHELL_TOOL.action_names == ("run", "poll", "cancel", "manual")
+    assert SHELL_TOOL.manual_skill_name == SHELL_TOOL.public_name
+    assert SHELL_TOOL.unknown_action_message == (
+        "action must be one of run, poll, cancel, or manual"
+    )
+    assert get_schema()["properties"]["action"]["enum"] == _ACTIONS
+
+
 def test_public_model_facing_name_is_shell_with_the_family_schema(tmp_path):
     """The registered public name stays exactly ``shell`` (``bash`` is only the
     retained implementation package), and the registered schema is now the
@@ -87,7 +104,7 @@ def test_public_model_facing_name_is_shell_with_the_family_schema(tmp_path):
 
     setup(agent, yolo=True)
 
-    assert agent.add_tool.call_args.args[0] == "shell"
+    assert agent.add_tool.call_args.args[0] == SHELL_TOOL.public_name
     schema = agent.add_tool.call_args.kwargs["schema"]
     assert schema == get_schema()
     # The legacy flat run-only fields are gone from the public root.
@@ -155,7 +172,9 @@ def test_run_only_fields_live_only_in_run_and_job_id_only_in_poll_cancel():
     assert MANUAL_INPUT_SCHEMA["additionalProperties"] is False
     from lingtai.tools.tool_family.manual import build_manual_child
 
-    assert MANUAL_INPUT_SCHEMA == dict(build_manual_child(None, "shell").input_schema)
+    assert MANUAL_INPUT_SCHEMA == dict(
+        build_manual_child(None, SHELL_TOOL.manual_skill_name).input_schema
+    )
 
 
 def test_every_child_input_schema_is_closed_and_free_of_host_fields():
@@ -193,7 +212,7 @@ def test_unknown_action_fails_with_shells_own_four_action_message(tmp_path):
 
     assert result["status"] == "failed"
     assert result["error_code"] == "ACTION_REQUIRED"
-    assert result["message"] == "action must be one of run, poll, cancel, or manual"
+    assert result["message"] == SHELL_TOOL.unknown_action_message
 
 
 @pytest.mark.parametrize(
@@ -600,7 +619,7 @@ def test_manual_returns_the_canonical_body_and_path_without_double_wrap(tmp_path
     # Same body and same host-local path the installed manual actually holds —
     # the destination `Agent._install_intrinsic_manuals` maps `bash/manual/` to.
     assert result["content"][0]["text"] == manual_path.read_text(encoding="utf-8")
-    assert manual_path.parent.name == "shell"
+    assert manual_path.parent.name == SHELL_TOOL.manual_skill_name
 
     # ``manual`` is a family child only. The engine's own manual branch is
     # gone, so the engine no longer serves documentation: an internal call
