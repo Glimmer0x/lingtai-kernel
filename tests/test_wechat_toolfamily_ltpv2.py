@@ -6,8 +6,10 @@ schema shape (``action``/``input``/``reasoning``/``summarize``), the
 ``handle_wechat``/``WechatManager.handle`` reject malformed envelopes,
 cross-action field leakage, missing required root fields, and unknown
 actions/params (``ACTION_REQUIRED`` / ``INVALID_ARGUMENT``) before any
-manager I/O — then that every one of the 10 real actions routes to the
-correct flat manager call. ``send``'s ``text``/``media_path`` is a
+manager I/O — then that every one of the 9 declared actions routes to the
+correct flat manager call, while the reserved ``manual`` action (appended by
+``WECHAT_PLUGIN``) bypasses the manager entirely and answers straight from the
+packaged skill. ``send``'s ``text``/``media_path`` is a
 non-exclusive ``anyOf`` (the manager sends both in one call when both are
 given), not a ``oneOf`` choice — covered explicitly below.
 """
@@ -24,6 +26,7 @@ from lingtai.mcp_servers.wechat._family import (
     handle_wechat,
 )
 from lingtai.mcp_servers.wechat.manager import WechatManager
+from lingtai.mcp_servers.wechat.plugin import WECHAT_PLUGIN
 
 
 class _CountingManager:
@@ -237,7 +240,6 @@ def test_unsupported_root_argument_is_rejected_before_action_lookup():
         ("add_contact", {"user_id": "wxid_a@im.wechat", "alias": "friend"}),
         ("remove_contact", {"alias": "friend"}),
         ("accounts", {}),
-        ("manual", {}),
     ],
 )
 def test_dispatch_routes_each_action_to_flat_manager_call(action, action_input):
@@ -250,6 +252,17 @@ def test_dispatch_routes_each_action_to_flat_manager_call(action, action_input):
     # The child handler must receive exactly {"action": action, **input} —
     # never "reasoning", "_reasoning", or "summarize".
     assert manager.calls[0] == {"action": action, **action_input}
+
+
+def test_manual_bypasses_the_manager_and_answers_from_the_plugin():
+    """``manual`` is plugin-owned (WECHAT_PLUGIN): it never reaches the manager."""
+    manager = _CountingManager()
+    result = handle_wechat(manager, {"action": "manual", "input": {}, "reasoning": "probe"})
+
+    assert manager.calls == []
+    assert result == WECHAT_PLUGIN.manual_payload()
+    assert result["status"] == "ok"
+    assert result["action"] == "manual"
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +332,11 @@ def test_dispatch_covers_all_ten_actions_exactly_once():
     assert set(inputs) == set(WECHAT_ACTIONS)
     for action in WECHAT_ACTIONS:
         handle_wechat(manager, {"action": action, "input": inputs[action], "reasoning": "r"})
-    assert [c["action"] for c in manager.calls] == list(WECHAT_ACTIONS)
+    # ``manual`` is plugin-owned and never reaches the manager (see
+    # test_manual_bypasses_the_manager_and_answers_from_the_plugin); the other
+    # nine declared actions still dispatch flat, in stable order.
+    declared = [action for action in WECHAT_ACTIONS if action != "manual"]
+    assert [c["action"] for c in manager.calls] == declared
 
 
 # ---------------------------------------------------------------------------

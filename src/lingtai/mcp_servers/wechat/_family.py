@@ -3,6 +3,12 @@
 This module owns only the public WeChat envelope and action branches. The
 manager remains the legacy result/business boundary behind the validated
 family, mirroring ``lingtai.mcp_servers.telegram._family``.
+
+Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
+this module declares WeChat's own actions and their strict `input` branches,
+and `WECHAT_PLUGIN` appends the reserved `manual` action from the packaged
+`SKILL.md`. `manual` therefore never routes through the manager and cannot be
+omitted, re-schema'd, or rebound to other material from here.
 """
 from __future__ import annotations
 
@@ -11,18 +17,12 @@ from typing import Any
 
 from lingtai.tools.tool_family import ChildTool, ToolFamily
 
-from .. import _skill
+from .plugin import WECHAT_ACTIONS, WECHAT_DECLARED_ACTIONS, WECHAT_PLUGIN
 
-# Kept local to avoid importing the manager (which consumes this schema).
-_SKILL_NAME = "wechat-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
-    "lingtai.mcp_servers.wechat"
-)
-
-_ACTIONS = (
-    "send", "check", "read", "reply", "search",
-    "contacts", "add_contact", "remove_contact", "accounts", "manual",
-)
+# The package's own actions plus the plugin-appended reserved ``manual``. Kept
+# local to avoid importing the manager (which consumes this schema).
+_DECLARED_ACTIONS = WECHAT_DECLARED_ACTIONS
+_ACTIONS = WECHAT_ACTIONS
 
 
 def _object(
@@ -69,7 +69,7 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
         required=["user_id"],
         any_of=[{"required": ["text"]}, {"required": ["media_path"]}],
     )
-    return {
+    return WECHAT_PLUGIN.action_input_schemas({
         "send": send,
         "check": _object({}),
         "read": _object(
@@ -139,17 +139,15 @@ def _wechat_input_schemas() -> dict[str, dict[str, Any]]:
             one_of=[{"required": ["alias"]}, {"required": ["user_id"]}],
         ),
         "accounts": _object({}),
-        "manual": _object({}),
-    }
+    })
 
 
 def _schema_only_family() -> ToolFamily:
     schemas = _wechat_input_schemas()
-    return ToolFamily(
-        "wechat",
+    return WECHAT_PLUGIN.build_family(
         [
             ChildTool(action, schemas[action], lambda _input: {})
-            for action in _ACTIONS
+            for action in _DECLARED_ACTIONS
         ],
     )
 
@@ -178,7 +176,7 @@ def wechat_schema() -> dict[str, Any]:
         "add_contact: save a contact (user_id, alias). "
         "remove_contact: remove a contact (alias or user_id). "
         "accounts: list configured WeChat accounts. "
-        + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
+        + WECHAT_PLUGIN.manual_action_description()
     )
     return schema
 
@@ -245,24 +243,25 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_wechat_family(manager: Any | None) -> ToolFamily:
+    """Compose the public family: manager-backed declared actions + plugin manual.
+
+    Only WeChat's own actions are built here. ``manual`` is appended by
+    ``WECHAT_PLUGIN`` and answered directly from the packaged ``SKILL.md``,
+    with or without a live manager — the same payload the manager's own
+    ``_handle_manual()`` returns, minus the possibility of the business
+    boundary replacing it.
+    """
     schemas = _wechat_input_schemas()
-    children: list[ChildTool] = []
-    for action in _ACTIONS:
-        if action == "manual":
-            handler = (
-                (lambda _input: manager.handle({"action": "manual"}))
-                if manager is not None
-                else lambda _input: _skill.manual_payload(
-                    _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
-                )
-            )
-        else:
-            handler = (
-                (lambda input_, action=action: manager.handle({"action": action, **dict(input_)}))
-                if manager is not None else (lambda _input: {})
-            )
-        children.append(ChildTool(action, schemas[action], handler))
-    return ToolFamily("wechat", children)
+    children = [
+        ChildTool(
+            action,
+            schemas[action],
+            (lambda input_, action=action: manager.handle({"action": action, **dict(input_)}))
+            if manager is not None else (lambda _input: {}),
+        )
+        for action in _DECLARED_ACTIONS
+    ]
+    return WECHAT_PLUGIN.build_family(children)
 
 
 def handle_wechat(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -285,4 +284,5 @@ def handle_wechat(manager: Any | None, args: Mapping[str, Any] | None) -> dict[s
 
 
 WECHAT_SCHEMA = wechat_schema()
-WECHAT_ACTIONS = _ACTIONS
+# ``WECHAT_ACTIONS`` is re-exported from ``plugin.py`` (imported above) so the
+# public action list has exactly one definition.
