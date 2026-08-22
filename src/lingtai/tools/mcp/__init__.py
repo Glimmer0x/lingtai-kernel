@@ -22,6 +22,16 @@ the public action values stay ``info``/``manual``, now carried in the canonical
 ``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope with a strict
 empty ``input`` per action. Neither action's observable result changed.
 
+Packaging: this directory is an **Agent Plugins v1.0.0** package. ``plugin.json``
+beside this module is the manifest the kernel's own plugin reader validates, and
+the manual is an owned skill at ``skills/mcp-manual/`` rather than a bare
+``manual/`` directory convention — see ``lingtai/tools/_plugin.py`` and the
+:data:`~lingtai.tools.mcp.plugin.MCP_TOOL_PLUGIN` descriptor, which is the single
+source of the family's name, its action list, and the mount name the reserved
+``manual`` child reads from. Packaging is presentation-layer only: the package
+ships no ``mcp.json``, so nothing about it registers, activates, or launches an
+MCP server.
+
 Ownership: this module is the agent-callable *tool* slice only. The registry
 machinery it renders (validation, JSONL I/O, catalog load, identity projection,
 addon decompression, XML build) is a service and lives at
@@ -34,10 +44,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
 
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from ..tool_family import ChildTool
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from .plugin import MCP_DECLARED_ACTIONS, MCP_TOOL_PLUGIN
 
 if TYPE_CHECKING:
+    from ..tool_family import ToolFamily
     from lingtai.kernel.base_agent import BaseAgent
 
 PROVIDERS = {"providers": [], "default": "builtin"}
@@ -144,8 +156,14 @@ _ACTION_DESCRIPTION = (
 )
 
 
-def _build_family(agent: "BaseAgent | None") -> ToolFamily:
+def _build_family(agent: "BaseAgent | None") -> "ToolFamily":
     """Build the two-child ``mcp`` family; the registry is declared exactly once.
+
+    Composition is the plugin's: :data:`~lingtai.tools.mcp.plugin.MCP_TOOL_PLUGIN`
+    owns the family name and appends the reserved ``manual`` child bound to the
+    owned ``mcp-manual`` skill's mount name, so this module declares only mcp's
+    *own* action. Declaring ``manual`` here would raise ``BuiltinToolPluginError``
+    rather than quietly shipping a manual pointing somewhere else.
 
     With an ``agent``, children are bound to real handlers for dispatch. With
     ``None``, the module-level schema-only family is built: its handlers raise
@@ -154,27 +172,30 @@ def _build_family(agent: "BaseAgent | None") -> ToolFamily:
     raises here rather than shipping silently). Both paths declare the same
     ordered children, so the composed schema and the dispatching family can
     never drift apart.
+
+    The plugin registers its ``manual`` child directly and unwrapped:
+    ``ToolFamily.handle()`` must dispatch that child's own canonical
+    MCP-compatible result verbatim (no double wrap). mcp's flat public shape is
+    reconstructed from it strictly *after* dispatch, in ``handle_mcp`` — never
+    inside a registered child.
     """
     if agent is None:
         def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
         info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
     else:
         info_handler = lambda _input: _reconcile(agent)  # noqa: E731
-        # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
-        # this child's own canonical MCP-compatible result verbatim (no double
-        # wrap). mcp's flat public shape is reconstructed from that canonical
-        # result strictly *after* dispatch, in ``handle_mcp`` — never inside a
-        # registered child.
-        manual_child = build_manual_child(agent, "mcp")
-    return ToolFamily(
-        "mcp",
+    # Keyed by the plugin's declared action list, so the enum order the schema
+    # advertises and the children that dispatch it come from one tuple; an
+    # action declared without a handler raises here rather than at call time.
+    handlers: dict[str, Any] = {"info": info_handler}
+    return MCP_TOOL_PLUGIN.build_family(
         [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
-            manual_child,
+            ChildTool(name, _EMPTY_INPUT, handlers[name], title=f"{name} input")
+            for name in MCP_DECLARED_ACTIONS
         ],
+        agent,
     )
 
 

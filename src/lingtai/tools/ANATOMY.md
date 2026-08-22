@@ -46,6 +46,9 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/mcp/CONTRACT.md
+  - tests/test_builtin_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -158,6 +161,17 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — built-in tool **packaging**: `BuiltinToolPlugin` binds one
+  tool package's Agent Plugins v1.0.0 `plugin.json`, the Python package that
+  ships it, and the owned `skills/<manual skill>` the reserved `manual`
+  action serves, raising at import when the three disagree;
+  `discover_tool_plugin` turns a package root into the mount plan
+  `Agent._install_intrinsic_manuals` copies, delegating all specification
+  validation to `lingtai.services.plugin_registry.read_plugin` rather than
+  forking it. Not a plugin runtime: it registers nothing, launches nothing,
+  and reports a tool package that ships an `mcp.json` as a packaging error
+  instead of a registrable server. `mcp/` is the first converted package
+  (`src/lingtai/tools/_plugin.py`, `src/lingtai/tools/mcp/ANATOMY.md`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).

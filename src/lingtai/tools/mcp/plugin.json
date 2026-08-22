@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mcp",
+  "version": "1.0.0",
+  "description": "LingTai's per-agent MCP server registry signpost: the read-only mcp tool plus the mcp-manual Agent Skill it routes every registration, activation, and troubleshooting question to.",
+  "homepage": "https://github.com/Lingtai-AI/lingtai-kernel",
+  "license": "Apache-2.0",
+  "keywords": ["lingtai", "builtin-tool", "mcp", "registry", "signpost"],
+  "extensions": {
+    "ai.lingtai.tool": {
+      "package": "lingtai.tools.mcp",
+      "manual_skill": "mcp-manual"
+    }
+  }
+}

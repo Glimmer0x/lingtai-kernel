@@ -552,17 +552,28 @@ class Agent(BaseAgent):
         """Wipe and rewrite ``.library/intrinsic/`` from kernel-shipped manuals.
 
         Runs near the end of ``__init__`` and ``_setup_from_init``. Installs
-        every capability's ``manual/`` bundle into
+        every capability's manual into
         ``.library/intrinsic/capabilities/<name>/``, **regardless of whether
         this agent enabled the capability**. The library is kernel-shipped
         documentation — agents should be able to read about a capability
         before they configure it.
+
+        Two source layouts, discovered per package. A tool package carrying an
+        Agent Plugins v1.0.0 ``plugin.json`` is read as a real plugin and its
+        manifest-declared owned skill is mounted (``install_tool_plugin``); a
+        package without one keeps the original ``manual/`` directory convention.
+        Both end at the same destination, so which layout a tool uses is
+        invisible to the model and to the reserved ``manual`` action.
 
         Never touches ``.library/custom/``. That is the agent's territory.
         """
         import shutil
         import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
+        from lingtai.tools._plugin import (
+            MANIFEST_FILENAME as PLUGIN_MANIFEST_FILENAME,
+            discover_tool_plugin,
+        )
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -572,6 +583,42 @@ class Agent(BaseAgent):
         if intrinsic_dir.exists():
             shutil.rmtree(intrinsic_dir)
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
+
+        def install_tool_plugin(entry: Path, subdir: str) -> None:
+            """Mount one Agent Plugins v1.0.0 built-in tool package.
+
+            A tool package carrying ``plugin.json`` states its identity in a
+            manifest instead of the bare ``manual/`` directory convention, and
+            its manual is an owned Agent Skill under ``skills/``. Discovery goes
+            through ``lingtai.tools._plugin.discover_tool_plugin``, which reads
+            it with ``services.plugin_registry.read_plugin`` — the same reader,
+            the same manifest grammar, and the same §4.1 path containment a
+            third-party plugin gets, so a built-in package cannot hold itself to
+            a laxer standard.
+
+            Mounting is a copy into ``.library/intrinsic/``, exactly as the
+            legacy convention's is, and nothing more: no ``mcp_registry.jsonl``
+            record is written and no server is launched. A tool plugin that
+            ships an ``mcp.json`` is reported as a problem by the discovery
+            helper and its servers stay unregistered — the model-facing tool
+            surface is not a second route into the MCP registry. A rejected
+            manifest leaves the capability unmounted and logged rather than
+            half-installed and silent.
+            """
+            plan, problems = discover_tool_plugin(entry)
+            for problem in problems:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=entry.name,
+                    reason=str(problem.get("error", "")),
+                )
+            if plan is None:
+                return
+            for destination_name, source in plan["mounts"]:
+                destination = intrinsic_dir / subdir / destination_name
+                if destination.exists():
+                    continue
+                shutil.copytree(source, destination)
 
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
@@ -584,6 +631,11 @@ class Agent(BaseAgent):
                 # Browser is an internal browse subcomponent. Its former manual
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
+                    continue
+                # Plugin-shaped packages are discovered from their manifest; the
+                # two layouts coexist while the remaining tools are converted.
+                if (entry / PLUGIN_MANIFEST_FILENAME).is_file():
+                    install_tool_plugin(entry, subdir)
                     continue
                 src = entry / "manual"
                 if src.is_dir():
@@ -617,10 +669,11 @@ class Agent(BaseAgent):
                     continue
                 shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
 
-        # Every tool package with a manual/ installs into
+        # Every tool package with a manual — a plugin.json manifest declaring an
+        # owned skill, or the original manual/ directory — installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
         # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan; tools without a manual/ (the
+        # former core/ + capabilities/ dual scan; tools with neither (the
         # file tools, the non-email intrinsics whose manuals ship as
         # intrinsic_skills bundles below) are simply skipped.
         install_from(tools_pkg, "capabilities")

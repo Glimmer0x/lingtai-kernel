@@ -1,8 +1,8 @@
 ---
 related_files:
-- src/lingtai/tools/mcp/manual/SKILL.md
+- src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
 maintenance: |
-  Third-party/legacy MCP wiring reference routed to from mcp/manual/SKILL.md; update it whenever the npx/uvx/HTTP server wiring path or the legacy mcp/servers.json mechanism changes.
+  Third-party/legacy MCP wiring reference routed to from mcp/skills/mcp-manual/SKILL.md; update it whenever the npx/uvx/HTTP server wiring path or the legacy mcp/servers.json mechanism changes.
 ---
 
 # Third-party and legacy MCP routes

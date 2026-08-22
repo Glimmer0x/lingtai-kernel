@@ -5,7 +5,12 @@ contract_version: 1
 related_files:
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/ANATOMY.md
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
+  - src/lingtai/tools/mcp/plugin.py
+  - src/lingtai/tools/mcp/plugin.json
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/services/plugin_registry.py
+  - tests/test_builtin_tool_plugin_package.py
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -129,6 +134,38 @@ which appends catalog entries named in init.json's `addons: [...]`, append-only
 and idempotent). Identity records are read separately via `read_identities`. `mcp`
 only reads, validates, and renders; `info` re-reads and re-injects on demand.
 
+## Packaging
+
+This tool ships as a real **Agent Plugins v1.0.0** package. The layout is part of
+the contract:
+
+```text
+src/lingtai/tools/mcp/
+    plugin.json                     # manifest: $schema + name: mcp + ai.lingtai.tool
+    plugin.py                       # MCP_TOOL_PLUGIN descriptor (BuiltinToolPlugin)
+    skills/mcp-manual/SKILL.md      # the manual, as a plugin-owned Agent Skill
+```
+
+- **The manifest is the identity.** `plugin.json` names the tool; the reserved
+  reverse-domain `ai.lingtai.tool` extension names the shipping Python package and
+  the owned manual skill. `MCP_TOOL_PLUGIN` re-states all three and raises
+  `BuiltinToolPluginError` at import if any disagrees, so code and manifest cannot
+  drift.
+- **One owner for the specification.** Manifest grammar and §4.1 path containment
+  are validated by `lingtai.services.plugin_registry.read_plugin` — the same reader
+  a third-party plugin goes through. `lingtai.tools._plugin` must not fork it.
+- **The manual is an owned skill.** `Agent._install_intrinsic_manuals` discovers
+  this package from its manifest and mounts the manifest-declared skill at
+  `.library/intrinsic/capabilities/mcp/`; that mounted copy is what
+  `action="manual"` serves, and its path stays `<agent>/.library/intrinsic/
+  capabilities/mcp/SKILL.md`.
+- **Packaging grants no new power.** This package MUST NOT ship an `mcp.json`.
+  Mounting a tool plugin writes no `mcp_registry.jsonl` record — in particular no
+  `source="plugin:mcp"` record — spawns no process, and does not make `mcp` a
+  declared or discovered Agent Plugin. Registration remains `register_plugins` for
+  operator-declared external plugins, and activation remains an explicit
+  `init.json` top-level `mcp` entry.
+
 ## Cross-platform invariants
 
 Do not change any of the following; documented for reviewers only.
@@ -141,6 +178,9 @@ Do not change any of the following; documented for reviewers only.
   `_reconcile` / `setup`, keeping the `lingtai.tools → lingtai` back-edge deferred.
 - **Identity safety:** identity projection strips secret fields before they can
   reach the prompt; only allowlisted, non-secret account fields are surfaced.
+- **Manual mount:** the model-facing manual path is unchanged by the plugin
+  packaging — `.library/intrinsic/capabilities/mcp/SKILL.md`, mounted from the
+  plugin's owned `skills/mcp-manual/` at boot.
 
 ## Anchored claims
 

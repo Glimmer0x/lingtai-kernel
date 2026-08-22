@@ -1,9 +1,9 @@
 ---
 related_files:
-- src/lingtai/tools/mcp/manual/SKILL.md
-- src/lingtai/tools/mcp/manual/reference/curated-addons.md
+- src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
+- src/lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md
 maintenance: |
-  MCP troubleshooting reference routed to from mcp/manual/SKILL.md and cross-linking curated-addons.md; update it as new boot-error patterns or update/deregister flows are discovered.
+  MCP troubleshooting reference routed to from mcp/skills/mcp-manual/SKILL.md and cross-linking curated-addons.md; update it as new boot-error patterns or update/deregister flows are discovered.
 ---
 
 # MCP troubleshooting

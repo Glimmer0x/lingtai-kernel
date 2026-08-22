@@ -129,6 +129,11 @@ exclude = [
     "i18n/*.json",
     "*/*.json",
     "*/manual/**/*",
+    # Agent Plugins v1.0.0 tool packages own their manual as a skill under
+    # skills/<name>/ instead of manual/. The manifest itself is covered by
+    # the "*/*.json" glob above; without this line the wheel would ship a
+    # plugin.json declaring a skills/ directory that is not in the archive.
+    "*/skills/**/*",
     # Shared future tool-call contract plus one
     # src/lingtai/tools/<tool>/CONTRACT.md per built-in tool. The runtime and
     # development graph use these invariants; omitting either entry silently

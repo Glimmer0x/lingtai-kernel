@@ -5,6 +5,7 @@ related_files:
   - scripts/generate_release_manifest.py
   - scripts/publish_release_assets.py
   - reports/bash-async-relaunch-durability-20260713.html
+  - reports/real-plugin-candidates/mcp.md
   - reports/issue-167-initial-diagnostics-explainer.html
   - reports/kernel-release-v0.13.0-20260620/candidate_head.txt
   - reports/kernel-release-v0.13.0-20260620/commits.md
@@ -91,6 +92,11 @@ re-running the tooling. This is an archive, not a component, so it owns no
     `shortstat.txt`, `dist-ls.txt`, `dist-sha256.txt`, `build.log`,
     `twine-check.log`, `validation.log`. Bundles differ in which of these
     exist, because the release tooling changed between cuts.
+- `real-plugin-candidates/` — one Markdown record per built-in tool converted
+  into a real Agent Plugins v1.0.0 package: what the conversion had to clear to
+  count as real, the boundaries it deliberately left alone, and the verification
+  behind it. `mcp.md` is the first, and is the reference slice the remaining
+  conversions follow.
 - Standalone explainers — self-contained HTML written for one investigation
   each: `bash-async-relaunch-durability-20260713.html`,
   `issue-167-initial-diagnostics-explainer.html`,

@@ -101,7 +101,7 @@ removed with them, so an unrecognized `"minimax"`/`"zhipu"` name now raises
 the factory's own documented `ValueError` like any other unknown provider,
 never an uncaught `ModuleNotFoundError`. Wire either provider through a
 third-party MCP server instead — see
-`src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md`, the
+`src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md`, the
 skill-owned procedure route. Naming either via `provider=`, `default_engine=`,
 or `engines={}` at `web` composition time raises `RetiredProviderError` — a
 composition-time, actionable failure, never a silent DuckDuckGo substitution

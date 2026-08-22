@@ -1,9 +1,9 @@
 ---
 related_files:
-- src/lingtai/tools/mcp/manual/SKILL.md
-- src/lingtai/tools/mcp/manual/reference/troubleshooting.md
+- src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
+- src/lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md
 maintenance: |
-  Kernel-curated MCP addon setup contract routed to from mcp/manual/SKILL.md and cross-linked from troubleshooting.md; update it whenever a curated addon (imap/telegram/feishu/wechat/whatsapp/cloud_mail) changes its config fields or install story.
+  Kernel-curated MCP addon setup contract routed to from mcp/skills/mcp-manual/SKILL.md and cross-linked from troubleshooting.md; update it whenever a curated addon (imap/telegram/feishu/wechat/whatsapp/cloud_mail) changes its config fields or install story.
 ---
 
 # Curated addons — imap / telegram / feishu / wechat / whatsapp / cloud_mail
