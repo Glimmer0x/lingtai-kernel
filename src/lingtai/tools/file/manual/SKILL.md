@@ -6,6 +6,7 @@ tags: [files, read, write, edit, grep, glob, encoding, utf-8]
 last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/__init__.py
+- src/lingtai/tools/file/plugin.py
 - src/lingtai/tools/file/CONTRACT.md
 - src/lingtai/tools/file/_read.py
 - src/lingtai/tools/file/_write.py

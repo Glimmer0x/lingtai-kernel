@@ -158,6 +158,18 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — tool **plugin packaging** descriptor, the `lingtai.tools` twin
+  of `mcp_servers/_plugin.py`. `ToolPlugin` binds one package's identity, its
+  bundled `manual/SKILL.md` (loaded and name-checked at construction), and its
+  capability declaration (`capability_declaration()`) — the record shape
+  `registry.BUILTIN_TOOLS`/`CORE_DEFAULTS`/`get_all_providers` and the
+  `Agent._install_intrinsic_manuals` destination publish. It also owns the
+  reserved-action promise: `actions()`, `action_input_schemas()`, and
+  `build_family()` append `manual` from the packaged skill and raise
+  `ToolPluginError` if a package declares, re-schemas, or rebinds it.
+  Declarative only — no discovery, import-by-name, mounting, registration, or
+  config reading; activation, defaults, guards, and the manual install sweep
+  stay with the host (`registry.py`, `lingtai/agent.py`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -192,7 +204,16 @@ emitted as a public name or a second schema.
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
 five operation modules once per manager and reaches the working tree only
-through the injected `FileIOService`. Unlike `bash`/`web_search`, the file
+through the injected `FileIOService`. `file` is the one plugin-packaged tool
+today: `file/plugin.py`'s `FILE_PLUGIN` declares the capability's module, boot
+defaults, provider metadata, packaged manual, and its own five actions, and
+`file/__init__.py` composes the schema, the dispatching family (with the
+plugin-appended reserved `manual`), `PROVIDERS`, and the `setup()` mount from
+it. The registry tables here stay the runtime source `setup_capability` reads —
+generating them from the descriptor would eagerly import the tool and break
+this module's lazy-import discipline — and
+`tests/test_file_tool_plugin_package.py` pins that they equal
+`FILE_PLUGIN.capability_declaration()`. Unlike `bash`/`web_search`, the file
 migration kept no configuration aliases: `read`, `write`, `edit`, `glob`, and
 `grep` are unknown capability names that fail loudly. Capability groups no
 longer exist at all — `file` was `_GROUPS`' only entry, so the map,

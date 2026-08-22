@@ -128,6 +128,14 @@ BUILTIN_TOOLS: dict[str, str] = {
     # the envelope dispatch, and all five operation implementations. The
     # pre-migration ``read``/``write``/``edit``/``glob``/``grep`` capabilities
     # and packages are gone, with no alias — those names now fail loudly.
+    #
+    # ``file`` is the one plugin-packaged tool today: this entry and its
+    # ``CORE_DEFAULTS`` entry below must equal
+    # ``lingtai.tools.file.plugin.FILE_PLUGIN.capability_declaration()``
+    # (``tests/test_file_tool_plugin_package.py``). This table stays the
+    # runtime source ``setup_capability`` reads — it is not generated from the
+    # descriptor, because resolving one here would eagerly import the tool and
+    # break this module's lazy-import discipline.
     "file": "lingtai.tools.file",
     "vision": "lingtai.tools.vision",
     # Unified public web capability.  ``web_search`` is a one-way input alias

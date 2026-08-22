@@ -621,8 +621,11 @@ class Agent(BaseAgent):
         # intrinsic/capabilities/<name>/ — agents see one flat capability
         # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
         # former core/ + capabilities/ dual scan; tools without a manual/ (the
-        # file tools, the non-email intrinsics whose manuals ship as
-        # intrinsic_skills bundles below) are simply skipped.
+        # non-email intrinsics whose manuals ship as intrinsic_skills bundles
+        # below) are simply skipped. This scan is the mount half of a
+        # plugin-packaged tool's contract: ``file`` ships its own
+        # ``manual/SKILL.md`` and ``ToolPlugin.manual_destination`` declares the
+        # ``<name>`` this loop computes for it.
         install_from(tools_pkg, "capabilities")
         install_skills_from(skills_pkg, "capabilities")
 

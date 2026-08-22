@@ -294,16 +294,17 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
     # copied next to capability manuals under .library/intrinsic/capabilities/.
     agent, workdir = _mk_agent(tmp_path)
     try:
-        skill_md = (
-            workdir
-            / ".library"
-            / "intrinsic"
-            / "capabilities"
-            / "file-manual"
-            / "SKILL.md"
-        )
+        capabilities = workdir / ".library" / "intrinsic" / "capabilities"
+        skill_md = capabilities / "read-manual" / "SKILL.md"
         assert skill_md.is_file()
-        body = skill_md.read_text(encoding="utf-8")
+        assert "name: read-manual" in skill_md.read_text(encoding="utf-8")
+
+        # ``file-manual`` is no longer standalone: it is the ``file`` plugin's
+        # packaged manual bundle, installed by the same sweep at the
+        # destination that plugin declares.
+        file_manual_md = capabilities / "file" / "SKILL.md"
+        assert file_manual_md.is_file()
+        body = file_manual_md.read_text(encoding="utf-8")
         assert "name: file-manual" in body
         assert "encoding='gbk'" in body
         assert "iconv -f gbk -t utf-8" in body

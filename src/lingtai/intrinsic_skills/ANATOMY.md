@@ -11,7 +11,6 @@ related_files:
   - src/lingtai/intrinsic_skills/context-manual/assets/molt-template.md
   - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
   - src/lingtai/intrinsic_skills/context-manual/reference/summarize-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/SKILL.md
   - src/lingtai/intrinsic_skills/lingtai-doctor/scripts/doctor.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/SKILL.md
@@ -86,9 +85,13 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `scripts/bench_agent_session_rebuild.py`.
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
-- Single-file bundles — `file-manual/`, `lingtai-manual/`, `pad-manual/`,
-  `psyche-manual/`, `read-manual/`, and `soul-manual/`, each one `SKILL.md`
-  documenting its namesake surface.
+- Single-file bundles — `lingtai-manual/`, `pad-manual/`, `psyche-manual/`,
+  `read-manual/`, and `soul-manual/`, each one `SKILL.md` documenting its
+  namesake surface. `file-manual/` is deliberately absent: the `file` tool is
+  plugin-packaged and owns its manual as
+  `src/lingtai/tools/file/manual/SKILL.md`, which the same install sweep copies
+  to `capabilities/file/`. `read-manual/` stays here — it is a nested reference
+  the file manual points at, not a second top-level manual action.
 
 ## Connections
 

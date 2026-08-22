@@ -9,6 +9,13 @@ resolution, numbered-line read output, continuation metadata, ``max_chars``
 cap, ``line_truncated``, edit ambiguity/missing handling, the full-write
 receipt, glob sorting, and grep regex/line/path results and caps.
 
+The package is plugin-packaged (``plugin.py``, ``.._plugin``): ``FILE_PLUGIN``
+is the one declaration of the capability's identity — its registry module, boot
+defaults, provider metadata, packaged ``manual/SKILL.md``, and the five actions
+this package owns. The public schema, the dispatching family, ``PROVIDERS``, and
+the ``setup()`` mount are all composed from it, and the reserved ``manual`` child
+is appended by the plugin rather than registered by :class:`FileManager`.
+
 Per ``../CONTRACT.md`` "Implementation independence", the six children share
 nothing but the family name and the wire envelope: each operation module is
 self-contained and none imports another. Each child's canonical raw result is
@@ -19,21 +26,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
+from .._plugin import ToolPluginError
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
 from . import _edit, _glob, _grep, _read, _write
+from .plugin import FILE_ACTIONS, FILE_DECLARED_ACTIONS, FILE_PLUGIN
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
 
-PROVIDERS = {"providers": [], "default": "builtin"}
+# Provider metadata for ``registry.get_all_providers``, sourced from the one
+# declaration rather than restated here.
+PROVIDERS = FILE_PLUGIN.providers_declaration()
 
-# The one family-owned manual. ``file-manual`` is the installed intrinsic skill
-# bundle (``src/lingtai/intrinsic_skills/file-manual/``) that already covers all
-# five operations; ``read-manual`` remains a nested parent-owned reference it
-# points at for read pagination/truncation depth, not a competing second
-# top-level manual action.
-FAMILY_MANUAL_SKILL = "file-manual"
+# The one family-owned manual, packaged in this plugin as ``manual/SKILL.md``
+# (frontmatter name ``file-manual``) and installed by the host into
+# ``.library/intrinsic/capabilities/file/``. ``read-manual`` remains a nested
+# parent-owned reference it points at for read pagination/truncation depth, not
+# a competing second top-level manual action.
+FAMILY_MANUAL_SKILL = FILE_PLUGIN.manual_destination
 
 _READ_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -121,26 +131,39 @@ _GLOB_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
+# This package's own five actions, keyed by public action name. ``manual`` is
+# deliberately absent: the plugin appends the reserved action from the packaged
+# ``manual/SKILL.md`` and rejects any attempt to declare it here.
+_DECLARED_SCHEMAS_BY_ACTION: dict[str, dict[str, Any]] = {
+    "read": _READ_INPUT_SCHEMA,
+    "write": _WRITE_INPUT_SCHEMA,
+    "edit": _EDIT_INPUT_SCHEMA,
+    "glob": _GLOB_INPUT_SCHEMA,
+    "grep": _GREP_INPUT_SCHEMA,
+}
+if set(_DECLARED_SCHEMAS_BY_ACTION) != set(FILE_DECLARED_ACTIONS):
+    raise ToolPluginError(
+        "file declares an action without an input schema (or the reverse): "
+        f"{sorted(FILE_DECLARED_ACTIONS)} vs {sorted(_DECLARED_SCHEMAS_BY_ACTION)}"
+    )
+
+# Canonical child order comes from the plugin's declared action list, so the
+# schema branch order and the dispatch registry order are the same one fact.
+_DECLARED_SCHEMAS: dict[str, dict[str, Any]] = {
+    action: _DECLARED_SCHEMAS_BY_ACTION[action] for action in FILE_DECLARED_ACTIONS
 }
 
-# Canonical child order: the five operations, then the reserved ``manual``.
-# Each entry pairs a child's public action name with its own strict input
-# schema; the operation modules supply the matching handlers.
-_CHILD_SCHEMAS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("read", _READ_INPUT_SCHEMA),
-    ("write", _WRITE_INPUT_SCHEMA),
-    ("edit", _EDIT_INPUT_SCHEMA),
-    ("glob", _GLOB_INPUT_SCHEMA),
-    ("grep", _GREP_INPUT_SCHEMA),
-    ("manual", _MANUAL_INPUT_SCHEMA),
+# Every public action's own strict ``input`` schema — the five declared above
+# plus the plugin-appended reserved ``manual``.
+ACTION_INPUT_SCHEMAS: dict[str, dict[str, Any]] = FILE_PLUGIN.action_input_schemas(
+    _DECLARED_SCHEMAS
 )
 
-# The five operation modules, in the same order as their children above.
+#: The complete public action list. Aliases the plugin's composed list so this
+#: module never restates the action set the schema is built from.
+ACTIONS: tuple[str, ...] = FILE_ACTIONS
+
+# The five operation modules, in the plugin's declared action order.
 _OPERATION_MODULES = (_read, _write, _edit, _glob, _grep)
 
 
@@ -148,22 +171,31 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
 
-def _build_family(handlers: Sequence[Callable[[Mapping[str, Any]], dict[str, Any]]] | None = None) -> ToolFamily:
-    """Build the six-child ``file`` family from the one canonical registry.
+def _build_family(
+    agent: "BaseAgent | None" = None,
+    handlers: Sequence[Callable[[Mapping[str, Any]], dict[str, Any]]] | None = None,
+) -> ToolFamily:
+    """Build the six-child ``file`` family through the plugin descriptor.
 
-    One builder serves both uses, so the schema the model sees and the registry
-    that actually dispatches can never drift apart. With *handlers* omitted the
-    result is schema-only: every child gets a handler that raises, which is what
-    module-level :data:`_FAMILY` uses to compose :func:`get_schema` and to prove
-    at import time that the fixed registry has no duplicate or reserved-name
-    collision (``ToolFamilyError`` would raise here rather than shipping
-    silently). :class:`FileManager` passes real agent-bound handlers.
+    This builder declares only this package's five operations; the reserved
+    ``manual`` child is appended by :data:`~.plugin.FILE_PLUGIN`, bound to the
+    manual destination the plugin declares. One builder serves both uses, so
+    the schema the model sees and the registry that actually dispatches can
+    never drift apart. With *handlers* omitted the result is schema-only: every
+    declared child gets a handler that raises, which is what module-level
+    :data:`_FAMILY` uses to compose :func:`get_schema` and to prove at import
+    time that the fixed registry has no duplicate or reserved-name collision
+    (``ToolPluginError``/``ToolFamilyError`` would raise here rather than
+    shipping silently). :class:`FileManager` passes real agent-bound handlers
+    plus the agent the plugin binds ``manual`` to.
     """
     children = []
-    for index, (name, schema) in enumerate(_CHILD_SCHEMAS):
+    for index, name in enumerate(FILE_DECLARED_ACTIONS):
         handler = handlers[index] if handlers is not None else _unused
-        children.append(ChildTool(name, schema, handler, title=f"{name} input"))
-    return ToolFamily("file", children)
+        children.append(
+            ChildTool(name, ACTION_INPUT_SCHEMAS[name], handler, title=f"{name} input")
+        )
+    return FILE_PLUGIN.build_family(children, agent)
 
 
 _FAMILY = _build_family()
@@ -187,7 +219,8 @@ def get_description(lang: str = "en") -> str:
         "file(action='grep', ...) to search file contents by regex. Text files "
         "only — this tool cannot read binary, images, or audio. Use "
         "file(action='manual', input={}, reasoning='load file guidance') once "
-        "for the installed file-manual. Read file-manual before non-UTF-8 files "
+        f"for the installed {FILE_PLUGIN.skill_name}. Read "
+        f"{FILE_PLUGIN.skill_name} before non-UTF-8 files "
         "or a careful search/edit workflow; it also carries the nested "
         "read-manual reference for read pagination, truncation, and "
         "line_truncated depth, plus the bash/Python metadata workflow (file "
@@ -217,6 +250,8 @@ def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
 class FileManager:
     """One per-Agent dispatcher over the six file children.
 
+    It binds this package's five declared operations; the sixth child,
+    ``manual``, belongs to :data:`~.plugin.FILE_PLUGIN` and is appended by it.
     Holds no mutable state of its own: each operation is bound once here and
     reaches the working tree only through the injected ``agent._file_io``
     service.
@@ -227,12 +262,14 @@ class FileManager:
         operations = [
             self._bind(module.build_operation(agent)) for module in _OPERATION_MODULES
         ]
-        # The reserved ``manual`` child is registered directly and unwrapped:
+        # Only the five declared operations are bound here. The reserved
+        # ``manual`` child is appended by ``FILE_PLUGIN`` from its packaged
+        # skill's declared destination, so no change to this manager can drop
+        # or rebind it. It is registered directly and unwrapped:
         # ``ToolFamily.handle()`` returns its own canonical MCP-compatible
         # result verbatim for ``action="manual"`` (no double wrap), and it
         # performs no target file operation.
-        operations.append(build_manual_child(agent, FAMILY_MANUAL_SKILL).handler)
-        self._family = _build_family(operations)
+        self._family = _build_family(agent, operations)
 
     @staticmethod
     def _bind(operation: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
@@ -264,13 +301,20 @@ class FileManager:
 
 
 def setup(agent: "BaseAgent") -> FileManager:
-    """Compose the one public ``file`` tool on *agent*."""
+    """Compose the one public ``file`` tool on *agent*.
+
+    The mounted tool name and glossary package come from
+    :data:`~.plugin.FILE_PLUGIN`, so the capability the registry resolves, the
+    family the schema advertises, and the tool actually registered on the agent
+    are the same declared identity. Mounting itself stays the host's: this runs
+    only because ``registry.setup_capability`` called it.
+    """
     manager = FileManager(agent)
     agent.add_tool(
-        "file",
+        FILE_PLUGIN.name,
         schema=get_schema(),
         handler=manager.handle,
         description=get_description(),
-        glossary_package=__package__,
+        glossary_package=FILE_PLUGIN.package,
     )
     return manager

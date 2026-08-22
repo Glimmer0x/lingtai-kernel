@@ -6,6 +6,9 @@ related_files:
   - src/lingtai/tools/file/BEHAVIORS.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/plugin.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/file/_read.py
   - src/lingtai/tools/file/_write.py
   - src/lingtai/tools/file/_edit.py
@@ -13,7 +16,6 @@ related_files:
   - src/lingtai/tools/file/_grep.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/tools/tool_family/ANATOMY.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - src/lingtai/tools/file/glossary-en.md
   - src/lingtai/tools/file/glossary-wen.md
@@ -37,16 +39,35 @@ model-facing handler over six canonical children — `read`, `write`, `edit`,
 composition and envelope dispatch delegate to the generic `tool_family`
 infrastructure; everything else about the file surface lives here.
 
+It is a **plugin-packaged** tool: the same folder ships the operation code, the
+bundled `manual/SKILL.md` the host installs into the agent's intrinsic library,
+and the capability declaration the built-in registry publishes for it. One
+descriptor, `plugin.py`'s `FILE_PLUGIN`, states all three, and the five actions
+this package owns. `manual` is not one of them — the plugin appends the
+reserved action itself.
+
 ## Components
 
-- `__init__.py` — the six child input schemas, the one registry builder, the
-  `FileManager` dispatcher, and `setup()` registration
-  (`src/lingtai/tools/file/__init__.py:1-273`).
-- `_build_family()` — the single handler-parameterized registry builder. Called
-  with no arguments it yields the module-level schema-only `_FAMILY` used by
-  `get_schema()`; called with bound handlers it yields the dispatching family.
-  One builder means the advertised schema and the dispatch registry cannot
-  drift apart (`src/lingtai/tools/file/__init__.py:151-169`).
+- `plugin.py` — the package's plugin descriptor. `FILE_PLUGIN` states the
+  capability/family name, the module `registry.BUILTIN_TOOLS` resolves, the
+  `CORE_DEFAULTS` boot kwargs, the `PROVIDERS` metadata, and the packaged
+  manual's skill name; `FILE_DECLARED_ACTIONS` lists this package's own five
+  actions with `manual` deliberately absent, and `FILE_ACTIONS` is the
+  plugin-composed public list (`src/lingtai/tools/file/plugin.py:1-44`).
+- `manual/SKILL.md` — the plugin-owned manual (frontmatter `name: file-manual`)
+  that `Agent._install_intrinsic_manuals` copies to
+  `.library/intrinsic/capabilities/file/` and `action="manual"` returns.
+- `__init__.py` — the five declared child input schemas, the one registry
+  builder, the `FileManager` dispatcher, and `setup()` registration — the
+  schema, the family, `PROVIDERS`, and the mounted tool name all composed from
+  `FILE_PLUGIN` (`src/lingtai/tools/file/__init__.py:1-290`).
+- `_build_family()` — the single agent/handler-parameterized registry builder.
+  It declares only the five operations and hands them to
+  `FILE_PLUGIN.build_family()`, which appends the reserved `manual` child.
+  Called with no arguments it yields the module-level schema-only `_FAMILY`
+  used by `get_schema()`; called with an agent and bound handlers it yields the
+  dispatching family. One builder means the advertised schema and the dispatch
+  registry cannot drift apart, and the plugin means neither can drop `manual`.
 - `_read.py` — the read operation plus its paging/truncation math
   (`_apply_cap`), per-call cap resolution (`_resolve_call_cap`), the
   `DEFAULT_READ_CAP_CHARS`/`READ_HARD_CAP_CHARS` constants, and the spill-aware
@@ -72,9 +93,15 @@ Every operation reaches the working tree only through the injected
 `write` and `edit` stop at that durable I/O boundary: they have no prompt-manager
 or context-reconstruction connection and never hot-load a changed prompt source.
 Activation is owned separately by `context.rebuild` and passive refresh/molt.
-The reserved `manual` child loads the `file-manual` intrinsic skill bundle
-through `tool_family.manual`, which reads it from the agent's installed
-`.library/intrinsic/capabilities/` tree.
+The reserved `manual` child is built by `FILE_PLUGIN`, not by `FileManager`,
+and is bound to the destination the plugin declares — so no manager change can
+drop or rebind it. The host boundary is unchanged: it still loads through
+`tool_family.manual`, which reads the installed copy from the agent's
+`.library/intrinsic/capabilities/file/` tree rather than from the package.
+`registry.BUILTIN_TOOLS["file"]`, `CORE_DEFAULTS["file"]`, and that install
+destination must equal `FILE_PLUGIN.capability_declaration()`; those host
+tables and the install sweep stay the runtime source, and
+`tests/test_file_tool_plugin_package.py` pins the agreement.
 
 ## Composition
 

@@ -4,6 +4,9 @@ tool: file
 contract_version: 3
 related_files:
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/plugin.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/file/_read.py
   - src/lingtai/tools/file/_write.py
   - src/lingtai/tools/file/_edit.py
@@ -15,7 +18,6 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/kernel/tool_result_summary.py
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
@@ -246,8 +248,14 @@ likewise stays false so exact procedure is not summarized away.
 
 ## Manual
 
-The family owns exactly one manual: `action="manual"` returns the installed
-`file-manual` intrinsic skill bundle. It performs no target file operation and
+The family owns exactly one manual, and it owns it as a **packaged skill**:
+`src/lingtai/tools/file/manual/SKILL.md` (frontmatter `name: file-manual`)
+ships inside this package. `action="manual"` returns the copy the host
+installed from it at `.library/intrinsic/capabilities/file/SKILL.md` — the
+destination `FILE_PLUGIN.manual_destination` declares. The child is built by
+`FILE_PLUGIN`, never by `FileManager`, so a manager change cannot drop or
+rebind it, and the package may not declare, re-schema, or re-handle `manual`
+(`ToolPluginError` at import time). It performs no target file operation and
 touches no path other than the manual's own, and its input is strict empty.
 The result is the canonical child shape — full body at `content[0].text`, the
 host-local path at `structuredContent.manual_path` — returned without double
@@ -279,6 +287,9 @@ is observed from the executor, never stored.
 | Write/edit receipts are returned verbatim | `file/__init__.py` (`handle`) | `tests/test_file_tool_family.py::test_write_and_edit_receipts_are_verbatim` |
 | Chat and Responses wires keep the correlation | `llm/openai/adapter.py` | `tests/test_file_tool_family.py::test_chat_and_responses_wire_parity` |
 | `summarize` is honored and never reaches a handler | `kernel/tool_result_summary.py` | `tests/test_file_tool_family.py::test_summarize_is_recognized_and_stripped` |
+| Registry entries equal the plugin's capability declaration | `file/plugin.py`, `tools/registry.py` | `tests/test_file_tool_plugin_package.py::test_declaration_matches_the_shipped_builtin_registry_entries` |
+| The package cannot declare, re-schema, or rebind `manual` | `tools/_plugin.py` | `tests/test_file_tool_plugin_package.py::test_a_package_cannot_declare_re_schema_or_rebind_the_reserved_manual` |
+| The host installs the packaged manual at the declared destination | `agent.py` (`_install_intrinsic_manuals`), `file/plugin.py` | `tests/test_file_tool_plugin_package.py::test_host_installs_the_packaged_bundle_and_manual_answers_from_it` |
 
 ## Verification matrix
 
@@ -289,12 +300,14 @@ is observed from the executor, never stored.
 | Per-operation behavior unchanged | `tests/test_layers_file.py`, `tests/test_read_continuation.py` | read a large file, resume via `next_offset` | silent data loss on long reads |
 | Receipts not obscured | `tests/test_file_tool_family.py` | `write` then inspect the raw result | agent cannot confirm a mutation |
 | Manual is no-I/O | `tests/test_file_tool_family.py` | call `action="manual"` on a read-only tree | manual becomes a side-effecting call |
+| Plugin packaging: declaration, packaged manual, mount destination | `tests/test_file_tool_plugin_package.py` | boot an agent, read `.library/intrinsic/capabilities/file/SKILL.md` | the capability's module, defaults, and manual drift into three disagreeing places |
 
 Run before merging:
 
 ```bash
 python -m pytest tests/test_file_tool_family.py tests/test_layers_file.py \
-  tests/test_read_continuation.py tests/test_intrinsic_manual_actions.py -q
+  tests/test_read_continuation.py tests/test_intrinsic_manual_actions.py \
+  tests/test_file_tool_plugin_package.py -q
 ```
 
 ## Schema and glossary ownership

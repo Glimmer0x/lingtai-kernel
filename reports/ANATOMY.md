@@ -49,6 +49,7 @@ related_files:
   - reports/kernel-release-v0.15.2-20260627/release-report.md
   - reports/kernel-release-v0.15.2-20260627/release_version.txt
   - reports/pr297-tool-result-replay-explainer.html
+  - reports/real-plugin-candidates/file.md
   - reports/t3-relaunch-watcher-redaction-explainer.html
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -97,6 +98,12 @@ re-running the tooling. This is an archive, not a component, so it owns no
   `pr297-tool-result-replay-explainer.html`, and
   `t3-relaunch-watcher-redaction-explainer.html`. Each embeds its own styling
   and depends on no repository asset.
+- `real-plugin-candidates/` — one Markdown record per model-facing tool
+  converted to a real Plugin package, written at conversion time: what the
+  reference slice actually was, the equivalent contract for that tool, what was
+  implemented, what behavior and host boundaries were preserved, and the
+  validation run. `file.md` is the first (`file`, against the Telegram curated
+  plugin reference).
 
 ## Connections
 

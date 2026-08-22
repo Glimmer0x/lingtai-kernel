@@ -187,7 +187,8 @@ the file or any state.
 - [ ] Step 5: the manual result has exactly the keys `status`, `content`,
       `structuredContent`; `status == "ok"`; `content[0].text` is the full
       body and starts with `name: file-manual`; `structuredContent.manual_path`
-      ends with `capabilities/file-manual/SKILL.md`; the file at that path
+      ends with `capabilities/file/SKILL.md` (the `file` plugin's declared
+      manual destination); the file at that path
       equals the body (the dispatched result is the canonical child result,
       verbatim, no double wrap).
 - [ ] Step 6: any non-empty manual `input` fails with
@@ -355,7 +356,9 @@ no `.rules` file and no ledger record.
       `content`, `structuredContent`; `content[0].text` is the full
       `file-manual` body (`name: file-manual` frontmatter) and equals the file
       read from `structuredContent.manual_path`; the path ends with
-      `capabilities/file-manual/SKILL.md`.
+      `capabilities/file/SKILL.md` — the destination
+      `src/lingtai/tools/file/plugin.py`'s `FILE_PLUGIN` declares for its
+      packaged `manual/SKILL.md`.
 - [ ] Step 2: every non-empty `input` on a strict-empty manual child fails
       with `error_code: "INVALID_ARGUMENT"` before the manual is loaded.
 - [ ] Step 3: avatar's manual returns its own flat shape `{status, action,

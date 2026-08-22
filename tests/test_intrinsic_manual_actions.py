@@ -55,13 +55,14 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
             "system-manual",
             "web",
             "vision",
-            "file-manual",
+            "file",
             "task_card",
         )
     }
 
     # The five old file roots are gone; the one ``file`` family owns a single
-    # ``manual`` action returning ``file-manual``.
+    # ``manual`` action returning its plugin-packaged ``file-manual`` skill,
+    # installed by the host at ``capabilities/file/``.
     file_tool.setup(agent)
 
     shell_manager = shell_tool.ShellManager.__new__(shell_tool.ShellManager)
@@ -97,7 +98,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "task_card": ("task_card", lambda: task_card_manager.handle(
             {"action": "manual", "input": {}, "reasoning": "load task card guidance"}
         )),
-        "file": ("file-manual", lambda: agent.handlers["file"](
+        "file": ("file", lambda: agent.handlers["file"](
             {"action": "manual", "input": {}, "reasoning": "load file guidance"}
         )),
     }
@@ -379,7 +380,7 @@ def test_file_manual_bodies_explain_one_time_manual_guidance() -> None:
     asserted. The guidance that still matters is: manual is a one-time lookup,
     ordinary work resumes after it, and repeating it is an error loop.
     """
-    file_body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
+    file_body = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
     read_body = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text(encoding="utf-8")
     for body in (file_body, read_body):
         assert "ordinary" in body
