@@ -53,21 +53,43 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# Schema data — canonical per-action input schemas and registration prose.
-# ``get_schema`` is composed below from ``INPUT_SCHEMAS``; ``schema.py``
-# deliberately defines no second one.
+# Package identity — the plugin descriptor that owns this tool's name, its
+# packaged manual skill, its declared action list, and the reserved ``manual``
+# action appended to it. Nothing below spells ``"notification"``, the mount
+# name, or the reserved action itself.
+from .plugin import (  # noqa: F401
+    NOTIFICATION_ACTIONS,
+    NOTIFICATION_DECLARED_ACTIONS,
+    NOTIFICATION_PLUGIN,
+)
+
+# Schema data — canonical per-action input schemas and registration prose for
+# the actions this package declares. ``get_schema`` is composed below from
+# ``INPUT_SCHEMAS``; ``schema.py`` deliberately defines no second one.
 from .schema import (  # noqa: F401
     ACTION_ENUM_DESCRIPTION,
-    ACTION_ORDER,
-    INPUT_SCHEMAS,
+    DECLARED_INPUT_SCHEMAS,
     get_description,
 )
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family import ChildTool
 
 # Single-source delegate — the canonical dismissal helper.  No notification
 # logic is reimplemented here.
 from lingtai.kernel.notifications import delay_notification_channel, dismiss_channel
+
+
+#: The complete public action list — declared actions then the plugin-appended
+#: ``manual``. Re-exported under the pre-plugin name so callers that read the
+#: family's action order keep one import site.
+ACTION_ORDER: tuple[str, ...] = NOTIFICATION_ACTIONS
+
+#: The complete per-action ``input`` schema map, composed the same way: this
+#: package's declared schemas plus the plugin's reserved ``manual`` schema. The
+#: ``KeyError`` a missing declared schema would raise here is deliberate — it
+#: fires at import, not at the first model call.
+INPUT_SCHEMAS: dict[str, Any] = NOTIFICATION_PLUGIN.action_input_schemas(
+    {action: DECLARED_INPUT_SCHEMAS[action] for action in NOTIFICATION_DECLARED_ACTIONS}
+)
 
 
 # Placeholder returned by ``check`` — the live payload (``_meta.agent_meta.notifications.attention``
@@ -83,19 +105,7 @@ _CHECK_PLACEHOLDER_MESSAGE = (
 )
 
 
-# The exact degraded-manual sentence pinned by ``CONTRACT.md`` Port. Kept
-# verbatim across the ToolFamily migration — see ``_adapt_manual_result``.
-_MANUAL_MISSING_ERROR = (
-    "notification manual missing — initializer may have failed or "
-    "capability not installed correctly"
-)
-
-# The installed intrinsic-skill directory ``manual`` reads. This is the
-# ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "notification-manual"
-
-
-def _schema_only_family() -> ToolFamily:
+def _schema_only_family():
     """Build the module-level ``ToolFamily`` used only to compose the schema.
 
     Notification is an *intrinsic*: the kernel imports this module once and
@@ -108,17 +118,23 @@ def _schema_only_family() -> ToolFamily:
     duplicate and no reserved-name collision on ``manual``
     (``ToolFamilyError`` raises here, at import, rather than shipping
     silently).
+
+    Composition goes through the plugin, so the schema this module advertises
+    and the family :func:`_build_family` dispatches are appended the same
+    reserved ``manual`` child — with the agentless variant here, which carries
+    the identical name, title, and strict-empty input but refuses to dispatch.
     """
 
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
-    return ToolFamily(
-        "notification",
+    return NOTIFICATION_PLUGIN.build_family(
         [
-            ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
-            for action in ACTION_ORDER
-        ],
+            ChildTool(
+                action, INPUT_SCHEMAS[action], _unused, title=f"{action} input"
+            )
+            for action in NOTIFICATION_DECLARED_ACTIONS
+        ]
     )
 
 
@@ -178,17 +194,14 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
     this Host-owned adapter runs strictly *after* dispatch, in :func:`handle`
     — never inside a registered child.
 
-    The degraded ``error`` sentence is restated here rather than forwarded.
-    The shared loader builds it as ``f"{skill_name} manual missing — ..."``
-    from the *installed directory* name, which for this family is
-    ``notification-manual`` — so forwarding it verbatim would silently change
-    the contract-pinned sentence from "notification manual missing" to
-    "notification-manual manual missing". Restating the exact pinned text is
-    Host presentation of an unchanged fact (the manual is absent), not a
-    rewrite of the child's canonical result, which stays canonical and
-    untouched. The alternative — renaming the loader's argument or its
-    message — would change every other family's error text, which no evidence
-    supports.
+    The degraded ``error`` sentence is forwarded, not restated. The shared
+    loader builds it as ``f"{skill_name} manual missing — ..."`` from the
+    installed directory name, and since the manual became a package-owned
+    skill that directory is this plugin's mount name — ``notification`` — so
+    the loader already produces the contract-pinned sentence verbatim. Before
+    the plugin conversion the manual mounted at ``notification-manual`` and
+    this adapter had to substitute the pinned text; owning the skill removed
+    that divergence instead of papering over it.
     """
     flat: dict[str, Any] = {
         "status": mcp_result.get("status", "ok"),
@@ -196,7 +209,7 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
         "manual_path": mcp_result["structuredContent"]["manual_path"],
     }
     if "error" in mcp_result:
-        flat["error"] = _MANUAL_MISSING_ERROR
+        flat["error"] = mcp_result["error"]
     return flat
 
 
@@ -367,7 +380,7 @@ def _list_hooks(agent, args: dict) -> dict:
     return {"status": "ok", "hooks": result}
 
 
-def _build_family(agent) -> ToolFamily:
+def _build_family(agent):
     """Build the per-call dispatching family with handlers bound to *agent*.
 
     Notification is an intrinsic with a module-level ``handle(agent, args)``
@@ -377,12 +390,14 @@ def _build_family(agent) -> ToolFamily:
     per call keeps ``agent`` out of module state, which matters because one
     process may serve several agents.
 
-    The reserved ``manual`` child is registered directly and unwrapped, per
-    ``tool_family/CONTRACT.md``: ``ToolFamily.handle()`` returns its canonical
+    The reserved ``manual`` child is appended by the plugin — bound to this
+    package's own installed skill, never to an entry in the handler map below
+    — and stays unwrapped, per ``tool_family/CONTRACT.md``:
+    ``ToolFamily.handle()`` returns its canonical
     ``content``/``structuredContent`` result verbatim, and
     :func:`_adapt_manual_result` reshapes it afterwards in :func:`handle`.
     """
-    dismiss_handlers = {
+    declared_handlers = {
         "add": _add_hook,
         "drop": _drop_hook,
         "edit": _edit_hook,
@@ -395,27 +410,25 @@ def _build_family(agent) -> ToolFamily:
     }
 
     def _bind(action: str):
-        handler = dismiss_handlers[action]
+        handler = declared_handlers[action]
 
         def _dispatch(action_input: Mapping[str, Any]) -> dict:
             return handler(agent, _strip_nulls(action_input))
 
         return _dispatch
 
-    children = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
+    return NOTIFICATION_PLUGIN.build_family(
+        [
+            ChildTool(
+                action,
+                INPUT_SCHEMAS[action],
+                _bind(action),
+                title=f"{action} input",
             )
-    return ToolFamily("notification", children)
+            for action in NOTIFICATION_DECLARED_ACTIONS
+        ],
+        agent=agent,
+    )
 
 
 def handle(agent, args: dict) -> dict:

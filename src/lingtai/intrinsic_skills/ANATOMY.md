@@ -19,9 +19,7 @@ related_files:
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/bench_agent_session_rebuild.py
   - src/lingtai/intrinsic_skills/lingtai-kernel-anatomy/scripts/check_anatomy_drift.py
   - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+  - src/lingtai/tools/notification/manual/SKILL.md
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
@@ -77,8 +75,6 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `substrate-manual`, `trajectory-mining`). Two of them
   ship executable helpers — `how-to-change-name/scripts/change_name.py` and
   `sqlite-log-query/scripts/event_summary.py`.
-- `notification-manual/` — the `notification` family manual plus the
-  `channel-model` and `dismissal-safety` reference sub-skills.
 - `lingtai-kernel-anatomy/` — the repository's own navigation skill: how to read
   and maintain the Anatomy/Contract graph. It carries
   `reference/mcp-protocol.md` and two scripts,
@@ -136,3 +132,11 @@ that tree is deliberately not durable — the agent's own material belongs in
   `description`, `version`, often `last_changed_at`), because the `skills`
   catalog renders it; keep both the governance fields and the catalog fields
   when editing a `SKILL.md`.
+- A bundle whose tool package converts to a plugin leaves this package. The
+  `notification` family's manual moved to
+  `src/lingtai/tools/notification/manual/` when that tool became an
+  `IntrinsicToolPlugin`: a plugin owns its own skill, so its manual ships in
+  the package it documents and mounts at `capabilities/notification/` through
+  the sibling `manual/` path above. The bundles that remain here are the ones
+  with no single owning tool package, which is this package's whole reason to
+  exist.

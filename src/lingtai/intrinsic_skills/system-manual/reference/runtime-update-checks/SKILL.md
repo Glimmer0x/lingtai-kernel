@@ -12,8 +12,8 @@ last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
-- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
+- src/lingtai/tools/notification/manual/SKILL.md
+- src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/kernel/nudge/__init__.py
 - src/lingtai/kernel/nudge/kernel_version.py

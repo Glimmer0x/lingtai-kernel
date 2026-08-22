@@ -7,14 +7,18 @@ notification verb — it remains a ``system`` action; the root ``summarize``
 boolean is the cross-cutting LTP v2 result-post-processing control, not an
 action.
 
-This module holds only data: each action's own canonical strict
-``input_schema`` (:data:`INPUT_SCHEMAS`) and the canonical English prose.
-``__init__.py`` composes these into the public model-facing schema via the
-generic ``ToolFamily`` infra (``lingtai.tools.tool_family``) — see
-``__init__.py::_schema_only_family``/``get_schema``. ``lang`` is accepted on
-:func:`get_description` and :func:`get_schema` for source compatibility and
-does not select localized aliases; schema prose is canonical English,
-language-independent.
+This module holds only data for the actions notification *itself* declares:
+each one's canonical strict ``input_schema`` (:data:`DECLARED_INPUT_SCHEMAS`)
+and the canonical English prose. The reserved ``manual`` action is deliberately
+absent — ``plugin.py``'s :data:`~lingtai.tools.notification.plugin.NOTIFICATION_PLUGIN`
+appends it (action name, strict-empty input, and the child that dispatches it)
+from the package's own installed skill, so this module cannot re-schema it.
+``__init__.py`` composes the declared data plus that appended action into the
+public model-facing schema via the generic ``ToolFamily`` infra
+(``lingtai.tools.tool_family``) — see ``__init__.py::_schema_only_family``/
+``get_schema``. ``lang`` is accepted on :func:`get_description` and
+:func:`get_schema` for source compatibility and does not select localized
+aliases; schema prose is canonical English, language-independent.
 
 Optional dismiss fields are declared in the provider-compatible nullable
 representation (``"type": ["string", "null"]`` plus membership in
@@ -26,6 +30,8 @@ nulls back to *absent* before the pre-existing dismiss handlers run, so
 from __future__ import annotations
 
 from typing import Any
+
+from .plugin import NOTIFICATION_PLUGIN
 
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
     "Legacy: the kernel no longer raises large_tool_result reminders — large "
@@ -40,24 +46,6 @@ LARGE_RESULT_DISMISS_ACTION_NOTE = (
 LARGE_RESULT_FORCE_NOTE = (
     "Does not affect large_tool_result reminder dismissal; that escape hatch "
     "is always allowed and clears only the reminder surface."
-)
-
-# The canonical action order. This is the single source for the schema's
-# ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
-# child registration order in ``__init__.py`` — one list, not three.
-# Read/clear actions keep the pre-existing prefix stable; hook-registry
-# management (add/drop/edit/list) is administrative and follows.
-ACTION_ORDER = (
-    "check",
-    "dismiss_channel",
-    "dismiss_event",
-    "dismiss_ref",
-    "add",
-    "drop",
-    "edit",
-    "list",
-    "delay",
-    "manual",
 )
 
 _CHANNEL_DESCRIPTION = (
@@ -247,19 +235,12 @@ _DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Declared verbatim as ``tool_family.manual.build_manual_child`` declares it,
-# so the schema-only family composed here and the real dispatching family in
-# ``__init__.py`` (which registers the shared ManualTool child, not this dict)
-# advertise byte-identical ``manual`` input. ``test_notification_tool.py``
-# pins that equality so the two cannot drift.
-_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+#: Per-action canonical ``input`` schemas for the actions this package
+#: declares. ``manual`` is absent by construction: the plugin appends the one
+#: shared ``tool_family.manual.MANUAL_INPUT_SCHEMA`` alongside the child that
+#: actually dispatches it, so the advertised and dispatched ``manual`` input
+#: are the same object by composition rather than by a pinned copy.
+DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "add": _ADD_INPUT_SCHEMA,
     "drop": _DROP_INPUT_SCHEMA,
     "edit": _EDIT_INPUT_SCHEMA,
@@ -269,7 +250,6 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "dismiss_channel": _DISMISS_CHANNEL_INPUT_SCHEMA,
     "dismiss_event": _DISMISS_EVENT_INPUT_SCHEMA,
     "dismiss_ref": _DISMISS_REF_INPUT_SCHEMA,
-    "manual": _MANUAL_INPUT_SCHEMA,
 }
 
 ACTION_ENUM_DESCRIPTION = (
@@ -320,8 +300,17 @@ ACTION_ENUM_DESCRIPTION = (
 ) + "\n\n" + LARGE_RESULT_DISMISS_ACTION_NOTE
 
 
+#: Everything the model description says after the plugin's own one-line
+#: summary. Kept separate so the opening line has exactly one owner — the
+#: package descriptor in ``plugin.py`` — rather than a second copy here.
+_DESCRIPTION_BODY = (
+    "This is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='delay', input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}, reasoning='...') to temporarily suppress only consumer delivery for one allowed channel (0 cancels); delay-alarm cannot be targeted and expiry raises a high-priority delay-alarm mirror. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+)
+
+
 def get_description(lang: str = "en") -> str:
-    return "Notification surface — read and clear the agent's notification channels, and manage external-hook registrations. Self-actions, no permissions needed.\n\nThis is the only tool that exposes notification verbs; the system tool no longer offers notification or dismiss aliases.\n\nEvery call takes action + input + reasoning; input is the strict argument object for the selected action. Use notification(action='check', input={}, reasoning='...') to read all channels, notification(action='dismiss_channel', input={'channel': '<name>', 'force': null, 'reason': null}, reasoning='...') to clear one channel whole, and dismiss_event / dismiss_ref to remove a single system event by event_id / ref_id. Use notification(action='add', input={'name': ..., 'channel': ..., 'source': ..., 'description': ..., 'how_to_modify': ..., 'how_to_cancel': ...}) to register an external hook, notification(action='drop', input={'name': ...}) to unregister one, notification(action='edit', input={'name': ..., ...}) to update a hook's fields, and notification(action='list', input={}) to view registered hooks. Use notification(action='delay', input={'channel': '<name>', 'seconds': 0 or a live-configured positive cap}, reasoning='...') to temporarily suppress only consumer delivery for one allowed channel (0 cancels); delay-alarm cannot be targeted and expiry raises a high-priority delay-alarm mirror. Use notification(action='manual', input={}, reasoning='...') to return the installed notification manual; this action is strictly read-only and does not change notification state. To compress a large tool result, use system(action=summarize)."
+    """The model-facing family description: plugin summary, then the body."""
+    return f"{NOTIFICATION_PLUGIN.summary}\n\n{_DESCRIPTION_BODY}"
 
 
 # NOTE: ``get_schema`` is deliberately NOT defined here. The model-facing

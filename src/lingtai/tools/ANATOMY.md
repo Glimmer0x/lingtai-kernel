@@ -46,6 +46,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -132,11 +133,16 @@ capability names and lazy adapters.
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
 - `notification/` — mandatory intrinsic owning the public `notification`
-  family: `check`, three atomic dismiss actions, and `manual`
+  family: `check`, three atomic dismiss actions, the four hook-registry
+  actions, `delay`, and `manual`
   (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
   is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
   builds its dispatching family per call, because an intrinsic receives `agent`
-  per call rather than owning a manager.
+  per call rather than owning a manager. It is also the one package wired
+  through `_plugin.py`: `notification/plugin.py` declares the package's
+  identity and its own nine actions, ships the `manual/` skill tree the agent
+  library mounts at `capabilities/notification/`, and lets the plugin append
+  the reserved `manual` action.
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -156,8 +162,22 @@ capability names and lazy adapters.
 - `email/` — the filesystem-based `email` intrinsic: mailbox I/O, composition,
   search, contacts, and delivery, migrated to the LTP v2 family envelope
   (`src/lingtai/tools/email/ANATOMY.md`).
-- `_manual.py` — bounded installed-manual loader
-  (`src/lingtai/tools/_manual.py:1-29`).
+- `_manual.py` — bounded installed-manual loader plus the single definition of
+  where an installed manual lives, `installed_manual_path()`
+  (`src/lingtai/tools/_manual.py:1-40`).
+- `_plugin.py` — the **intrinsic-tool plugin packaging** descriptor.
+  `IntrinsicToolPlugin` binds one package's identity, the `manual/SKILL.md` it
+  ships (loaded and name-checked at construction), and the host records it
+  publishes: `intrinsic_declaration()` in `registry.INTRINSICS` record shape and
+  `tool_manifest()` in the curated servers' name/description/actions shape
+  (`src/lingtai/tools/_plugin.py:96-288`). It also owns the reserved-action
+  promise: `actions()`, `action_input_schemas()`, and `build_family()` append
+  `manual` — bound to the package's own installed skill — and raise
+  `IntrinsicToolPluginError` if a package declares, re-schemas, or rebinds it.
+  Declarative only: no discovery, import-by-scan, activation, registration, or
+  config reading; wiring and install stay with the host (`registry.py`,
+  `lingtai/agent.py`), and external Agent Plugins v1.0.0 directories stay with
+  `services/plugin_registry.py`.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -229,3 +249,22 @@ registry, schema, prompt, check-caps, manual, or catalog entries under those old
 public names. The five pre-migration file packages are not among them: they were
 deleted outright into `file/`, so there is no legacy directory, contract,
 glossary, or alias left for that surface.
+
+**Intrinsic-tool plugin packaging is declarative, not a runtime.** `_plugin.py`
+adds no in-process plugin runtime, no config flag, and no second registry: an
+`IntrinsicToolPlugin` is a package-local descriptor its own package imports
+explicitly. `registry.INTRINSICS` remains the mapping the kernel reads,
+`Agent._install_intrinsic_manuals()` remains the code that mounts a manual, and
+`services/plugin_registry.py` remains the owner of external Agent Plugins
+v1.0.0 — the descriptor is what those must agree with, proven by test rather
+than generated at runtime. `notification` is the one package wired through it
+today; every other tool still declares these facts inline and is unchanged.
+
+**A plugin's manual is an owned skill.** A converted package ships its manual
+under its own `manual/` directory and mounts it at
+`.library/intrinsic/capabilities/<tool name>/`, the same `install_from` path
+`avatar`, `email`, `daemon`, and the other tool-owned manuals already use. The
+skill's catalog `name` (e.g. `notification-manual`) stays independent of that
+directory, so agent-facing references to a manual by name are unaffected by a
+conversion. `src/lingtai/intrinsic_skills/` keeps only the bundles that have no
+owning tool package.

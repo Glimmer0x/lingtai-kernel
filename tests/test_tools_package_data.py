@@ -80,10 +80,14 @@ _BACKEND_MANUAL = (
     "lingtai/tools/daemon/manual/reference/cli-backends/reference/backends/{backend}/SKILL.md"
 )
 
+# The notification manual is package-owned (an ``IntrinsicToolPlugin`` ships it
+# inside the tool package), so it reaches the wheel through the same
+# ``"lingtai.tools"`` ``*/manual/**/*`` glob as every other tool manual rather
+# than through the ``intrinsic_skills`` bundle glob.
 _NOTIFICATION_MANUAL_FILES = (
-    "lingtai/intrinsic_skills/notification-manual/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md",
+    "lingtai/tools/notification/manual/SKILL.md",
+    "lingtai/tools/notification/manual/reference/channel-model/SKILL.md",
+    "lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md",
 )
 
 # The three per-tool glossary languages that each package must ship.
@@ -240,7 +244,7 @@ def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):
     assert not missing, "daemon backend manuals missing from wheel: %r" % missing
 
 
-def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
+def test_wheel_ships_package_owned_notification_manual(wheel_entries: set[str]):
     missing = [path for path in _NOTIFICATION_MANUAL_FILES if path not in wheel_entries]
     assert not missing, "notification manual files missing from wheel: %r" % missing
 

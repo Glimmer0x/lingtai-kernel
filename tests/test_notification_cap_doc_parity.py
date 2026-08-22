@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANUAL = ROOT / "src/lingtai/intrinsic_skills/notification-manual/SKILL.md"
+MANUAL = ROOT / "src/lingtai/tools/notification/manual/SKILL.md"
 CONTRACT = ROOT / "src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md"
 
 

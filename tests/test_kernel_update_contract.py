@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 _SUBSTRATE = ROOT / "src/lingtai/prompts/substrate/substrate.md"
-_CHANNEL_MODEL = ROOT / "src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md"
+_CHANNEL_MODEL = ROOT / "src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md"
 _RUNTIME_UPDATE = ROOT / "src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md"
 
 

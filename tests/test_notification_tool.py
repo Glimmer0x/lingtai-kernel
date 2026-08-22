@@ -39,6 +39,7 @@ from typing import Any
 import pytest
 
 from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
+from lingtai.tools.notification.plugin import NOTIFICATION_PLUGIN
 from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
@@ -237,15 +238,17 @@ def test_each_action_input_branch_is_strict_and_exact() -> None:
 def test_manual_branch_matches_the_shared_manual_child_schema() -> None:
     """The advertised ``manual`` input equals the child that actually dispatches.
 
-    ``schema.py`` declares ``_MANUAL_INPUT_SCHEMA`` for composition while
-    ``handle`` registers ``tool_family.manual.build_manual_child``. If those
-    two ever drift, the model would be shown an input shape dispatch does not
-    enforce.
+    Both the advertised schema and the dispatching child are appended by
+    ``NOTIFICATION_PLUGIN`` from the one shared manual input, so they cannot
+    drift; this pins that the composition really is the shared literal and not
+    a re-declared copy.
     """
-    from lingtai.tools.tool_family.manual import build_manual_child
+    from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
-    child = build_manual_child(object(), "notification-manual")
+    child = build_manual_child(object(), NOTIFICATION_PLUGIN.mount_name)
     assert notif_intrinsic.INPUT_SCHEMAS["manual"] == dict(child.input_schema)
+    assert notif_intrinsic.INPUT_SCHEMAS["manual"] == MANUAL_INPUT_SCHEMA
+    assert "manual" not in notif_intrinsic.DECLARED_INPUT_SCHEMAS
 
 
 def test_action_enum_keeps_notification_specific_prose() -> None:
@@ -339,14 +342,15 @@ def test_system_module_has_no_dismiss_callable() -> None:
 
 
 def _notification_manual_path(workdir: Path) -> Path:
-    return (
-        workdir
-        / ".library"
-        / "intrinsic"
-        / "capabilities"
-        / "notification-manual"
-        / "SKILL.md"
-    )
+    """The installed manual the plugin mounts — named after the tool package.
+
+    Since the manual became a package-owned skill
+    (``src/lingtai/tools/notification/manual/``) the install destination is the
+    plugin's own mount name, ``notification``, exactly like every other
+    tool-owned manual. Derived from the descriptor rather than spelled again,
+    so a mount rename cannot pass this suite by accident.
+    """
+    return NOTIFICATION_PLUGIN.installed_manual_path(workdir)
 
 
 def test_manual_returns_installed_notification_manual_without_state_mutation(

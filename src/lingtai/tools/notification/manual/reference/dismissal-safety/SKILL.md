@@ -11,7 +11,7 @@ version: 0.4.0
 tags: [lingtai, notifications, dismiss, force, stale, safety, hooks]
 last_changed_at: "2026-08-10T00:00:00Z"
 related_files:
-- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+- src/lingtai/tools/notification/manual/SKILL.md
 - src/lingtai/tools/notification/__init__.py
 - src/lingtai/tools/notification/schema.py
 maintenance: |

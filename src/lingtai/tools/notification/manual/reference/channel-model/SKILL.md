@@ -10,7 +10,7 @@ version: 0.5.0
 tags: [lingtai, notifications, channels, protocol, sync, delay, alarm, nudge, hooks, whitelist]
 last_changed_at: "2026-08-20T00:00:00Z"
 related_files:
-- src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+- src/lingtai/tools/notification/manual/SKILL.md
 - src/lingtai/tools/notification/schema.py
 - src/lingtai/kernel/notification_store/__init__.py
 maintenance: |

@@ -338,19 +338,23 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "Nested reference catalog" in system_manual_body
         assert "location: reference/notification-manual/SKILL.md" not in system_manual_body
 
+        # The notification manual is package-owned (an ``IntrinsicToolPlugin``
+        # ships it at ``tools/notification/manual/``), so it installs under the
+        # tool's own name like every other tool-owned manual. Its catalog
+        # ``name`` stays ``notification-manual``, which is what agents cite.
         notification_manual_md = (
             workdir
             / ".library"
             / "intrinsic"
             / "capabilities"
-            / "notification-manual"
+            / "notification"
             / "SKILL.md"
         )
         assert notification_manual_md.is_file()
         notification_manual_body = notification_manual_md.read_text(encoding="utf-8")
         assert "name: notification-manual" in notification_manual_body
         assert "# Notification Manual" in notification_manual_body
-        assert "<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md" in notification_manual_body
+        assert "<agent>/.library/intrinsic/capabilities/notification/SKILL.md" in notification_manual_body
         assert "location: reference/channel-model/SKILL.md" in notification_manual_body
         assert "location: reference/dismissal-safety/SKILL.md" in notification_manual_body
         assert (

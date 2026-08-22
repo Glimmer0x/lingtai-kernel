@@ -1,11 +1,14 @@
 ---
 name: notification-tool
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
   - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/plugin.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/_manual.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -14,6 +17,7 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/agent.py
   - tests/test_notification_tool.py
+  - tests/test_intrinsic_tool_plugin_package.py
   - tests/test_notification_delay_alarm.py
   - tests/test_daemon_attention_delay.py
   - tests/test_system_dismiss.py
@@ -22,9 +26,9 @@ related_files:
   - src/lingtai/tools/notification/glossary-zh.md
   - src/lingtai/tools/notification/glossary-wen.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
@@ -138,12 +142,15 @@ Observable action contracts are:
   on successful (`cleared: true`) dismissals, and stale-version refusals remain
   a `status: "error"` contract without `cause`.
 - `manual` reads only
-  `<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md`.
+  `<agent>/.library/intrinsic/capabilities/notification/SKILL.md` — the mount
+  point `NOTIFICATION_PLUGIN` declares for this package's own `manual/` skill
+  tree, and the single path `tools/_manual.py::installed_manual_path` defines.
   Success contains exactly `{status: "ok", notification_manual, manual_path}`.
   Absence contains exactly `{status: "degraded", notification_manual: "",
   manual_path, error}`, where `error` is `notification manual missing —
-  initializer may have failed or capability not installed correctly`. Other
-  filesystem/decoding errors propagate.
+  initializer may have failed or capability not installed correctly` — now the
+  shared loader's own sentence, forwarded rather than restated, because the
+  mount name is the tool name. Other filesystem/decoding errors propagate.
 - `add` validates the manifest and appends it to the hook registry. Success
   returns `{status: "ok", reason: "added", name}`; `duplicate_name` and
   `channel_in_use` are `status: "error"` results that leave the registry
@@ -243,16 +250,20 @@ installer) — and marks a workdir seeded only after a successful load, logging 
 transient failure (`notification_hook_registry_error`, `phase=...`) for retry on
 the next sync.
 
-The `manual` action is the reserved family child built by
-`tool_family.manual.build_manual_child` over the shared
-`tools/_manual.py::load_installed_manual` loader: one `is_file` check and one
-UTF-8 read at the fixed path. It does not call notification Core,
-`NotificationStorePort`, the post-hook, or a producer. That child's canonical
-`content`/`structuredContent` result is returned by the family dispatcher
-verbatim; flattening it to this Port's pinned `notification_manual` shape is a
-Host presentation step that runs strictly after dispatch, never inside the
-child. Agent initialization copies the bundled first-level
-`notification-manual` skill tree into the installed per-agent intrinsic library.
+The `manual` action is the reserved family child **appended by the package's
+own plugin descriptor**, not declared by this package: `NOTIFICATION_PLUGIN`
+(`plugin.py`) builds it via `tool_family.manual.build_manual_child` over the
+shared `tools/_manual.py::load_installed_manual` loader, bound to the plugin's
+mount name — one `is_file` check and one UTF-8 read at the fixed path. It does
+not call notification Core, `NotificationStorePort`, the post-hook, or a
+producer. That child's canonical `content`/`structuredContent` result is
+returned by the family dispatcher verbatim; flattening it to this Port's pinned
+`notification_manual` shape is a Host presentation step that runs strictly
+after dispatch, never inside the child. Agent initialization copies this
+package's own first-level `manual/` skill tree
+(`src/lingtai/tools/notification/manual/`) into the installed per-agent
+intrinsic library, through the same `install_from` path every other tool-owned
+manual uses.
 
 `handle()` strips the kernel-injected `_tc_id` before envelope validation.
 `base_agent.tools._dispatch_tool` adds that field to every intrinsic's args as
@@ -266,6 +277,18 @@ is not a second inbound adapter.
 
 ## Contract rules
 
+- This package MUST declare only its own nine actions. `manual` is reserved:
+  declaring, re-schemaing, or rebinding it MUST raise
+  `IntrinsicToolPluginError` at import rather than shipping a family whose
+  `manual` points somewhere other than this package's installed skill.
+- The package MUST ship the manual it documents (`manual/SKILL.md` with
+  frontmatter `name: notification-manual`). A missing or renamed packaged skill
+  MUST fail at import; a missing *installed* copy remains a degraded result,
+  not an import failure.
+- `registry.INTRINSICS["notification"]` MUST equal
+  `NOTIFICATION_PLUGIN.intrinsic_declaration()`. The descriptor documents that
+  record; the registry module stays the runtime source the kernel reads, and
+  nothing here discovers, imports by scan, or activates a package.
 - `manual` MUST NOT read, create, clear, fingerprint, acknowledge, or otherwise
   mutate `.notification/` or producer state, and MUST NOT emit notification logs.
 - Missing installed guidance is degraded, never a silent successful empty body;
@@ -304,8 +327,18 @@ is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
-- `contract_version` is `6`: a `delay` whose target is the aggregate `daemon`
-  channel now masks that channel's attention token instead of omitting it from
+- `contract_version` is `7`: the manual became a package-owned skill. The
+  installed path `manual` reads moved from
+  `.library/intrinsic/capabilities/notification-manual/SKILL.md` to
+  `.library/intrinsic/capabilities/notification/SKILL.md`, because the bundle
+  now ships inside this package (`manual/`) and mounts under the plugin's own
+  name like every other tool-owned manual. Result *shape* is unchanged and the
+  degraded sentence is byte-identical; only `manual_path` differs, and the
+  skill's catalog `name` stays `notification-manual`. Version `7` also reserves
+  `manual` at the packaging layer: the package declares nine actions and the
+  plugin appends the tenth.
+- `contract_version` `6`: a `delay` whose target is the aggregate `daemon`
+  channel masks that channel's attention token instead of omitting it from
   the coherent consumer read, so daemon truth, delivered version, and dismissal
   keep working while it is delayed. Non-daemon targets are unchanged.
 - `contract_version` `5`: `delay` resolves its nonzero duration cap live
@@ -316,6 +349,14 @@ is not a second inbound adapter.
   recorded the LTP v2 envelope migration.
 
 ## Contract tests
+
+`tests/test_intrinsic_tool_plugin_package.py` proves the packaging contract:
+the registry record equals the descriptor's `intrinsic_declaration()`, the
+package ships its own `manual/` tree and no longer ships one under
+`intrinsic_skills/`, the declared list omits `manual` while the composed list
+ends with it, declaring/re-schemaing/rebinding `manual` raises, the mount point
+is the one the shared loader reads, and the public envelope, `check`
+placeholder, and no-I/O cross-action rejection are unchanged.
 
 `tests/test_notification_tool.py` proves mandatory registration and wiring, the
 ordered ten-action schema, the closed LTP v2 root, each action's strict input

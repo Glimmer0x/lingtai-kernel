@@ -7,14 +7,15 @@ description: >
   Routes channel/sync mechanics and dismissal safety into nested references;
   large-result compaction is owned by
   `context-manual` → `reference/summarize-manual/SKILL.md`.
-version: 0.10.0
+version: 0.11.0
 tags: [lingtai, notifications, channels, dismiss, delay, alarm, manual, force, stale, nudge, hooks, whitelist]
-last_changed_at: "2026-08-20"
+last_changed_at: "2026-08-22T00:00:00Z"
 related_files:
 - src/lingtai/tools/notification/__init__.py
+- src/lingtai/tools/notification/plugin.py
 - src/lingtai/tools/notification/schema.py
-- src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-- src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+- src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+- src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -77,7 +78,7 @@ procedures and constraints you called it for.
 `notification(action='manual', input={})` reads only:
 
 ```text
-<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md
+<agent>/.library/intrinsic/capabilities/notification/SKILL.md
 ```
 
 Success returns exactly `status`, `notification_manual`, and `manual_path`. A
