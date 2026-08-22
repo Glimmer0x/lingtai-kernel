@@ -102,6 +102,17 @@ Nullable-and-required is how an optional field is expressed (per
 *absent* before the manager runs, so `folder`/`n`/`filter` defaulting and
 `edit_contact`'s `if "name" in args` semantics are preserved exactly.
 
+### Package-local root/manual ownership
+
+`EmailToolDescriptor` / `EMAIL_TOOL_DESCRIPTOR` in `__init__.py` own Email's
+canonical model-facing root (`email`) and installed manual destination (`email`).
+Both the schema-only and per-call dispatching `ToolFamily` builders consume
+`root_name`; the dispatched `build_manual_child` consumes `manual_skill_name`;
+the existing notification dismissal guard and boot-time mailbox marker consume
+the same root. This is a package-local identity seam for every-tool
+pluginization, **not** plugin discovery or activation: Agent/Host registration,
+the intrinsic registry, provider wires, and mailbox lifecycle remain unchanged.
+
 The tables below list each action's inputs. Under the envelope they are that
 action's `input` properties — e.g. `email(action='read', input={'email_id':
 [...]}, reasoning='...')`.
@@ -205,6 +216,7 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 | Sender identity is carried on inbound mail and surfaced on read | `src/lingtai/tools/email/manager.py:_inject_identity` | `tests/test_email_identity.py` |
 | Abs-mode replies resolve via `_return_route`, guarding the `#145` ambiguous self-route | `src/lingtai/tools/email/manager.py:_resolve_reply_target` | `tests/test_email_abs_reply_route.py` |
 | The model-facing root is the closed LTP v2 envelope and nothing else | `src/lingtai/tools/email/__init__.py:get_schema` | `tests/test_tool_family_email_migration.py::test_root_is_the_closed_ltp_v2_envelope_and_nothing_else` |
+| One package-local descriptor owns the canonical root and installed manual destination consumed by both families and the actual manual child | `src/lingtai/tools/email/__init__.py:EMAIL_TOOL_DESCRIPTOR` | `tests/test_tool_family_email_migration.py::test_package_local_descriptor_is_consumed_by_schema_dispatch_and_manual_child` |
 | All 14 public action values and their order are unchanged | `src/lingtai/tools/email/_family_schema.py:ACTION_ORDER` | `tests/test_tool_family_email_migration.py::test_public_action_values_and_order_are_unchanged` |
 | One child registry drives both the advertised schema and dispatch | `src/lingtai/tools/email/__init__.py:_build_family` | `tests/test_tool_family_email_migration.py::test_one_canonical_child_registry_drives_schema_and_dispatch` |
 | A cross-action key is rejected before any mailbox I/O or delivery | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_email_migration.py::test_cross_action_key_is_rejected_before_any_mailbox_io`, `::test_send_fields_cannot_be_smuggled_through_a_read_call` |

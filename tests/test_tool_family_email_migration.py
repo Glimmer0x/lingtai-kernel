@@ -107,6 +107,49 @@ def test_root_is_the_closed_ltp_v2_envelope_and_nothing_else():
         assert legacy not in schema["properties"]
 
 
+def test_package_local_descriptor_is_consumed_by_schema_dispatch_and_manual_child(
+    tmp_path,
+):
+    """Email owns its canonical root/manual identity without an activation API.
+
+    Both ToolFamily instances consume the descriptor's root, the dispatcher's
+    generic error is consequently rooted at that same name, and the actual
+    generic ManualTool child reads the descriptor-selected installed manual.
+    Agent/global registration is deliberately outside this package-local seam.
+    """
+    descriptor = email_tool.EMAIL_TOOL_DESCRIPTOR
+    assert descriptor.root_name == "email"
+    assert descriptor.manual_skill_name == "email"
+    assert email_tool._FAMILY.name == descriptor.root_name
+
+    agent = _agent(tmp_path)
+    family = email_tool._build_family(agent)
+    assert family.name == descriptor.root_name
+    assert agent._mailbox_tool == descriptor.root_name
+    assert family.handle({"action": "contacts", "input": {"query": "x"}}) == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": f"unsupported {descriptor.root_name} input field",
+    }
+
+    body = "# Email manual\n\nDescriptor-owned installed destination.\n"
+    path = (
+        agent._working_dir
+        / ".library"
+        / "intrinsic"
+        / "capabilities"
+        / descriptor.manual_skill_name
+        / "SKILL.md"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    assert family.handle({"action": "manual", "input": {}}) == {
+        "status": "ok",
+        "content": [{"type": "text", "text": body}],
+        "structuredContent": {"manual_path": str(path)},
+    }
+
+
 def test_public_action_values_and_order_are_unchanged():
     assert email_tool.get_schema()["properties"]["action"]["enum"] == _PUBLIC_ACTIONS
     assert list(ACTION_ORDER) == _PUBLIC_ACTIONS

@@ -37,6 +37,7 @@ tool is now request/response only.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from lingtai.kernel.notifications import register_generic_dismiss_guard
@@ -44,11 +45,35 @@ from .._manual import load_installed_manual  # noqa: F401  (public re-export)
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import build_manual_child
 
+
+@dataclass(frozen=True, slots=True)
+class EmailToolDescriptor:
+    """Package-local identity for Email's one canonical ToolFamily root.
+
+    This is deliberately not an activation or registration API: Agent/Host
+    registration remains where it was.  It owns only the values Email itself
+    passes to the generic family and manual-child helpers, so the advertised
+    root, dispatch family, notification guard, mailbox marker, and installed
+    manual destination cannot silently drift apart.
+    """
+
+    root_name: str
+    manual_skill_name: str
+
+
+EMAIL_TOOL_DESCRIPTOR = EmailToolDescriptor(
+    root_name="email",
+    manual_skill_name="email",
+)
+
+
 register_generic_dismiss_guard(
-    "email",
+    EMAIL_TOOL_DESCRIPTOR.root_name,
     (
-        "email(action='dismiss', input={'email_id': [...]}, reasoning='handled') "
-        "or email(action='read', input={'email_id': [...]}, reasoning='refresh')"
+        f"{EMAIL_TOOL_DESCRIPTOR.root_name}(action='dismiss', "
+        "input={'email_id': [...]}, reasoning='handled') "
+        f"or {EMAIL_TOOL_DESCRIPTOR.root_name}(action='read', "
+        "input={'email_id': [...]}, reasoning='refresh')"
     ),
 )
 
@@ -101,10 +126,6 @@ from .manager import EmailManager  # noqa: F401
 # LTP v2 family composition — one model-facing root, one child per action
 # ---------------------------------------------------------------------------
 
-# The installed intrinsic-skill directory ``manual`` reads. Unchanged from the
-# pre-migration ``load_installed_manual(agent, "email")`` call.
-_MANUAL_SKILL_NAME = "email"
-
 # The exact pre-migration reserved-action rejection for ``unread``. It is a
 # kernel-synthesized digest action, NOT a public child: it is absent from
 # ``ACTION_ORDER`` and therefore from the ``action`` enum, so the generic
@@ -116,9 +137,9 @@ _MANUAL_SKILL_NAME = "email"
 _UNREAD_RESERVED_RESULT: dict[str, Any] = {
     "status": "error",
     "message": (
-        "email(action='unread', ...) is reserved for kernel-"
+        f"{EMAIL_TOOL_DESCRIPTOR.root_name}(action='unread', ...) is reserved for kernel-"
         "synthesized unread-mail digests and cannot be invoked "
-        "directly. Use email(action='check') to view your inbox."
+        f"directly. Use {EMAIL_TOOL_DESCRIPTOR.root_name}(action='check') to view your inbox."
     ),
 }
 
@@ -142,7 +163,7 @@ def _schema_only_family() -> ToolFamily:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
     return ToolFamily(
-        "email",
+        EMAIL_TOOL_DESCRIPTOR.root_name,
         [
             ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
             for action in ACTION_ORDER
@@ -276,7 +297,9 @@ def _build_family(agent) -> ToolFamily:
     children = []
     for action in ACTION_ORDER:
         if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
+            children.append(
+                build_manual_child(agent, EMAIL_TOOL_DESCRIPTOR.manual_skill_name)
+            )
         else:
             children.append(
                 ChildTool(
@@ -286,7 +309,7 @@ def _build_family(agent) -> ToolFamily:
                     title=f"{action} input",
                 )
             )
-    return ToolFamily("email", children)
+    return ToolFamily(EMAIL_TOOL_DESCRIPTOR.root_name, children)
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +363,7 @@ def handle(agent, args: dict) -> dict:
         # distinction is restored here at Email's own Host boundary.
         if not action:
             return {"error": "action is required"}
-        return {"error": f"Unknown email action: {action}"}
+        return {"error": f"Unknown {EMAIL_TOOL_DESCRIPTOR.root_name} action: {action}"}
     return result
 
 
@@ -359,4 +382,4 @@ def boot(agent) -> None:
     mgr = EmailManager(agent)
     agent._email_manager = mgr
     agent._mailbox_name = "email box"
-    agent._mailbox_tool = "email"
+    agent._mailbox_tool = EMAIL_TOOL_DESCRIPTOR.root_name
