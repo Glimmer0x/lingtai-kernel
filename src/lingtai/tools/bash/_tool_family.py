@@ -18,6 +18,13 @@ translates the new envelope into that flat shape before delegating, so every
 existing ``ShellManager`` test keeps exercising the exact same code path. That
 flat shape is internal only — this module owns the package's single public
 ``get_schema``/``get_description`` pair, re-exported from ``__init__.py``.
+
+Action *composition* belongs to the package's plugin descriptor (``plugin.py``):
+this module declares Shell's own three actions and their strict ``input``
+branches, and ``SHELL_PLUGIN`` appends the reserved ``manual`` action from the
+packaged ``manual/SKILL.md``. ``manual`` therefore never routes through
+``ShellManager`` and cannot be omitted, re-schema'd, or rebound to other
+material from here.
 This is the same division ``web`` uses between
 ``ToolFamily.handle()`` (envelope validation/dispatch) and its own
 Host/presentation adaptation, applied in the opposite direction: here the
@@ -30,8 +37,8 @@ import os
 from typing import Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
 from ._shell_dialect import ShellKind
+from .plugin import SHELL_ACTIONS, SHELL_DECLARED_ACTIONS, SHELL_PLUGIN
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
@@ -154,12 +161,28 @@ CANCEL_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Sourced from the shared reserved-``manual`` builder rather than re-declared,
-# so the schema the wire advertises and the schema the dispatcher validates
-# against are the same object by construction and cannot drift apart.
-MANUAL_INPUT_SCHEMA: dict[str, Any] = dict(
-    build_manual_child(None, "shell").input_schema
-)
+# Sourced from the package's plugin descriptor rather than re-declared, so the
+# schema the wire advertises and the schema the dispatcher validates against are
+# the same definition by construction and cannot drift apart. The descriptor in
+# turn deep-copies the one shared reserved-``manual`` literal owned by
+# ``tool_family/manual.py``, so Shell's ``manual`` input stays byte-identical to
+# every other LingTai family's.
+MANUAL_INPUT_SCHEMA: dict[str, Any] = SHELL_PLUGIN.manual_input_schema()
+
+# The declared branches, keyed by action, in the plugin's stable order. Built
+# once here so the schema-only family, the per-agent dispatcher, and the
+# ``ACTION_REQUIRED`` prose below all read one list instead of three literals.
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "run": RUN_INPUT_SCHEMA,
+    "poll": POLL_INPUT_SCHEMA,
+    "cancel": CANCEL_INPUT_SCHEMA,
+}
+assert tuple(_DECLARED_INPUT_SCHEMAS) == SHELL_DECLARED_ACTIONS
+
+#: ``run, poll, cancel, or manual`` — the public action list as prose, derived
+#: from the plugin-composed list so a new action cannot leave the Host's
+#: ``ACTION_REQUIRED`` message behind.
+_ACTIONS_PROSE = ", ".join(SHELL_ACTIONS[:-1]) + f", or {SHELL_ACTIONS[-1]}"
 
 
 def get_description(
@@ -190,22 +213,24 @@ def get_description(
 
 
 def _schema_only_family() -> ToolFamily:
-    # A throwaway ``ToolFamily`` composing only the model-facing schema — the
-    # fixed four-child registry (no duplicate/reserved-name collision) is
-    # proven once, at import time, exactly as ``web_search`` does. The real
-    # per-agent dispatcher below builds its own ``ToolFamily`` with handlers
-    # bound to a live ``ShellManager`` instance.
+    # A throwaway family composing only the model-facing schema — the fixed
+    # child registry (no duplicate/reserved-name collision) is proven once, at
+    # import time, exactly as ``web_search`` does. The real per-agent dispatcher
+    # below builds its own family with handlers bound to a live ``ShellManager``.
+    #
+    # Composed through the plugin descriptor, so this module declares only
+    # Shell's *own* three branches and ``manual`` is appended from the packaged
+    # skill. The schema-only family is agentless, which its plugin-owned
+    # ``manual`` child handles by falling back to that packaged skill rather
+    # than reaching for a library that does not exist here.
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
-    return ToolFamily(
-        "shell",
+    return SHELL_PLUGIN.build_family(
         [
-            ChildTool("run", RUN_INPUT_SCHEMA, _unused, title="run input"),
-            ChildTool("poll", POLL_INPUT_SCHEMA, _unused, title="poll input"),
-            ChildTool("cancel", CANCEL_INPUT_SCHEMA, _unused, title="cancel input"),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
-        ],
+            ChildTool(action, schema, _unused, title=f"{action} input")
+            for action, schema in _DECLARED_INPUT_SCHEMAS.items()
+        ]
     )
 
 
@@ -234,25 +259,25 @@ class ShellFamilyDispatcher:
     ``ChildTool`` handlers below, each of which flattens its own validated
     ``input`` mapping (injecting the matching ``action`` key, mirroring the
     legacy dispatch contract in ``ShellManager.handle``) and calls
-    ``ShellManager.handle()`` unchanged. ``manual`` is registered directly,
-    unwrapped, from ``build_manual_child`` — the shared reserved-name
-    contract every LingTai family uses — so it returns the canonical
-    ``content``/``structuredContent`` shape. It is the family's sole manual
-    surface: ``ShellManager.handle`` has no ``action="manual"`` branch, so the
-    engine never serves documentation and ``manual`` performs no shell
-    operation.
+    ``ShellManager.handle()`` unchanged. ``manual`` is not listed here at all:
+    the family is composed by ``SHELL_PLUGIN.build_family``, which appends its
+    own reserved ``manual`` child bound to the packaged ``manual/SKILL.md`` —
+    the shared reserved-name contract every LingTai family uses — so it returns
+    the canonical ``content``/``structuredContent`` shape and this class cannot
+    omit, re-schema, or rebind it. It is the family's sole manual surface:
+    ``ShellManager.handle`` has no ``action="manual"`` branch, so the engine
+    never serves documentation and ``manual`` performs no shell operation.
     """
 
     def __init__(self, manager: Any, agent: Any) -> None:
         self._manager = manager
-        self._family = ToolFamily(
-            "shell",
+        self._family = SHELL_PLUGIN.build_family(
             [
                 ChildTool("run", RUN_INPUT_SCHEMA, self._dispatch_run, title="run input"),
                 ChildTool("poll", POLL_INPUT_SCHEMA, self._dispatch_poll, title="poll input"),
                 ChildTool("cancel", CANCEL_INPUT_SCHEMA, self._dispatch_cancel, title="cancel input"),
-                build_manual_child(agent, "shell"),
             ],
+            agent,
         )
 
     @staticmethod
@@ -290,5 +315,5 @@ class ShellFamilyDispatcher:
         # (``status``/``error_code``/``message``) is left untouched.
         result = self._family.handle(args)
         if result.get("error_code") == "ACTION_REQUIRED":
-            result["message"] = "action must be one of run, poll, cancel, or manual"
+            result["message"] = f"action must be one of {_ACTIONS_PROSE}"
         return result

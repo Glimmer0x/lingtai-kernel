@@ -563,6 +563,7 @@ class Agent(BaseAgent):
         import shutil
         import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
+        from lingtai.tools import _plugin as tool_plugins
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -588,13 +589,13 @@ class Agent(BaseAgent):
                 src = entry / "manual"
                 if src.is_dir():
                     # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
-                        destination_name = "shell"
-                    elif entry.name == "web_search":
-                        destination_name = "web"
-                    else:
-                        destination_name = entry.name
+                    # model-facing names exactly once. A package that ships a
+                    # plugin descriptor states its own destination there
+                    # (``shell`` for the retained ``bash`` directory); the rest
+                    # fall back to the retained alias table, then to their own
+                    # name. The mapping is never a literal here — the installer
+                    # asks the package.
+                    destination_name = tool_plugins.manual_destination_for(entry.name)
                     destination = intrinsic_dir / subdir / destination_name
                     if destination.exists():
                         continue

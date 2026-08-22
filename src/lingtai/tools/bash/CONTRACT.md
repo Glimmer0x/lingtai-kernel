@@ -146,15 +146,32 @@ inside another action's result.
 | `run` (async) | `command`, `async: true` | `working_dir`, `timeout`, `reminder` | `{status: "ok", job_id, pid, message, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `shell-manual` and `notification-manual` for details | `{status: "error", message}` — same validation errors, invalid boolean/non-numeric/non-finite/negative/too-large `reminder`, plus `Failed to start async job: ...` |
 | `poll` | `job_id` | — | running: `{status: "running", job_id, pid?}` while the recorded supervisor may still commit; known finished: `{status: "done", exit_status_known: true, exit_code, stdout, stderr, ok, command_status, warning?}`; unrecoverable/legacy terminal: `{status: "done", exit_status_known: false, exit_code: null, stdout, stderr}` | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, or an already terminal-consumed job |
 | `cancel` | `job_id` | — | `{status: "cancelled", job_id}` only after the supervisor has committed the held child's exact terminal status and cancellation atomically consumes/suppresses the job | `{status: "error", message}` — missing/invalid `job_id`, `Job not found`, terminal job, legacy job, or a durable cancellation request still awaiting a terminal commit (which remains pollable/remindable) |
-| `manual` | — (strict empty `{}`) | — | `{status, content: [{type: "text", text: <full shell-manual body>}], structuredContent: {manual_path}}` — the shared ManualTool contract, returned without double wrapping | `status: "degraded"` plus `error` when the installed manual is missing |
+| `manual` | — (strict empty `{}`) | — | `{status: "ok", content: [{type: "text", text: <full shell-manual body>}], structuredContent: {manual_path, skill, manual_source, installed_manual_path}}` — the shared ManualTool contract, returned without double wrapping | none reachable: the packaged skill is the floor (see below) |
 
 `manual` performs no shell operation: it never reaches the execution engine,
-spawns no process, and touches no job state. It serves the installed manual body
-and its host-local `manual_path` unchanged
-(`.library/intrinsic/capabilities/shell/SKILL.md`, the destination
-`Agent._install_intrinsic_manuals` maps the retained `bash/manual/` bundle to).
-Its input schema is sourced from the shared `build_manual_child` builder, not
-re-declared, so the advertised and dispatch-validated shapes are one definition.
+spawns no process, and touches no job state. It is owned by the package's plugin
+descriptor (`bash/plugin.py`), not by this family module: `SHELL_PLUGIN` appends
+the reserved child itself, so `manual` cannot be omitted, re-schema'd, or
+rebound to other material. Its input schema is a deep copy of the one shared
+`tool_family.manual` literal, not a re-declaration, so the advertised and
+dispatch-validated shapes are one definition.
+
+Two sources, one body. The host boundary comes first: `manual` reads the
+installed copy at `.library/intrinsic/capabilities/shell/SKILL.md` — the
+destination `Agent._install_intrinsic_manuals` maps the retained `bash/manual/`
+bundle to, and now learns from the descriptor rather than a literal — so the
+model-visible `manual_path` stays host-local and points at the agent's own
+library. Package ownership is the floor beneath it: that library copy is a
+verbatim copy of *this package's* `manual/SKILL.md`, wiped and rewritten from it
+on every boot and `system(action='refresh')`, so when the library is missing or
+empty the packaged skill answers with the same bytes rather than an empty body.
+`structuredContent.manual_source` is `"installed"` or `"packaged"` and
+`structuredContent.installed_manual_path` always names the host path, so the
+model is never told a library file exists when it does not; the packaged-source
+answer additionally carries a top-level `warning` saying which path was empty
+and that the next boot rewrites it. `status` is `"ok"` in both cases — the
+manual was served. There is no longer a `status: "degraded"`, empty-body
+outcome for `shell(action='manual')`.
 
 The async start receipt (`run` async `message`) and the durable reminder
 notification body both hand the model a literal call, and both MUST teach the

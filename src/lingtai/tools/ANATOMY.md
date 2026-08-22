@@ -46,6 +46,10 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/bash/plugin.py
+  - src/lingtai/mcp_servers/ANATOMY.md
+  - tests/test_shell_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -158,6 +162,25 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — built-in tool **plugin packaging** descriptor:
+  `KernelToolPlugin` binds one tool package's identity, its bundled
+  `manual/SKILL.md` (loaded and name-checked at construction), and its
+  capability record (`capability_declaration()`) — the mount facts
+  `registry.BUILTIN_TOOLS` / `registry.CORE_DEFAULTS` and
+  `Agent._install_intrinsic_manuals` publish. It owns the reserved-action
+  promise: `actions()`, `action_input_schemas()`, and `build_family()` append
+  `manual` from the packaged skill and raise `KernelToolPluginError` if a
+  package declares, re-schemas, or rebinds it. Its one runtime-facing seam is
+  `manual_destination_for()` — a guarded, cached `<pkg>.plugin` import that lets
+  the manual installer ask a package where its bundle belongs instead of
+  hard-coding `bash` → `shell`. Declarative otherwise: no activation, no manager
+  construction, no config reading, no containment/dialect/async machinery. The
+  `lingtai.tools` sibling of `lingtai.mcp_servers._plugin.CuratedMcpPlugin`
+  (`src/lingtai/mcp_servers/ANATOMY.md`), differing only where a built-in must:
+  `name` (public) and `package` (retained implementation) are two facts, not
+  one, and `manual` reads the host-installed library copy first so the
+  model-visible `manual_path` stays host-local, with the packaged skill as the
+  fallback floor (`src/lingtai/tools/_plugin.py`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -188,7 +211,13 @@ to compose the public action-separated schema (re-exported as the package's
 canonical `get_schema`/`get_description`) and to translate `action`/`input`
 calls into the internal flat shape `ShellManager.handle` consumes. `bash` is
 the one-way legacy input alias for `shell` (`registry.py`) and is never
-emitted as a public name or a second schema.
+emitted as a public name or a second schema. `shell` is also the first built-in
+converted to a **plugin-style package**: `bash/plugin.py` states its public
+name, retained module, packaged skill, own action list, and capability record
+once, and `_tool_family.py` / `__init__.py` / the manual installer all read
+those facts from it instead of restating them
+(`src/lingtai/tools/bash/ANATOMY.md`,
+`tests/test_shell_tool_plugin_package.py`).
 
 The public `file` row imports `lingtai.tools.file` lazily; that owner binds its
 five operation modules once per manager and reaches the working tree only

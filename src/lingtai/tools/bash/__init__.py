@@ -30,6 +30,14 @@ from ._shell_dialect import (
     extract_posix_commands,
 )
 
+# The package's plugin descriptor: its public capability/family name, the
+# packaged ``manual/SKILL.md`` behind ``action='manual'``, its own action list,
+# and the capability record ``lingtai.tools.registry`` and the manual installer
+# must agree with. ``setup()`` registers the tool under ``SHELL_PLUGIN.name``
+# rather than a literal, so the registered tool, the composed family, and the
+# installed manual destination are one name.
+from .plugin import SHELL_ACTIONS, SHELL_DECLARED_ACTIONS, SHELL_PLUGIN
+
 from ._async_supervisor import (
     load_state,
     publish_reminder_if_claimed,
@@ -2106,7 +2114,7 @@ def setup(
     # so the async lifecycle and durable state stay one untouched code path.
     dispatcher = ShellFamilyDispatcher(mgr, agent)
     agent.add_tool(
-        "shell", schema=get_schema(), handler=dispatcher.handle,
+        SHELL_PLUGIN.name, schema=get_schema(), handler=dispatcher.handle,
         description=desc, glossary_package=__package__,
     )
     return mgr

@@ -106,7 +106,13 @@ BUILTIN_TOOLS: dict[str, str] = {
     "skills": "lingtai.tools.skills",
     # ``bash`` remains a one-way read-only input alias only; the public
     # capability is canonically named ``shell`` while its implementation stays
-    # in the retained internal package.
+    # in the retained internal package. This entry and the ``shell`` entry in
+    # ``CORE_DEFAULTS`` below are the runtime source the host reads; the
+    # ``shell`` package states the same facts in its own plugin descriptor
+    # (``bash/plugin.py``), and the two are proven equal by
+    # ``tests/test_shell_tool_plugin_package.py`` rather than by importing the
+    # package here — importing it would break this module's lazy-resolution
+    # discipline.
     "shell": "lingtai.tools.bash",
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
