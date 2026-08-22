@@ -42,6 +42,10 @@ related_files:
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/tools/registry.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/web_search/plugin.py
+  - src/lingtai/tools/web_search/plugin.json
+  - tests/test_tool_plugin_package.py
   - src/lingtai/tools/glossary_validator.py
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
@@ -57,6 +61,10 @@ related_files:
   - src/lingtai/tools/daemon/interactive_terminal/ANATOMY.md
 maintenance: |
   Keep this registry Anatomy connected to its parent and the unified web owner.
+  Tool plugin packaging (`_plugin.py`) is declarative plus two real mount
+  points; it is not a second registry and never a plugin runtime. `web` is its
+  only package today — do not describe another tool as one until it ships a
+  `plugin.json`.
   Browser is an internal browse child, not a second public capability. The
   generic tool_family package is optional composition infrastructure any
   future family migration may adopt, not a second registry. context is its
@@ -79,8 +87,18 @@ capability names and lazy adapters.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:39-344`).
+- `_plugin.py` — built-in **tool plugin** packaging: `ToolPlugin` binds one
+  package's identity, the `manual/` skill it owns, and the `plugin.json`
+  manifest it ships, and owns the reserved-action promise —
+  `action_input_schemas()` / `build_family()` append `manual` from the packaged
+  bundle and raise `ToolPluginError` if a package declares, re-schemas, or
+  rebinds it. It also owns the host-side discovery half
+  (`read_manifest`/`discover_manifests`/`validate_manifest`), which is
+  filesystem-only so registry import never pulls a tool package. The
+  `lingtai.tools` sibling of `lingtai/mcp_servers/_plugin.py`.
 - `web_search/` — public `web` composition owner for search, browse, settings,
-  and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
+  and manual, and the first tool plugin package
+  (`src/lingtai/tools/web_search/ANATOMY.md`).
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
   public `task_card` family, one agent-local artifact under `taskcard/`, and
   no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
@@ -171,7 +189,18 @@ capability names and lazy adapters.
 ## Connections
 
 `Agent` calls registry setup. The public `web` row imports
-`lingtai.tools.web_search` lazily. That owner imports the browser Core and
+`lingtai.tools.web_search` lazily.
+
+Tool plugin packages are *discovered*, then *mounted*, at exactly two seams —
+nothing else in this package reads a manifest. `registry.setup_capability`
+resolves a plugin-backed capability to the module its `plugin.json` publishes
+and refuses to proceed when `BUILTIN_TOOLS` disagrees with it (a packaging
+defect, not a preference); `Agent._install_intrinsic_manuals` mounts the
+declared bundle at the declared `install_as`, which is why `web_search` → `web`
+is no longer a host-side special case (`bash` → `shell` still is: `bash` ships
+no manifest). Discovery imports nothing, activation and kwargs stay with the
+host, and a manifest that is present but unusable is logged and skipped rather
+than half-applied. That owner imports the browser Core and
 provider factory only at composition or action boundaries, and imports
 `tool_family` to compose its schema and (optionally) dispatch. The public
 `vision` row imports `lingtai.tools.vision`, which imports `tool_family` the
@@ -226,6 +255,8 @@ owned here.
 Retained physical legacy directories (`bash/`, `web_search/`) and
 provider-native wire strings remain for compatibility. They must not become
 registry, schema, prompt, check-caps, manual, or catalog entries under those old
-public names. The five pre-migration file packages are not among them: they were
+public names. `web_search/` is the case where the package now *states* its own
+public name instead of the host inferring it: `plugin.json`'s
+`manual.install_as` is the single declaration of where its manual mounts. The five pre-migration file packages are not among them: they were
 deleted outright into `file/`, so there is no legacy directory, contract,
 glossary, or alias left for that surface.

@@ -5,6 +5,8 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/registry.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/web_search/plugin.py
   - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/tools/web_search/CONTRACT.md
@@ -170,6 +172,20 @@ model-facing schema or nested `input`.
 - Family boundaries follow shared domain, authority, state, and cohesion — not
   superficial implementation similarity. A family exists because its actions
   belong to one thing, not because their code looks alike.
+- A built-in tool MAY package itself as a **tool plugin**
+  (`src/lingtai/tools/_plugin.py`), and when it does the `manual` obligation
+  above stops being a convention the package must remember. Such a package
+  declares only its own actions; `ToolPlugin` appends the reserved `manual`
+  from the package's own `manual/SKILL.md` bundle and raises `ToolPluginError`
+  if the package declares, re-schemas, or rebinds it. The package also ships a
+  `plugin.json` manifest stating its public name, its module, and where the
+  host mounts its skill; that manifest — not a host-side table — is what
+  `Agent._install_intrinsic_manuals` and `registry.setup_capability` follow, so
+  a retained implementation directory can differ from the public name without
+  the host having to know. Packaging owns none of a tool's policy: provider
+  admission, credential gates, settings ownership, and dispatch authorization
+  all remain exactly where this Contract already puts them. `web`
+  (`lingtai/tools/web_search/`) is the reference package.
 
 ### Settings
 

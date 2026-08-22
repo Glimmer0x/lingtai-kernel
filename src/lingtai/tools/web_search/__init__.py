@@ -1,8 +1,20 @@
-"""Unified ``web`` capability: search, static browse, and its manual.
+"""Unified ``web`` capability: search, static browse, and its owned manual.
 
 This retained package is the composition owner.  Search providers remain lazy
 internal adapters, while the tested browser Core/Port stays in
 ``lingtai.tools.browser`` and is never registered as a separate public tool.
+
+Packaging is owned by ``plugin.py``: ``WEB_PLUGIN`` states the public name, the
+packaged ``manual/`` skill, where the host mounts it, and the two actions this
+package declares.  Every family composed below goes through
+``WEB_PLUGIN.build_family``, so the reserved ``manual`` child is appended from
+the packaged bundle and cannot be declared, re-schema'd, or rebound here.  The
+shipped ``plugin.json`` is the record the host reads to discover and mount this
+package; ``tests/test_tool_plugin_package.py`` pins it equal to the descriptor.
+
+Packaging is all the plugin owns.  Provider admission, the settings-only
+Anthropic/Gemini opt-in, the canonical-backend identity gate, the artifact
+spill policy, and the internal browser boundary are unchanged and stay here.
 """
 from __future__ import annotations
 
@@ -15,8 +27,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 from ._spill import spill_if_over_threshold
+from .plugin import WEB_ACTIONS, WEB_DECLARED_ACTIONS, WEB_PLUGIN
 from .settings import (
     OutputSettingsSnapshot,
     SettingsSnapshot,
@@ -161,35 +173,49 @@ _BROWSE_INPUT_SCHEMA: dict[str, Any] = {
 # The single source of truth for web's own children: one ``(name, schema,
 # title)`` triple per child, consumed both by the module-level schema-only
 # family below and by ``WebManager.__init__``, which binds real handlers to
-# the same specs. The reserved ``manual`` child is not listed here: its schema
-# is the owner-exported ``MANUAL_INPUT_SCHEMA`` and its real child comes from
-# ``build_manual_child``.
+# the same specs. The reserved ``manual`` child is not listed here and must
+# not be: ``WEB_PLUGIN.build_family`` appends it from the packaged
+# ``manual/SKILL.md`` and raises ``ToolPluginError`` if this package ever
+# tries to declare, re-schema, or rebind it.
 _CHILD_SPECS: tuple[tuple[str, dict[str, Any], str], ...] = (
     ("search", _SEARCH_INPUT_SCHEMA, "search input"),
     ("browse", _BROWSE_INPUT_SCHEMA, "browse input"),
 )
 
+# The declared children and the plugin's declared action list are the same
+# fact stated twice; disagreement is a packaging defect, caught here at import
+# rather than as a schema/dispatch surprise at runtime.
+assert tuple(name for name, _schema, _title in _CHILD_SPECS) == WEB_DECLARED_ACTIONS
+
 
 def _schema_only_family() -> ToolFamily:
-    # A throwaway ``ToolFamily`` used only to compose the model-facing schema
-    # and to prove the fixed three-child registry has no duplicate or
-    # reserved-name collision (``ToolFamilyError`` would raise here, at
+    # A throwaway family used only to compose the model-facing schema and to
+    # prove the fixed three-child registry has no duplicate or reserved-name
+    # collision (``ToolFamilyError``/``ToolPluginError`` would raise here, at
     # import time, rather than shipping silently). ``WebManager`` builds its
-    # own per-instance ``ToolFamily`` in ``__init__`` with real handlers
-    # bound to that instance; this module-level one never dispatches.
+    # own per-instance family in ``__init__`` with real handlers bound to that
+    # instance; this module-level one never dispatches — which is exactly why
+    # it is composed without an agent, so the plugin supplies its
+    # never-dispatching ``manual`` child rather than one bound to an agent
+    # that does not exist yet.
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
-    return ToolFamily(
-        "web",
+    return WEB_PLUGIN.build_family(
         [
-            *(ChildTool(name, schema, _unused, title=title) for name, schema, title in _CHILD_SPECS),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            ChildTool(name, schema, _unused, title=title)
+            for name, schema, title in _CHILD_SPECS
         ],
     )
 
 
 _FAMILY = _schema_only_family()
+
+# The public action list, rendered once for the envelope-level ``ACTION_REQUIRED``
+# normalization in ``WebManager.handle``. Sourced from the plugin so a future
+# action cannot be added to the family and silently left out of the message the
+# model reads when it omits ``action``.
+_ACTION_SENTENCE = f"{', '.join(WEB_ACTIONS[:-1])}, or {WEB_ACTIONS[-1]}"
 
 
 def get_description(lang: str = "en") -> str:
@@ -251,22 +277,22 @@ class WebManager:
         self._services: dict[str, Any] = {}
         self._service_errors: dict[str, str] = {}
         handlers = {"search": self._dispatch_search, "browse": self._dispatch_browse}
-        self._family = ToolFamily(
-            "web",
+        # ``manual`` is appended by the plugin, bound to this agent's mounted
+        # copy of web's own packaged skill — the same child
+        # ``build_manual_child`` produced before, now sourced from the
+        # descriptor's declared mount destination instead of a literal spelled
+        # here. It is registered directly, unwrapped: ``ToolFamily.handle()``
+        # must dispatch that child's own canonical MCP-compatible result
+        # verbatim for ``action="manual"`` (no double wrap). Web's flat public
+        # shape is reconstructed from that canonical result strictly *after*
+        # ``self._family.handle(...)`` returns, in ``handle()`` below — never
+        # inside a registered child.
+        self._family = WEB_PLUGIN.build_family(
             [
-                *(
-                    ChildTool(name, schema, handlers[name], title=title)
-                    for name, schema, title in _CHILD_SPECS
-                ),
-                # Registered directly, unwrapped: ``ToolFamily.handle()`` must
-                # dispatch this child's own canonical MCP-compatible result
-                # verbatim for ``action="manual"`` (no double wrap). Web's
-                # flat public shape is reconstructed from that canonical
-                # result strictly *after* ``self._family.handle(...)``
-                # returns, in ``handle()`` below — never inside a registered
-                # child.
-                build_manual_child(agent, "web"),
+                ChildTool(name, schema, handlers[name], title=title)
+                for name, schema, title in _CHILD_SPECS
             ],
+            agent=agent,
         )
 
     @property
@@ -602,7 +628,7 @@ class WebManager:
         # This path never reads settings/web.search.json and performs no
         # provider construction or search operation, even when settings are
         # malformed: manual does not own that file.
-        loaded = load_installed_manual(self._agent, "web")
+        loaded = load_installed_manual(self._agent, WEB_PLUGIN.install_as)
         loaded.update({"action": "manual", "current_setting": diagnostic})
         return loaded
 
@@ -791,7 +817,7 @@ class WebManager:
             result = self._adapt_manual_result(result)
         elif result.get("error_code") == "ACTION_REQUIRED":
             result["action"] = "unknown"
-            result["message"] = "action must be one of search, browse, or manual"
+            result["message"] = f"action must be one of {_ACTION_SENTENCE}"
             result["current_setting"] = self._no_settings_diagnostic()
         elif result.get("status") == "failed" and "current_setting" not in result:
             result["action"] = action if isinstance(action, str) else "unknown"
@@ -950,7 +976,10 @@ def setup(
         default_source=source, legacy_fallback_from=legacy_fallback_from,
     )
     agent.add_tool(
-        "web", schema=get_schema(), handler=manager.handle,
+        # The public name comes from the plugin descriptor, which is also what
+        # the shipped ``plugin.json`` publishes and what the registry mounts
+        # this module for — one name, not three independent spellings.
+        WEB_PLUGIN.name, schema=get_schema(), handler=manager.handle,
         description=get_description(), glossary_package=__package__,
     )
     return manager

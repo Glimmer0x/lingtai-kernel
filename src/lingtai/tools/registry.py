@@ -10,6 +10,13 @@ onto an agent. It owns two layers:
   :func:`setup_capability`, :func:`apply_core_defaults`,
   :func:`normalize_capabilities`,
   :func:`get_all_providers`, :data:`CAPABILITY_UNAVAILABLE`.
+- the tool-plugin mount seam: :func:`tool_plugin_manifests` /
+  :func:`plugin_module_path`, which discover ``plugin.json``-carrying packages
+  under ``lingtai.tools`` and give :func:`setup_capability` the module a
+  plugin-backed capability resolves to. Discovery reads the filesystem only —
+  it never imports a tool package — and a discovered manifest that disagrees
+  with this module's own :data:`BUILTIN_TOOLS` entry is a packaging defect that
+  fails loudly rather than one of the two silently winning.
 
 Import discipline: capability modules are resolved with ``importlib`` *inside*
 :func:`setup_capability` / :func:`get_all_providers`, never at module top, so
@@ -131,9 +138,53 @@ BUILTIN_TOOLS: dict[str, str] = {
     "file": "lingtai.tools.file",
     "vision": "lingtai.tools.vision",
     # Unified public web capability.  ``web_search`` is a one-way input alias
-    # below so old presets materialize this single handler.
+    # below so old presets materialize this single handler. ``web`` is also the
+    # first *tool plugin* package: ``lingtai/tools/web_search/plugin.json``
+    # publishes this same module, and ``setup_capability`` requires the two to
+    # agree before it mounts anything (``_plugin.py``).
     "web": "lingtai.tools.web_search",
 }
+
+
+# ---------------------------------------------------------------------------
+# Layer 2b — tool plugin packages (discovered from disk, then mounted)
+# ---------------------------------------------------------------------------
+#
+# A tool plugin package ships a ``plugin.json`` manifest stating its public
+# name, its module, and where its packaged manual bundle mounts. Discovery is
+# filesystem-only and cached: importing this registry must not import every
+# tool (see "Import discipline" above), and ``lingtai.tools._plugin`` itself is
+# imported lazily inside these helpers for the same reason.
+
+_PLUGIN_MANIFESTS: dict[str, dict] | None = None
+_PLUGIN_PROBLEMS: list[dict[str, str]] = []
+
+
+def tool_plugin_manifests(*, refresh: bool = False) -> dict[str, dict]:
+    """Discovered tool-plugin manifests, keyed by package directory name.
+
+    Scanned once per process. ``refresh=True`` re-scans; it exists for tests
+    and for a host that rewrites the tools tree, not for a runtime code path.
+    """
+    global _PLUGIN_MANIFESTS, _PLUGIN_PROBLEMS
+    if _PLUGIN_MANIFESTS is None or refresh:
+        from ._plugin import discover_manifests
+
+        _PLUGIN_MANIFESTS, _PLUGIN_PROBLEMS = discover_manifests()
+    return _PLUGIN_MANIFESTS
+
+
+def tool_plugin_problems(*, refresh: bool = False) -> list[dict[str, str]]:
+    """Packages whose ``plugin.json`` was present but unusable, with reasons."""
+    tool_plugin_manifests(refresh=refresh)
+    return list(_PLUGIN_PROBLEMS)
+
+
+def plugin_module_path(name: str) -> str | None:
+    """The module a discovered tool plugin publishes for capability *name*."""
+    from ._plugin import manifest_module
+
+    return manifest_module(tool_plugin_manifests(), name)
 
 # Capabilities that boot by default on every Agent — the always-on floor.
 # init.json's ``manifest.capabilities`` only needs to declare overrides (kwargs)
@@ -349,10 +400,29 @@ def setup_capability(agent: "BaseAgent", name: str, **kwargs: Any) -> Any:
     """
     name = canonical_capability_name(name)
     module_path = BUILTIN_TOOLS.get(name)
+    # A tool plugin package publishes its own module in ``plugin.json``; that
+    # manifest is what the host reads, so it is what this seam mounts. The
+    # registry's own entry stays the compatibility surface (error text,
+    # check-caps, presets) and must agree — a disagreement means the shipped
+    # package and this table describe different tools, which is a packaging
+    # defect, not a preference to resolve silently.
+    plugin_path = plugin_module_path(name)
+    if plugin_path is not None:
+        if module_path is not None and module_path != plugin_path:
+            from ._plugin import ToolPluginError
+
+            raise ToolPluginError(
+                f"capability {name!r} is registered as {module_path!r} but its "
+                f"shipped plugin manifest declares {plugin_path!r}"
+            )
+        module_path = plugin_path
     if module_path is None:
+        available = set(BUILTIN_TOOLS) | {
+            manifest["name"] for manifest in tool_plugin_manifests().values()
+        }
         raise ValueError(
             f"Unknown capability: {name!r}. "
-            f"Available: {', '.join(sorted(BUILTIN_TOOLS))}."
+            f"Available: {', '.join(sorted(available))}."
         )
     mod = importlib.import_module(module_path)
     setup_fn = getattr(mod, "setup", None)

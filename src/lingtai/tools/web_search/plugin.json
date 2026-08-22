@@ -1,0 +1,18 @@
+{
+  "schema": "lingtai.tool.plugin.v1",
+  "name": "web",
+  "summary": "Unified web capability — search, static browse, and its owned manual.",
+  "homepage": "https://github.com/Lingtai-AI/lingtai-kernel/blob/main/src/lingtai/tools/web_search/CONTRACT.md",
+  "source": "lingtai-builtin",
+  "module": "lingtai.tools.web_search",
+  "manual": {
+    "skill": "web-manual",
+    "bundle": "manual",
+    "install_as": "web"
+  },
+  "actions": [
+    "search",
+    "browse",
+    "manual"
+  ]
+}

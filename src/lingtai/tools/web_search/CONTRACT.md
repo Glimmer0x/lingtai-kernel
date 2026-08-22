@@ -6,6 +6,9 @@ related_files:
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/plugin.py
+  - src/lingtai/tools/web_search/plugin.json
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
@@ -26,7 +29,10 @@ maintenance: |
   together when behavior or errors change; retain browser as an internal browse
   subcomponent rather than a second capability. web's schema composition and
   envelope dispatch build on the generic tool_family package; keep that link
-  current when either side's boundary changes.
+  current when either side's boundary changes. Packaging (plugin.py /
+  plugin.json) owns none of the promises below: it appends the reserved manual
+  and declares the mount, and every provider, credential, settings, and
+  delivery rule here is unchanged by it.
 ---
 # Unified web capability
 

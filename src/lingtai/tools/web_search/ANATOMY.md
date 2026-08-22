@@ -7,6 +7,10 @@ related_files:
   - src/lingtai/tools/web_search/BEHAVIORS.md
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/plugin.py
+  - src/lingtai/tools/web_search/plugin.json
+  - src/lingtai/tools/_plugin.py
+  - tests/test_tool_plugin_package.py
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
@@ -49,6 +53,10 @@ related_files:
 maintenance: |
   Keep this public web Anatomy and its Contract reciprocal, keep the parent
   link bidirectional, and keep the sole web-manual edge on both owner twins.
+  This package is the reference tool *plugin*: plugin.py is the descriptor and
+  plugin.json the shipped manifest the host reads; keep the two equal (the
+  packaging test pins it) and never restate the mount destination in a
+  host-side table.
   Browser is an internal browse subcomponent, not another model-facing node.
   tool_family is generic optional infrastructure this package composes onto;
   web's own instance-bound diagnostics and dispatch wrapper remain here.
@@ -65,12 +73,32 @@ composition and envelope dispatch delegate to the generic
 `tool_family` infrastructure; this package retains ownership of
 action implementations, settings, and diagnostics.
 
+It is also the first built-in **tool plugin** package: the same folder ships
+the tool code, the `manual/` skill it owns, and the `plugin.json` manifest the
+host reads to discover and mount it. Packaging is all the plugin owns —
+provider admission, the settings-only Anthropic/Gemini opt-in, the
+canonical-backend identity gate, the artifact spill policy, and the internal
+browser boundary are untouched by it and stay in `__init__.py`.
+
 ## Components
 
-- `WebManager`, `setup()`, and the single `web` schema — builds a per-instance
-  `ToolFamily` (`lingtai.tools.tool_family`) with `search`/`browse` handlers
-  bound to instance state and a `manual` child from
-  `tool_family.manual.build_manual_child`; `handle()` delegates envelope
+- `plugin.py` — the `WEB_PLUGIN` descriptor
+  (`lingtai.tools._plugin.ToolPlugin`): public name `web`, the retained
+  `lingtai.tools.web_search` module, the packaged `web-manual` skill, the
+  `install_as: web` mount destination, and `WEB_DECLARED_ACTIONS =
+  ("search", "browse")`. `manual` is deliberately absent — the plugin appends
+  it and rejects any attempt to declare, re-schema, or rebind it
+  (`src/lingtai/tools/web_search/plugin.py:26-48`).
+- `plugin.json` — the shipped manifest the host actually reads. Discovery is
+  filesystem-only (no tool package is imported), so this file is what
+  `Agent._install_intrinsic_manuals` mounts the manual bundle from and what
+  `registry.setup_capability` resolves this capability's module through. It
+  must equal `WEB_PLUGIN.tool_declaration()`; `tests/test_tool_plugin_package.py`
+  pins the equality rather than generating the file at runtime.
+- `WebManager`, `setup()`, and the single `web` schema — composes every family
+  through `WEB_PLUGIN.build_family` (`lingtai.tools.tool_family` underneath):
+  `search`/`browse` handlers bound to instance state, plus the plugin-appended
+  `manual` child bound to the mounted skill; `handle()` delegates envelope
   validation and dispatch to that `ToolFamily` and stamps
   `current_setting`/`action` onto envelope-level failures; lazy engine
   composition, settings diagnostics, and registration

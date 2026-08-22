@@ -171,6 +171,15 @@ def _schema_declares_reasoning_param(schema: Any) -> bool:
     return "reasoning" in properties or "_reasoning" in properties
 
 
+#: Retained implementation directories under ``lingtai.tools`` whose manual
+#: bundle installs under a different public capability name, for packages that
+#: are NOT tool plugins. A tool plugin states this itself, in its shipped
+#: ``plugin.json`` (``manual.install_as``), and never appears here — ``web``
+#: (``web_search/``) was moved out of this table when it became one. Read only
+#: by ``Agent._install_intrinsic_manuals``.
+_LEGACY_MANUAL_DESTINATIONS: dict[str, str] = {"bash": "shell"}
+
+
 class Agent(BaseAgent):
     """BaseAgent with composable capabilities.
 
@@ -558,11 +567,36 @@ class Agent(BaseAgent):
         documentation — agents should be able to read about a capability
         before they configure it.
 
+        This is the *mount* half of the tool-plugin contract. A tool package
+        that ships a ``plugin.json`` declares which bundle directory holds its
+        owned skill and which public capability name that skill installs under;
+        this method reads those manifests (from disk, importing nothing) and
+        mounts accordingly, instead of carrying a host-side table of retained
+        directory names. ``web_search`` → ``web`` was such a special case and is
+        now the manifest's own statement.
+
         Never touches ``.library/custom/``. That is the agent's territory.
         """
         import shutil
         import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
+        from lingtai.tools._plugin import MANUAL_BUNDLE_DIRNAME, discover_manifests
+
+        # Discovery must never take the agent down, and a manifest that is
+        # present but unusable must never be silently half-applied: the package
+        # falls back to the pre-plugin mapping below and the reason is logged.
+        try:
+            plugin_manifests, plugin_problems = discover_manifests()
+        except Exception as e:  # pragma: no cover - defensive
+            plugin_manifests, plugin_problems = {}, [
+                {"package": "lingtai.tools", "reason": str(e)}
+            ]
+        for problem in plugin_problems:
+            self._log(
+                "tool_plugin_manifest_invalid",
+                package=problem["package"],
+                reason=problem["reason"],
+            )
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -585,16 +619,22 @@ class Agent(BaseAgent):
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
                     continue
-                src = entry / "manual"
+                # A tool plugin package states both facts itself; everything
+                # else keeps the pre-plugin rule, where a retained
+                # implementation directory maps to its canonical model-facing
+                # name exactly once (``bash`` → ``shell``) and every other
+                # package installs under its own directory name.
+                manifest = plugin_manifests.get(entry.name)
+                if manifest is not None:
+                    bundle_name = manifest["manual"]["bundle"]
+                    destination_name = manifest["manual"]["install_as"]
+                else:
+                    bundle_name = MANUAL_BUNDLE_DIRNAME
+                    destination_name = _LEGACY_MANUAL_DESTINATIONS.get(
+                        entry.name, entry.name
+                    )
+                src = entry / bundle_name
                 if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
-                        destination_name = "shell"
-                    elif entry.name == "web_search":
-                        destination_name = "web"
-                    else:
-                        destination_name = entry.name
                     destination = intrinsic_dir / subdir / destination_name
                     if destination.exists():
                         continue
