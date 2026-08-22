@@ -62,6 +62,7 @@ from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 # in ``__init__.py`` proving they still match the engine's own values.
 DEFAULT_MAX_TURNS = 5000
 CHECK_LAST_MAX = 1000
+LIST_DEFAULT_LAST = 1000
 
 #: The canonical action order, model-facing enum order, and dispatch order.
 DAEMON_ACTIONS: tuple[str, ...] = (
@@ -284,8 +285,7 @@ LIST_INPUT_SCHEMA: dict[str, Any] = {
         "last": {
             "type": ["integer", "null"],
             "minimum": 1,
-            "maximum": CHECK_LAST_MAX,
-            "description": "For 'list': positive maximum number of list entries to show after filtering. Null for no list limit.",
+            "description": "For 'list': positive maximum number of list entries to show after filtering. Omitted or null returns the newest 1000 entries; pass a positive value explicitly to request a different count (including more than 1000).",
         },
     },
     "required": ["contains", "status", "include_done", "last"],

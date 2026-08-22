@@ -894,6 +894,44 @@ def test_list_status_filter(tmp_path, monkeypatch, capsys):
     assert "no daemon runs" in capsys.readouterr().out
 
 
+def test_list_cli_keeps_default_1000_and_forwards_explicit_1005(
+    tmp_path, monkeypatch, capsys,
+):
+    """The public CLI keeps the engine default but exposes a larger page."""
+    agent_dir = _write_agent_dir(tmp_path)
+    for index in range(1005):
+        run_path = _seed_run_dir(agent_dir, handle=f"em-{index}")
+        state_path = run_path / "daemon.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        minute, second = divmod(index, 60)
+        state["started_at"] = f"2026-08-13T10:{minute:02d}:{second:02d}Z"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    assert _run_cli(monkeypatch, ["daemon", "list", "--agent-dir", str(agent_dir)]) == 0
+    default_out = capsys.readouterr().out
+    assert "1000 shown, 0 running" in default_out
+    assert "em-1004" in default_out
+    assert "em-0" not in default_out  # newest 1000, not the oldest five
+
+    assert _run_cli(monkeypatch, [
+        "daemon", "list", "--last", "1005", "--agent-dir", str(agent_dir),
+    ]) == 0
+    explicit_out = capsys.readouterr().out
+    assert "1005 shown, 0 running" in explicit_out
+    assert "em-0" in explicit_out
+    assert "em-1004" in explicit_out
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-an-integer"])
+def test_list_cli_last_is_strictly_positive(tmp_path, monkeypatch, capsys, value):
+    agent_dir = _write_agent_dir(tmp_path)
+    code = _run_cli(monkeypatch, [
+        "daemon", "list", "--last", value, "--agent-dir", str(agent_dir),
+    ])
+    assert code == 2
+    assert "--last" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("argv", [
     ["daemon", "list"],
     ["daemon", "check", "em-1"],
@@ -1186,3 +1224,6 @@ def test_daemon_manual_documents_the_cli():
     ).read_text(encoding="utf-8")
     assert "## Programmatic use / CLI" in manual
     assert "lingtai-agent daemon emanate" in manual
+    assert "lingtai-agent daemon list" in manual
+    assert "[--last N]" in manual
+    assert "non-empty `contains` searches prompt-preview text" in manual

@@ -56,6 +56,7 @@ from .._manual import load_installed_manual
 from ._tool_family import (
     CHECK_LAST_MAX as _FAMILY_CHECK_LAST_MAX,
     DEFAULT_MAX_TURNS as _FAMILY_DEFAULT_MAX_TURNS,
+    LIST_DEFAULT_LAST as _FAMILY_LIST_DEFAULT_LAST,
     DaemonFamilyDispatcher,
     build_schema as _family_build_schema,
 )
@@ -1405,7 +1406,7 @@ class _ToolCollector:
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows status; daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -6122,6 +6123,123 @@ class DaemonManager:
                 rows.append((run_path, state))
         return rows
 
+    def _handle_list_without_query(
+        self,
+        *,
+        wanted_status: str,
+        include_done: bool,
+        limit_int: int,
+    ) -> dict:
+        """List without a text query while bounding entry reads.
+
+        Historical ``daemon.json`` records still have to be inspected to learn
+        their timestamps because the current persistence layout has no separate
+        chronological index.  We nevertheless keep only record/state rows until
+        the existing status sort has selected the newest ``limit_int`` rows; for
+        current-version records, expensive list-entry materialization (notably
+        ``.prompt`` preview reads) happens only for rows that can be returned.
+        Missing, corrupt, or stale records still take the documented candidate-
+        wide migration/rebuild path so their index can be repaired.
+        """
+        rows: list[tuple[str, str, object]] = []
+        running = 0
+        total_before_filter = 0
+        active_run_ids: set[str] = set()
+
+        def add_row(sort_key: str, status: object, kind: str, payload: object) -> None:
+            nonlocal total_before_filter
+            total_before_filter += 1
+            if wanted_status and wanted_status != "all":
+                if str(status or "").lower() != wanted_status:
+                    return
+            rows.append((sort_key, kind, payload))
+
+        for em_id, entry in self._emanations.items():
+            elapsed = time.time() - entry["start_time"]
+            future = entry.get("future")
+            exc = None
+            detached = future is None
+            if detached:
+                active_status = None
+            elif future.done():
+                exc = future.exception()
+                active_status = "failed" if exc else "done"
+            else:
+                active_status = "running"
+                running += 1
+
+            run_dir = entry.get("run_dir")
+            if run_dir is not None:
+                state = (
+                    self._read_run_dir_state_from_disk(run_dir)
+                    if detached else run_dir.state_snapshot()
+                )
+                state.setdefault("handle", em_id)
+                active_run_ids.add(run_dir.run_id)
+                status = active_status or state.get("state") or "unknown"
+                if detached and status == "running":
+                    running += 1
+                add_row(
+                    str(state.get("started_at") or state.get("run_id") or ""),
+                    status,
+                    "state",
+                    (state, run_dir.path, active_status,
+                     round(elapsed) if not detached else None, exc),
+                )
+            else:
+                info = {
+                    "id": em_id,
+                    "task": self._truncate_list_string(entry.get("task", ""), 120),
+                    "status": active_status,
+                    "elapsed_s": round(elapsed),
+                }
+                if exc:
+                    info["error"] = str(exc)
+                add_row("", active_status, "info", info)
+
+        if include_done:
+            for run_path, state in self._iter_daemon_history_states(
+                skip_run_ids=active_run_ids,
+            ):
+                status = state.get("state") or "unknown"
+                if status == "running":
+                    running += 1
+                add_row(
+                    str(state.get("started_at") or state.get("run_id") or ""),
+                    status,
+                    "state",
+                    (state, run_path, None, None, None),
+                )
+
+        rows.sort(key=lambda row: row[0], reverse=True)
+        selected = rows[:limit_int]
+        emanations: list[dict] = []
+        for _, kind, payload in selected:
+            if kind == "info":
+                emanations.append(payload)  # type: ignore[arg-type]
+                continue
+            state, run_path, active_status, active_elapsed, active_error = payload  # type: ignore[misc]
+            emanations.append(
+                self._daemon_list_entry_from_state(
+                    state,
+                    run_path,
+                    active_status=active_status,
+                    active_elapsed=active_elapsed,
+                    active_error=active_error,
+                )
+            )
+
+        return {
+            "emanations": emanations,
+            "running": running,
+            "manager_pool_size": self._manager_pool_size,
+            "history_included": include_done,
+            "index": "daemon_run_dirs",
+            "total_before_filter": total_before_filter,
+            "total_matches": len(rows),
+            "showing": len(emanations),
+        }
+
     def _handle_list(
         self,
         contains: str | None = "",
@@ -6130,17 +6248,22 @@ class DaemonManager:
         limit: int | None = None,
     ) -> dict:
         try:
-            limit_int = int(limit) if limit is not None else None
+            limit_int = self._LIST_DEFAULT_LAST if limit is None else int(limit)
         except (TypeError, ValueError):
             return {"status": "error", "message": f"last must be a positive integer (got {limit!r})"}
-        if limit_int is not None and limit_int < 1:
+        if limit_int < 1:
             return {"status": "error", "message": f"last must be ≥ 1 (got {limit_int})"}
-        if limit_int is not None:
-            limit_int = min(limit_int, self._CHECK_LAST_MAX)
 
         query = (contains or "").strip().lower()
         wanted_status = (status_filter or "all").strip().lower()
         include_done = include_done is not False
+
+        if not query:
+            return self._handle_list_without_query(
+                wanted_status=wanted_status,
+                include_done=include_done,
+                limit_int=limit_int,
+            )
 
         emanations: list[dict] = []
         running = 0
@@ -8768,10 +8891,11 @@ class DaemonManager:
             )
         return {"status": "sent", "id": em_id, "output": output}
 
-    # Hard cap on `last` to bound memory in case events.jsonl has grown large
-    # (long-running emanations under the new 3600s timeout default can write
-    # thousands of events). Beyond this an agent should read the file directly.
+    # ``check.last`` remains capped because its event-tail reader must protect
+    # itself from an oversized JSONL tail. ``list.last`` has a bounded default
+    # but accepts explicit positive overrides above that default.
     _CHECK_LAST_MAX = 1000
+    _LIST_DEFAULT_LAST = _FAMILY_LIST_DEFAULT_LAST
 
     def _handle_check(self, em_id: str, last=20, truncate=500) -> dict:
         """Read-only progress tail for one emanation.
@@ -9518,9 +9642,10 @@ class DaemonManager:
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
-# ``check``/``list`` child schemas advertise the same ``last`` ceiling the
-# engine enforces. Stated here because ``DaemonManager`` owns ``_CHECK_LAST_MAX``.
+# ``check`` child schema advertises the same event-tail ceiling the engine
+# enforces, while its list default matches the manager's bounded default.
 assert _FAMILY_CHECK_LAST_MAX == DaemonManager._CHECK_LAST_MAX
+assert _FAMILY_LIST_DEFAULT_LAST == DaemonManager._LIST_DEFAULT_LAST
 
 
 def setup(agent: "Agent",

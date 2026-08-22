@@ -97,7 +97,7 @@ identical.
 
 ```bash
 lingtai-agent daemon emanate --tasks batch.json --agent-dir ~/agents/foo [--backend lingtai] [--yes]
-lingtai-agent daemon list  [--status running] [--agent-dir ~/agents/foo]
+lingtai-agent daemon list  [--status running] [--last N] [--agent-dir ~/agents/foo]
 lingtai-agent daemon check em-1 [--agent-dir ~/agents/foo]
 ```
 
@@ -142,7 +142,11 @@ Behavior worth knowing before wiring it into a job:
   `daemon.json` that is missing, unreadable, or written by an older
   `data_version`. Such runs are still listed — reconstructed in memory — with a
   stderr note naming them; run `daemon(action="list", input={"contains": null, "status": null, "include_done": null, "last": null})` as the owning agent to
-  actually repair them.
+  actually repair them. That omitted/null `last` uses the newest-1000 default;
+  pass a positive `last: N` explicitly when a larger page is needed. The deferred
+  prompt/result materialization benefit applies only when `contains` is absent or
+  empty; a non-empty `contains` searches prompt-preview text, so it preserves
+  full candidate materialization before filtering and paging.
 - **Terminal notifications stay with the owning agent.** Runs dispatched from
   the CLI are detached and still notify the agent that owns the working
   directory; the CLI process itself publishes nothing.

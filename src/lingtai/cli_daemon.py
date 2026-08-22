@@ -64,6 +64,17 @@ class CliDaemonError(Exception):
     """A user-facing refusal: printed to stderr, exits non-zero."""
 
 
+def _strict_positive_int(raw: str) -> int:
+    """Parse a CLI integer that must be strictly positive."""
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return value
+
+
 # --------------------------------------------------------------------------
 # Agent facade
 # --------------------------------------------------------------------------
@@ -953,7 +964,7 @@ def _handle_list(args) -> int:
         contains="",
         status_filter=args.status or "all",
         include_done=True,
-        limit=None,
+        limit=args.last,
     )
     if result.get("status") == "error":
         raise CliDaemonError(str(result.get("message", "list failed")))
@@ -1045,6 +1056,13 @@ def add_daemon_parser(sub: "argparse._SubParsersAction") -> None:
         "--status",
         default=None,
         help="Filter by status: running, done, failed, cancelled, timeout, or all",
+    )
+    listing.add_argument(
+        "--last",
+        type=_strict_positive_int,
+        default=None,
+        metavar="N",
+        help="Show the newest N rows (strictly positive; default: 1000)",
     )
     listing.add_argument(
         "--agent-dir",
