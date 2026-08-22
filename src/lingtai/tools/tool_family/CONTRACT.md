@@ -10,6 +10,9 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/task_card/plugin.py
+  - tests/test_local_tool_plugin_package.py
   - src/lingtai/tools/web_search/CONTRACT.md
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/mcp/CONTRACT.md
@@ -498,6 +501,16 @@ Guarded by: [T006](BEHAVIORS.md#behavior-t006)
   `ToolFamily.handle()` dispatches back verbatim — MUST be the canonical
   `content[0].text` (full body) / `structuredContent.manual_path` (host-local
   path) shape, never the pre-mapping flat `load_installed_manual()` dict.
+- A family supplying its own `manual` child MUST produce that canonical shape
+  through the exported `manual.to_manual_result` rather than a second local
+  mapper, and MUST use the exported `manual.MANUAL_CHILD_TITLE` for its schema
+  branch title, so a self-built reserved child composes a schema byte-identical
+  to a `build_manual_child` one. `lingtai.tools._plugin.LocalToolPlugin` is the
+  one such builder today: it binds `manual` to its package's own bundled
+  `manual/SKILL.md` (installed copy first, packaged bundle as fallback) so a
+  plugin-packaged family's manual is always answerable and never routes through
+  that package's manager. Both exports are additive; every existing consumer of
+  `build_manual_child` is unchanged.
   `status`/`error` loader facts MUST be preserved truthfully alongside those
   two fields, not dropped or double-wrapped.
 - A family MUST register `build_manual_child`'s returned `ChildTool` directly

@@ -123,6 +123,15 @@ BUILTIN_TOOLS: dict[str, str] = {
     # ``init.json`` top-level ``mcp`` entry. A plugin merely *discovered* on an
     # inherited skills path mounts nothing at all.
     "plugin": "lingtai.tools.plugin",
+    # ``task_card`` is the one capability packaged as a local-tool plugin
+    # (``lingtai.tools._plugin``). Its package states these facts once in
+    # ``lingtai/tools/task_card/plugin.py`` and this entry must equal
+    # ``TASK_CARD_PLUGIN.tool_declaration()`` — pinned by
+    # ``tests/test_local_tool_plugin_package.py``. It is deliberately still a
+    # literal rather than a generated value: importing this registry must not
+    # import a tool package (see the import discipline above), so the shipped
+    # entry stays the runtime source and the descriptor is what it agrees with,
+    # exactly as ``mcp_catalog.json`` relates to a curated MCP's plugin.
     "task_card": "lingtai.tools.task_card",
     # Unified public file capability: one package owning the composed schema,
     # the envelope dispatch, and all five operation implementations. The
@@ -157,6 +166,8 @@ CORE_DEFAULTS: dict[str, dict] = {
     # presentation. It renders a read-only catalog and writes nothing at all,
     # so booting it on every agent costs one directory scan and risks nothing.
     "plugin": {},
+    # Must equal ``TASK_CARD_PLUGIN.tool_declaration()["default_configuration"]``
+    # (same test, same reason as the ``BUILTIN_TOOLS`` entry above).
     "task_card": {},
     "file": {},
     "vision": {},

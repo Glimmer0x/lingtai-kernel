@@ -225,6 +225,7 @@ related_files:
   - tests/test_llm_service_adapter_cache.py
   - tests/test_llm_utils.py
   - tests/test_local_command_core.py
+  - tests/test_local_tool_plugin_package.py
   - tests/test_logging_setup.py
   - tests/test_loop_guard.py
   - tests/test_macos_shell_adapter.py

@@ -5,9 +5,14 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/plugin.py
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/registry.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/agent.py
+  - tests/test_local_tool_plugin_package.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
@@ -148,11 +153,27 @@ declarative artifact and one active watch per agent.
     dead watch. A transient renderer failure during resume preserves the last
     body and lets the updater thread retry, matching live-watch error
     semantics.
+15. This capability is plugin-packaged. One package-local descriptor
+    (`plugin.py`, a `lingtai.tools._plugin.LocalToolPlugin`) states the
+    capability name, the module the built-in registry mounts, the packaged
+    `manual/SKILL.md`, and the installed-manual destination; the public schema,
+    description, dispatch family, notification channel, and the name `setup`
+    mounts under are all composed from it rather than re-spelled. The package
+    declares only its own five actions: `manual` is appended by the plugin from
+    the packaged bundle, and declaring, re-schemaing, or rebinding it is a
+    packaging defect that raises at import. Packaging governs the model-facing
+    surface only — renderer execution, artifact writes, watch persistence,
+    lifecycle, and the read-only Telegram/Feishu projections are untouched by
+    it, and no plugin runtime, discovery scan, or second registry is
+    introduced.
 
 ## Port
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
-`stop`, `remove`, and `manual`.
+`stop`, `remove`, and `manual`. The action inventory is the plugin's
+`TASK_CARD_ACTIONS` — this package's five declared actions followed by the
+reserved `manual` — so the advertised list cannot drift from the family
+actually composed.
 
 ## Adapters
 
@@ -182,7 +203,9 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
 5. The tool result for `start`/`inspect`/`retry`/`stop`/`remove` must report the
    exact artifact paths and current `status_value`.
 6. `manual` must remain discoverable from both this contract and the paired
-   Anatomy.
+   Anatomy, and it is the plugin's to serve: it answers from this package's
+   own skill and MUST NOT route through `TaskCardManager`, so no manager
+   change can drop, replace, or rebind it.
 7. Configuration is resolved fresh from `taskcard/taskcard.json` on every
    `start`; `inspect`/`retry`/`stop`/`remove` act only on values already fixed
    onto the existing watch and never re-resolve configuration.
@@ -197,9 +220,32 @@ Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
     stale descriptors are cleared without resurrecting a dead watch, and the
     resumed watch keeps the same refresh budget rather than silently
     resetting its ceiling.
+11. The manual is always answerable. `manual` returns the copy installed at
+    `.library/intrinsic/capabilities/task_card/SKILL.md` when it is present —
+    that copy is the installed projection of this package's own `manual/`
+    bundle and a host may legitimately curate it — and otherwise returns the
+    packaged document itself rather than the pre-plugin empty/degraded result.
+    The result shape is unchanged in both cases
+    (`status`/`content`/`structuredContent.manual_path`).
+12. `lingtai.tools.registry`'s `BUILTIN_TOOLS`/`CORE_DEFAULTS` entries remain
+    the runtime mount source, because importing the registry MUST NOT eagerly
+    import tool packages. `TASK_CARD_PLUGIN.tool_declaration()` is the record
+    those entries must agree with, and that agreement is pinned by test — it
+    is not generated at runtime.
 
 ## Tests
 
+- `tests/test_local_tool_plugin_package.py` covers the packaging promises of
+  Behavior rule 15 and Invariants 6, 11, and 12: the declaration agreeing with
+  the shipped registry entries, the registry staying import-cheap (proven in a
+  subprocess), `setup` mounting under the descriptor name, the packaged bundle
+  being the one the agent library installs from and the installed path being
+  the one `manual` reads back, `manual` refusing to be declared/re-schemaed/
+  rebound by the package, `manual` answering without entering the manager and
+  falling back to the packaged skill, the unchanged strict envelope/branch
+  titles, and descriptor defects (foreign module, wrong skill name, missing
+  bundle, blank identity field, non-mapping default configuration) raising at
+  construction.
 - `tests/test_task_card_controller.py` covers intrinsic registration,
   exact paths, atomic ordering, one-watch enforcement, failure/recovery, stop
   semantics, configured defaults/ceilings (including the omitted-value and

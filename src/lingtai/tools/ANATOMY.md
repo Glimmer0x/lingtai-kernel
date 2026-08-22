@@ -46,6 +46,10 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/task_card/plugin.py
+  - src/lingtai/tools/tool_family/manual.py
+  - tests/test_local_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -78,12 +82,35 @@ capability names and lazy adapters.
   addressing and ownership rules, and the explicit per-tool migration boundary.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
-  (`src/lingtai/tools/registry.py:39-344`).
+  (`src/lingtai/tools/registry.py:39-344`). Its literals stay the runtime
+  source the host reads — importing the registry must not eagerly import every
+  tool package — so a plugin-packaged capability's `tool_declaration()` is what
+  those entries must *agree* with, proven by test rather than generated.
+- `_plugin.py` — local-tool **plugin packaging** descriptor: `LocalToolPlugin`
+  binds one package's identity, its bundled `manual/SKILL.md` (loaded and
+  name-checked at construction), and its built-in mount record
+  (`tool_declaration()`) — the `BUILTIN_TOOLS`/`CORE_DEFAULTS`/installed-manual
+  facts `registry.py` and `Agent._install_intrinsic_manuals` publish. It also
+  owns the reserved-action promise: `actions()`, `action_input_schemas()`, and
+  `build_family()` append `manual` from the packaged bundle and raise
+  `LocalToolPluginError` if a package declares, re-schemas, or rebinds it, and
+  `manual_child()` binds that action to the plugin's own skill
+  (installed copy first, packaged bundle as fallback) so it never routes
+  through the package's manager. The model-facing twin of
+  `mcp_servers/_plugin.py`: a curated MCP declares a *launcher* into
+  `mcp_catalog.json`, a local tool declares a *mount* into `registry.py`.
+  Declarative only — no discovery, import-by-name, boot, registration, or
+  config reading; activation/lifecycle stay with the host.
 - `web_search/` — public `web` composition owner for search, browse, settings,
   and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
   public `task_card` family, one agent-local artifact under `taskcard/`, and
-  no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
+  no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`). It is the
+  one package wired through `_plugin.py` today: `task_card/plugin.py` →
+  `task_card/__init__.py` (public schema, description, dispatch family,
+  plugin-appended `manual`, notification channel, and the name `setup()` mounts
+  under). The other capabilities still declare these facts inline and are
+  unchanged.
 - `file/` — sole owner of the public `file` capability: the composed schema,
   the envelope dispatch, and all five operation implementations in
   `_read.py`/`_write.py`/`_edit.py`/`_glob.py`/`_grep.py`

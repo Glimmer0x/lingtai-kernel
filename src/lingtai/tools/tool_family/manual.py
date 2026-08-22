@@ -23,7 +23,12 @@ from typing import Any, Mapping
 from .._manual import load_installed_manual
 from . import ChildTool
 
-__all__ = ["MANUAL_INPUT_SCHEMA", "build_manual_child"]
+__all__ = [
+    "MANUAL_CHILD_TITLE",
+    "MANUAL_INPUT_SCHEMA",
+    "build_manual_child",
+    "to_manual_result",
+]
 
 #: The one strict-empty ``manual`` input schema every family shares. ``required``
 #: is stated explicitly rather than left implicit: an empty ``properties`` map
@@ -43,8 +48,14 @@ MANUAL_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+#: The ``manual`` child's schema branch title. Owned here so a family that
+#: builds its own reserved child (``lingtai.tools._plugin.LocalToolPlugin``
+#: does, to bind the child to its packaged bundle) produces a composed schema
+#: byte-identical to one built by :func:`build_manual_child`.
+MANUAL_CHILD_TITLE = "manual input"
 
-def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
+
+def to_manual_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
     """Map a ``load_installed_manual``-shaped dict to the canonical child result.
 
     Full body goes to ``content[0].text``; ``manual_path`` goes to
@@ -54,6 +65,12 @@ def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
     reports a missing/degraded manual) are preserved verbatim as truthful
     loader facts alongside the two MCP-compatible fields; this is not a
     second wrapper, it is this child's own canonical result shape.
+
+    Public because the reserved child is not always built by
+    :func:`build_manual_child`: a packaged local-tool plugin
+    (``lingtai.tools._plugin.LocalToolPlugin``) binds its own ``manual`` child
+    to its bundled ``manual/SKILL.md`` and maps it through this same function,
+    so a plugin-served manual and an installed-library one are the same shape.
     """
     result: dict[str, Any] = {
         "status": loaded.get("status", "ok"),
@@ -83,7 +100,7 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
 
     def handler(_input: Mapping[str, Any]) -> dict[str, Any]:
         loaded = load_installed_manual(agent, skill_name)
-        return _to_mcp_result(loaded)
+        return to_manual_result(loaded)
 
     return ChildTool(
         name="manual",
@@ -91,5 +108,5 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
         # letting one family's child mutate every other family's schema.
         input_schema=copy.deepcopy(MANUAL_INPUT_SCHEMA),
         handler=handler,
-        title="manual input",
+        title=MANUAL_CHILD_TITLE,
     )

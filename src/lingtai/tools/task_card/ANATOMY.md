@@ -4,7 +4,13 @@ related_files:
   - src/lingtai/tools/task_card/BEHAVIORS.md
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/plugin.py
   - src/lingtai/tools/task_card/manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/tool_family/ANATOMY.md
+  - src/lingtai/tools/registry.py
+  - src/lingtai/agent.py
+  - tests/test_local_tool_plugin_package.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/task_card/ANATOMY.md
@@ -23,7 +29,8 @@ maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this Anatomy reciprocal with its paired CONTRACT.md and manual. Update
   this file in the same change as any ownership, file-path, lifecycle, or
-  projection-boundary change.
+  projection-boundary change, and whenever the plugin descriptor's identity,
+  packaged manual binding, action inventory, or mount record changes.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -45,20 +52,51 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
-- `__init__.py` — the full capability owner: schema/description, one-watch
-  lifecycle, renderer execution, atomic file writes, error/limit notifications,
-  persisted config loading/validation (`TaskCardManager._load_config`), the
-  one-way legacy-config migration (`TaskCardManager._migrate_legacy_config`),
-  and `setup(agent)` registration.
+This package is plugin-packaged (`lingtai.tools._plugin`): `plugin.py` states
+its identity once and everything model-facing is composed from that descriptor.
+The packaging governs the *surface*, not the behavior — the renderer
+subprocess, the atomic writes, the watch descriptor, the resident projection,
+and the consumer boundaries below are all unchanged by it.
+
+- `plugin.py` — the local-tool plugin descriptor. `TASK_CARD_PLUGIN` states the
+  capability/registry name, the module the built-in registry mounts, the
+  summary that record carries, the packaged `manual/SKILL.md`, and the
+  installed library destination that bundle lands in;
+  `TASK_CARD_DECLARED_ACTIONS` lists this package's own five actions with
+  `manual` deliberately absent, and `TASK_CARD_ACTIONS` is the plugin-composed
+  public list.
+- `__init__.py` — the full capability owner: one-watch lifecycle, renderer
+  execution, atomic file writes, error/limit notifications, persisted config
+  loading/validation (`TaskCardManager._load_config`), the one-way
+  legacy-config migration (`TaskCardManager._migrate_legacy_config`), and
+  `setup(agent)` registration. Its schema, description, dispatch family,
+  notification channel, and mounted tool name are all composed from
+  `plugin.py`; only the five declared children are built here, because the
+  plugin appends `manual` itself.
 - `manual/SKILL.md` — the progressive-disclosure manual for renderer authors
-  and lifecycle use.
+  and lifecycle use. It is this plugin's **owned skill**: the descriptor loads
+  and name-checks it at import, `Agent._install_intrinsic_manuals` copies the
+  `manual/` bundle into `.library/intrinsic/capabilities/task_card/`, and the
+  reserved `manual` action reads that installed copy back — falling back to the
+  packaged document when nothing is installed, because a plugin's manual is
+  always answerable.
 
 ## Connections
 
-- `setup(agent)` registers the public `task_card` tool through
+- `setup(agent)` registers the public `task_card` tool — under
+  `TASK_CARD_PLUGIN.name`, not a re-spelled literal — through
   `lingtai.tools.registry` and rehydrates a persisted active watch
   (`TaskCardManager.resume_persisted_watch`) so the card survives
   `refresh`/molt/agent-stop restarts.
+- `registry.py`'s `BUILTIN_TOOLS`/`CORE_DEFAULTS` entries remain the runtime
+  mount source the host reads (importing the registry must not eagerly import
+  every tool package); `TASK_CARD_PLUGIN.tool_declaration()` is what those
+  entries must agree with, pinned by
+  `tests/test_local_tool_plugin_package.py`.
+- `Agent._install_intrinsic_manuals` scans package folders rather than
+  importing them, so the descriptor's `manual_skill` and its
+  `installed_manual_path()` are the declared two ends of that install — the
+  same directory the reserved `manual` action reads.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
   writes `inactive`, joins the watch thread best-effort, and re-persists the
   watch descriptor with its carried refresh budget for the next boot.

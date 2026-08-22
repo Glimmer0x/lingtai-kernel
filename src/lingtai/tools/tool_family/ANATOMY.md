@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/task_card/ANATOMY.md
+  - tests/test_local_tool_plugin_package.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/web_search/ANATOMY.md
   - src/lingtai/tools/mcp/ANATOMY.md
@@ -118,7 +121,16 @@ provider wire. See `CONTRACT.md` "Diagnostics sidecar" for the full rules and
   the export and still declares its own local `_MANUAL_INPUT_SCHEMA`, which
   its own owner may collapse onto this export separately. Each `ChildTool`
   deep-copies `MANUAL_INPUT_SCHEMA` rather than sharing the literal, so one
-  family's schema can never be mutated through another's.
+  family's schema can never be mutated through another's. Two further exports
+  serve families that build the reserved child themselves: `to_manual_result()`
+  (the `load_installed_manual()` → canonical-result mapper, formerly the
+  private `_to_mcp_result`) and `MANUAL_CHILD_TITLE` (the `"manual input"`
+  branch title). `lingtai.tools._plugin.LocalToolPlugin` is the one such
+  builder today — a plugin-packaged capability binds `manual` to its *own*
+  bundled `manual/SKILL.md`, preferring the installed copy and falling back to
+  the packaged one, and reuses both exports so its composed schema stays
+  byte-identical to a `build_manual_child` family's. Every existing consumer of
+  `build_manual_child` is unchanged by those exports.
 
 ## Connections
 

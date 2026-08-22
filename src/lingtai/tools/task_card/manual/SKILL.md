@@ -6,14 +6,18 @@ description: >
 last_changed_at: 2026-08-01T00:00:00Z
 related_files:
 - src/lingtai/tools/task_card/__init__.py
+- src/lingtai/tools/task_card/plugin.py
 - src/lingtai/tools/task_card/ANATOMY.md
 - src/lingtai/tools/task_card/CONTRACT.md
+- src/lingtai/tools/_plugin.py
 maintenance: |
   Keep this manual aligned with the intrinsic task_card capability's actual
   action surface, the exact taskcard/status and taskcard/taskcard.md file
   contract, and the one-card-per-agent lifecycle. Update it with the paired
   Anatomy/Contract whenever the renderer contract, file paths, or stop/order
-  semantics change.
+  semantics change. This document is the task_card plugin's owned skill: its
+  frontmatter `name` is pinned by the descriptor in
+  src/lingtai/tools/task_card/plugin.py and renaming it fails at import.
 ---
 
 # task_card manual
@@ -50,6 +54,28 @@ on boot and leaves the card `inactive` rather than silently resurrecting a
 dead watch.
 
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
+
+## Call shape, `summarize`, and where this manual comes from
+
+`task_card` is one LTP-v2 family: pass the selected `action` and that action's
+strict `input` object, with `reasoning` and the result-postprocessing boolean
+`summarize` only at the root. `manual` takes `{}` as its input. `summarize` is
+never a renderer, watch, or artifact option — no Task Card action consumes it.
+Leave it false when exact artifact paths, `status_value`, watch IDs, or an
+`inspect` body's exact text matter; it is normally unnecessary for the short
+lifecycle receipts, and calls to `manual` should leave it false so this
+procedure is not summarized away.
+
+This capability is a plugin-style package, and this document is the plugin's
+own skill. The `manual` action serves it directly: it never routes through the
+Task Card watch manager, so no change there can drop or replace it, and if the
+installed library copy is missing it answers from the copy shipped inside the
+package rather than returning an empty manual. The same descriptor
+(`plugin.py`) also owns the capability's name, its action inventory, and the
+mount record the built-in registry publishes — so the actions listed above, the
+schema you were given, and the tool you called are guaranteed to be the same
+family. None of that changes the renderer contract, the file paths, the
+lifecycle, or how Telegram/Feishu project the card.
 
 ## Resident meta projection and the 2000-char cap
 

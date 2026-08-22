@@ -11,6 +11,13 @@ The producer writes only those files. Channels consume/project them
 independently. The watch descriptor survives ``refresh``/molt/agent-stop so a
 restart rehydrates the active watch; ``stop``/``remove``/refresh exhaustion
 clear it because those are deliberate terminal ends.
+
+Packaging: this is a *plugin-style package* (``lingtai.tools._plugin``). Its
+``plugin.py`` owns the capability name, the module the built-in registry mounts,
+the packaged ``manual/SKILL.md`` behind the reserved ``manual`` action, and the
+action inventory; everything below composes its model-facing surface from that
+one descriptor instead of re-spelling those facts. The renderer/watch/artifact
+behavior is untouched by that packaging — it stays in ``TaskCardManager``.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from lingtai.kernel import notifications
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .plugin import TASK_CARD_ACTIONS, TASK_CARD_DECLARED_ACTIONS, TASK_CARD_PLUGIN
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -73,8 +80,10 @@ _LEGACY_CONFIG_DIR = "telegram"
 # value forward would silently cap most real agents below the new built-in
 # default instead of leaving them on it.
 _LEGACY_UNTOUCHED_MAX_REFRESHES = 1000
-_MANUAL_SKILL_NAME = "task_card"
-notifications.register_notification_channel("task_card")
+# The public channel name, the model-facing root, and the installed manual
+# destination are all the plugin descriptor's to state; nothing here re-spells
+# them (``plugin.py``).
+notifications.register_notification_channel(TASK_CARD_PLUGIN.name)
 
 
 class _Config(NamedTuple):
@@ -123,20 +132,33 @@ _START_INPUT_SCHEMA = _object(
 _WATCH_INPUT_SCHEMA = _object({"watch_id": {"type": "string"}}, required=["watch_id"])
 _REMOVE_INPUT_SCHEMA = _object({}, required=[])
 
-_CHILDREN: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("start", _START_INPUT_SCHEMA),
-    ("inspect", _WATCH_INPUT_SCHEMA),
-    ("retry", _WATCH_INPUT_SCHEMA),
-    ("stop", _WATCH_INPUT_SCHEMA),
-    ("remove", _REMOVE_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
+# This package's own actions and their strict ``input`` branches. ``manual`` is
+# deliberately absent: ``TASK_CARD_PLUGIN`` appends the reserved action from the
+# packaged ``manual/SKILL.md`` and rejects any attempt to declare it here.
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "start": _START_INPUT_SCHEMA,
+    "inspect": _WATCH_INPUT_SCHEMA,
+    "retry": _WATCH_INPUT_SCHEMA,
+    "stop": _WATCH_INPUT_SCHEMA,
+    "remove": _REMOVE_INPUT_SCHEMA,
+}
+#: Declared branches plus the plugin-appended reserved ``manual`` branch.
+_INPUT_SCHEMAS: dict[str, dict[str, Any]] = TASK_CARD_PLUGIN.action_input_schemas(
+    _DECLARED_INPUT_SCHEMAS
 )
 
 
 def _schema_family() -> ToolFamily:
-    return ToolFamily(
-        "task_card",
-        [ChildTool(name, schema, lambda _input: {}) for name, schema in _CHILDREN],
+    """Compose the schema-only family (no agent yet) through the plugin.
+
+    The plugin appends ``manual`` here exactly as it does for the live family,
+    so the advertised schema and the dispatched one cannot disagree.
+    """
+    return TASK_CARD_PLUGIN.build_family(
+        [
+            ChildTool(action, _INPUT_SCHEMAS[action], lambda _input: {})
+            for action in TASK_CARD_DECLARED_ACTIONS
+        ],
     )
 
 
@@ -149,7 +171,10 @@ def get_schema() -> dict[str, Any]:
         "Declarative Task Card action. start keeps one renderer watch writing the "
         "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
         "and stop read or control that one artifact; remove is the terminal "
-        "lifecycle cleanup; manual explains the full contract."
+        "lifecycle cleanup; manual explains the full contract. Call "
+        # The packaged skill advertises itself here (name + frontmatter
+        # description) while its full body stays behind ``action='manual'``.
+        + TASK_CARD_PLUGIN.manual_action_description()
     )
     return schema
 
@@ -167,8 +192,11 @@ def get_description() -> str:
         "and current. Restart a new watch when one expires mid-task. Use stop to "
         "pause a watch while preserving its last body, and "
         "remove once the work is completed, cancelled, or abandoned so the artifact "
-        "cannot mislead a consumer as stale. Actions: start, inspect, retry, stop, "
-        "remove, manual."
+        "cannot mislead a consumer as stale. Actions: "
+        # Sourced from the plugin so the advertised inventory cannot drift from
+        # the family actually composed (``manual`` included, always last).
+        + ", ".join(TASK_CARD_ACTIONS)
+        + "."
     )
 
 
@@ -251,15 +279,28 @@ class TaskCardManager:
             return {"status": "failed", "message": str(exc)}
 
     def _family(self) -> ToolFamily:
-        children = [
-            ChildTool("start", _START_INPUT_SCHEMA, self._start_child),
-            ChildTool("inspect", _WATCH_INPUT_SCHEMA, self._inspect_child),
-            ChildTool("retry", _WATCH_INPUT_SCHEMA, self._retry_child),
-            ChildTool("stop", _WATCH_INPUT_SCHEMA, self._stop_child),
-            ChildTool("remove", _REMOVE_INPUT_SCHEMA, self._remove_child),
-            build_manual_child(self._agent, _MANUAL_SKILL_NAME),
-        ]
-        return ToolFamily("task_card", children)
+        """Compose the live family: this package's actions + the plugin manual.
+
+        Only Task Card's own actions are built here. ``manual`` is appended by
+        ``TASK_CARD_PLUGIN`` and answered from this package's installed manual
+        bundle — falling back to the packaged copy the installer writes from —
+        so it never routes through this manager and no manager change can drop
+        or rebind it.
+        """
+        handlers = {
+            "start": self._start_child,
+            "inspect": self._inspect_child,
+            "retry": self._retry_child,
+            "stop": self._stop_child,
+            "remove": self._remove_child,
+        }
+        return TASK_CARD_PLUGIN.build_family(
+            [
+                ChildTool(action, _INPUT_SCHEMAS[action], handlers[action])
+                for action in TASK_CARD_DECLARED_ACTIONS
+            ],
+            agent=self._agent,
+        )
 
     def _start_child(self, input_: dict[str, Any]) -> dict[str, Any]:
         renderer_path = self._validate_renderer_path(input_.get("renderer_path"))
@@ -1213,7 +1254,7 @@ def setup(agent: BaseAgent, **_ignored: Any) -> TaskCardManager:
     else:
         manager._agent = agent
     agent.add_tool(
-        "task_card",
+        TASK_CARD_PLUGIN.name,
         schema=get_schema(),
         handler=manager.handle,
         description=get_description(),
