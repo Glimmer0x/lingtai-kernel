@@ -336,11 +336,17 @@ def test_emanate_backend_enum_and_engine_ceilings_agree():
     assert emanate["timeout"]["minimum"] == 5
 
 
-def test_check_and_list_last_ceiling_matches_the_engine():
-    for action in ("check", "list"):
-        last = daemon_action_input_schema(action)["properties"]["last"]
-        assert last["maximum"] == daemon_pkg.DaemonManager._CHECK_LAST_MAX
-        assert last["minimum"] == 1
+def test_check_last_ceiling_and_list_default_match_the_engine():
+    check_last = daemon_action_input_schema("check")["properties"]["last"]
+    assert check_last["maximum"] == daemon_pkg.DaemonManager._CHECK_LAST_MAX
+    assert check_last["minimum"] == 1
+
+    list_last = daemon_action_input_schema("list")["properties"]["last"]
+    assert "maximum" not in list_last
+    assert list_last["minimum"] == 1
+    assert "newest 1000" in list_last["description"]
+    assert daemon_pkg.DaemonManager._LIST_DEFAULT_LAST == 1000
+
     assert daemon_action_input_schema("check")["properties"]["truncate"]["minimum"] == 0
 
 

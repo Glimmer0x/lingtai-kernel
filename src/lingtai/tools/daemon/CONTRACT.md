@@ -300,10 +300,24 @@ continues on full history and never falls back to a different wire).
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `emanate` | `tasks[]` (each `task`+`tools`) | `backend`, `max_turns`, `timeout`, per-task `prompt` (LingTai only), `skills`/`mcp`/`preset`/`backend_options`/`context_token_limit`/`plugin`/`task_files` | `{status: "dispatched", count, ids: [...], group_id, handoff}`; `handoff` tells the model it may go idle or call `system(action='sleep')` while waiting for the terminal notification, and conditionally says that if Telegram is connected and a Task Card is available for the current turn, the model should use it to report progress via `telegram(action='manual')` and that manual's `Programmable Task Card` section; read `daemon-manual` and `notification-manual` for details | `{status: "error", message}` — obsolete `system_prompt` migration, CLI `prompt`, bad limits, or tool-surface/preset failure |
-| `list` | — | `contains`, `status`, `include_done` (default true), `last` | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
+| `list` | — | `contains`, `status`, `include_done` (default true), `last` (default newest 1000; explicit positive values, including values above 1000, are accepted) | `{...}` list blob of matching emanations (running + persisted history) | `{status: "error", message}` |
 | `ask` | `id`, `message` | — | `{status: "sent", id, output}` (resume-capable CLI ask returns immediately as `{status: "sent", id, async: true, ...}`); an active common-MCP CLI returns `{status: "queued", id, delivery: "checkpoint", message_id}` | `{status: "error", id, message}` — unknown/absent id or terminal backend resume unsupported; an active backend without common MCP remains `{status: "busy", ...}` |
 | `check` | `id` | `last` (default 20), `truncate` (default 500) | `{id, run_id, state, backend, path, turn, current_tool, elapsed_s, finished_at, tokens, result_preview, result_path, last_output, error, latest_checkpoint, pending_checkpoint_messages, events: [...]}`; pending is a count, never message content | `{status: "error", message}` — unknown id, no run_dir, invalid `last`/`truncate`, or read failure |
 | `reclaim` | — | — | `{status: "reclaimed", cancelled: <n>}` (or `{status: "shutdown", ...}` on lifecycle shutdown) | — |
+
+For `list`, omitted or null `last` is resolved by `DaemonManager` to a newest-
+1000 default before list-entry materialization. A caller that needs more entries
+must pass a positive `last: N` explicitly; values above 1000 are accepted. The
+current run-directory persistence layout still requires reading candidate
+`daemon.json` records to preserve timestamp sorting and filtering. For current
+versioned records, and when `contains` is absent or empty, the bounded path
+materializes prompt/result entry details only for rows eligible for the returned
+page. A non-empty `contains` preserves full candidate materialization because it
+searches prompt-preview text before filtering and paging; the deferred
+no-`contains` benefit does not apply to that search path. Missing, corrupt, or
+stale records still use the candidate-wide migration/rebuild path required to
+repair the index. This is an execution default, not a `daemon.json` or
+environment configuration, and there is no unbounded default route.
 
 `emanate` returns immediately after dispatch; terminal state (`done` /
 `timeout` / `cancelled` / `failed`) reaches the parent via a `source="daemon"`

@@ -2388,6 +2388,49 @@ def test_handle_list_shows_status(tmp_path):
     assert statuses["em-2"] == "running"
 
 
+def test_handle_list_defaults_to_newest_1000_and_materializes_only_page(tmp_path, monkeypatch):
+    """The bounded default limits entry reads, while explicit larger pages work."""
+    agent = _make_agent(tmp_path, ["daemon"])
+    mgr = agent.get_capability("daemon")
+    total = 1005
+    for i in range(total):
+        run_id = f"em-history-{i:04d}"
+        run_path = agent._working_dir / "daemons" / run_id
+        run_path.mkdir(parents=True)
+        (run_path / "daemon.json").write_text(
+            json.dumps(
+                {
+                    "data_version": DaemonRunDir.DATA_VERSION,
+                    "handle": run_id,
+                    "run_id": run_id,
+                    "state": "done",
+                    "started_at": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    materialized: list[str] = []
+
+    def record_materialization(state, run_path, **_kwargs):
+        materialized.append(state["run_id"])
+        return {"run_id": state["run_id"]}
+
+    monkeypatch.setattr(mgr, "_daemon_list_entry_from_state", record_materialization)
+
+    default_listing = mgr._handle_list()
+    assert default_listing["showing"] == 1000
+    assert len(materialized) == 1000
+    assert default_listing["emanations"][0]["run_id"] == "em-history-1004"
+    assert default_listing["emanations"][-1]["run_id"] == "em-history-0005"
+
+    materialized.clear()
+    expanded_listing = mgr._handle_list(limit=total)
+    assert expanded_listing["showing"] == total
+    assert len(materialized) == total
+    assert expanded_listing["emanations"][0]["run_id"] == "em-history-1004"
+
+
 def test_handle_list_includes_historical_done_run_dirs(tmp_path):
     """list scans daemon run dirs so completed daemons remain discoverable."""
     agent = _make_agent(tmp_path, ["file", "daemon"])
