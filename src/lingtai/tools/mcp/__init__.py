@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .plugin import MCP_ACTIONS, MCP_INPUT_SCHEMAS, MCP_PLUGIN
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -71,9 +71,6 @@ def _reconcile(agent: "BaseAgent") -> dict:
     xml = _build_registry_xml(records, identities)
     agent.update_system_prompt("mcp", xml, protected=True)
 
-    # Health: the umbrella manual must be present.
-    intrinsic_dir = working_dir / ".library" / "intrinsic"
-    manual_path = intrinsic_dir / "capabilities" / "mcp" / "SKILL.md"
     result = {
         "status": "ok",
         "registry_path": str(_registry_path(working_dir)),
@@ -113,86 +110,43 @@ def _flatten_manual_result(mcp_result: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Tool surface
 # ---------------------------------------------------------------------------
-
-_DESCRIPTION = (
-    "SIGNPOST ONLY: this tool does not register, activate, configure, or "
-    "troubleshoot MCP servers by itself. `info` only re-reads the registry and "
-    "returns registry health; `manual` returns the mcp-manual body. "
-    "Your per-agent MCP server registry. The <registered_mcp> catalog in your "
-    "system prompt lists every MCP server currently registered. Before using "
-    "this tool (registering, deregistering, updating, or troubleshooting MCP "
-    "servers), read the `mcp-manual` skill — call `manual` to fetch its body "
-    "(registration contract, file paths, schema), and call `info` for the current "
-    "registry health snapshot; no exceptions. To register, deregister, or update MCPs, edit "
-    "mcp_registry.jsonl directly with write/edit and call "
-    "system(action=\"refresh\")."
-)
-
-# Both actions are signpost-only reads that take no arguments at all, so both
-# children share the one canonical strict-empty ``input`` — the same literal
-# the generic ``manual`` child registers, reused rather than hand-copied so the
-# schema-only and dispatching families cannot advertise different shapes.
-# ``ToolFamily.build_schema`` deep-copies per child, and dispatch reads only
-# ``properties``, so one shared object is safe.
-_EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
-
-_ACTION_DESCRIPTION = (
-    "info: signpost-only action; re-reads the registry and returns "
-    "a runtime health snapshot (registry contents, problems, registry path) "
-    "without the manual body. manual: return only the mcp-manual skill body. "
-    "Neither action mutates MCP configuration."
-)
+#
+# The package-local ``MCP_PLUGIN`` owns mcp's fixed model-facing identity:
+# description, public action order, strict-empty action schemas, and the
+# bundled manual child.  This module keeps only the Host-facing reconciliation
+# and legacy result adaptation that require an agent instance.
 
 
 def _build_family(agent: "BaseAgent | None") -> ToolFamily:
-    """Build the two-child ``mcp`` family; the registry is declared exactly once.
+    """Build MCP's agent-bound or schema-only family from its local descriptor.
 
-    With an ``agent``, children are bound to real handlers for dispatch. With
-    ``None``, the module-level schema-only family is built: its handlers raise
-    if ever called, and constructing it at import time proves the fixed
-    registry has no duplicate or reserved-name collision (``ToolFamilyError``
-    raises here rather than shipping silently). Both paths declare the same
-    ordered children, so the composed schema and the dispatching family can
-    never drift apart.
+    The descriptor owns the fixed public action order, both strict-empty input
+    declarations, and the reserved package-manual child. This adapter binds
+    only ``info`` to the Host-owned registry projection when an agent exists.
     """
     if agent is None:
         def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
         info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
     else:
         info_handler = lambda _input: _reconcile(agent)  # noqa: E731
-        # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
-        # this child's own canonical MCP-compatible result verbatim (no double
-        # wrap). mcp's flat public shape is reconstructed from that canonical
-        # result strictly *after* dispatch, in ``handle_mcp`` — never inside a
-        # registered child.
-        manual_child = build_manual_child(agent, "mcp")
-    return ToolFamily(
-        "mcp",
-        [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
-            manual_child,
-        ],
-    )
+    return MCP_PLUGIN.build_family([
+        ChildTool("info", MCP_INPUT_SCHEMAS["info"], info_handler, title="info input"),
+    ])
 
 
 _FAMILY = _build_family(None)
 
 
 def get_description(lang: str = "en") -> str:
-    return _DESCRIPTION
+    return MCP_PLUGIN.description
 
 
 def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema``. The public action enum stays exactly ``["info",
-    # "manual"]``; the pre-migration hand-written action description is
-    # preserved verbatim so the signpost promise the model reads is unchanged.
-    schema = _FAMILY.build_schema()
-    schema["properties"]["action"]["description"] = _ACTION_DESCRIPTION
-    return schema
+    # The descriptor owns the fixed action signpost; ToolFamily composes the
+    # same child schemas that the agent-bound family validates during dispatch.
+    return MCP_PLUGIN.build_schema(_FAMILY)
 
 
 def setup(agent: "BaseAgent", **_ignored) -> None:
@@ -223,13 +177,13 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
         # a missing ``action`` key renders the empty-string default (not
         # ``None``), and invalid JSON can make ``action`` unhashable (``[]`` /
         # ``{}``, issue #513's explicit blocker). Membership is tested against
-        # ``child_names``, a tuple, which compares by ``==`` and never hashes,
-        # so an unhashable value simply does not match — whereas
+        # the descriptor's ``MCP_ACTIONS`` tuple, which compares by ``==`` and
+        # never hashes, so an unhashable value simply does not match — whereas
         # ``ToolFamily.handle``'s ``action not in self._children`` dict lookup
         # would raise ``TypeError`` on it. That is precisely why this routing
         # exists ahead of the delegation below.
         action = args.get("action", "") if isinstance(args, Mapping) else ""
-        if action not in family.child_names:
+        if action not in MCP_ACTIONS:
             return {
                 "status": "error",
                 "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",

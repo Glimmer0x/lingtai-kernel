@@ -105,6 +105,24 @@ def test_schema_only_and_dispatching_families_declare_identical_children(mcp_age
     assert schema_only == dispatching
 
 
+def test_package_descriptor_owns_mcp_schema_dispatch_and_manual(mcp_agent):
+    """The model-facing root consumes its local descriptor rather than a host map."""
+    from lingtai.tools.mcp import _build_family, get_description
+    from lingtai.tools.mcp.manual import load_packaged_manual
+    from lingtai.tools.mcp.plugin import MCP_ACTIONS, MCP_PLUGIN
+
+    agent, _ = mcp_agent
+    assert MCP_ACTIONS == ("info", "manual")
+    assert _build_family(agent).child_names == MCP_ACTIONS
+    assert get_description() == MCP_PLUGIN.description
+    assert get_schema()["properties"]["action"]["description"] == MCP_PLUGIN.action_description
+
+    result = _handler(agent)(
+        {"action": "manual", "input": {}, "reasoning": "read package manual"}
+    )
+    assert result["mcp_manual"] == load_packaged_manual()["manual"]
+
+
 def test_schema_correlates_each_action_const_to_its_own_input():
     schema = get_schema()
     conditions = schema["allOf"]
@@ -202,7 +220,9 @@ def test_info_re_reads_registry_and_does_not_mutate_it(mcp_agent, monkeypatch):
 # manual: exact body/path, no registry side effect, no double wrap
 # ---------------------------------------------------------------------------
 
-def test_manual_returns_exact_body_and_path(mcp_agent):
+def test_manual_returns_exact_packaged_body_and_path(mcp_agent):
+    from lingtai.tools.mcp.manual import load_packaged_manual
+
     agent, workdir = mcp_agent
     result = _handler(agent)(
         {"action": "manual", "input": {}, "reasoning": "load mcp guidance"}
@@ -211,12 +231,16 @@ def test_manual_returns_exact_body_and_path(mcp_agent):
     # stays the tool-specific `mcp_manual`, not the generic `manual`.
     assert set(result) == {"status", "mcp_manual", "manual_path"}
     assert result["status"] == "ok"
-    expected_path = (
+    packaged = load_packaged_manual()
+    assert packaged["status"] == "ok"
+    assert result["manual_path"] == packaged["manual_path"]
+    assert result["mcp_manual"] == packaged["manual"]
+    assert result["mcp_manual"]
+    # The root now owns its packaged manual; the agent-local intrinsic copy is
+    # an installation artifact, not this action's runtime source.
+    assert result["manual_path"] != str(
         workdir / ".library" / "intrinsic" / "capabilities" / "mcp" / "SKILL.md"
     )
-    assert result["manual_path"] == str(expected_path)
-    assert result["mcp_manual"] == expected_path.read_text(encoding="utf-8")
-    assert result["mcp_manual"]
 
 
 def test_manual_result_is_not_double_wrapped(mcp_agent):
@@ -252,12 +276,21 @@ def test_manual_performs_no_registry_rescan_or_mutation(mcp_agent, monkeypatch):
     assert registry_path.read_bytes() == before
 
 
-def test_manual_reports_degraded_when_manual_missing(mcp_agent):
-    agent, workdir = mcp_agent
-    manual_path = (
-        workdir / ".library" / "intrinsic" / "capabilities" / "mcp" / "SKILL.md"
-    )
-    manual_path.unlink()
+def test_manual_reports_degraded_when_packaged_manual_missing(mcp_agent, monkeypatch):
+    import lingtai.tools.mcp.manual as mcp_manual
+
+    class _MissingResource:
+        def joinpath(self, _path):
+            return self
+
+        def read_text(self, *, encoding):
+            raise FileNotFoundError("missing package data")
+
+        def __str__(self):
+            return "/missing/mcp/manual/SKILL.md"
+
+    agent, _ = mcp_agent
+    monkeypatch.setattr(mcp_manual.resources, "files", lambda _package: _MissingResource())
 
     result = _handler(agent)(
         {"action": "manual", "input": {}, "reasoning": "load mcp guidance"}
@@ -265,7 +298,7 @@ def test_manual_reports_degraded_when_manual_missing(mcp_agent):
     # Truthful degraded shape is preserved, including the exact error text.
     assert result["status"] == "degraded"
     assert result["mcp_manual"] == ""
-    assert result["manual_path"] == str(manual_path)
+    assert result["manual_path"] == "/missing/mcp/manual/SKILL.md"
     assert result["error"] == (
         "mcp manual missing — initializer may have failed or capability not "
         "installed correctly"
@@ -279,7 +312,7 @@ def test_manual_reports_degraded_when_manual_missing(mcp_agent):
 @pytest.mark.parametrize("action", ["info", "manual"])
 def test_extra_input_field_is_rejected_before_any_io(mcp_agent, monkeypatch, action):
     import lingtai.services.mcp_registry as registry_service
-    import lingtai.tools.tool_family.manual as manual_child_module
+    import lingtai.tools.mcp.manual as mcp_manual
 
     agent, workdir = mcp_agent
     registry_path = workdir / REGISTRY_FILENAME
@@ -290,10 +323,10 @@ def test_extra_input_field_is_rejected_before_any_io(mcp_agent, monkeypatch, act
 
     monkeypatch.setattr(registry_service, "read_registry", _fail)
     monkeypatch.setattr(registry_service, "read_identities", _fail)
-    # Patch the name the manual child actually calls: `tool_family/manual.py`
-    # binds `load_installed_manual` at module import, so patching
-    # `lingtai.tools._manual` would never intercept it.
-    monkeypatch.setattr(manual_child_module, "load_installed_manual", _fail)
+    # Patch MCP's package-owned loader: the descriptor's manual child binds it
+    # through this module at dispatch time, so no generic installed-manual
+    # loader is an alternate path.
+    monkeypatch.setattr(mcp_manual, "load_packaged_manual", _fail)
 
     result = _handler(agent)(
         {"action": action, "input": {"bogus": 1}, "reasoning": "invalid call"}

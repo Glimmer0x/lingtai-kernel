@@ -37,10 +37,12 @@ description: >
   callback contract and to `src/lingtai/services/mcp_registry.py` for
   validator internals. Read this for *what to do*, anatomy for *how it
   works*.
-version: 3.4.2
-last_changed_at: 2026-08-20T00:00:00Z
+version: 3.4.3
+last_changed_at: 2026-08-22T00:00:00Z
 related_files:
 - src/lingtai/tools/mcp/__init__.py
+- src/lingtai/tools/mcp/plugin.py
+- src/lingtai/tools/mcp/manual.py
 - src/lingtai/tools/mcp/ANATOMY.md
 - src/lingtai/tools/mcp/CONTRACT.md
 maintenance: |

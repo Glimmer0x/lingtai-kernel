@@ -1,9 +1,11 @@
 ---
 name: mcp-contract
 tool: mcp
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/plugin.py
+  - src/lingtai/tools/mcp/manual.py
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/manual/SKILL.md
   - src/lingtai/services/mcp_registry.py
@@ -23,9 +25,11 @@ maintenance: |
 registry into the protected `mcp` system-prompt section and reports registry
 health. It does NOT register, activate, configure, or troubleshoot MCP servers —
 all mutations happen by editing `mcp_registry.jsonl` with `write`/`edit`. The tool
-slice lives in `src/lingtai/tools/mcp/__init__.py`; the registry machinery it renders
-lives in `src/lingtai/services/mcp_registry.py` (imported lazily). The code is the
-source of truth.
+slice keeps its Host-facing reconciliation in `src/lingtai/tools/mcp/__init__.py`,
+while `plugin.py` owns its fixed model-facing descriptor and `manual.py` owns the
+bundled manual child. The registry machinery it renders lives in
+`src/lingtai/services/mcp_registry.py` (imported lazily). The code is the source of
+truth.
 
 ## Routing Card
 Guarded by: [MC001](BEHAVIORS.md#behavior-mc001)
@@ -62,9 +66,13 @@ back-edge -> §Scope; the generic composition/dispatch infrastructure ->
   changed the call envelope only — no action was added, removed, renamed, or
   given a new capability, and external MCP registration remains entirely
   outside this tool.
-- Ownership boundary: the module is the agent-callable tool slice only. The
-  registry service is imported lazily inside `setup` and the handlers, per the
-  `lingtai.tools → lingtai` lazy-back-edge rule.
+- Ownership boundary: `plugin.py` declares only the package's fixed
+  model-facing name/actions/descriptions and appends its package-owned `manual`
+  child; `manual.py` loads the bundled `manual/SKILL.md`. `__init__.py` is the
+  agent-callable reconciliation/presentation adapter only. The registry service
+  is imported lazily inside `setup` and the `info` handler, per the
+  `lingtai.tools → lingtai` lazy-back-edge rule. The descriptor is not runtime
+  discovery, registration, activation, or an alternate registry.
 
 ## Tool surface
 
@@ -76,18 +84,19 @@ stay `info` / `manual`. Exactly two read-only actions; the handler is
 `ToolFamily`.
 
 **Envelope.** The model-facing schema is `get_schema()` =
-`ToolFamily.build_schema()` with the pre-migration signpost `action`
-description preserved verbatim. Root properties are exactly `action`, `input`,
-`reasoning`, and `summarize`; `required` is `[action, input, reasoning]` and the
-root is closed (`additionalProperties: false`). `reasoning` is required Host
+`MCP_PLUGIN.build_schema(_FAMILY)`: the package descriptor supplies the
+pre-migration signpost `action` description while `ToolFamily` composes the
+family. Root properties are exactly `action`, `input`, `reasoning`, and
+`summarize`; `required` is `[action, input, reasoning]` and the root is closed
+(`additionalProperties: false`). `reasoning` is required Host
 InvocationContext/audit metadata declared by the family itself, never action
 input. `summarize` is the optional root presentation control, validated as
 boolean and stripped before dispatch. Both actions take **no arguments**, so
 both share the one canonical strict-empty `input`
-(`{type: object, properties: {}, additionalProperties: false}`) — the
-`MANUAL_INPUT_SCHEMA` literal exported by `tool_family.manual` and reused here
-as `_EMPTY_INPUT`, rather than hand-copied per action, so the schema-only and
-dispatching families cannot advertise different shapes. The root
+(`{type: object, properties: {}, additionalProperties: false}`) —
+`MCP_INPUT_SCHEMAS` is composed by the descriptor from the generic
+`MANUAL_INPUT_SCHEMA` literal, rather than hand-copied per action, so the
+schema-only and dispatching families cannot advertise different shapes. The root
 `allOf`/`if`/`then` correlates each `action` const with its own `input` branch,
 and `input.oneOf` discloses both branches with titles
 `info input` / `manual input`.
@@ -99,17 +108,18 @@ and `input.oneOf` discloses both branches with titles
 
 Each `registered` entry is `{name, summary}` and carries `identity` only when a
 matching identity record with non-empty `accounts` exists. `manual` returns
-`status: "degraded"` with an empty `mcp_manual` and an `error` string when
-`.library/intrinsic/capabilities/mcp/SKILL.md` is missing.
+`status: "degraded"` with an empty `mcp_manual` and an `error` string when the
+bundled package resource `lingtai.tools.mcp/manual/SKILL.md` is missing.
 
-`manual` is the family-owned reserved child, registered directly from
-`tool_family.manual.build_manual_child(agent, "mcp")`. `ToolFamily.handle()`
-returns that child's canonical `content`/`structuredContent` result verbatim
-(no double wrap); mcp's pre-migration flat public shape — body under the
-tool-specific key `mcp_manual`, not the generic `manual` — is reconstructed by
-the Host-owned `_flatten_manual_result` strictly *after* dispatch returns,
-never inside a registered child. `manual` performs no registry read, rescan, or
-mutation.
+`manual` is the package-owned reserved child, appended by
+`MCP_PLUGIN.build_family()` from `mcp.manual.build_manual_child()`. It reads the
+bundled `manual/SKILL.md`, not an agent-local `.library` copy and never the
+registry. `ToolFamily.handle()` returns that child's canonical
+`content`/`structuredContent` result verbatim (no double wrap); mcp's
+pre-migration flat public shape — body under the tool-specific key
+`mcp_manual`, not the generic `manual` — is reconstructed by the Host-owned
+`_flatten_manual_result` strictly *after* dispatch returns, never inside a
+registered child. `manual` performs no registry read, rescan, or mutation.
 
 **Error shapes** (plain dicts):
 - Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported"}`. This exact envelope is Host-owned and predates the family migration, so `handle_mcp` renders it *before* delegating: it restores the pre-migration empty-string default for a missing `action` key and routes an unhashable `action` (`[]`, `{}` from invalid JSON — issue #513) here instead of into the generic dispatcher's dict lookup. An unknown action is rejected before any input validation or handler I/O.
@@ -149,9 +159,9 @@ Do not change any of the following; documented for reviewers only.
 | The capability renders the registry into the `mcp` prompt section | `src/lingtai/tools/mcp/__init__.py` (`_reconcile`) | `tests/test_mcp_capability.py::test_mcp_capability_renders_registry_into_prompt` |
 | `info` returns a health snapshot | `src/lingtai/tools/mcp/__init__.py` (`_reconcile`) | `tests/test_mcp_capability.py::test_mcp_show_action_returns_health_snapshot`, `tests/test_tool_family_mcp_migration_parity.py::test_info_returns_health_snapshot_without_manual_body` |
 | Unknown actions return a `{status: error}` dict | `src/lingtai/tools/mcp/__init__.py` (`handle_mcp`) | `tests/test_mcp_capability.py::test_mcp_show_unknown_action_returns_error`, `tests/test_tool_family_mcp_migration_parity.py::test_unknown_action_envelope_is_byte_identical_to_pre_migration` |
-| Public name/actions and the LTP v2 envelope are exact on both wires | `src/lingtai/tools/mcp/__init__.py` (`get_schema`) | `tests/test_tool_family_mcp_migration_parity.py::test_schema_exposes_exact_public_actions_and_envelope`, `::test_schema_survives_chat_and_responses_wires` |
-| Both actions declare a strict-empty `input`; extra input fails before handler I/O | `src/lingtai/tools/mcp/__init__.py` (`_EMPTY_INPUT`, `_build_family`) | `tests/test_tool_family_mcp_migration_parity.py::test_both_actions_declare_canonical_strict_empty_input`, `::test_extra_input_field_is_rejected_before_any_io`, `::test_schema_only_and_dispatching_families_declare_identical_children` |
-| `manual` returns the exact body/path with no registry rescan and no double wrap | `src/lingtai/tools/mcp/__init__.py` (`_flatten_manual_result`) | `tests/test_tool_family_mcp_migration_parity.py::test_manual_returns_exact_body_and_path`, `::test_manual_performs_no_registry_rescan_or_mutation`, `::test_manual_result_is_not_double_wrapped` |
+| Public name/actions and the LTP v2 envelope are exact on both wires | `src/lingtai/tools/mcp/plugin.py` / `__init__.py` (`get_schema`) | `tests/test_tool_family_mcp_migration_parity.py::test_schema_exposes_exact_public_actions_and_envelope`, `::test_schema_survives_chat_and_responses_wires` |
+| Both actions declare a strict-empty `input`; extra input fails before handler I/O | `src/lingtai/tools/mcp/plugin.py` (`MCP_INPUT_SCHEMAS`, `_build_family`) | `tests/test_tool_family_mcp_migration_parity.py::test_both_actions_declare_canonical_strict_empty_input`, `::test_extra_input_field_is_rejected_before_any_io`, `::test_schema_only_and_dispatching_families_declare_identical_children` |
+| The descriptor supplies the package manual and it returns the exact body/path with no registry rescan or double wrap | `src/lingtai/tools/mcp/plugin.py`, `manual.py`, `__init__.py` (`_flatten_manual_result`) | `tests/test_tool_family_mcp_migration_parity.py::test_package_descriptor_owns_mcp_schema_dispatch_and_manual`, `::test_manual_returns_exact_packaged_body_and_path`, `::test_manual_performs_no_registry_rescan_or_mutation`, `::test_manual_result_is_not_double_wrapped` |
 | init.json `addons: [...]` triggers append-only decompression | `src/lingtai/services/mcp_registry.py` | `tests/test_mcp_capability.py::test_addons_list_triggers_decompression`, `::test_decompress_is_idempotent` |
 | Duplicate / invalid registry lines are dropped | `src/lingtai/services/mcp_registry.py` | `tests/test_mcp_capability.py::test_registry_drops_duplicates_by_name`, `::test_registry_drops_invalid_lines` |
 | Identity is attached only when present and secrets are stripped | `src/lingtai/tools/mcp/__init__.py` (`_registered_entry`) / service | `tests/test_mcp_identity_discovery.py::test_show_action_includes_identity_when_present`, `::test_secret_fields_are_stripped_from_accounts` |
