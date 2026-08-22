@@ -507,7 +507,7 @@ def test_family_registers_the_reserved_manual_child_once(tmp_path):
 def test_wire_and_dispatch_families_come_from_one_child_declaration(tmp_path):
     """The schema-only family and the manager's family cannot drift apart.
 
-    Both are built by `_build_family`, so child names, order, and per-action
+    Both are built by the package-local descriptor, so child names, order, and per-action
     input schemas are identical objects/values on the wire surface and at the
     dispatch boundary — the duplication that a second hand-written registry
     would allow is structurally impossible.
@@ -538,6 +538,63 @@ def test_manual_child_input_schema_is_the_generic_owners_object(tmp_path):
     assert manual_branch["properties"] == MANUAL_INPUT_SCHEMA["properties"]
     assert manual_branch["additionalProperties"] is False
     assert manual_branch.get("required") == MANUAL_INPUT_SCHEMA["required"] == []
+
+
+
+def test_package_local_descriptor_owns_schema_dispatch_and_manual(tmp_path):
+    """Vision's local descriptor is the active one-root/manual seam.
+
+    It owns all four public actions and is consumed by both the schema-only
+    family and the manager-bound dispatcher. The manager's actual ``manual``
+    child is still the generic direct child for the descriptor's installed
+    manual name; only after dispatch does vision flatten that canonical result.
+    """
+    from lingtai.tools.vision import _FAMILY
+    from lingtai.tools.vision.descriptor import VISION_TOOL_DESCRIPTOR
+
+    assert VISION_TOOL_DESCRIPTOR.name == "vision"
+    assert VISION_TOOL_DESCRIPTOR.manual_skill_name == "vision"
+    assert VISION_TOOL_DESCRIPTOR.action_names == ("analyze", "check", "list", "manual")
+
+    body, manual_path = _install_manual(tmp_path)
+    mgr = _manager(tmp_path, _never_called_service())
+    assert mgr._family.child_names == _FAMILY.child_names == VISION_TOOL_DESCRIPTOR.action_names
+    assert mgr._family.build_schema() == _FAMILY.build_schema() == get_schema()
+
+    manual_call = {"action": "manual", "input": {}, "reasoning": "load vision guidance"}
+    raw = mgr._family.handle(manual_call)
+    assert raw == {
+        "status": "ok",
+        "content": [{"type": "text", "text": body}],
+        "structuredContent": {"manual_path": str(manual_path)},
+    }
+    assert mgr.handle(manual_call) == {
+        "status": "ok",
+        "action": "manual",
+        "manual": body,
+        "manual_path": str(manual_path),
+    }
+
+
+def test_descriptor_rejects_partial_or_manual_handler_replacement(tmp_path):
+    """Provider-facing handlers must bind every non-manual descriptor action."""
+    from lingtai.tools.vision.descriptor import VISION_TOOL_DESCRIPTOR
+
+    def handler(_input):
+        return {"status": "ok"}
+
+    with pytest.raises(ValueError, match="missing: check, list"):
+        VISION_TOOL_DESCRIPTOR.build_family(handlers={"analyze": handler})
+    with pytest.raises(ValueError, match="unknown: manual"):
+        VISION_TOOL_DESCRIPTOR.build_family(
+            agent=_StubAgent(tmp_path),
+            handlers={
+                "analyze": handler,
+                "check": handler,
+                "list": handler,
+                "manual": handler,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

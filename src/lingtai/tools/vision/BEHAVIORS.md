@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/descriptor.py
   - src/lingtai/tools/vision/settings.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file

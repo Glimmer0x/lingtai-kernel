@@ -7,6 +7,7 @@ description: >
 last_changed_at: 2026-08-09T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/descriptor.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
 maintenance: |

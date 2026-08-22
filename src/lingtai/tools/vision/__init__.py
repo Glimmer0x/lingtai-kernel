@@ -38,8 +38,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from .descriptor import VISION_TOOL_DESCRIPTOR
 
 
 if TYPE_CHECKING:
@@ -193,99 +192,7 @@ PROVIDERS = {
     "fallback_on_inherit": None,  # no agnostic fallback for vision
 }
 
-_ANALYZE_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "image_path": {
-            "type": "string",
-            "description": "Path to the image file",
-        },
-        "question": {
-            # Strict OpenAI object branches express an optional field as a
-            # required nullable property. Null means absent, and the analyze
-            # handler then applies the same default prompt it always has.
-            "type": ["string", "null"],
-            "description": (
-                "Question about the image, or null for the default "
-                "\"Describe what you see in this image.\""
-            ),
-        },
-        "preset": {
-            "type": ["string", "null"],
-            "description": (
-                "Optional preset name/path whose vision service should be "
-                "borrowed for this call (e.g. \"codex-pool\" for gpt-5.6 "
-                "vision). Must be a path listed in manifest.preset.allowed. "
-                "Null/absent uses the default route (active provider or the "
-                "configured vision capability)."
-            ),
-        },
-    },
-    "required": ["image_path", "question"],
-    "additionalProperties": False,
-}
-
-def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
-    raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-
-_CHECK_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "preset": {
-            "type": ["string", "null"],
-            "description": (
-                "Optional preset name/path whose vision service should be "
-                "checked (e.g. \"codex-pool\" for gpt-5.6 vision). Must be a "
-                "path listed in manifest.preset.allowed. Null/absent checks "
-                "the default route (active provider or the configured vision "
-                "capability). The check resolves the service identity without "
-                "sending an image request."
-            ),
-        },
-    },
-    "required": ["preset"],
-    "additionalProperties": False,
-}
-
-_LIST_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-
-def _build_family(
-    analyze_handler: Any = _unused,
-    check_handler: Any = _unused,
-    list_handler: Any = _unused,
-    manual_child: ChildTool | None = None,
-) -> ToolFamily:
-    """Build vision's family from the one canonical child declaration.
-
-    The single source of truth for vision's children: both the module-level
-    schema-only family (which composes the model-facing schema and proves at
-    import time that the registry has no duplicate or reserved-name collision)
-    and each ``VisionManager``'s dispatching family come from here, so child
-    names, schemas, titles, and order cannot drift between the wire surface
-    and the dispatcher. Defaults build the non-dispatching variant; the
-    manager passes its bound ``analyze``/``check``/``list`` handlers and the
-    real reserved ``manual`` child from ``build_manual_child``.
-    """
-    return ToolFamily(
-        "vision",
-        [
-            ChildTool("analyze", _ANALYZE_INPUT_SCHEMA, analyze_handler, title="analyze input"),
-            ChildTool("check", _CHECK_INPUT_SCHEMA, check_handler, title="check input"),
-            ChildTool("list", _LIST_INPUT_SCHEMA, list_handler, title="list input"),
-            manual_child
-            or ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
-        ],
-    )
-
-
-_FAMILY = _build_family()
+_FAMILY = VISION_TOOL_DESCRIPTOR.build_family()
 
 
 def get_description(lang: str = "en") -> str:
@@ -304,8 +211,8 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from ``_build_family``'s child
-    # declaration, never hand-assembled.
+    # Composed by generic ToolFamily infrastructure from the package-local
+    # descriptor, never hand-assembled or read from provider configuration.
     return _FAMILY.build_schema()
 
 
@@ -321,14 +228,17 @@ class VisionManager:
         self._agent = agent
         self._vision_service = vision_service
         self._manual_reason = manual_reason
-        # Same canonical child declaration the module-level schema-only family
-        # uses, with this instance's bound analyze/check/list handlers and the
-        # real reserved ``manual`` child registered directly (unwrapped).
-        self._family = _build_family(
-            self._dispatch_analyze,
-            self._dispatch_check,
-            self._dispatch_list,
-            build_manual_child(agent, "vision"),
+        # Bind this package's one descriptor to instance-owned operation
+        # handlers. The descriptor itself creates and registers the generic
+        # manual child directly, so the strict root schema, dispatch registry,
+        # and installed-manual ownership cannot drift apart.
+        self._family = VISION_TOOL_DESCRIPTOR.build_family(
+            agent=agent,
+            handlers={
+                "analyze": self._dispatch_analyze,
+                "check": self._dispatch_check,
+                "list": self._dispatch_list,
+            },
         )
 
     def _build_service_from_preset(self, preset_ref: str) -> tuple[Any, str]:

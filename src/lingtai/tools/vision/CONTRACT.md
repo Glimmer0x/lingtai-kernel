@@ -4,6 +4,7 @@ tool: vision
 contract_version: 1
 related_files:
   - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/descriptor.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
@@ -29,15 +30,20 @@ Guarded by: [VN001](BEHAVIORS.md#behavior-vn001)
 `vision` is one action-separated family in the LingTai Tool Protocol v2 shape
 defined in `src/lingtai/tools/CONTRACT.md`, built on the generic
 `src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool` plus
-the reusable ManualTool builder). The public tool name stays `vision` and the
-public action values stay exactly `analyze` and `manual`; adopting the shared
-infrastructure changed no provider route, identity rule, or result shape in this
-file. Exactly one public model-facing `vision` root is registered; the two
-canonical children are not separate tools and consume no model tool slots.
+the reusable ManualTool builder). The public tool name stays `vision` and its
+public action values stay exactly `analyze`, `check`, `list`, and `manual`;
+adopting the shared infrastructure changed no provider route, identity rule, or
+result shape in this file. The package-local `descriptor.py`
+`VISION_TOOL_DESCRIPTOR` is the one action/schema and installed-manual-name seam
+consumed by both schema composition and manager binding. It owns no provider
+selection, credential resolution, connectivity, or capability registration;
+those remain in the host-facing manager/setup layer. Exactly one public
+model-facing `vision` root is registered; its canonical children are not
+separate tools and consume no model tool slots.
 
 The model shape is the strict envelope `action` + `input` + `reasoning` +
 optional `summarize`, with `required: [action, input, reasoning]` and
-`additionalProperties: false`. The root exposes both children's exact input
+`additionalProperties: false`. The root exposes all four children' exact input
 schemas before invocation (`input.oneOf`, one titled branch per action) and
 correlates each `action` const with that child's own `input` at the root
 (`allOf`/`if`/`then`), on both the Chat Completions and Responses wires.
