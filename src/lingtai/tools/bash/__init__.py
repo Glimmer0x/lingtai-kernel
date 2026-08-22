@@ -36,7 +36,11 @@ from ._shell_dialect import (
 # must agree with. ``setup()`` registers the tool under ``SHELL_PLUGIN.name``
 # rather than a literal, so the registered tool, the composed family, and the
 # installed manual destination are one name.
-from .plugin import SHELL_ACTIONS, SHELL_DECLARED_ACTIONS, SHELL_PLUGIN
+from .plugin import (
+    SHELL_ACTIONS as SHELL_ACTIONS,
+    SHELL_DECLARED_ACTIONS as SHELL_DECLARED_ACTIONS,
+    SHELL_PLUGIN,
+)
 
 from ._async_supervisor import (
     load_state,
