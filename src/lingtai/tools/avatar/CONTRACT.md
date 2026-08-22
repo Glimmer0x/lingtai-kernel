@@ -67,8 +67,10 @@ per-action `input` object, and the model-facing root is exactly `action`,
   one call into the next.
 - The unknown/omitted-`action` error envelope is **preserved exactly** (see
   §Invalid or missing `action`).
-- `manual`'s result gains `manual_path` (the host-local packaged resource
-  path) alongside the unchanged `status`, `action`, and exact `manual` body.
+- `manual`'s result gains `manual_path` (the host-local installed path,
+  `.library/intrinsic/capabilities/avatar/SKILL.md` inside the calling agent's
+  working dir) alongside the unchanged `status`, `action`, and exact `manual`
+  body.
 - `avatar` joins the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist so the
   root `summarize` boolean it advertises is honored by the single central
   summarizer rather than silently ignored.
@@ -121,19 +123,20 @@ storage; detached-process launch -> §Cross-platform invariants.
 - `action="rules"` writes a `.rules` signal to the caller and every descendant
   so each agent refreshes its own `system/rules.md`-derived prompt. It carries
   its own admin gate, independent of `spawn` — spawning never requires admin.
-- `action="manual"` is read-only: it returns the exact packaged
-  `src/lingtai/tools/avatar/manual/SKILL.md` body plus its host-local
-  `manual_path`, and performs no filesystem mutation (no spawn, no ledger
-  write, no `.rules` write). The action is **plugin-owned**: `AVATAR_PLUGIN`
+- `action="manual"` is read-only: it returns the exact
+  `.library/intrinsic/capabilities/avatar/SKILL.md` body installed in the
+  calling agent's working dir plus that host-local `manual_path`, and performs
+  no filesystem mutation (no spawn, no ledger write, no `.rules` write). The
+  action is **plugin-owned**: `AVATAR_PLUGIN`
   (`src/lingtai/tools/avatar/plugin.py`) appends the reserved child and answers
-  it straight from the packaged skill, so `AvatarManager` has no `manual`
-  binding to drop or rebind. Avatar's manual is read from the package rather
-  than from the agent's installed `.library` intrinsic catalog, so the plugin
-  owns this loader instead of the shared
-  `load_installed_manual`/`build_manual_child` pair — that builder would
-  report a `.library` path this family never reads. The packaged copy is the
-  source of truth for the installed one: the host copies `manual/` to
-  `.library/intrinsic/capabilities/avatar/` on every boot.
+  it itself, so `AvatarManager` has no `manual` binding to drop or rebind. Like
+  every other LingTai family's `manual`, it reads that installed copy through
+  the one shared `lingtai.tools._manual.load_installed_manual`, so the path the
+  model is handed is one it can open from its own working dir. The packaged
+  `src/lingtai/tools/avatar/manual/SKILL.md` is the *source* of the installed
+  copy — the host copies `manual/` to `.library/intrinsic/capabilities/avatar/`
+  on every boot — and is never what the action reports. A missing installed
+  copy degrades truthfully rather than being backfilled from that source.
 
 **Non-goals:** the parent holds no in-process handle to the avatar — liveness is
 checked purely via the filesystem handshake. The tool does not manage the
@@ -194,7 +197,7 @@ I/O of any kind.
 
 | Input | Optional input | Success output | Error shapes |
 |---|---|---|---|
-| `{}` | — | `{status: "ok", action: "manual", manual: <exact SKILL.md body>, manual_path: <host-local packaged path>}` | `{status: "degraded", action: "manual", manual: "", manual_path: ..., error: "avatar manual missing"}` if the packaged manual file is missing; the same degraded shape with an `error` naming the mismatch if the packaged file is present but is not the declared `avatar-manual` skill (a foreign or empty manual is refused, never served) |
+| `{}` | — | `{status: "ok", action: "manual", manual: <exact installed SKILL.md body>, manual_path: <agent working dir>/.library/intrinsic/capabilities/avatar/SKILL.md}` | `{status: "degraded", action: "manual", manual: "", manual_path: <that same host-local path>, error: "avatar manual missing — initializer may have failed or capability not installed correctly"}` if this agent has no installed copy — the packaged source is never substituted for it. Packaging defects in that source (missing, empty, or a foreign skill) are reported by `AVATAR_PLUGIN.validate_packaged_skill()`, not by this action |
 
 The result is avatar's own canonical shape, returned verbatim — it is never
 nested inside another action's result envelope and never double-wrapped.
@@ -227,8 +230,8 @@ avatar's own declared actions — and `src/lingtai/tools/_plugin.py`
   Agent Plugins v1.0.0 directories.
 - **Packaging faults degrade, they do not crash boot.** Unlike the curated-MCP
   twin, which validates its skill eagerly at construction, avatar reads its
-  packaged skill on demand: an unreadable or foreign manual degrades that one
-  action (above) instead of failing the import of a core-default capability.
+  packaged skill on demand, so an unreadable or foreign packaged manual never
+  fails the import of a core-default capability.
   `AVATAR_PLUGIN.validate_packaged_skill()` raises the same defect loudly for
   packaging tests and doctor-style checks.
 
@@ -334,7 +337,8 @@ live descendant.
 | Rules are distributed recursively to descendants (cycle-safe) | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_rules.py::test_rules_distributes_recursively`, `::test_rules_root_not_duplicated_via_cycle` |
 | Spawning distributes existing rules to the newborn | `src/lingtai/tools/avatar/__init__.py` | `tests/test_avatar_rules.py::test_spawn_distributes_existing_rules`, `::test_spawn_deep_clone_also_gets_rules_signal` |
 | `_prepare_deep` refuses a non-sibling destination | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::test_prepare_deep_refuses_non_sibling_dst` |
-| `action="manual"` returns the exact packaged manual body and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_manual_returns_exact_body_and_performs_no_mutation` |
+| `action="manual"` returns the exact manual body and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_manual_returns_exact_body_and_performs_no_mutation` |
+| `action="manual"` reports the agent's host-local installed `manual_path`, never the packaged source path | `src/lingtai/tools/_plugin.py`, `src/lingtai/tools/avatar/__init__.py` | `tests/test_builtin_tool_plugin_package.py::test_manual_reports_the_host_local_install_not_the_packaged_source`, `::test_manual_degrades_truthfully_when_the_host_has_no_installed_copy`; `tests/test_tool_family_avatar_migration.py::TestManualThroughTheEnvelope::test_manual_returns_the_exact_installed_body_and_host_local_path` |
 | Invalid `action` fails deterministically without touching other actions | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_invalid_action_fails_deterministically`, `::test_spawn_missing_name_fails_without_affecting_other_actions` |
 | `action` is schema-required (root `required: ["action", "input", "reasoning"]`) and runtime-required — a missing `action` never defaults to `spawn`, `rules`, or `manual`, regardless of which action's fields are present, and mutates nothing | `src/lingtai/tools/avatar/__init__.py` | `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_missing_action_fails_deterministically_regardless_of_payload_shape`; `tests/test_avatar_rules.py::TestAvatarRulesAction::test_explicit_spawn_action_required` |
 | The daemon blacklists the canonical `avatar` name (not the retired two-tool names) | `src/lingtai/tools/daemon/__init__.py` | `tests/test_daemon.py::test_build_tool_surface_blacklist`, `tests/test_layers_avatar.py::TestUnifiedAvatarTool::test_daemon_excludes_avatar_from_child_surface` |

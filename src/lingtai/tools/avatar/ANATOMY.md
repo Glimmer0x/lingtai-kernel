@@ -69,7 +69,7 @@ family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 |------|------|-------------|
 | `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
 | `rules` | `rules_content` | Set rules content and distribute via `.rules` signal files to self + all descendants. Karma-gated. |
-| `manual` | *(empty)* | Read-only, **plugin-owned**: `AVATAR_PLUGIN` appends this child and answers it from the packaged `manual/SKILL.md` — the manager holds no binding for it. Returns the exact body plus its host-local `manual_path`. No spawn or rules I/O. |
+| `manual` | *(empty)* | Read-only, **plugin-owned**: `AVATAR_PLUGIN` appends this child and answers it from the agent's installed `.library/intrinsic/capabilities/avatar/SKILL.md` — the manager holds no binding for it. Returns that exact body plus its host-local `manual_path`. No spawn or rules I/O. |
 
 The model-facing root is exactly `action` + `input` + required `reasoning` +
 optional `summarize`, `additionalProperties: false`. Each action owns exactly
@@ -160,16 +160,25 @@ avatar/__init__.py
   (`tests/test_builtin_tool_plugin_package.py`) rather than by importing the
   descriptor into the registry.
 - **Reserved `manual` is plugin-owned:** avatar declares only `spawn` and
-  `rules`; `AVATAR_PLUGIN` appends `manual` and answers it from the packaged
-  skill. Declaring, re-schema'ing, or rebinding it raises
+  `rules`; `AVATAR_PLUGIN` appends `manual` and answers it from the host-local
+  installed skill. Declaring, re-schema'ing, or rebinding it raises
   `BuiltinToolPluginError` at import time, and no `AvatarManager` change can
   drop or replace the document the action serves.
+- **`manual_path` is the agent's own file:** like every other LingTai family's
+  `manual`, the action loads `.library/intrinsic/capabilities/avatar/SKILL.md`
+  from the calling agent's working dir through the one shared
+  `lingtai.tools._manual.load_installed_manual`, so the path handed to the
+  model is one it can open. The packaged `manual/SKILL.md` is that copy's
+  source, not the agent-visible document, and is never reported. An agent with
+  no installed copy degrades truthfully (`status: "degraded"` plus the loader's
+  `error`) rather than being backfilled from the source, which would hide a
+  failed install.
 - **Packaging faults degrade, boot does not:** the packaged skill is read on
   demand, not cached at construction (the deliberate divergence from the
-  curated-MCP twin). A missing, empty, or foreign `manual/SKILL.md` degrades
-  that one action with a truthful `error` and is never served as a body;
-  `AVATAR_PLUGIN.validate_packaged_skill()` raises the same defect loudly for
-  packaging checks. A core-default capability must not fail an agent's import.
+  curated-MCP twin), so a missing, empty, or foreign `manual/SKILL.md` never
+  fails the import of a core-default capability;
+  `AVATAR_PLUGIN.validate_packaged_skill()` raises that packaging defect loudly
+  for packaging checks.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
 - **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
@@ -198,7 +207,8 @@ avatar/__init__.py
 `Agent._install_intrinsic_manuals` copies this package's `manual/` directory
 into `.library/intrinsic/capabilities/avatar/` on every boot — the destination
 `AVATAR_PLUGIN.installed_manual_path()` names. The packaged file stays the
-source of truth: `action="manual"` reads it, never the installed copy.
+source of truth for that copy; `action="manual"` reads and reports the
+installed copy, which is the one the agent itself can open.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` and the
 POSIX reference adapter. Unsupported Windows selection fails loudly; a future

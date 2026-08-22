@@ -204,21 +204,24 @@ _SUPPORTED_ACTIONS_PHRASE = (
 )
 
 
-def _build_family(handlers: Mapping[str, Any]) -> ToolFamily:
+def _build_family(handlers: Mapping[str, Any], agent: "Agent | None") -> ToolFamily:
     """Build avatar's family, binding each declared action to *handlers[name]*.
 
     Only avatar's own actions are bound here. ``manual`` is appended by
-    ``AVATAR_PLUGIN`` and answered directly from the packaged skill, with or
-    without a manager — it is not in *handlers* and cannot be supplied there.
-    Construction validates the registry, so a duplicate or reserved-name
-    collision raises ``ToolFamilyError``/``BuiltinToolPluginError`` here — at
-    import time for ``_FAMILY`` — rather than shipping silently.
+    ``AVATAR_PLUGIN`` and answered from *agent*'s installed
+    ``.library/intrinsic/capabilities/avatar/SKILL.md``, with or without a
+    manager — it is not in *handlers* and cannot be supplied there. *agent* is
+    ``None`` only for the module-level schema-only family, which never
+    dispatches. Construction validates the registry, so a duplicate or
+    reserved-name collision raises ``ToolFamilyError``/``BuiltinToolPluginError``
+    here — at import time for ``_FAMILY`` — rather than shipping silently.
     """
     return AVATAR_PLUGIN.build_family(
         [
             ChildTool(name, schema, handlers[name], title=f"{name} input")
             for name, schema in _DECLARED_CHILD_SPECS
         ],
+        agent,
     )
 
 
@@ -228,7 +231,7 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
 
 # Composes the model-facing schema only; ``AvatarManager`` builds its own
 # per-instance family with real handlers bound to that instance.
-_FAMILY = _build_family({name: _unused for name, _ in _DECLARED_CHILD_SPECS})
+_FAMILY = _build_family({name: _unused for name, _ in _DECLARED_CHILD_SPECS}, None)
 
 
 def get_description(lang: str = "en") -> str:
@@ -258,11 +261,15 @@ class AvatarManager:
         # The spawn mission brief reaches ``_spawn`` out-of-band via
         # ``self._pending_reasoning``, set by ``handle()`` (see ``handle``).
         # ``manual`` is deliberately absent: the plugin appends and answers it
-        # from the packaged skill, so no manager binding exists to rebind.
-        self._family = _build_family({
-            "spawn": self._dispatch_spawn,
-            "rules": self._dispatch_rules,
-        })
+        # from this agent's installed manual, so no manager binding exists to
+        # rebind.
+        self._family = _build_family(
+            {
+                "spawn": self._dispatch_spawn,
+                "rules": self._dispatch_rules,
+            },
+            agent,
+        )
         self._pending_reasoning: str | None = None
 
     # ------------------------------------------------------------------
@@ -315,20 +322,21 @@ class AvatarManager:
         return self._rules(self._strip_nulls(action_input))
 
     def _manual(self) -> dict:
-        """The packaged avatar-manual result — plugin-owned, no mutation.
+        """The installed avatar-manual result — plugin-owned, no mutation.
 
-        Avatar's manual ships inside this package (``manual/SKILL.md``) rather
-        than in the agent's installed ``.library`` catalog, so ``AVATAR_PLUGIN``
-        owns the loader instead of the shared
-        ``load_installed_manual``/``build_manual_child`` pair — that builder
-        would report a ``.library`` path this family never reads.
+        ``Agent._install_intrinsic_manuals`` installs this package's
+        ``manual/SKILL.md`` into the agent's ``.library`` catalog like every
+        other capability's, so ``AVATAR_PLUGIN`` reports that host-local copy
+        through the same shared ``load_installed_manual`` the rest of the
+        families use. The packaged file is that copy's source, not the document
+        this agent reads.
 
         This is a read-only convenience for callers holding a manager; the
         public ``manual`` action does **not** come through here. The family's
         ``manual`` child is the plugin's own, so nothing this manager does can
-        drop or replace the packaged skill it serves.
+        drop or replace the skill it serves.
         """
-        return AVATAR_PLUGIN.manual_payload()
+        return AVATAR_PLUGIN.manual_payload(self._agent)
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)

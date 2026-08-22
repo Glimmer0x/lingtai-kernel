@@ -26,21 +26,27 @@ that its own package calls explicitly.
 The one hard promise it enforces is the reserved ``manual`` action
 (``tools/CONTRACT.md`` "Every LingTai-owned family MUST offer a ``manual``
 action"): a package declares only its *own* actions, and this module appends
-``manual`` itself, answered from the package's bundled ``manual/SKILL.md``. A
-package that tries to declare, re-schema, or re-handle ``manual`` raises
+``manual`` itself, answered — like every other LingTai family's ``manual`` —
+from the host-local copy the host installed for *this* agent, through the one
+shared :func:`lingtai.tools._manual.load_installed_manual`. The packaged
+``manual/SKILL.md`` is that copy's source, not the document the agent reads,
+so it is what :meth:`BuiltinToolPlugin.validate_packaged_skill` checks and
+what the host installs — never what the action reports. A package that tries
+to declare, re-schema, or re-handle ``manual`` raises
 :class:`BuiltinToolPluginError` at import time rather than shipping a family
-whose manual is missing or points somewhere other than its packaged skill.
+whose manual is missing or points somewhere other than its own skill.
 
 Deliberate divergence from the curated-MCP twin: that descriptor loads and
 validates its ``SKILL.md`` eagerly at construction and raises on a missing or
 foreign manual. A curated MCP that fails that way loses one subprocess. A
 built-in tool is imported in-process by an agent that may boot it as a core
 default, so an unreadable packaged file must never take agent boot down —
-:meth:`BuiltinToolPlugin.load_manual` therefore reads on demand and *degrades
-truthfully* (``status="degraded"`` plus a naming ``error``, never a foreign
-body), while :meth:`BuiltinToolPlugin.validate_packaged_skill` raises the same
-defect loudly for packaging tests and doctor-style checks. Descriptor-shape
-defects, which need no filesystem, still fail at import.
+:meth:`BuiltinToolPlugin.load_manual` therefore reads the packaged skill on
+demand and *degrades truthfully* (``status="degraded"`` plus a naming
+``error``, never a foreign body), while
+:meth:`BuiltinToolPlugin.validate_packaged_skill` raises the same defect
+loudly for packaging tests and doctor-style checks. Descriptor-shape defects,
+which need no filesystem, still fail at import.
 """
 from __future__ import annotations
 
@@ -51,6 +57,7 @@ from typing import Any, Callable
 
 from lingtai.kernel._frontmatter import split_frontmatter
 
+from ._manual import load_installed_manual
 from .tool_family import RESERVED_MANUAL_NAME, ChildTool, ToolFamily
 from .tool_family.manual import MANUAL_INPUT_SCHEMA
 
@@ -74,8 +81,9 @@ MANUAL_ACTION = RESERVED_MANUAL_NAME
 
 #: The packaged manual resource every built-in tool ships, relative to its own
 #: package root. ``Agent._install_intrinsic_manuals`` copies this ``manual/``
-#: directory verbatim; ``manual`` reads the packaged original, which is the
-#: source of truth for the installed copy.
+#: directory verbatim into :data:`INSTALLED_MANUAL_ROOT`; the packaged original
+#: is the source of truth for that installed copy, and the ``manual`` action
+#: serves the installed copy — the document the agent itself can read.
 MANUAL_RESOURCE = "manual/SKILL.md"
 
 #: Where the host installs that packaged manual inside an agent working dir.
@@ -156,13 +164,15 @@ class BuiltinToolPlugin:
         return resources.files(self.package).joinpath(MANUAL_RESOURCE)
 
     def load_manual(self) -> dict[str, Any]:
-        """Read the packaged skill → the flat installed-manual result shape.
+        """Read and validate the *packaged* skill → the flat loader result shape.
 
-        Returns ``{status, manual, manual_path}`` — the same three keys
-        ``lingtai.tools._manual.load_installed_manual`` returns — plus ``error``
-        when degraded. ``manual`` is the *whole* ``SKILL.md`` text, frontmatter
-        included, because that is the document the skill catalog and the model
-        both read.
+        The packaging-side read: the source ``Agent._install_intrinsic_manuals``
+        copies from, not the host-local document the ``manual`` action serves
+        (:meth:`manual_payload`). Returns ``{status, manual, manual_path}`` —
+        the same three keys ``lingtai.tools._manual.load_installed_manual``
+        returns — plus ``error`` when degraded. ``manual`` is the *whole*
+        ``SKILL.md`` text, frontmatter included, because that is the document
+        the skill catalog and the model both read.
 
         Read on demand rather than cached at construction: a built-in tool is
         imported in-process during agent boot, and a packaging fault must
@@ -193,9 +203,22 @@ class BuiltinToolPlugin:
     def _degraded(path: str, error: str) -> dict[str, Any]:
         return {"status": "degraded", "manual": "", "manual_path": path, "error": error}
 
-    def manual_payload(self) -> dict[str, Any]:
-        """The ``action='manual'`` result: the packaged skill, named by its action."""
-        loaded = self.load_manual()
+    def manual_payload(self, agent: Any) -> dict[str, Any]:
+        """The ``action='manual'`` result: this agent's installed skill, named by its action.
+
+        *agent* is the host this capability is mounted on. The manual reported
+        is the host-local copy at :meth:`installed_manual_path` inside that
+        agent's working dir — the document the agent can actually open, and the
+        one every other LingTai family's ``manual`` reports via the shared
+        ``load_installed_manual``. Reporting the packaged source path instead
+        would hand the model a path outside its own working dir, and one that
+        does not exist at all in an installed distribution.
+
+        A missing installed copy degrades truthfully (the loader's own
+        ``status``/``error``); it is never silently backfilled from the
+        packaged source, because that would hide a failed install.
+        """
+        loaded = load_installed_manual(agent, self.name)
         payload: dict[str, Any] = {
             "status": loaded["status"],
             "action": MANUAL_ACTION,
@@ -206,17 +229,19 @@ class BuiltinToolPlugin:
             payload["error"] = loaded["error"]
         return payload
 
-    def manual_child(self) -> ChildTool:
-        """The plugin-owned reserved ``manual`` child.
+    def manual_child(self, agent: Any) -> ChildTool:
+        """The plugin-owned reserved ``manual`` child, bound to one host.
 
-        Its handler closes over this descriptor's packaged skill, so ``manual``
+        Its handler closes over this descriptor and *agent*, so ``manual``
         never routes through the package's manager and cannot be rebound to
-        other material by anything the manager does.
+        other material by anything the manager does. *agent* may be ``None``
+        for a module-level schema-only family that never dispatches, matching
+        ``tool_family.manual.build_manual_child``'s own contract.
         """
         return ChildTool(
             MANUAL_ACTION,
             MANUAL_INPUT_SCHEMA,
-            lambda _input: self.manual_payload(),
+            lambda _input: self.manual_payload(agent),
             title=f"{MANUAL_ACTION} input",
         )
 
@@ -239,7 +264,8 @@ class BuiltinToolPlugin:
         ``Agent._install_intrinsic_manuals`` copies ``<package>/manual/`` into
         ``.library/intrinsic/capabilities/<name>/`` on every boot, keyed by the
         *public* name — which is why a retained implementation directory must
-        declare ``module_name`` instead of renaming this destination.
+        declare ``module_name`` instead of renaming this destination. This is
+        the manual the ``manual`` action reads and reports.
         """
         return f"{INSTALLED_MANUAL_ROOT}/{self.name}/SKILL.md"
 
@@ -263,10 +289,14 @@ class BuiltinToolPlugin:
         self._check_declared_names([name for name, _schema in declared])
         return tuple(declared) + ((MANUAL_ACTION, MANUAL_INPUT_SCHEMA),)
 
-    def build_family(self, declared: Sequence[ChildTool]) -> ToolFamily:
-        """Compose this plugin's one public family, ``manual`` always appended."""
+    def build_family(self, declared: Sequence[ChildTool], agent: Any) -> ToolFamily:
+        """Compose this plugin's one public family, ``manual`` always appended.
+
+        *agent* is the host whose installed manual the appended child serves;
+        it may be ``None`` for a schema-only family that never dispatches.
+        """
         self._check_declared_names([child.name for child in declared])
-        return ToolFamily(self.name, [*declared, self.manual_child()])
+        return ToolFamily(self.name, [*declared, self.manual_child(agent)])
 
     def _check_declared_names(self, declared: Sequence[str] | Any) -> None:
         names = list(declared)

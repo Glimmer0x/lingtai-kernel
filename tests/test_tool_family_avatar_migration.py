@@ -98,6 +98,21 @@ def _manager(parent_dir: Path, launcher: _FakeLauncher, *, admin: dict | None = 
     return AvatarManager(agent, launcher=launcher), agent
 
 
+def _install_manual(parent_dir: Path) -> Path:
+    """Put avatar's skill where ``Agent._install_intrinsic_manuals`` puts it.
+
+    Same destination, same bytes — the host-local copy ``manual`` reports. The
+    real installer is exercised end to end in
+    ``tests/test_builtin_tool_plugin_package.py``; here the stub agent stands in
+    for the host, so the install is reproduced rather than booted.
+    """
+    packaged = Path(str(avatar_tool.AVATAR_PLUGIN.manual_resource()))
+    installed = parent_dir / avatar_tool.AVATAR_PLUGIN.installed_manual_path()
+    installed.parent.mkdir(parents=True, exist_ok=True)
+    installed.write_text(packaged.read_text(encoding="utf-8"), encoding="utf-8")
+    return installed
+
+
 # ---------------------------------------------------------------------------
 # Schema: root envelope, per-action children, wire correlation
 # ---------------------------------------------------------------------------
@@ -233,6 +248,7 @@ class TestAvatarDispatch:
         assert kwargs["schema"]["required"] == ["action", "input", "reasoning"]
 
     def test_manual_result_is_not_double_wrapped(self, network, launcher):
+        _install_manual(network)
         mgr, _ = _manager(network, launcher)
         result = mgr.handle({"action": "manual", "input": {}})
         # Avatar's own canonical flat result — no generic envelope nested
@@ -547,19 +563,24 @@ class TestRulesThroughTheEnvelope:
 
 
 class TestManualThroughTheEnvelope:
-    def test_manual_returns_the_exact_packaged_body_and_path(self, network, launcher):
+    def test_manual_returns_the_exact_installed_body_and_host_local_path(
+        self, network, launcher
+    ):
+        installed = _install_manual(network)
         mgr, _ = _manager(network, launcher)
         result = mgr.handle({"action": "manual", "input": {}})
 
-        source = (
-            Path(avatar_tool.__file__).resolve().parent / "manual" / "SKILL.md"
-        )
         assert result["status"] == "ok"
         assert result["action"] == "manual"
-        assert result["manual"] == source.read_text(encoding="utf-8")
-        assert Path(result["manual_path"]) == source
+        assert result["manual"] == installed.read_text(encoding="utf-8")
+        assert Path(result["manual_path"]) == installed
+        # Never the candidate/source tree the host installed *from*.
+        assert Path(result["manual_path"]) != (
+            Path(avatar_tool.__file__).resolve().parent / "manual" / "SKILL.md"
+        )
 
     def test_manual_performs_no_spawn_or_rules_io(self, network, launcher):
+        _install_manual(network)
         mgr, _ = _manager(network, launcher, admin={"karma": True})
         before = sorted(p.name for p in network.parent.iterdir())
 
@@ -572,31 +593,18 @@ class TestManualThroughTheEnvelope:
         assert not (network / "logs").exists()
         assert sorted(p.name for p in network.parent.iterdir()) == before
 
-    def test_missing_packaged_manual_degrades_truthfully(self, network, launcher, monkeypatch):
-        # The packaged-skill read moved into the plugin descriptor when avatar
-        # became a built-in tool plugin, so the resource seam patched here is
-        # the plugin's. The dispatch boundary and the degraded result are
-        # unchanged: a missing manual never takes the family down.
-        from lingtai.tools import _plugin as tool_plugin
-
+    def test_missing_installed_manual_degrades_truthfully(self, network, launcher):
+        # This agent never had the manual installed. The dispatch boundary and
+        # the degraded result are unchanged: a missing manual never takes the
+        # family down — and it is never quietly backfilled from the packaged
+        # source, which would hide a failed install.
         mgr, _ = _manager(network, launcher)
 
-        class _Missing:
-            def joinpath(self, _name):
-                return self
-
-            def read_text(self, **_kwargs):
-                raise FileNotFoundError("gone")
-
-            def __str__(self) -> str:
-                return "<missing avatar manual>"
-
-        monkeypatch.setattr(
-            tool_plugin.resources, "files", lambda _pkg: _Missing(),
-        )
         result = mgr.handle({"action": "manual", "input": {}})
         assert result["status"] == "degraded"
         assert result["action"] == "manual"
         assert result["manual"] == ""
-        assert result["error"] == "avatar manual missing"
-        assert result["manual_path"] == "<missing avatar manual>"
+        assert "avatar manual missing" in result["error"]
+        assert Path(result["manual_path"]) == (
+            network / avatar_tool.AVATAR_PLUGIN.installed_manual_path()
+        )

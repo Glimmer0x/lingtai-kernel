@@ -9,9 +9,13 @@ declared, schema'd, or handled by the package.
 
 These tests pin the packaging promise, the runtime discovery/mount contract
 around it (registry entry, lazy import, ``.library`` install), and the
-*unchanged* public Avatar surface. No test spawns a live avatar: the launcher
-Port is a double, every agent lives under ``tmp_path``, and the manual action
-touches nothing.
+*unchanged* public Avatar surface. The ``manual`` tests run against a real
+host built by the ``host`` fixture — a real ``Agent`` whose real
+``_install_intrinsic_manuals`` put the skill on disk — because the one thing
+the action must report is the *host-local installed* path, which a hand-built
+stub could only assert against itself. No test spawns a live avatar: the
+launcher Port is a double, every agent lives under ``tmp_path``, and the
+manual action touches nothing.
 """
 from __future__ import annotations
 
@@ -52,11 +56,35 @@ class _RecordingManager:
         return _handle
 
 
-def _recording_family(recorder: _RecordingManager):
+def _recording_family(recorder: _RecordingManager, agent=None):
     """Avatar's real family with its declared actions bound to the recorder."""
     return avatar_tool._build_family(
-        {action: recorder.handler(action) for action in AVATAR_DECLARED_ACTIONS}
+        {action: recorder.handler(action) for action in AVATAR_DECLARED_ACTIONS},
+        agent,
     )
+
+
+@pytest.fixture
+def host(tmp_path):
+    """A real agent host, manuals installed by the real installer.
+
+    ``Agent.__init__`` runs ``_install_intrinsic_manuals``, so the avatar skill
+    is on disk at ``AVATAR_PLUGIN.installed_manual_path()`` exactly as a booted
+    agent sees it. No live avatar is ever spawned: nothing here calls ``spawn``.
+    """
+    from lingtai.agent import Agent
+    from tests._service_helpers import make_gemini_mock_service
+
+    return Agent(
+        service=make_gemini_mock_service(),
+        agent_name="parent",
+        working_dir=tmp_path / "parent",
+        capabilities=["avatar"],
+    )
+
+
+def _installed_manual(agent) -> Path:
+    return agent._working_dir / AVATAR_PLUGIN.installed_manual_path()
 
 
 def _descriptor_fields(**overrides):
@@ -146,7 +174,8 @@ def test_package_does_not_declare_manual_and_the_plugin_appends_it_last():
                 [
                     ChildTool("spawn", {"type": "object"}, lambda _i: {}),
                     ChildTool("manual", {"type": "object"}, lambda _i: {"hijacked": True}),
-                ]
+                ],
+                None,
             ),
             id="family",
         ),
@@ -165,48 +194,81 @@ def test_composed_family_always_carries_a_manual_child_with_the_shared_strict_in
     assert dict(avatar_tool._CHILD_SPECS)["manual"] is MANUAL_INPUT_SCHEMA
 
 
-def test_manual_answers_from_the_packaged_skill_without_entering_the_manager():
+def test_manual_answers_from_the_installed_skill_without_entering_the_manager(host):
     recorder = _RecordingManager()
-    family = _recording_family(recorder)
+    family = _recording_family(recorder, host)
     result = family.handle({"action": "manual", "input": {}})
     assert recorder.calls == []
-    assert result == AVATAR_PLUGIN.manual_payload()
+    assert result == AVATAR_PLUGIN.manual_payload(host)
     assert result["status"] == "ok"
     assert result["action"] == "manual"
     skill_path = Path(result["manual_path"])
-    assert skill_path.is_absolute() and skill_path.name == "SKILL.md"
+    assert skill_path == _installed_manual(host)
     assert result["manual"] == skill_path.read_text(encoding="utf-8")
 
 
-def test_the_manager_cannot_rebind_the_public_manual_action(tmp_path):
+def test_manual_reports_the_host_local_install_not_the_packaged_source(host):
+    """The regression: ``manual_path`` is the agent's own file, never the source tree.
+
+    A real host, a real ``_install_intrinsic_manuals``, and the real
+    ``AvatarManager.handle`` dispatch — the path the model is handed must be
+    openable from inside this agent's working dir.
+    """
+    installed = _installed_manual(host)
+    assert installed.is_file()
+
+    manager = AvatarManager(host, launcher=object())
+    result = manager.handle({"action": "manual", "input": {}})
+
+    assert result["status"] == "ok"
+    assert result["action"] == "manual"
+    assert Path(result["manual_path"]) == installed
+    assert result["manual"] == installed.read_text(encoding="utf-8")
+    # Not the candidate/source copy the host installed *from*.
+    packaged = Path(str(AVATAR_PLUGIN.manual_resource()))
+    assert Path(result["manual_path"]) != packaged
+    assert host._working_dir in Path(result["manual_path"]).parents
+
+
+def test_manual_degrades_truthfully_when_the_host_has_no_installed_copy(host):
+    """A failed install is reported, never backfilled from the packaged source."""
+    installed = _installed_manual(host)
+    installed.unlink()
+
+    result = AvatarManager(host, launcher=object()).handle(
+        {"action": "manual", "input": {}}
+    )
+    assert result["status"] == "degraded"
+    assert result["action"] == "manual"
+    assert result["manual"] == ""
+    assert "avatar manual missing" in result["error"]
+    assert Path(result["manual_path"]) == installed
+
+
+def test_the_manager_cannot_rebind_the_public_manual_action(host):
     """Even a manager that redefines its own manual cannot change the action."""
 
     class _HijackingManager(AvatarManager):
         def _manual(self):
             return {"status": "ok", "action": "manual", "manual": "hijacked"}
 
-    (tmp_path / "parent").mkdir()
-    agent = type("_StubAgent", (), {})()
-    agent._working_dir = tmp_path / "parent"
-    agent._admin = {}
-    agent.agent_name = "parent"
-    agent._venv_path = None
-    manager = _HijackingManager(agent, launcher=object())
+    manager = _HijackingManager(host, launcher=object())
 
     result = manager.handle({"action": "manual", "input": {}})
-    assert result == AVATAR_PLUGIN.manual_payload()
+    assert result == AVATAR_PLUGIN.manual_payload(host)
     assert result["manual"] != "hijacked"
 
 
-def test_manual_payload_is_the_same_document_the_legacy_manager_helper_returns():
+def test_manual_payload_is_the_same_document_the_legacy_manager_helper_returns(host):
     """Routing manual through the plugin preserves the existing public result."""
     bare = object.__new__(AvatarManager)
-    assert bare._manual() == AVATAR_PLUGIN.manual_payload()
+    bare._agent = host
+    assert bare._manual() == AVATAR_PLUGIN.manual_payload(host)
 
 
-def test_manual_input_stays_strictly_empty_and_the_action_writes_nothing(tmp_path):
+def test_manual_input_stays_strictly_empty_and_the_action_writes_nothing(host, tmp_path):
     recorder = _RecordingManager()
-    family = _recording_family(recorder)
+    family = _recording_family(recorder, host)
     rejected = family.handle({"action": "manual", "input": {"name": "helper"}})
     assert rejected["status"] == "failed"
     assert rejected["error_code"] == "INVALID_ARGUMENT"
@@ -235,25 +297,18 @@ def test_a_foreign_or_missing_packaged_skill_degrades_and_validates_loudly():
     # Refused, not served: the body is empty and the error names the mismatch.
     assert loaded["manual"] == ""
     assert "expected 'somebody-elses-manual'" in loaded["error"]
-    assert foreign.manual_payload()["action"] == "manual"
+    assert foreign.load_manual()["manual_path"].endswith("SKILL.md")
     with pytest.raises(BuiltinToolPluginError, match="declares skill"):
         foreign.validate_packaged_skill()
 
 
-def test_the_host_installs_the_packaged_skill_where_the_descriptor_says(tmp_path):
+def test_the_host_installs_the_packaged_skill_where_the_descriptor_says(host):
     """``Agent._install_intrinsic_manuals`` is the mount; the descriptor names it."""
-    from lingtai.agent import Agent
-    from tests._service_helpers import make_gemini_mock_service
-
-    agent = Agent(
-        service=make_gemini_mock_service(),
-        agent_name="parent",
-        working_dir=tmp_path / "parent",
-        capabilities=["avatar"],
-    )
-    installed = agent._working_dir / AVATAR_PLUGIN.installed_manual_path()
+    installed = _installed_manual(host)
     assert installed.is_file()
-    assert installed.read_text(encoding="utf-8") == AVATAR_PLUGIN.manual_payload()["manual"]
+    # Installed verbatim from the packaged source the descriptor points at.
+    packaged = Path(str(AVATAR_PLUGIN.manual_resource()))
+    assert installed.read_text(encoding="utf-8") == packaged.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

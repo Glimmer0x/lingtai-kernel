@@ -165,14 +165,17 @@ capability names and lazy adapters.
   declaration `registry.py` publishes for it (`capability_declaration()`, the
   `BUILTIN_TOOLS`/`CORE_DEFAULTS` entry shape). It also owns the reserved-action
   promise: `actions()`, `child_specs()`, and `build_family()` append `manual`
-  from the packaged skill and raise `BuiltinToolPluginError` if a package
-  declares, re-schemas, or rebinds it. Declarative only — no discovery,
+  and raise `BuiltinToolPluginError` if a package declares, re-schemas, or
+  rebinds it. The appended child answers from the host-local installed manual
+  via `_manual.load_installed_manual` — the packaged `manual/SKILL.md` is that
+  copy's source and what `validate_packaged_skill()` checks, never what the
+  action reports. Declarative only — no discovery,
   import-by-name, spawning, registration, or config reading; activation,
   privilege, and lifecycle stay with the host (`registry.py`, `BaseAgent.add_tool`,
   `Agent._install_intrinsic_manuals`). It is the in-process twin of
   `lingtai.mcp_servers._plugin` and is unrelated to `plugin/`, the catalog tool
   for external Agent Plugins v1.0.0 directories
-  (`src/lingtai/tools/_plugin.py:98-300`).
+  (`src/lingtai/tools/_plugin.py:100-330`).
 - `avatar/plugin.py` — the reference slice for `_plugin.py`. `AVATAR_PLUGIN`
   states the capability name, module, boot kwargs, and packaged
   `avatar-manual` skill; `AVATAR_DECLARED_ACTIONS` lists avatar's own two
