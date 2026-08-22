@@ -100,11 +100,15 @@ def test_reasoning_and_summarize_never_reach_manager_input():
     assert manager.calls == [{"action": "check", "limit": 5}]
 
 
-def test_manual_action_dispatches_to_manager_manual():
+def test_manual_action_answers_from_plugin_without_entering_manager():
     manager = _CountingManager()
     result = handle_cloud_mail(manager, {"action": "manual", "input": {}, "reasoning": "x"})
     assert result["status"] == "ok"
-    assert manager.calls == [{"action": "manual"}]
+    assert result["action"] == "manual"
+    assert result["skill"] == "cloud-mail-mcp-manual"
+    # ``manual`` is plugin-owned: it never dispatches into the manager, even
+    # when a live manager is present.
+    assert manager.calls == []
 
 
 def test_manual_action_without_manager_returns_bundled_skill():

@@ -3,21 +3,24 @@
 This module owns only the public Cloud Mail envelope and action branches.
 ``CloudMailManager`` remains the legacy result/business boundary behind the
 validated family, mirroring ``telegram/_family.py``.
+
+Action *composition* belongs to the package's plugin descriptor (`plugin.py`):
+this module declares Cloud Mail's own actions and their strict `input`
+branches, and `CLOUD_MAIL_PLUGIN` appends the reserved `manual` action from
+the packaged `SKILL.md`. `manual` therefore never routes through the manager
+and cannot be omitted, re-schema'd, or rebound to other material from here.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
 
-from .. import _skill
+from .plugin import CLOUD_MAIL_ACTIONS, CLOUD_MAIL_DECLARED_ACTIONS, CLOUD_MAIL_PLUGIN
 
-# Kept local to avoid importing the manager (which consumes this schema).
-_SKILL_NAME = "cloud-mail-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(
-    "lingtai.mcp_servers.cloud_mail"
-)
-
-_ACTIONS = ("check", "search", "read", "send", "accounts", "add_user", "manual")
+# The package's own actions plus the plugin-appended reserved ``manual``. Kept
+# local to avoid importing the manager (which consumes this schema).
+_DECLARED_ACTIONS = CLOUD_MAIL_DECLARED_ACTIONS
+_ACTIONS = CLOUD_MAIL_ACTIONS
 
 
 def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
@@ -40,7 +43,6 @@ def _object(
 
 
 def _cloud_mail_input_schemas() -> dict[str, dict[str, Any]]:
-    empty = _object({})
     account = {"type": "string", "description": "Account alias (or admin email). Defaults to the first configured account."}
     time_sort = _nullable({"type": "string", "enum": ["asc", "desc"]})
     check = _object(
@@ -97,7 +99,7 @@ def _cloud_mail_input_schemas() -> dict[str, dict[str, Any]]:
         },
         required=["address"],
     )
-    accounts = empty
+    accounts = _object({})
     add_user = _object(
         {
             "account": _nullable(account),
@@ -107,15 +109,14 @@ def _cloud_mail_input_schemas() -> dict[str, dict[str, Any]]:
         },
         required=["email", "password"],
     )
-    return {
+    return CLOUD_MAIL_PLUGIN.action_input_schemas({
         "check": check,
         "search": search,
         "read": read,
         "send": send,
         "accounts": accounts,
         "add_user": add_user,
-        "manual": empty,
-    }
+    })
 
 
 def cloud_mail_schema() -> dict[str, Any]:
@@ -138,7 +139,7 @@ def cloud_mail_schema() -> dict[str, Any]:
                     "id '<account>:<emailId>'), send (requires user credentials "
                     "in config), accounts (redacted status), add_user (create a "
                     "Cloud Mail user). Call manual "
-                    + _skill.manual_action_description(_SKILL_FRONTMATTER, _SKILL_NAME)
+                    + CLOUD_MAIL_PLUGIN.manual_action_description()
                 ),
             },
             "input": {
@@ -204,21 +205,24 @@ def _basic_validate(value: Any, schema: Mapping[str, Any]) -> bool:
 
 
 def build_cloud_mail_family(manager: Any | None):
-    """Bind action handlers to ``manager`` (or produce no-op stubs)."""
+    """Bind action handlers to ``manager`` (or produce no-op stubs).
+
+    Only Cloud Mail's own actions are handler-bound to ``manager`` here.
+    ``manual`` is appended from ``CLOUD_MAIL_PLUGIN`` and answers directly
+    from the packaged ``SKILL.md``, with or without a live manager — the same
+    payload the manager's own ``_manual()`` returns, minus the possibility of
+    the business boundary replacing it.
+    """
     schemas = _cloud_mail_input_schemas()
 
     def _handler(action: str):
-        if action == "manual":
-            if manager is not None:
-                return lambda _input: manager.handle({"action": "manual"})
-            return lambda _input: _skill.manual_payload(
-                _SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH, _SKILL_NAME
-            )
         if manager is not None:
             return lambda input_, action=action: manager.handle({"action": action, **dict(input_)})
         return lambda _input: {}
 
-    return {action: _handler(action) for action in _ACTIONS}, schemas
+    handlers = {action: _handler(action) for action in _DECLARED_ACTIONS}
+    handlers["manual"] = lambda _input: CLOUD_MAIL_PLUGIN.manual_payload()
+    return handlers, schemas
 
 
 def handle_cloud_mail(manager: Any | None, args: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -242,4 +246,5 @@ def handle_cloud_mail(manager: Any | None, args: Mapping[str, Any] | None) -> di
 
 
 CLOUD_MAIL_SCHEMA = cloud_mail_schema()
-CLOUD_MAIL_ACTIONS = _ACTIONS
+# ``CLOUD_MAIL_ACTIONS`` is re-exported from ``plugin.py`` (imported above) so
+# the public action list has exactly one definition.

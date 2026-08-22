@@ -50,6 +50,7 @@ from .. import _config
 from .licc import push_inbox_event
 from .manager import CloudMailManager, DESCRIPTION, SCHEMA
 from ._family import handle_cloud_mail
+from .plugin import CLOUD_MAIL_PLUGIN
 
 log = logging.getLogger("lingtai_cloud_mail")
 
@@ -144,7 +145,7 @@ def build_server(manager: CloudMailManager | None) -> Server:
         return types.ListToolsResult(
             tools=[
                 types.Tool(
-                    name="cloud_mail",
+                    name=CLOUD_MAIL_PLUGIN.name,
                     description=DESCRIPTION,
                     input_schema=SCHEMA,
                 ),
@@ -155,7 +156,7 @@ def build_server(manager: CloudMailManager | None) -> Server:
         _ctx: ServerRequestContext,
         params: types.CallToolRequestParams,
     ) -> types.CallToolResult:
-        if params.name != "cloud_mail":
+        if params.name != CLOUD_MAIL_PLUGIN.name:
             raise _unknown_tool(params.name)
         arguments = params.arguments or {}
         if manager is None:
@@ -179,7 +180,7 @@ def build_server(manager: CloudMailManager | None) -> Server:
         return _tool_result(result)
 
     server: Server = Server(
-        "lingtai-cloud-mail",
+        CLOUD_MAIL_PLUGIN.server_name,
         instructions=_SERVER_INSTRUCTIONS,
         on_list_tools=_list_tools,
         on_call_tool=_call_tool,
