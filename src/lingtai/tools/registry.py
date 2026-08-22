@@ -108,6 +108,13 @@ BUILTIN_TOOLS: dict[str, str] = {
     # capability is canonically named ``shell`` while its implementation stays
     # in the retained internal package.
     "shell": "lingtai.tools.bash",
+    # ``avatar`` is packaged as a built-in tool plugin: its own
+    # ``lingtai.tools.avatar.plugin`` descriptor states this module path and the
+    # ``CORE_DEFAULTS`` kwargs below, and
+    # ``tests/test_builtin_tool_plugin_package.py`` pins that this shipped
+    # mapping equals ``AVATAR_PLUGIN.capability_declaration()``. This mapping
+    # stays the runtime source — importing it must not import the package, so
+    # the agreement is proven by test, never by importing the descriptor here.
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
@@ -150,6 +157,7 @@ CORE_DEFAULTS: dict[str, dict] = {
     "knowledge": {},
     "skills": {},
     "shell": {"yolo": True},
+    # Must equal ``AVATAR_PLUGIN.capability_declaration()["default_kwargs"]``.
     "avatar": {},
     "daemon": {},
     "mcp": {},

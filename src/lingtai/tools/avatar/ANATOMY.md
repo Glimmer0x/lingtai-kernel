@@ -5,6 +5,8 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/CONTRACT.md
   - src/lingtai/adapters/avatar_launcher.py
@@ -14,6 +16,7 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - tests/test_avatar_rules.py
   - tests/test_tool_family_avatar_migration.py
+  - tests/test_builtin_tool_plugin_package.py
   - src/lingtai/tools/avatar/glossary-en.md
   - src/lingtai/tools/avatar/glossary-zh.md
   - src/lingtai/tools/avatar/glossary-wen.md
@@ -42,10 +45,20 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
+- `avatar/plugin.py` — the **built-in tool plugin descriptor**. One place that
+  states avatar's capability/tool name, the module the registry imports, the
+  always-on boot kwargs, the packaged `avatar-manual` skill, avatar's own
+  declared actions, and the model-facing root description. `AVATAR_PLUGIN`
+  appends the reserved `manual` action from the packaged skill and refuses any
+  attempt to declare it (`avatar/plugin.py:25-45`).
 - `avatar/__init__.py` — validation, preparation, boot policy, ledger, rules,
   schemas, and setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
   opaque-handle Port.
+- `../_plugin.py` — the shared `BuiltinToolPlugin` packaging descriptor avatar
+  is the reference slice for: identity checks, the reserved-`manual` promise,
+  family composition, the capability declaration, and the `add_tool` kwargs.
+  Declarative only — it discovers, imports, spawns, and registers nothing.
 
 ## Public API
 
@@ -56,7 +69,7 @@ family (`src/lingtai/tools/CONTRACT.md`) whose actions are canonical children:
 |------|------|-------------|
 | `spawn` | `name`, `type`, `comment`, `dry_run`, `confirm` | Spawn a new avatar agent (shallow or deep). `dry_run` previews only; `confirm` acknowledges the mission-quality gate. |
 | `rules` | `rules_content` | Set rules content and distribute via `.rules` signal files to self + all descendants. Karma-gated. |
-| `manual` | *(empty)* | Read-only: returns the exact `manual/SKILL.md` body plus its host-local `manual_path`. No spawn or rules I/O. |
+| `manual` | *(empty)* | Read-only, **plugin-owned**: `AVATAR_PLUGIN` appends this child and answers it from the packaged `manual/SKILL.md` — the manager holds no binding for it. Returns the exact body plus its host-local `manual_path`. No spawn or rules I/O. |
 
 The model-facing root is exactly `action` + `input` + required `reasoning` +
 optional `summarize`, `additionalProperties: false`. Each action owns exactly
@@ -85,24 +98,39 @@ unknown-action error string.
 ## Internal Module Layout
 
 ```
+avatar/plugin.py
+  ├── AVATAR_PLUGIN                 — the BuiltinToolPlugin descriptor:
+  │                                    identity, packaged skill, capability
+  │                                    declaration, add_tool kwargs
+  ├── AVATAR_DECLARED_ACTIONS       — avatar's own actions ('manual' absent)
+  ├── AVATAR_ACTIONS                — declared + the appended 'manual'
+  └── AVATAR_DESCRIPTION            — the model-facing root description,
+                                       pointing at the plugin's own skill name
+
 avatar/__init__.py
   ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict per-action inputs
-  │                                    (manual reuses the generic
+  ├── _DECLARED_CHILD_SPECS         — avatar's own (action, schema) pairs
+  ├── _CHILD_SPECS                  — the plugin-composed listing: declared
+  │                                    plus ('manual', the shared
   │                                    tool_family.manual.MANUAL_INPUT_SCHEMA)
-  ├── _CHILD_SPECS                  — the one (action, schema) source both
-  │                                    family listings are built from
-  ├── _build_family() / _FAMILY     — import-time registry validation;
-  │                                    get_schema() composes from _FAMILY
+  ├── _SUPPORTED_ACTIONS_PHRASE     — the pinned unknown-action wording,
+  │                                    rendered from AVATAR_ACTIONS
+  ├── _build_family() / _FAMILY     — AVATAR_PLUGIN.build_family() appends the
+  │                                    plugin-owned manual child; import-time
+  │                                    registry validation; get_schema()
+  │                                    composes from _FAMILY
   ├── AvatarManager.__init__        — parent agent ref + per-instance ToolFamily
   ├── handle()                      — envelope entry: captures root _reasoning,
   │                                    delegates to ToolFamily.handle(), then
   │                                    normalizes ACTION_REQUIRED back to
   │                                    avatar's pinned unknown-action error
-  ├── _dispatch_spawn/_rules/_manual — child handlers; strip nulls, thread
-  │                                    the mission brief to _spawn
+  ├── _dispatch_spawn/_rules        — child handlers; strip nulls, thread
+  │                                    the mission brief to _spawn. There is
+  │                                    no manual dispatcher: the plugin owns it
   ├── _strip_nulls()                — nullable-optional → absent
-  ├── _manual()                     — reads the packaged manual/SKILL.md body
-  │                                    and reports its host-local path
+  ├── _manual()                     — read-only convenience delegate to
+  │                                    AVATAR_PLUGIN.manual_payload(); the
+  │                                    public action does not route here
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -123,6 +151,25 @@ avatar/__init__.py
 
 ## Key Invariants
 
+- **Plugin packaging:** avatar is a built-in tool *plugin package*. `plugin.py`
+  is the single source for its identity, and `AVATAR_PLUGIN.capability_declaration()`
+  must equal the shipped `registry.BUILTIN_TOOLS["avatar"]` /
+  `registry.CORE_DEFAULTS["avatar"]` entries. The registry mapping stays the
+  runtime source the host reads and lazily imports — importing the registry
+  must not import this package, so the agreement is proven by test
+  (`tests/test_builtin_tool_plugin_package.py`) rather than by importing the
+  descriptor into the registry.
+- **Reserved `manual` is plugin-owned:** avatar declares only `spawn` and
+  `rules`; `AVATAR_PLUGIN` appends `manual` and answers it from the packaged
+  skill. Declaring, re-schema'ing, or rebinding it raises
+  `BuiltinToolPluginError` at import time, and no `AvatarManager` change can
+  drop or replace the document the action serves.
+- **Packaging faults degrade, boot does not:** the packaged skill is read on
+  demand, not cached at construction (the deliberate divergence from the
+  curated-MCP twin). A missing, empty, or foreign `manual/SKILL.md` degrades
+  that one action with a truthful `error` and is never served as a body;
+  `AVATAR_PLUGIN.validate_packaged_skill()` raises the same defect loudly for
+  packaging checks. A core-default capability must not fail an agent's import.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
 - **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
@@ -146,7 +193,12 @@ avatar/__init__.py
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` through its own `tool_family.ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean it advertises is actually honored by the single central summarizer. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
+- **Kernel hooks:** `setup()` is called during capability initialization and performs the one `add_tool` call from `AVATAR_PLUGIN.tool_registration()` (composition only — the host still decides whether setup runs at all); `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` through its own `tool_family.ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean it advertises is actually honored by the single central summarizer. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
+
+`Agent._install_intrinsic_manuals` copies this package's `manual/` directory
+into `.library/intrinsic/capabilities/avatar/` on every boot — the destination
+`AVATAR_PLUGIN.installed_manual_path()` names. The packaged file stays the
+source of truth: `action="manual"` reads it, never the installed copy.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` and the
 POSIX reference adapter. Unsupported Windows selection fails loudly; a future

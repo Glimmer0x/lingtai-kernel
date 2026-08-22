@@ -37,6 +37,7 @@ related_files:
   - src/lingtai/tools/lingtai/CONTRACT.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/tools/avatar/plugin.py
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/_tool_family.py
@@ -46,6 +47,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -158,6 +160,29 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — built-in tool **plugin packaging** descriptor: `BuiltinToolPlugin`
+  binds one package's identity, its bundled `manual/SKILL.md`, and the capability
+  declaration `registry.py` publishes for it (`capability_declaration()`, the
+  `BUILTIN_TOOLS`/`CORE_DEFAULTS` entry shape). It also owns the reserved-action
+  promise: `actions()`, `child_specs()`, and `build_family()` append `manual`
+  from the packaged skill and raise `BuiltinToolPluginError` if a package
+  declares, re-schemas, or rebinds it. Declarative only — no discovery,
+  import-by-name, spawning, registration, or config reading; activation,
+  privilege, and lifecycle stay with the host (`registry.py`, `BaseAgent.add_tool`,
+  `Agent._install_intrinsic_manuals`). It is the in-process twin of
+  `lingtai.mcp_servers._plugin` and is unrelated to `plugin/`, the catalog tool
+  for external Agent Plugins v1.0.0 directories
+  (`src/lingtai/tools/_plugin.py:98-300`).
+- `avatar/plugin.py` — the reference slice for `_plugin.py`. `AVATAR_PLUGIN`
+  states the capability name, module, boot kwargs, and packaged
+  `avatar-manual` skill; `AVATAR_DECLARED_ACTIONS` lists avatar's own two
+  actions with `manual` deliberately absent, and `AVATAR_ACTIONS` is the
+  plugin-composed public list. `avatar/__init__.py` builds the schema, family,
+  description, and its one `add_tool` registration from it. The other built-in
+  tools still declare these facts inline and are unchanged;
+  `tests/test_builtin_tool_plugin_package.py` pins the packaging invariants and
+  the agreement between `AVATAR_PLUGIN.capability_declaration()` and the
+  shipped `registry.py` entries (`src/lingtai/tools/avatar/plugin.py:25-45`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).

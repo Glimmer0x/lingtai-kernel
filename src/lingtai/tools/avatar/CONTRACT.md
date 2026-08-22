@@ -4,6 +4,8 @@ tool: avatar
 contract_version: 4
 related_files:
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/manual/SKILL.md
@@ -14,6 +16,7 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_avatar_migration.py
+  - tests/test_builtin_tool_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -121,11 +124,16 @@ storage; detached-process launch -> §Cross-platform invariants.
 - `action="manual"` is read-only: it returns the exact packaged
   `src/lingtai/tools/avatar/manual/SKILL.md` body plus its host-local
   `manual_path`, and performs no filesystem mutation (no spawn, no ledger
-  write, no `.rules` write). Avatar's manual ships inside this package rather
-  than being installed into the agent's `.library` intrinsic catalog, so this
-  action owns its own loader instead of the shared
+  write, no `.rules` write). The action is **plugin-owned**: `AVATAR_PLUGIN`
+  (`src/lingtai/tools/avatar/plugin.py`) appends the reserved child and answers
+  it straight from the packaged skill, so `AvatarManager` has no `manual`
+  binding to drop or rebind. Avatar's manual is read from the package rather
+  than from the agent's installed `.library` intrinsic catalog, so the plugin
+  owns this loader instead of the shared
   `load_installed_manual`/`build_manual_child` pair — that builder would
-  report a `.library` path this family never reads.
+  report a `.library` path this family never reads. The packaged copy is the
+  source of truth for the installed one: the host copies `manual/` to
+  `.library/intrinsic/capabilities/avatar/` on every boot.
 
 **Non-goals:** the parent holds no in-process handle to the avatar — liveness is
 checked purely via the filesystem handshake. The tool does not manage the
@@ -186,10 +194,43 @@ I/O of any kind.
 
 | Input | Optional input | Success output | Error shapes |
 |---|---|---|---|
-| `{}` | — | `{status: "ok", action: "manual", manual: <exact SKILL.md body>, manual_path: <host-local packaged path>}` | `{status: "degraded", action: "manual", manual: "", manual_path: ..., error: "avatar manual missing"}` if the packaged manual file is missing |
+| `{}` | — | `{status: "ok", action: "manual", manual: <exact SKILL.md body>, manual_path: <host-local packaged path>}` | `{status: "degraded", action: "manual", manual: "", manual_path: ..., error: "avatar manual missing"}` if the packaged manual file is missing; the same degraded shape with an `error` naming the mismatch if the packaged file is present but is not the declared `avatar-manual` skill (a foreign or empty manual is refused, never served) |
 
 The result is avatar's own canonical shape, returned verbatim — it is never
 nested inside another action's result envelope and never double-wrapped.
+
+### Packaging: avatar is a built-in tool plugin
+
+`src/lingtai/tools/avatar/` is a plugin-style package. `plugin.py` states the
+capability identity in one place — the public name, the module the registry
+imports, the always-on boot kwargs, the packaged `avatar-manual` skill, and
+avatar's own declared actions — and `src/lingtai/tools/_plugin.py`
+(`BuiltinToolPlugin`, the in-process twin of the curated-MCP
+`lingtai.mcp_servers._plugin`) binds them. The contract this adds:
+
+- **`manual` is reserved and appended, never declared.** Declaring,
+  re-schema'ing, or rebinding `manual` raises `BuiltinToolPluginError` at
+  import time. The appended child's `input` is the one shared
+  `tool_family.manual.MANUAL_INPUT_SCHEMA` object.
+- **The declaration must equal the shipped registry entry.**
+  `AVATAR_PLUGIN.capability_declaration()` states `lingtai.tools.avatar` and
+  `{}`; `registry.BUILTIN_TOOLS["avatar"]` and `registry.CORE_DEFAULTS["avatar"]`
+  remain the runtime source the host reads and lazily imports, and the
+  agreement is proven by test — the registry never imports this descriptor.
+- **The descriptor is declarative, not a runtime.** It discovers nothing,
+  imports nothing by name, spawns nothing, and registers nothing. `setup()`
+  still performs the one `add_tool` call, `registry.setup_capability` still
+  decides whether that happens, `Agent._install_intrinsic_manuals` still
+  performs the `.library` install, and the `rules` karma gate, the launcher
+  Port, the network scope checks, and `delegates/ledger.jsonl` are untouched.
+  It is unrelated to `lingtai.tools.plugin`, the catalog tool for external
+  Agent Plugins v1.0.0 directories.
+- **Packaging faults degrade, they do not crash boot.** Unlike the curated-MCP
+  twin, which validates its skill eagerly at construction, avatar reads its
+  packaged skill on demand: an unreadable or foreign manual degrades that one
+  action (above) instead of failing the import of a core-default capability.
+  `AVATAR_PLUGIN.validate_packaged_skill()` raises the same defect loudly for
+  packaging tests and doctor-style checks.
 
 ### Invalid or missing `action`
 

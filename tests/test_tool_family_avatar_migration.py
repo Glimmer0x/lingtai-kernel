@@ -573,6 +573,12 @@ class TestManualThroughTheEnvelope:
         assert sorted(p.name for p in network.parent.iterdir()) == before
 
     def test_missing_packaged_manual_degrades_truthfully(self, network, launcher, monkeypatch):
+        # The packaged-skill read moved into the plugin descriptor when avatar
+        # became a built-in tool plugin, so the resource seam patched here is
+        # the plugin's. The dispatch boundary and the degraded result are
+        # unchanged: a missing manual never takes the family down.
+        from lingtai.tools import _plugin as tool_plugin
+
         mgr, _ = _manager(network, launcher)
 
         class _Missing:
@@ -586,10 +592,11 @@ class TestManualThroughTheEnvelope:
                 return "<missing avatar manual>"
 
         monkeypatch.setattr(
-            avatar_tool.resources, "files", lambda _pkg: _Missing(),
+            tool_plugin.resources, "files", lambda _pkg: _Missing(),
         )
         result = mgr.handle({"action": "manual", "input": {}})
         assert result["status"] == "degraded"
+        assert result["action"] == "manual"
         assert result["manual"] == ""
         assert result["error"] == "avatar manual missing"
         assert result["manual_path"] == "<missing avatar manual>"

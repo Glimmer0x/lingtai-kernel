@@ -24,6 +24,16 @@ Usage (LTP v2 envelope — one action, one strict child input):
 
 The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
 ToolExecutor), never an ``input`` property — see ``handle()``.
+
+Packaging: this folder is a built-in tool *plugin package*. ``plugin.py`` states
+avatar's capability identity, its packaged ``manual/SKILL.md`` skill, its own
+declared actions, and the capability declaration the registry must agree with;
+``AVATAR_PLUGIN`` appends the reserved ``manual`` action and answers it straight
+from that packaged skill, so ``manual`` never routes through ``AvatarManager``
+and no manager change can drop or rebind it. Registration, activation,
+privilege, and lifecycle stay exactly where they were: ``setup()`` still
+performs the one ``add_tool`` call, and ``lingtai.tools.registry`` still owns
+capability lookup and boot.
 """
 from __future__ import annotations
 
@@ -32,15 +42,14 @@ import os
 import re
 import shutil
 import time
-from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
+from .plugin import AVATAR_ACTIONS, AVATAR_DESCRIPTION, AVATAR_PLUGIN
 
 
 def _is_alive(working_dir) -> bool:
@@ -168,29 +177,47 @@ _RULES_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The one child spec: canonical action name → its own strict input schema, in
-# model-facing enum order. Both the module-level schema-only family and each
-# manager's handler-bound family are built from this single source by
-# ``_build_family`` below, so the two listings cannot drift apart.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
+# Avatar's OWN child specs: canonical action name → its own strict input
+# schema, in model-facing enum order. The reserved ``manual`` action is
+# deliberately absent — ``AVATAR_PLUGIN`` appends it from the packaged
+# ``manual/SKILL.md`` and rejects any attempt to declare it here.
+_DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("spawn", _SPAWN_INPUT_SCHEMA),
     ("rules", _RULES_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
+)
+
+# The complete child spec — declared actions plus the plugin-appended
+# ``manual``, whose input is the one shared ``MANUAL_INPUT_SCHEMA`` object.
+# Both the module-level schema-only family and each manager's handler-bound
+# family are built from this single source by ``_build_family`` below, so the
+# two listings cannot drift apart.
+_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = AVATAR_PLUGIN.child_specs(
+    _DECLARED_CHILD_SPECS
+)
+
+# Avatar's pinned unknown-action wording, rendered from the plugin's one public
+# action list so the error can never name a set of actions the family does not
+# actually serve. Renders exactly "'spawn', 'rules', or 'manual'".
+_SUPPORTED_ACTIONS_PHRASE = (
+    "".join(f"{action!r}, " for action in AVATAR_ACTIONS[:-1])
+    + f"or {AVATAR_ACTIONS[-1]!r}"
 )
 
 
 def _build_family(handlers: Mapping[str, Any]) -> ToolFamily:
-    """Build avatar's family, binding each spec'd action to *handlers[name]*.
+    """Build avatar's family, binding each declared action to *handlers[name]*.
 
+    Only avatar's own actions are bound here. ``manual`` is appended by
+    ``AVATAR_PLUGIN`` and answered directly from the packaged skill, with or
+    without a manager — it is not in *handlers* and cannot be supplied there.
     Construction validates the registry, so a duplicate or reserved-name
-    collision raises ``ToolFamilyError`` here — at import time for ``_FAMILY``
-    — rather than shipping silently.
+    collision raises ``ToolFamilyError``/``BuiltinToolPluginError`` here — at
+    import time for ``_FAMILY`` — rather than shipping silently.
     """
-    return ToolFamily(
-        "avatar",
+    return AVATAR_PLUGIN.build_family(
         [
             ChildTool(name, schema, handlers[name], title=f"{name} input")
-            for name, schema in _CHILD_SPECS
+            for name, schema in _DECLARED_CHILD_SPECS
         ],
     )
 
@@ -201,21 +228,12 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
 
 # Composes the model-facing schema only; ``AvatarManager`` builds its own
 # per-instance family with real handlers bound to that instance.
-_FAMILY = _build_family({name: _unused for name, _ in _CHILD_SPECS})
+_FAMILY = _build_family({name: _unused for name, _ in _DECLARED_CHILD_SPECS})
 
 
 def get_description(lang: str = "en") -> str:
-    return (
-        "Spawn an independent agent (他我), set network rules for descendants, "
-        "or read the avatar manual. Requires an explicit action — no default. "
-        "avatar(action='spawn', input={'name': 'researcher', ...}, "
-        "reasoning='<the avatar's mission>'): inherits init.json, boots on "
-        "default preset; your reasoning becomes the avatar's first prompt. "
-        "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
-        "distribute rules to self + all descendants (requires karma). "
-        "avatar(action='manual', input={}, reasoning='...'): return the "
-        "avatar-manual skill body. See avatar-manual skill for full guidance."
-    )
+    """The model-facing root description, owned by the plugin descriptor."""
+    return AVATAR_DESCRIPTION
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -239,10 +257,11 @@ class AvatarManager:
         self._launcher = launcher
         # The spawn mission brief reaches ``_spawn`` out-of-band via
         # ``self._pending_reasoning``, set by ``handle()`` (see ``handle``).
+        # ``manual`` is deliberately absent: the plugin appends and answers it
+        # from the packaged skill, so no manager binding exists to rebind.
         self._family = _build_family({
             "spawn": self._dispatch_spawn,
             "rules": self._dispatch_rules,
-            "manual": self._dispatch_manual,
         })
         self._pending_reasoning: str | None = None
 
@@ -276,8 +295,8 @@ class AvatarManager:
             action = raw.get("action", "")
             return {
                 "error": (
-                    f"unknown action: {action!r}, only 'spawn', 'rules', or "
-                    f"'manual' is supported"
+                    f"unknown action: {action!r}, only "
+                    f"{_SUPPORTED_ACTIONS_PHRASE} is supported"
                 ),
             }
         return result
@@ -295,35 +314,21 @@ class AvatarManager:
     def _dispatch_rules(self, action_input: Mapping[str, Any]) -> dict:
         return self._rules(self._strip_nulls(action_input))
 
-    def _dispatch_manual(self, _action_input: Mapping[str, Any]) -> dict:
-        return self._manual()
-
     def _manual(self) -> dict:
-        """Return the exact packaged avatar-manual body; performs no mutation.
+        """The packaged avatar-manual result — plugin-owned, no mutation.
 
         Avatar's manual ships inside this package (``manual/SKILL.md``) rather
-        than in the agent's installed ``.library`` catalog, so this action owns
-        its own loader instead of the shared
-        ``load_installed_manual``/``build_manual_child`` pair — reusing that
-        builder here would report a ``.library`` path this family never reads.
+        than in the agent's installed ``.library`` catalog, so ``AVATAR_PLUGIN``
+        owns the loader instead of the shared
+        ``load_installed_manual``/``build_manual_child`` pair — that builder
+        would report a ``.library`` path this family never reads.
+
+        This is a read-only convenience for callers holding a manager; the
+        public ``manual`` action does **not** come through here. The family's
+        ``manual`` child is the plugin's own, so nothing this manager does can
+        drop or replace the packaged skill it serves.
         """
-        resource = resources.files(__package__).joinpath("manual/SKILL.md")
-        try:
-            body = resource.read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError, OSError):
-            return {
-                "status": "degraded",
-                "action": "manual",
-                "manual": "",
-                "manual_path": str(resource),
-                "error": "avatar manual missing",
-            }
-        return {
-            "status": "ok",
-            "action": "manual",
-            "manual": body,
-            "manual_path": str(resource),
-        }
+        return AVATAR_PLUGIN.manual_payload()
 
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
@@ -952,13 +957,21 @@ class AvatarManager:
 
 
 def setup(agent: "Agent", **kwargs) -> AvatarManager:
-    """Set up the avatar capability on an agent."""
+    """Set up the avatar capability on an agent.
+
+    The host still performs mounting: ``registry.setup_capability`` calls this,
+    and this calls ``add_tool`` once. What gets mounted — the public tool name
+    and the glossary package — comes from ``AVATAR_PLUGIN`` rather than being
+    restated here, so the registered tool cannot drift from the descriptor the
+    capability declaration is checked against.
+    """
     mgr = AvatarManager(agent)
     agent.add_tool(
-        "avatar",
-        schema=get_schema(),
-        handler=mgr.handle,
-        description=get_description(),
-        glossary_package=__package__,
+        AVATAR_PLUGIN.name,
+        **AVATAR_PLUGIN.tool_registration(
+            schema=get_schema(),
+            description=get_description(),
+            handler=mgr.handle,
+        ),
     )
     return mgr
