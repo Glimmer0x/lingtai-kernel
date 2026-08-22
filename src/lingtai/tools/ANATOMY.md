@@ -46,6 +46,9 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/plugin/plugin.py
+  - tests/test_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -113,6 +116,14 @@ capability names and lazy adapters.
   `Agent._register_declared_plugins` before capability setup, unreachable from
   any action, which is what makes it safe in `CORE_DEFAULTS`. Registration is
   registry-level like `addons:[]`: registered, never running.
+  It is also the first **tool plugin**: `plugin/plugin.py` holds its `TOOL_PLUGIN`
+  descriptor, `__init__.py` declares only `info` and lets the descriptor append
+  the reserved `manual`, and `plugin/manual/SKILL.md` is the skill the package
+  owns. The two senses of "plugin" stay apart by construction — this package
+  ships no `plugin.json`, is invisible to `services.plugin_registry.read_plugins`,
+  never appears in its own `info` snapshot, and owns no `source="plugin:plugin"`
+  record — which is what lets the reporter be packaged without having to mount
+  itself before it can report (`tests/test_tool_plugin_package.py`).
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
   lifecycle, preset, and identity-naming actions behind one model-facing root
   (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene
@@ -158,6 +169,21 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — **tool-plugin packaging**, the tools-layer twin of
+  `lingtai/mcp_servers/_plugin.py`. `ToolPlugin` binds one tool package's
+  identity, its bundled `manual/SKILL.md` (loaded and frontmatter-name-checked at
+  construction), and the capability declaration the built-in registry publishes
+  for it (`capability_declaration()`). It owns the reserved-action promise:
+  `actions()`, `action_input_schemas()`, and `build_family()` append `manual` and
+  raise `ToolPluginError` if a package declares, re-schemas, or rebinds it. It
+  also holds the manual **mount** contract — `iter_tool_plugins()` /
+  `declared_manual_destinations()` scan `lingtai/tools/` for `<pkg>/plugin.py`,
+  importing only packages that declare a descriptor, so
+  `Agent._install_intrinsic_manuals` reads a package's declared destination
+  instead of guessing from the directory name. Declarative only: no capability
+  runtime, no second registry, no config reading. **Not** the Agent Plugins
+  runtime — a `ToolPlugin` package that shipped a `plugin.json` is rejected at
+  import (`src/lingtai/tools/_plugin.py`).
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).

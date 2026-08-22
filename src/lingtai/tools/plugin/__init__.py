@@ -40,6 +40,19 @@ discovery, registration, pruning, XML build) is a service and lives at
 ``lingtai/services/plugin_registry.py``; it is imported lazily inside ``setup``
 and the handlers, per the ``lingtai.tools → lingtai`` lazy-back-edge rule.
 
+Packaging: this directory is a **tool plugin** — a plugin-style package that
+ships its handler code, its ``manual/SKILL.md``, and its capability declaration
+together. ``plugin.py`` holds the descriptor
+(:data:`~lingtai.tools.plugin.plugin.TOOL_PLUGIN`); this module declares only the
+``info`` action and lets the descriptor append the reserved ``manual`` bound to
+the packaged skill, and names its tool and error surface from the descriptor
+rather than from repeated literals. That is the *tools*-layer sense of "plugin"
+(``lingtai/tools/_plugin.py``) and it is emphatically **not** the Agent Plugins
+v1.0.0 sense this tool reports. This package ships no ``plugin.json``, is never
+scanned by ``read_plugins``, never appears in its own ``info`` snapshot, and owns
+no ``source="plugin:plugin"`` record — the non-recursion that lets the reporter
+be packaged without having to mount itself before it can report.
+
 Usage: ``Agent(plugins=[...])`` or ``Agent(capabilities={"plugin": {"paths":
 [...]}})``, or via init.json.
 """
@@ -48,7 +61,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Mapping
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from .plugin import PLUGIN_ACTIONS, TOOL_PLUGIN
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
@@ -242,19 +256,39 @@ _DESCRIPTION = (
 # ``properties``, so one shared object is safe.
 _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
 
-_ACTION_DESCRIPTION = (
+#: This capability's own declared-action lines. The reserved ``manual`` line is
+#: appended by the tool plugin from the packaged skill's frontmatter (see
+#: :meth:`~lingtai.tools._plugin.ToolPlugin.manual_action_description`), so the
+#: skill name the schema advertises cannot drift from the skill that ships.
+_DECLARED_ACTION_DESCRIPTION = (
     "info: read-only action; re-scans the configured plugin paths and returns "
     "the boot registration snapshot (registered plugins with what mounted and "
     "what was skipped and why, discovered-only plugins, per-path report, "
-    "problems) without the manual body. manual: return only the plugin-manual "
-    "skill body. Neither action registers or unregisters anything — mounting "
-    "happens at boot from init.json manifest.plugins, so a newly declared "
-    "plugin needs system(action=\"refresh\")."
+    "problems) without the manual body. Neither action registers or "
+    "unregisters anything — mounting happens at boot from init.json "
+    "manifest.plugins, so a newly declared plugin needs "
+    "system(action=\"refresh\")."
 )
+
+_ACTION_DESCRIPTION = (
+    f"{_DECLARED_ACTION_DESCRIPTION} {TOOL_PLUGIN.manual_action_description()}"
+)
+
+#: The unknown-action envelope's action list, rendered from the tool plugin's
+#: own public action tuple rather than hand-copied, so adding an action cannot
+#: leave the error message advertising a stale surface.
+_SUPPORTED_ACTIONS = " or ".join(repr(action) for action in PLUGIN_ACTIONS)
 
 
 def _build_family(agent: "BaseAgent | None", paths: list[str] | None = None) -> ToolFamily:
     """Build the two-child ``plugin`` family; the registry is declared exactly once.
+
+    Composition runs through this package's own tool plugin
+    (:data:`~lingtai.tools.plugin.plugin.TOOL_PLUGIN`): this function declares
+    only ``info``, and the descriptor appends the reserved ``manual`` child bound
+    to the skill the package ships. Declaring ``manual`` here — or rebinding it
+    to other material — raises ``ToolPluginError`` at import rather than shipping
+    a family whose manual points somewhere other than the packaged skill.
 
     With an ``agent``, children are bound to real handlers for dispatch. With
     ``None``, the module-level schema-only family is built: its handlers raise
@@ -263,27 +297,23 @@ def _build_family(agent: "BaseAgent | None", paths: list[str] | None = None) -> 
     raises here rather than shipping silently). Both paths declare the same
     ordered children, so the composed schema and the dispatching family can
     never drift apart.
+
+    The ``manual`` child the descriptor appends is registered directly,
+    unwrapped: ``ToolFamily.handle()`` must dispatch its own canonical
+    MCP-compatible result verbatim (no double wrap). This capability's flat
+    public shape is reconstructed from that canonical result strictly *after*
+    dispatch, in ``handle_plugin`` — never inside a registered child.
     """
     if agent is None:
         def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
         info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
     else:
         info_handler = lambda _input: _reconcile(agent, paths)  # noqa: E731
-        # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
-        # this child's own canonical MCP-compatible result verbatim (no double
-        # wrap). This capability's flat public shape is reconstructed from that
-        # canonical result strictly *after* dispatch, in ``handle_plugin`` —
-        # never inside a registered child.
-        manual_child = build_manual_child(agent, "plugin")
-    return ToolFamily(
-        "plugin",
-        [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
-            manual_child,
-        ],
+    return TOOL_PLUGIN.build_family(
+        [ChildTool("info", _EMPTY_INPUT, info_handler, title="info input")],
+        agent=agent,
     )
 
 
@@ -296,8 +326,9 @@ def get_description(lang: str = "en") -> str:
 
 def get_schema(lang: str = "en") -> dict:
     # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema``. The public action enum is exactly ``["info",
-    # "manual"]`` — the same two-action flagpost surface ``mcp`` exposes.
+    # ``input_schema``. The public action enum is exactly ``PLUGIN_ACTIONS`` —
+    # this package's one declared action plus the reserved ``manual`` the tool
+    # plugin appends — the same two-action flagpost surface ``mcp`` exposes.
     schema = _FAMILY.build_schema()
     schema["properties"]["action"]["description"] = _ACTION_DESCRIPTION
     return schema
@@ -341,7 +372,7 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
         if action not in family.child_names:
             return {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
+                "message": f"unknown action: {action!r}, only {_SUPPORTED_ACTIONS} is supported",
             }
         result = family.handle(args)
         if action == "manual" and "content" in result:
@@ -349,7 +380,7 @@ def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> Non
         return result
 
     agent.add_tool(
-        "plugin",
+        TOOL_PLUGIN.name,
         schema=get_schema(),
         handler=handle_plugin,
         description=get_description(),

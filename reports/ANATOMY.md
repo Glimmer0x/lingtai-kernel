@@ -49,6 +49,7 @@ related_files:
   - reports/kernel-release-v0.15.2-20260627/release-report.md
   - reports/kernel-release-v0.15.2-20260627/release_version.txt
   - reports/pr297-tool-result-replay-explainer.html
+  - reports/real-plugin-candidates/plugin.md
   - reports/t3-relaunch-watcher-redaction-explainer.html
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -91,6 +92,10 @@ re-running the tooling. This is an archive, not a component, so it owns no
     `shortstat.txt`, `dist-ls.txt`, `dist-sha256.txt`, `build.log`,
     `twine-check.log`, `validation.log`. Bundles differ in which of these
     exist, because the release tooling changed between cuts.
+- `real-plugin-candidates/` — one Markdown record per tool converted to a real
+  plugin package, written at the time of the conversion. `plugin.md` covers the
+  `plugin` capability: the first tool plugin, and the one where the packaging
+  had to be kept clear of the Agent Plugins standard the tool itself reports.
 - Standalone explainers — self-contained HTML written for one investigation
   each: `bash-async-relaunch-durability-20260713.html`,
   `issue-167-initial-diagnostics-explainer.html`,

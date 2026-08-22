@@ -3,6 +3,8 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/plugin/BEHAVIORS.md
   - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/tools/plugin/manual/SKILL.md
   - src/lingtai/tools/plugin/glossary-en.md
@@ -18,6 +20,7 @@ related_files:
   - src/lingtai/agent.py
   - src/lingtai/init_schema.py
   - tests/test_plugin_tool.py
+  - tests/test_tool_plugin_package.py
   - docs/examples/agent-plugins/hello-lingtai/plugin.json
   - docs/examples/agent-plugins/hello-lingtai/mcp.json
   - docs/examples/agent-plugins/hello-lingtai/server.py
@@ -223,6 +226,12 @@ my-plugin/
 ## Internal Module Layout
 
 ```
+plugin/plugin.py
+  └── TOOL_PLUGIN                   — this package's ToolPlugin descriptor: name,
+      PLUGIN_DECLARED_ACTIONS         module, summary, packaged skill, manual
+      PLUGIN_ACTIONS                  destination, default kwargs; ('info',) and
+                                      ('info', 'manual') respectively
+
 plugin/__init__.py
   ├── Path collection
   │   └── _collect_paths()          — own ∪ declared ∪ skills paths, in that order, deduped
@@ -237,9 +246,11 @@ plugin/__init__.py
   │   └── _flatten_manual_result()  — canonical child result → flat plugin_manual shape
   │
   └── Tool surface
-      ├── _build_family()           — the one two-child registry (info + manual)
+      ├── _build_family()           — declares `info`; TOOL_PLUGIN appends `manual`
+      ├── _ACTION_DESCRIPTION       — declared line + the descriptor's manual catalog line
+      ├── _SUPPORTED_ACTIONS        — the unknown-action envelope, from PLUGIN_ACTIONS
       ├── get_description/schema()  — module-level, backed by the schema-only _FAMILY
-      └── setup()                   — registers the plugin tool, runs initial _reconcile
+      └── setup()                   — registers TOOL_PLUGIN.name, runs initial _reconcile
 
 services/plugin_registry.py
   ├── §4.1 containment
@@ -275,6 +286,21 @@ services/plugin_registry.py
 
 ## Key Invariants
 
+- **A tool plugin is not an Agent Plugin.** This package is packaged as a *tool
+  plugin* (`lingtai/tools/_plugin.py`) — a kernel-shipped Python package that
+  owns its capability declaration and its `manual/SKILL.md`. It is emphatically
+  not an *Agent Plugin*, the third-party directory standard it reports. It ships
+  no `plugin.json` (`ToolPlugin` rejects a package that does, at import),
+  `read_plugins` pointed at `lingtai/tools/` finds nothing, the tool never
+  appears in its own `info` snapshot, and no `source="plugin:plugin"` record
+  exists. Without that line the reporter would have to be mounted before it
+  could report, and uninstalling "plugin" would mean pruning a kernel capability.
+- **`manual` is descriptor-owned:** `__init__.py` declares only `info`;
+  `TOOL_PLUGIN.build_family()` appends the reserved `manual` bound to this
+  package's declared skill, and raises `ToolPluginError` if the package tries to
+  declare, re-schema, or rebind it. The child still answers from the per-agent
+  *installed* copy, so the public `manual_path` contract is unchanged — what the
+  descriptor owns is *which* skill it is and *where* it mounts.
 - **Declaration gates mounting:** an inherited skills path is scanned and listed
   but never registers anything. Only `manifest.plugins` and its alias mount.
 - **No model-facing mutation:** no action registers, unregisters, copies, or

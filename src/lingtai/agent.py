@@ -573,6 +573,25 @@ class Agent(BaseAgent):
             shutil.rmtree(intrinsic_dir)
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
 
+        # Where each *tool plugin* says its manual belongs. A tool package that
+        # ships a ``plugin.py`` descriptor declares its own installed
+        # destination, so this loop reads a declaration instead of guessing from
+        # the directory name. Packages without a descriptor are absent from the
+        # mapping and keep the retained name mapping below unchanged.
+        #
+        # Deliberately narrow: this is the kernel's *own* wheel being scanned
+        # (``lingtai.tools._plugin``), never the Agent Plugins path — third-party
+        # plugin directories are registered by ``services.plugin_registry`` and
+        # nothing of theirs is installed here. A failure only costs the
+        # declarations, so the install falls back to today's behavior rather than
+        # taking boot down.
+        try:
+            from lingtai.tools._plugin import declared_manual_destinations
+            declared_destinations = declared_manual_destinations()
+        except Exception as e:
+            self._log("tool_plugin_manual_mounts_failed", reason=str(e))
+            declared_destinations = {}
+
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
@@ -587,9 +606,12 @@ class Agent(BaseAgent):
                     continue
                 src = entry / "manual"
                 if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
+                    # A tool plugin's own declaration wins; otherwise retained
+                    # implementation directories map to canonical model-facing
+                    # names exactly once.
+                    if entry.name in declared_destinations:
+                        destination_name = declared_destinations[entry.name]
+                    elif entry.name == "bash":
                         destination_name = "shell"
                     elif entry.name == "web_search":
                         destination_name = "web"

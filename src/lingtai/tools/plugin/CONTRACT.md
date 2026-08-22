@@ -4,6 +4,8 @@ tool: plugin
 contract_version: 1
 related_files:
   - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/services/plugin_registry.py
   - src/lingtai/tools/CONTRACT.md
@@ -11,6 +13,7 @@ related_files:
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - docs/examples/agent-plugins/hello-lingtai/plugin.json
+  - tests/test_tool_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -120,6 +123,42 @@ composition/dispatch infrastructure -> `src/lingtai/tools/tool_family/CONTRACT.m
 - Ownership boundary: the module is the agent-callable tool slice only. The
   scanning service is imported lazily inside `_reconcile`, per the
   `lingtai.tools → lingtai` lazy-back-edge rule.
+
+### Packaging: this package is a tool plugin, not an Agent Plugin
+
+`plugin/` is packaged as a **tool plugin** — the tools-layer sense of the word,
+defined in `src/lingtai/tools/_plugin.py`. `plugin/plugin.py` holds the
+`TOOL_PLUGIN` descriptor: the public name, the module the built-in registry
+imports, the summary, the `manual/SKILL.md` this package owns, where that manual
+mounts, and the `CORE_DEFAULTS` kwargs. `__init__.py` declares only `info`; the
+descriptor appends the reserved `manual`.
+
+This is the one package where the two senses of "plugin" could collide, so the
+boundary is stated as a MUST and enforced, not left to convention:
+
+- A tool plugin MUST NOT ship an Agent Plugins `plugin.json`. `ToolPlugin`
+  raises `ToolPluginError` at import for a package that does.
+- `services.plugin_registry` MUST NOT discover, validate, register, or prune
+  anything under `lingtai/tools/`. Pointing `read_plugins` at that tree finds
+  zero plugins, and no `source="plugin:plugin"` record can exist.
+- `plugin(action="info")` MUST NOT list this package in either tier. The
+  reporter is not part of what it reports.
+- Tool-plugin discovery (`iter_tool_plugins`) MUST stay a scan of the kernel's
+  own wheel for `<pkg>/plugin.py`, and MUST NOT be routed through the Agent
+  Plugins scanner. It imports only packages that declare a descriptor; declaring
+  one is therefore a promise that the package's `__init__` stays import-cheap.
+- The registry tables (`BUILTIN_TOOLS`, `CORE_DEFAULTS`) remain the runtime
+  source the host reads; `TOOL_PLUGIN.capability_declaration()` is what those
+  entries MUST agree with, proven by test rather than generated at runtime — the
+  registry must stay importable without importing every tool.
+- `Agent._install_intrinsic_manuals` reads a tool plugin's declared
+  `manual_destination` instead of inferring one from the directory name.
+  Packages without a descriptor keep the retained `bash` → `shell` and
+  `web_search` → `web` mapping unchanged.
+- The `manual` action's public result is unchanged: it still answers from the
+  per-agent installed copy at `.library/intrinsic/capabilities/plugin/SKILL.md`,
+  and `manual_path` still names that host-local file. The descriptor owns *which*
+  skill and *where* it mounts, not the loader contract.
 
 ## Tool surface
 
