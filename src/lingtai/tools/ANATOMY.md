@@ -42,6 +42,8 @@ related_files:
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/adapters/browser_transport.py
   - src/lingtai/mcp_servers/_plugin.py
+  - src/lingtai/mcp_servers/telegram/plugin.py
+  - src/lingtai/mcp_catalog.json
   - src/lingtai/services/plugin_registry.py
   - src/lingtai/kernel/base_agent/tools.py
   - src/lingtai/tools/registry.py
@@ -65,10 +67,13 @@ maintenance: |
   future family migration may adopt, not a second registry. context is its
   thirteenth consumer and the fifth migrated intrinsic. Update
   structural claims with code and keep reciprocal graph edges valid.
-  The curated-MCP packaging, Agent Plugins, and host tool-registration entries
-  in related_files are navigation to the precedent the paired Contract's
-  `### Tool-to-MCP Plugin Contract` names as a future migration target; they are
-  not a claim that any family here is wrapped today, and the normative rules
+  The curated-MCP packaging, catalog, Agent Plugins, and host tool-registration
+  entries in related_files are navigation for the paired Contract's
+  `### Tool-to-MCP Plugin Contract`: the curated descriptor/catalog route is the
+  form that Contract selects, and the Agent Plugins entry is the excluded
+  external standard kept only as the registration-versus-activation precedent.
+  They are not a claim that any family here is wrapped today, and the normative
+  rules — including the selected form and the governed-surface classification —
   stay in the Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
@@ -85,9 +90,11 @@ capability names and lazy adapters.
   model-facing tool call contract, the two-level family/action settings
   addressing and ownership rules, the explicit per-tool migration boundary, and
   `### Tool-to-MCP Plugin Contract`, the additive future target for wrapping
-  each first-party family in an MCP-style plugin package that owns its manual.
+  each first-party family in the selected curated-descriptor MCP plugin package
+  form that owns its manual.
 - `BEHAVIORS.md` — the paired LABT file: LP001 guards the closed LTP envelope,
-  LP002 guards the Tool-to-MCP Plugin Contract's status, graph, and
+  LP002 guards the Tool-to-MCP Plugin Contract's status, its two-class governed
+  surface, its single selected wrapper form, the document graph, and the
   current-evidence claims.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
@@ -217,16 +224,22 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The route the paired Contract's `### Tool-to-MCP Plugin Contract` targets is
-not wired here today. These are the roles it separates, and the nearest
-existing precedent for each. `registry.py` is the current first-party
-composition point — it imports no `lingtai.mcp_servers` packaging, so no family
-here is wrapped.
-`src/lingtai/mcp_servers/_plugin.py` is the existing *packaging* precedent:
-one curated package binding its server, bundled `SKILL.md`, declaration, and
-reserved `manual` child, and it is explicitly not a plugin runtime.
-`src/lingtai/services/plugin_registry.py` is the existing *declaration and
-boot-registration* precedent for external Agent Plugins, with activation kept
-separate (the rendering tool is `src/lingtai/tools/plugin/ANATOMY.md`).
+not wired here today. These are the roles it separates, and where each one
+already lives. `registry.py` is the current first-party composition point — it
+imports no `lingtai.mcp_servers` packaging, so no family *in this package* is
+wrapped; the Contract's governed surface is wider than this directory and also
+classifies the kernel-shipped MCP families under `src/lingtai/mcp_servers/`.
+`src/lingtai/mcp_servers/_plugin.py` is the *selected* wrapper form, not merely
+one precedent among several: one curated package binding its server, bundled
+`SKILL.md`, declaration, and reserved `manual` child, and it is explicitly not
+a plugin runtime. `src/lingtai/mcp_servers/telegram/plugin.py` is its reference
+descriptor slice and `src/lingtai/mcp_catalog.json` the shipped catalog record
+each descriptor must agree with.
+`src/lingtai/services/plugin_registry.py` is the external Agent Plugins v1.0.0
+*declaration and boot-registration* path, with activation kept separate (the
+rendering tool is `src/lingtai/tools/plugin/ANATOMY.md`). The Contract excludes
+that standard from conversion; it is navigation to the precedent for
+registration versus activation, not an alternative wrapper form.
 `src/lingtai/kernel/base_agent/tools.py` is the *host* mount point whose
 `_add_tool` replaces a schema of the same name, which is why the Contract
 records live tool-name collision policy as an open decision rather than a
