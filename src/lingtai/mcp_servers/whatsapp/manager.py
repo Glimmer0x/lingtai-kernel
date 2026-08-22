@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 from lingtai.kernel._frontmatter import strip_frontmatter  # noqa: E402
 from lingtai.mcp_servers import _config, _identity, _skill  # noqa: E402
 from ._family import WHATSAPP_ACTIONS, WHATSAPP_SCHEMA  # noqa: E402
+from .plugin import WHATSAPP_PLUGIN  # noqa: E402
 
 
 def _utcnow() -> str:
@@ -44,8 +45,12 @@ def _load_notification_header_template() -> str:
 # inbound LICC notification body, exactly as telegram/feishu/wechat do.
 _NOTIFICATION_HEADER_TEMPLATE = _load_notification_header_template()
 
-_SKILL_NAME = "whatsapp-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
+# The package's plugin descriptor already loaded and validated SKILL.md;
+# these names alias its single copy rather than re-reading the file.
+_SKILL_NAME = WHATSAPP_PLUGIN.skill_name
+_SKILL_FRONTMATTER = WHATSAPP_PLUGIN.skill_frontmatter
+_SKILL_BODY = WHATSAPP_PLUGIN.skill_body
+_SKILL_PATH = WHATSAPP_PLUGIN.skill_path
 
 SCHEMA = WHATSAPP_SCHEMA
 

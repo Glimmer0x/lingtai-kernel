@@ -123,7 +123,12 @@ def test_root_schema_shape_requires_action_input_reasoning():
 
 
 def test_every_action_dispatches_with_its_valid_input():
+    """``manual`` is plugin-owned (mirrors Telegram): it answers from the
+    packaged SKILL.md and never reaches the manager, unlike every declared
+    business action.
+    """
     manager = _CountingManager()
+    declared = [action for action in WHATSAPP_ACTIONS if action != "manual"]
     for action in WHATSAPP_ACTIONS:
         result = handle_whatsapp(
             manager,
@@ -134,8 +139,8 @@ def test_every_action_dispatches_with_its_valid_input():
             },
         )
         assert result["status"] == "ok", (action, result)
-    assert len(manager.calls) == len(WHATSAPP_ACTIONS)
-    assert [call["action"] for call in manager.calls] == list(WHATSAPP_ACTIONS)
+    assert len(manager.calls) == len(declared)
+    assert [call["action"] for call in manager.calls] == declared
 
 
 def test_every_action_resolves_to_a_manager_method():
