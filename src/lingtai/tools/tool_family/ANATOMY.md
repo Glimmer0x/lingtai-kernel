@@ -193,15 +193,19 @@ exercises a different composition shape than `web`: soul is a module with a
 composes `get_schema()` from a module-level schema-only `ToolFamily` (which also
 fails loudly at import time on a duplicate/reserved-name collision) and builds
 an agent-bound `ToolFamily` per call in `handle()`, both from the one canonical
-`_CHILD_SPECS` registry of (name, schema, handler-factory).
-Soul goes one step further than `web`'s dual listing: `_build_children(agent)`
+registry of declared (name, schema, handler-factory).
+Soul goes one step further than `web`'s dual listing: `_build_family(agent)`
 is the single place children are enumerated, called with `None` for the
 schema-only family and with the live agent per dispatch, so the drift class
-where a child is schema-advertised but dispatch-rejected cannot occur. Its
-`manual` child comes from `build_manual_child(agent, "soul-manual")`,
-registered directly and unwrapped, and `handle()` flattens that canonical
-result back to soul's pre-migration flat `status`/`manual`/`manual_path` shape
-after dispatch. Soul additionally drops
+where a child is schema-advertised but dispatch-rejected cannot occur. Soul is
+also a plugin-style package ([`../soul/ANATOMY.md`](../soul/ANATOMY.md),
+[`../_plugin.py`](../_plugin.py)), so it is this package's one consumer that does
+not call `build_manual_child` itself: `_build_family` hands its five declared
+children to `SOUL_PLUGIN.build_family`, which appends
+`build_manual_child(agent, "soul-manual")` bound to the skill the soul package
+ships. The child is still registered directly and unwrapped, and `handle()`
+flattens that canonical result back to soul's pre-migration flat
+`status`/`manual`/`manual_path` shape after dispatch. Soul additionally drops
 the kernel-injected `_tc_id` before the envelope's closed-root check — that key
 is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
 args (capabilities like `web` never see it), so a family migrating an intrinsic

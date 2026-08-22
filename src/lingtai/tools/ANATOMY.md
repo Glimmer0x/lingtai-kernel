@@ -46,6 +46,10 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/soul/plugin.py
+  - src/lingtai/tools/soul/manual/SKILL.md
+  - tests/test_intrinsic_tool_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -125,7 +129,11 @@ capability names and lazy adapters.
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
 - `soul/` — the `soul` intrinsic family: six action-separated children
   (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
-  model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
+  model-facing root (`src/lingtai/tools/soul/ANATOMY.md`). It is also this
+  package's one **plugin-style package** today: `soul/plugin.py` declares its
+  identity, `soul/manual/SKILL.md` is the skill it owns and ships, and
+  `soul/__init__.py` declares only its own five actions while the descriptor
+  appends the reserved `manual` bound to that skill.
 - `bash/` — public `shell` composition owner for run/poll/cancel/manual
   (`src/lingtai/tools/bash/ANATOMY.md`); the public model-facing schema is
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
@@ -158,6 +166,19 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — intrinsic-tool **plugin packaging** descriptor and the in-process
+  twin of `src/lingtai/mcp_servers/_plugin.py`. `IntrinsicToolPlugin` binds one
+  package's identity, its bundled `manual/SKILL.md` (loaded and name-checked at
+  construction), and the two runtime records the host materializes for it:
+  `intrinsic_declaration()` — the `{"module": …}` value `registry.INTRINSICS`
+  publishes — and `manual_mount_declaration()` — which packaged bundle installs
+  into which `.library/intrinsic/capabilities/<mount>` directory. It also owns
+  the reserved-action promise: `actions()`, `action_input_schemas()`, and
+  `build_family()` append `manual` from the package's own skill and raise
+  `IntrinsicToolPluginError` if a package declares, re-schemas, or rebinds it.
+  `discover_intrinsic_plugins()`/`intrinsic_manual_mounts()` are read-only
+  discovery the host calls; the module registers, installs, and activates
+  nothing itself.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -182,7 +203,11 @@ public name. `soul` is a mandatory intrinsic (`INTRINSICS`, not
 `BUILTIN_TOOLS`) and imports `tool_family` statically; because it is a module
 rather than a per-Agent manager object, it composes its schema from a
 module-level schema-only `ToolFamily` and builds an agent-bound one per
-`handle(agent, args)` call. The public `shell` row imports `lingtai.tools.bash`
+`handle(agent, args)` call. `soul` composes that family through
+`soul/plugin.py`'s descriptor rather than naming itself, so its registry entry,
+its packaged skill, and its public action list have one definition each and are
+checked against each other by `tests/test_intrinsic_tool_plugin_package.py`.
+The public `shell` row imports `lingtai.tools.bash`
 lazily; `bash/__init__.py` imports `tool_family` (via `bash/_tool_family.py`)
 to compose the public action-separated schema (re-exported as the package's
 canonical `get_schema`/`get_description`) and to translate `action`/`input`
@@ -229,3 +254,25 @@ registry, schema, prompt, check-caps, manual, or catalog entries under those old
 public names. The five pre-migration file packages are not among them: they were
 deleted outright into `file/`, so there is no legacy directory, contract,
 glossary, or alias left for that surface.
+
+**Intrinsic plugin packaging is declarative, not a runtime.** `_plugin.py` adds
+no in-process plugin runtime, no config flag, and no second registry: an
+`IntrinsicToolPlugin` is a package-local descriptor its own package imports
+explicitly. `registry.INTRINSICS` remains the mapping the kernel is handed and
+`Agent._install_intrinsic_manuals` remains the only writer of
+`.library/intrinsic/` — the descriptor is what those must agree with, proven by
+test rather than by generating either at runtime. Discovery is the one thing the
+host asks for: it reads each plugin package's declared mount name instead of
+carrying a hardcoded directory mapping for it, and a package that ships no
+`plugin.py` (every tool but `soul` today) is scanned and left untouched, keeping
+`registry.py`'s rule that importing the registry must not import every tool.
+
+**Soul's `manual` is plugin-owned.** The family's `manual` child is built by
+`SOUL_PLUGIN.manual_child()` against the descriptor's own `mount_name`, so no
+change to soul's child registry can drop it or point it at other material. The
+skill it serves moved out of `lingtai/intrinsic_skills/soul-manual/` into the
+package that owns it (`soul/manual/SKILL.md`); the *installed* directory stayed
+`soul-manual`, because that name is the model-visible `manual_path` and skill
+catalog entry, not an implementation detail. `manual` still reads the installed
+copy — the agent's `.library/` view of its own capabilities, whose absence is
+reported as `status='degraded'` rather than papered over by an in-wheel read.

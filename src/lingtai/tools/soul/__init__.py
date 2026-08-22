@@ -4,15 +4,21 @@ Six actions (``inquiry``, ``flow``, ``config``, ``voice``, ``dismiss``,
 ``manual``), each a canonical :class:`~lingtai.tools.tool_family.ChildTool`
 behind the one public ``soul`` family root. Per-action behavior, inputs, and
 result/error shapes live in ``CONTRACT.md``; the model-facing text lives in the
-schema descriptions below and in the ``soul-manual`` skill. Neither is restated
-here.
+schema descriptions below and in the packaged ``soul-manual`` skill. Neither is
+restated here.
 
-Action separation is structural: :data:`_CHILD_SPECS` is the single registry of
-name, schema, and handler, so the model-facing schema and dispatch are
-generated from one source and cannot drift. The public tool name, action
-values, semantics, receipts, and errors are exactly what they were before the
-migration — only the argument *shape* moved from a flat root into ``action`` +
-per-action ``input``.
+This package is a *plugin-style package*: ``plugin.py``'s :data:`SOUL_PLUGIN`
+states its identity, ``manual/SKILL.md`` is the skill it owns and ships, and the
+descriptor composes the public family — so this module declares only soul's own
+five actions and cannot drop, re-schema, or rebind the reserved ``manual``.
+
+Action separation is structural: :data:`SOUL_DECLARED_ACTIONS` is the single
+list of soul's own actions and :data:`_DECLARED_INPUT_SCHEMAS` /
+:data:`_DECLARED_HANDLERS` the single registry of their schemas and handlers, so
+the model-facing schema and dispatch are generated from one source and cannot
+drift. The public tool name, action values, semantics, receipts, and errors are
+exactly what they were before the migration — only the argument *shape* moved
+from a flat root into ``action`` + per-action ``input``.
 """
 from __future__ import annotations
 
@@ -20,8 +26,16 @@ from typing import Any, Mapping
 
 # Re-export constants from config.py
 from lingtai.kernel.config import DEFAULT_SOUL_DELAY_SECONDS
+from .._plugin import IntrinsicToolPluginError
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+# ``SOUL_ACTIONS`` is re-exported, not redefined: the public action list (soul's
+# five plus the plugin-appended ``manual``) has exactly one definition, in
+# ``plugin.py``, and is what ``get_schema()``'s ``action`` enum equals.
+from .plugin import (  # noqa: F401  (SOUL_ACTIONS: public re-export)
+    SOUL_ACTIONS,
+    SOUL_DECLARED_ACTIONS,
+    SOUL_PLUGIN,
+)
 from .config import (
     SOUL_DELAY_MIN_SECONDS,
     CONSULTATION_PAST_COUNT_MIN,
@@ -163,40 +177,81 @@ _DISMISS_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The one canonical child registry: name, canonical input schema, and the
-# factory producing that child's agent-bound handler. Declaring names, order,
-# schemas, and handlers in a single place is what makes schema-vs-dispatch
-# drift structurally impossible — there is no second list to forget to update,
-# so a child can never be schema-advertised but dispatch-rejected. Order here is
+# The canonical registry of soul's OWN actions: each declared action's input
+# schema and the factory producing that child's agent-bound handler. Declaring
+# schemas and handlers in a single place, keyed by the one action list
+# ``plugin.py`` owns, is what makes schema-vs-dispatch drift structurally
+# impossible — there is no second list to forget to update, so a child can never
+# be schema-advertised but dispatch-rejected. ``SOUL_DECLARED_ACTIONS`` order is
 # the model-facing ``action`` enum order and the ``input.oneOf`` branch order,
 # unchanged from the pre-migration flat schema.
 #
-# ``manual`` is absent: ``build_manual_child`` owns that child's schema and
-# handler, and :func:`_build_children` appends it last.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any], Any], ...] = (
-    ("inquiry", _INQUIRY_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_inquiry(agent, _strip_nulls(i))),
-    ("flow", _FLOW_INPUT_SCHEMA,
-     lambda agent: lambda _i: _handle_flow(agent)),
-    ("config", _CONFIG_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_config(agent, _strip_nulls(i))),
-    ("voice", _VOICE_INPUT_SCHEMA,
-     lambda agent: lambda i: _handle_voice(agent, _strip_nulls(i))),
-    ("dismiss", _DISMISS_INPUT_SCHEMA,
-     lambda agent: lambda _i: _handle_dismiss(agent)),
+# ``manual`` is absent from all three: the plugin descriptor owns that child's
+# schema and handler and appends it last, and rejects any attempt to declare it
+# here (see ``.._plugin``).
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "inquiry": _INQUIRY_INPUT_SCHEMA,
+    "flow": _FLOW_INPUT_SCHEMA,
+    "config": _CONFIG_INPUT_SCHEMA,
+    "voice": _VOICE_INPUT_SCHEMA,
+    "dismiss": _DISMISS_INPUT_SCHEMA,
+}
+
+_DECLARED_HANDLERS: dict[str, Any] = {
+    "inquiry": lambda agent: lambda i: _handle_inquiry(agent, _strip_nulls(i)),
+    "flow": lambda agent: lambda _i: _handle_flow(agent),
+    "config": lambda agent: lambda i: _handle_config(agent, _strip_nulls(i)),
+    "voice": lambda agent: lambda i: _handle_voice(agent, _strip_nulls(i)),
+    "dismiss": lambda agent: lambda _i: _handle_dismiss(agent),
+}
+
+# The declared list and this module's two registries must cover exactly the same
+# actions. Checked at import so a package that adds an action to one and forgets
+# the other fails here rather than shipping a schema-advertised, undispatchable
+# action (or a dead schema nothing routes to).
+for _registry_name, _registry in (
+    ("_DECLARED_INPUT_SCHEMAS", _DECLARED_INPUT_SCHEMAS),
+    ("_DECLARED_HANDLERS", _DECLARED_HANDLERS),
+):
+    if tuple(_registry) != SOUL_DECLARED_ACTIONS:
+        raise IntrinsicToolPluginError(
+            f"soul {_registry_name} {tuple(_registry)!r} must match the "
+            f"plugin-declared actions {SOUL_DECLARED_ACTIONS!r}"
+        )
+del _registry_name, _registry
+
+#: Every public action's own ``input`` schema, composed by the plugin: soul's
+#: five declared schemas above plus the reserved ``manual``'s strict-empty one.
+ACTION_INPUT_SCHEMAS: dict[str, dict[str, Any]] = SOUL_PLUGIN.action_input_schemas(
+    _DECLARED_INPUT_SCHEMAS
 )
 
 
-def _build_children(agent) -> list[ChildTool]:
-    """Build the six children from the one canonical registry.
+def _build_declared_children(agent) -> list[ChildTool]:
+    """Build soul's own five children from the one canonical registry.
 
     ``agent`` may be ``None`` for the module-level schema-only family, whose
     children are never dispatched — only their schemas are read.
     """
     return [
-        ChildTool(name, schema, make_handler(agent), title=f"{name} input")
-        for name, schema, make_handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, "soul-manual")]
+        ChildTool(
+            action,
+            _DECLARED_INPUT_SCHEMAS[action],
+            _DECLARED_HANDLERS[action](agent),
+            title=f"{action} input",
+        )
+        for action in SOUL_DECLARED_ACTIONS
+    ]
+
+
+def _build_family(agent) -> ToolFamily:
+    """Compose soul's one public family through this package's plugin descriptor.
+
+    The descriptor supplies the family name and appends the reserved ``manual``
+    child bound to this package's own installed skill, so the composed family is
+    always soul's five actions plus a manual this module cannot omit or rebind.
+    """
+    return SOUL_PLUGIN.build_family(agent, _build_declared_children(agent))
 
 
 # Composes the model-facing schema. Building it at import time is also the
@@ -205,7 +260,7 @@ def _build_children(agent) -> list[ChildTool]:
 # soul is an intrinsic *module*, not a per-Agent manager object, so there is no
 # instance to hang a family off; ``handle()`` binds one to the passed agent per
 # call from this same registry.
-_FAMILY = ToolFamily("soul", _build_children(None))
+_FAMILY = _build_family(None)
 
 
 def get_description(lang: str = "en") -> str:
@@ -385,7 +440,7 @@ def handle(agent, args: dict) -> dict:
     raw.pop("_tc_id", None)
 
     action = raw.get("action")
-    result = ToolFamily("soul", _build_children(agent)).handle(raw)
+    result = _build_family(agent).handle(raw)
 
     if action == "manual" and "content" in result:
         return _adapt_manual_result(result)

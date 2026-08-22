@@ -558,11 +558,22 @@ class Agent(BaseAgent):
         documentation — agents should be able to read about a capability
         before they configure it.
 
+        A tool package that ships a ``plugin.py`` declares where its own bundle
+        lands (``lingtai.tools._plugin.intrinsic_manual_mounts``); this method
+        asks, then does every wipe, copy, and ordering decision itself. Mounting
+        stays the host's — the descriptor only says which directory name is a
+        promise to the agent rather than an accident of the Python module name.
+
         Never touches ``.library/custom/``. That is the agent's territory.
         """
         import shutil
         import lingtai.tools as tools_pkg
         import lingtai.intrinsic_skills as skills_pkg
+        from lingtai.tools._plugin import intrinsic_manual_mounts
+
+        # Ask the tools package once, before any copy: plugin package directory
+        # name -> the installed capability directory that package declares.
+        declared_mounts = intrinsic_manual_mounts()
 
         library_dir = self._working_dir / ".library"
         intrinsic_dir = library_dir / "intrinsic"
@@ -587,9 +598,14 @@ class Agent(BaseAgent):
                     continue
                 src = entry / "manual"
                 if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
+                    # A plugin package's own declaration wins: it is the only
+                    # party that knows which installed directory name its
+                    # ``manual`` action and skill catalog already promise.
+                    # Retained implementation directories without a plugin map
+                    # to canonical model-facing names exactly once here.
+                    if entry.name in declared_mounts:
+                        destination_name = declared_mounts[entry.name]
+                    elif entry.name == "bash":
                         destination_name = "shell"
                     elif entry.name == "web_search":
                         destination_name = "web"

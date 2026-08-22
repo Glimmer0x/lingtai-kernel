@@ -2,10 +2,13 @@
 name: soul-manual
 description: |
   Operational guide for the `soul` tool — your inner voice: the one-tool/six-actions call shape, the `LINGTAI_SOUL_FLOW_ENABLED` opt-in gate, disabled-flow behavior, and the delay-is-cadence-not-an-off-switch semantics. Read it before calling `flow`, tuning `config`, or troubleshooting a `status: disabled` result.
-version: 1.2.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 1.3.0
+last_changed_at: "2026-08-22T00:00:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
+- src/lingtai/tools/soul/plugin.py
+- src/lingtai/tools/_plugin.py
+- src/lingtai/tools/soul/ANATOMY.md
 - src/lingtai/tools/soul/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
 - src/lingtai/tools/soul/flow.py

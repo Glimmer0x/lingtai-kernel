@@ -5,6 +5,9 @@ related_files:
   - src/lingtai/agent.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/skills/ANATOMY.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/soul/manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
   - pyproject.toml
   - src/lingtai/intrinsic_skills/__init__.py
   - src/lingtai/intrinsic_skills/context-manual/SKILL.md
@@ -25,7 +28,6 @@ related_files:
   - src/lingtai/intrinsic_skills/pad-manual/SKILL.md
   - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/soul-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/goal-manual/SKILL.md
@@ -87,8 +89,14 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
 - Single-file bundles — `file-manual/`, `lingtai-manual/`, `pad-manual/`,
-  `psyche-manual/`, `read-manual/`, and `soul-manual/`, each one `SKILL.md`
-  documenting its namesake surface.
+  `psyche-manual/`, and `read-manual/`, each one `SKILL.md` documenting its
+  namesake surface. `soul-manual/` used to be among them; it moved to
+  `src/lingtai/tools/soul/manual/SKILL.md` when that package became a
+  plugin-style package (`src/lingtai/tools/_plugin.py`), because a manual with a
+  companion tool package belongs to that package. It still installs to
+  `.library/intrinsic/capabilities/soul-manual/` — the plugin *declares* that
+  destination rather than inheriting the directory name, so the move is
+  invisible to agents.
 
 ## Connections
 
@@ -101,7 +109,10 @@ for the per-tool `manual/` bundles and `install_skills_from`
 touches `.library/custom/`, which is the agent's own territory.
 `src/lingtai/tools/`
 supplies the other half of the same install — the per-tool `manual/` bundles —
-so a bundle lives here precisely when no tool package owns it.
+so a bundle lives here precisely when no tool package owns it. Before copying,
+the installer asks `lingtai.tools._plugin.intrinsic_manual_mounts()` where each
+plugin-style tool package wants its bundle to land; a bundle here has no
+descriptor and always installs under its own directory name.
 
 After the copy, the `skills` capability re-scans `.library/` and renders the
 catalog into the `skills` prompt section

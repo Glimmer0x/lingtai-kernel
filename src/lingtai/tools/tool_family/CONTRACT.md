@@ -298,10 +298,14 @@ intrinsic exposes `get_schema()`/`handle(agent, args)` rather than a per-Agent
 manager object, so `get_schema()` composes from a module-level schema-only
 `ToolFamily` (whose construction at import time is also the registry's
 duplicate/reserved-name collision check) and `handle()` builds an agent-bound
-`ToolFamily` per call from the same six child `input_schema` objects. Its
-`manual` child is `build_manual_child(agent, "soul-manual")`, registered
-directly and unwrapped, and `handle()` flattens that canonical result to
-soul's pre-migration flat `status`/`manual`/`manual_path` shape strictly after
+`ToolFamily` per call from the same six child `input_schema` objects. Soul is
+additionally a plugin-style package (`../soul/CONTRACT.md`, `../_plugin.py`): it
+declares only its own five children and its plugin descriptor appends the
+reserved child, so `build_manual_child(agent, "soul-manual")` is reached through
+`SOUL_PLUGIN.build_family` rather than named by soul itself. This changes who
+composes the child, not the contract this package owns — it is still registered
+directly and unwrapped, and `handle()` flattens that canonical result to soul's
+pre-migration flat `status`/`manual`/`manual_path` shape strictly after
 dispatch. `soul` also drops the kernel-injected `_tc_id` before delegating:
 `base_agent._dispatch_tool` adds that transport key to every intrinsic's args
 (a capability like `web` never receives it), so a migrating intrinsic strips it

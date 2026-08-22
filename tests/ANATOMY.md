@@ -391,6 +391,7 @@ related_files:
   - tests/test_tool_family_generic.py
   - tests/test_tool_family_generic_summarize_executor.py
   - tests/test_tool_family_knowledge_migration_parity.py
+  - tests/test_intrinsic_tool_plugin_package.py
   - tests/test_tool_family_manual_contract.py
   - tests/test_tool_family_mcp_migration_parity.py
   - tests/test_tool_family_soul_migration.py

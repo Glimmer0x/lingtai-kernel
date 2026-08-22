@@ -664,14 +664,13 @@ def test_flat_pre_migration_flow_args_are_now_rejected(agent):
 def test_schema_and_dispatch_come_from_one_registry(agent):
     """There is no second child list to drift: the module-level schema-only
     family and the per-call agent-bound family are built by the same
-    ``_build_children`` from the same ``_CHILD_SPECS`` + reserved manual."""
-    from lingtai.tools.tool_family import ToolFamily
-
+    ``_build_family`` from the same declared registries + the plugin-appended
+    reserved manual."""
     schema_names = tuple(
         b["title"].removesuffix(" input")
         for b in soul.get_schema("en")["properties"]["input"]["oneOf"]
     )
-    dispatch_names = ToolFamily("soul", soul._build_children(agent)).child_names
+    dispatch_names = soul._build_family(agent).child_names
     assert schema_names == dispatch_names == _ACTIONS
 
 

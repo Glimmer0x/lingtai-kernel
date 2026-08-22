@@ -5,12 +5,16 @@ contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/plugin.py
+  - src/lingtai/tools/soul/manual/SKILL.md
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/soul/config.py
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_soul_migration.py
+  - tests/test_intrinsic_tool_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -78,7 +82,28 @@ claims; log/notification paths -> §State & storage.
 ## Tool surface
 
 Schema and dispatch both live in `src/lingtai/tools/soul/__init__.py`
-(`get_schema`, `handle`).
+(`get_schema`, `handle`), composed through this package's plugin descriptor
+(`src/lingtai/tools/soul/plugin.py`, built on `src/lingtai/tools/_plugin.py`).
+
+The descriptor is declarative. It owns three promises and nothing else:
+
+- The public action list is `SOUL_DECLARED_ACTIONS` + the reserved `manual`, in
+  that order. This module declares only its own five actions; declaring,
+  re-schema'ing, or rebinding `manual` raises `IntrinsicToolPluginError` at
+  import.
+- `manual` is served by the descriptor's own child, bound to the skill this
+  package ships (`soul/manual/SKILL.md`, frontmatter `name: soul-manual`) and
+  installed at `.library/intrinsic/capabilities/soul-manual/SKILL.md`. That
+  installed path is the `manual_path` this contract's table promises and does
+  not change when the Python package is renamed.
+- `SOUL_PLUGIN.intrinsic_declaration()` must equal `registry.INTRINSICS["soul"]`
+  and `SOUL_PLUGIN.manual_mount_declaration()` must describe what
+  `Agent._install_intrinsic_manuals` actually materializes.
+
+It is **not** a plugin runtime: it registers nothing, activates nothing, and
+writes no file. Mounting the family stays `lingtai.tools.registry`'s and
+installing the skill stays the Agent's, and no action or input field it composes
+can enable soul flow — that gate remains the operator's env var alone.
 
 Inputs below are fields of that action's own `input` object, never of the root.
 
@@ -188,7 +213,9 @@ init.json                   — manifest.soul persistence for config (delay_seco
 | `manual` returns the full body plus host-local `manual_path`, no double wrap, and performs no soul operation | `src/lingtai/tools/soul/__init__.py:_adapt_manual_result`, `tool_family/manual.py:build_manual_child` | `tests/test_tool_family_soul_migration.py` (manual section), `tests/test_intrinsic_manual_actions.py` |
 | One public `soul` root on both the Chat and Responses wires, `reasoning` required | `src/lingtai/tools/soul/__init__.py:get_schema`, `kernel/base_agent/tools.py:_build_tool_schemas` | `tests/test_tool_family_soul_migration.py::test_agent_composition_keeps_reasoning_required_on_both_wires` |
 | The synthesized involuntary flow pair carries the current envelope, not the flat pre-migration shape | `src/lingtai/tools/soul/consultation.py:build_consultation_pair` | `tests/test_tool_family_soul_migration.py::test_synthesized_involuntary_flow_pair_uses_the_current_envelope`, `tests/test_soul_consultation.py::TestBuildConsultationPair::test_pair_uses_soul_flow_action` |
-| Schema and dispatch are generated from one child registry and cannot drift | `src/lingtai/tools/soul/__init__.py:_CHILD_SPECS`/`_build_children` | `tests/test_tool_family_soul_migration.py::test_schema_and_dispatch_come_from_one_registry` |
+| Schema and dispatch are generated from one child registry and cannot drift | `src/lingtai/tools/soul/__init__.py:_DECLARED_INPUT_SCHEMAS`/`_DECLARED_HANDLERS`/`_build_family` | `tests/test_tool_family_soul_migration.py::test_schema_and_dispatch_come_from_one_registry` |
+| The package declares only its own five actions; the plugin appends the reserved `manual` and rejects any attempt to declare, re-schema, or rebind it | `src/lingtai/tools/soul/plugin.py:SOUL_DECLARED_ACTIONS`, `src/lingtai/tools/_plugin.py:IntrinsicToolPlugin` | `tests/test_intrinsic_tool_plugin_package.py::test_a_package_cannot_declare_re_schema_or_rebind_the_reserved_manual` |
+| The package owns and ships the `soul-manual` skill, and the shipped registry/mount records equal what the host materializes | `src/lingtai/tools/soul/manual/SKILL.md`, `src/lingtai/tools/soul/plugin.py`, `src/lingtai/tools/registry.py:INTRINSICS`, `src/lingtai/agent.py:_install_intrinsic_manuals` | `tests/test_intrinsic_tool_plugin_package.py` |
 | `flow` is opt-in and returns a stable `disabled` status when the env var is unset | `src/lingtai/tools/soul/__init__.py:handle` (`_soul_flow_enabled`) | `tests/test_soul.py` |
 | A late consultation result is discarded after a state change | `src/lingtai/tools/soul/flow.py` | `tests/test_soul.py::test_consultation_fire_discards_late_result_after_state_change` |
 | `inquiry` returns a voice (or "(silence)") and persists the entry | `src/lingtai/tools/soul/__init__.py:handle`, `src/lingtai/tools/soul/inquiry.py:soul_inquiry` | `tests/test_soul_consultation.py` |
