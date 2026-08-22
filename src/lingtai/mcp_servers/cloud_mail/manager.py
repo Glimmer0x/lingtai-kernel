@@ -23,14 +23,23 @@ from .client import CloudMailClient, CloudMailError
 from ._watermark import WatermarkStore
 from . import _family
 from .. import _skill
+from .plugin import CLOUD_MAIL_PLUGIN
 
 log = logging.getLogger("lingtai_cloud_mail")
 
 # Bundled usage manual (skill format) — SKILL.md ships in this package folder.
 # action='manual' reads the full body; the YAML frontmatter name/description are
 # injected into the tool schema as a progressive-disclosure catalog entry.
-_SKILL_NAME = "cloud-mail-mcp-manual"
-_SKILL_FRONTMATTER, _SKILL_BODY, _SKILL_PATH = _skill.load_skill(__package__)
+#
+# The package's plugin descriptor already loaded and validated that SKILL.md, so
+# these names alias its single copy rather than re-reading the file. The public
+# family answers ``manual`` from the same descriptor without entering this
+# manager at all; the flat ``_manual()`` below stays for the legacy internal
+# action boundary.
+_SKILL_NAME = CLOUD_MAIL_PLUGIN.skill_name
+_SKILL_FRONTMATTER = CLOUD_MAIL_PLUGIN.skill_frontmatter
+_SKILL_BODY = CLOUD_MAIL_PLUGIN.skill_body
+_SKILL_PATH = CLOUD_MAIL_PLUGIN.skill_path
 
 DESCRIPTION = (
     "Cloud Mail REST email client for a self-hosted Cloud Mail deployment "
