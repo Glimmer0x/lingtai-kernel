@@ -79,7 +79,12 @@ from .schema import (  # noqa: F401
 )
 from .._manual import load_installed_manual
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+
+# The package's plugin descriptor — system's one statement of who it is: the
+# registry name and mount module, the ``system-manual`` skill behind the
+# reserved ``manual`` action, and the eleven actions system itself declares.
+# ``registry.py`` discovers it through the ``PLUGIN`` re-export below.
+from .plugin import SYSTEM_ACTIONS, SYSTEM_DECLARED_ACTIONS, SYSTEM_PLUGIN  # noqa: F401
 
 # Summarize — the agent-authored context-summarization ENGINE. This module
 # stays here, but ``system`` no longer exposes a public ``summarize`` action:
@@ -131,15 +136,25 @@ from .karma import (  # noqa: F401
 # Module-level intrinsic protocol — family composition and handle()
 # ---------------------------------------------------------------------------
 
-# The installed intrinsic-skill directory ``manual`` reads. This is the
-# ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "system-manual"
+#: The descriptor this package is discovered and mounted by. ``registry.py``
+#: reads this attribute (``_plugin.plugin_of``) to build system's ``INTRINSICS``
+#: record, so the registry no longer restates system's name or module.
+PLUGIN = SYSTEM_PLUGIN
+
+# The installed intrinsic-skill directory ``manual`` reads — the
+# ``load_installed_manual`` skill name, not the family name. Derived from the
+# plugin descriptor rather than spelled again here: the descriptor already
+# resolved and validated the shipped ``system-manual`` bundle at import, and
+# derives this destination the same way ``Agent._install_intrinsic_manuals``
+# does, so the name the family reads back cannot drift from the bundle the
+# installer wrote.
+_MANUAL_SKILL_NAME = SYSTEM_PLUGIN.installed_capability
 
 # The one canonical action -> handler registry. Names and order come from
-# ``schema.ACTION_ORDER``; ``manual`` is absent because ``build_manual_child``
-# owns that child's schema and handler. Each handler keeps its historical
-# ``(agent, args)`` signature and its module home, so this migration moves no
-# lifecycle, preset, or summarization logic.
+# ``plugin.SYSTEM_DECLARED_ACTIONS``; ``manual`` is absent because the plugin
+# owns that child's schema and handler and appends it. Each handler keeps its
+# historical ``(agent, args)`` signature and its module home, so this migration
+# moves no lifecycle, preset, or summarization logic.
 _ACTION_HANDLERS = {
     "refresh": _refresh,
     "sleep": _sleep,
@@ -169,16 +184,21 @@ def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in action_input.items() if value is not None}
 
 
-def _build_children(agent) -> list[ChildTool]:
-    """Build the eleven children from the one canonical registry.
+def _declared_children(agent) -> list[ChildTool]:
+    """Build the eleven children system declares, from the one canonical registry.
+
+    ``manual`` is not built here: it is the plugin's reserved child, appended
+    by :meth:`IntrinsicPlugin.build_family`. Declaring it here would raise
+    ``IntrinsicPluginError`` rather than shipping a family whose manual points
+    somewhere other than the package's own ``system-manual`` skill.
 
     ``agent`` may be ``None`` for the module-level schema-only family, whose
     children are never dispatched — only their schemas are read.
 
-    Each non-manual child adapts the generic ``Callable[[Mapping], dict]``
-    child contract to the handler's historical ``(agent, args)`` signature.
-    The handler receives only its own validated ``input`` mapping: never
-    ``action``, ``reasoning``, ``_reasoning``, or ``summarize``.
+    Each child adapts the generic ``Callable[[Mapping], dict]`` child contract
+    to the handler's historical ``(agent, args)`` signature. The handler
+    receives only its own validated ``input`` mapping: never ``action``,
+    ``reasoning``, ``_reasoning``, or ``summarize``.
     """
 
     def _bind(action: str):
@@ -189,39 +209,48 @@ def _build_children(agent) -> list[ChildTool]:
 
         return _dispatch
 
-    children: list[ChildTool] = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
-            )
-    return children
+    return [
+        ChildTool(
+            action,
+            INPUT_SCHEMAS[action],
+            _bind(action),
+            title=f"{action} input",
+        )
+        for action in SYSTEM_DECLARED_ACTIONS
+    ]
+
+
+def _build_children(agent) -> list[ChildTool]:
+    """The complete twelve children, in canonical order.
+
+    System's own eleven followed by the plugin's reserved ``manual``. The
+    composition — including the rejection of a package-declared ``manual`` — is
+    the plugin's, so this list and the family built from it below are the same
+    answer from the same rule rather than two assemblies that could drift.
+    """
+    return SYSTEM_PLUGIN.compose_children(agent, _declared_children(agent))
 
 
 # Composes the model-facing schema. Building it at import time is also the
-# registry's duplicate/reserved-name collision check: a collision raises
-# ``ToolFamilyError`` here rather than shipping silently. It never dispatches —
-# ``system`` is an intrinsic *module*, not a per-Agent manager object, so there
-# is no instance to hang a family off; ``handle()`` binds one to the passed
-# agent per call from this same registry.
-_FAMILY = ToolFamily("system", _build_children(None))
+# registry's duplicate/reserved-name collision check *and* the plugin's
+# reserved-``manual`` check: either raises (``ToolFamilyError`` /
+# ``IntrinsicPluginError``) here rather than shipping silently. It never
+# dispatches — ``system`` is an intrinsic *module*, not a per-Agent manager
+# object, so there is no instance to hang a family off; ``handle()`` binds one
+# to the passed agent per call from this same registry.
+_FAMILY = SYSTEM_PLUGIN.build_family(None, _declared_children(None))
 
 
 def _build_family(agent) -> ToolFamily:
     """Build the per-call dispatching family with handlers bound to *agent*.
 
-    Construction is cheap (eleven ``ChildTool`` dataclasses and a name check),
-    and building it per call keeps ``agent`` out of module state, which matters
-    because one process may serve several agents.
+    The family name and the reserved ``manual`` child both come from the plugin
+    descriptor, so the dispatching family and the schema-only one above are
+    composed by the same call. Construction is cheap (twelve ``ChildTool``
+    dataclasses and a name check), and building it per call keeps ``agent`` out
+    of module state, which matters because one process may serve several agents.
     """
-    return ToolFamily("system", _build_children(agent))
+    return SYSTEM_PLUGIN.build_family(agent, _declared_children(agent))
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:

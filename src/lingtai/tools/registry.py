@@ -31,6 +31,11 @@ from typing import TYPE_CHECKING, Any, Mapping
 # en/zh/wen tool strings get injected via lingtai.kernel.i18n.register_strings.
 from . import i18n as _i18n  # noqa: F401  (import side effect: register_strings)
 
+# Intrinsic plugin packaging — the discovery + checked-mount seam this registry
+# builds ``INTRINSICS`` through. Declarative only: it activates nothing and
+# adds no second registry (see ``_plugin.py``).
+from . import _plugin
+
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
 
@@ -71,14 +76,30 @@ from . import email, system, context, soul, notification  # noqa: E402  (lingtai
 # reachable on the current root of that name.
 from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
-INTRINSICS: dict[str, dict[str, Any]] = {
-    "email": {"module": email},
-    "system": {"module": system},
-    "context": {"module": context},
-    "psyche": {"module": psyche},
-    "soul": {"module": soul},
-    "notification": {"module": notification},
-}
+# The mandatory-intrinsic mapping, mounted through ``_plugin.mount_intrinsics``.
+#
+# Membership stays here and stays hand-written: this dict is the mandatory-
+# include mechanism, and there is no manifest gate for intrinsics. What
+# ``mount_intrinsics`` adds is *discovery*: for every module that ships a
+# plugin descriptor (``<pkg>.PLUGIN``), it checks that the key it is mounted
+# under, the descriptor's own ``name``, and the descriptor's declared
+# ``package`` all agree — so a packaged intrinsic cannot be mounted under a
+# name or module it does not claim, and the registry no longer restates a
+# packaged tool's identity by hand. Modules that ship no descriptor are mounted
+# exactly as before, so packaging can be adopted one intrinsic at a time.
+#
+# The record shape is unchanged (``{"module": <module>}``), so
+# ``BaseAgent._wire_intrinsics`` is untouched.
+INTRINSICS: dict[str, dict[str, Any]] = _plugin.mount_intrinsics(
+    {
+        "email": email,
+        "system": system,
+        "context": context,
+        "psyche": psyche,
+        "soul": soul,
+        "notification": notification,
+    }
+)
 
 
 # ---------------------------------------------------------------------------

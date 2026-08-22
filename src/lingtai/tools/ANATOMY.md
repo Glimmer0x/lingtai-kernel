@@ -46,6 +46,9 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/system/plugin.py
+  - tests/test_system_intrinsic_plugin_package.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -78,7 +81,11 @@ capability names and lazy adapters.
   addressing and ownership rules, and the explicit per-tool migration boundary.
 - `registry.py` — intrinsic mapping, public `BUILTIN_TOOLS`, input aliases,
   defaults, normalization, setup, and check-caps metadata
-  (`src/lingtai/tools/registry.py:39-344`).
+  (`src/lingtai/tools/registry.py:39-344`). `INTRINSICS` is built through
+  `_plugin.mount_intrinsics()` (`src/lingtai/tools/registry.py:93-102`):
+  membership stays hand-written here, but a module that ships a plugin
+  descriptor has its identity checked against the key it is mounted under
+  instead of restated. The record shape (`{"module": <module>}`) is unchanged.
 - `web_search/` — public `web` composition owner for search, browse, settings,
   and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
@@ -158,6 +165,30 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — **intrinsic plugin packaging** descriptor: `IntrinsicPlugin`
+  (`src/lingtai/tools/_plugin.py:99-296`) binds one intrinsic package's identity,
+  the kernel-shipped `SKILL.md` behind its `manual` action (resolved and
+  name-checked at construction), and the mount record `registry.INTRINSICS`
+  publishes for it (`intrinsic_declaration()`,
+  `src/lingtai/tools/_plugin.py:278-296`). It owns the reserved-action promise:
+  `actions()`, `action_input_schemas()`, `compose_children()`, and
+  `build_family()` (`src/lingtai/tools/_plugin.py:220-259`) append `manual` from
+  the plugin's own skill and raise `IntrinsicPluginError` if a package declares,
+  re-schemas, or rebinds it. `plugin_of()`/`mount_intrinsics()`
+  (`src/lingtai/tools/_plugin.py:365-416`) are the discovery-and-checked-mount
+  seam the registry builds `INTRINSICS` through; discovery is opt-in per package
+  (a module with no `PLUGIN` is mounted exactly as before), so packaging is
+  adopted one intrinsic at a time. This is the `lingtai.tools` twin of
+  `src/lingtai/mcp_servers/_plugin.py` and, like it, is **declarative only** — no
+  activation, execution policy, lifecycle, or second registry: those stay with
+  `registry.py`, `BaseAgent._wire_intrinsics`, `Agent._install_intrinsic_manuals`,
+  and `services/plugin_registry.py`. It resolves shipped skill bundles with
+  `importlib.util.find_spec` rather than `importlib.resources.files`
+  (`src/lingtai/tools/_plugin.py:299-324`) so importing `lingtai.tools` still does
+  not pull `lingtai.intrinsic_skills`, per the import DAG below. `system` is the
+  one intrinsic wired through it today
+  (`src/lingtai/tools/system/plugin.py`, `src/lingtai/tools/system/ANATOMY.md`);
+  `tests/test_system_intrinsic_plugin_package.py` pins the invariants.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).

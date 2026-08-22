@@ -333,6 +333,7 @@ related_files:
   - tests/test_sync_gitee_mirror.py
   - tests/test_system.py
   - tests/test_system_dismiss.py
+  - tests/test_system_intrinsic_plugin_package.py
   - tests/test_system_notifications.py
   - tests/test_system_summarize.py
   - tests/test_task_card_controller.py

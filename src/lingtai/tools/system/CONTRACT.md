@@ -4,6 +4,9 @@ tool: system
 contract_version: 3
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/tools/_plugin.py
+  - src/lingtai/tools/registry.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
@@ -15,6 +18,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_system_intrinsic_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -27,6 +31,10 @@ maintenance: |
   and the two name actions arrived here from the dissolved psyche family.
   summarize.py stays here as a private engine only — keep the context Contract
   link current, since that family owns the public actions driving it.
+  contract_version is NOT bumped for the plugin packaging: it changed no
+  model-facing byte. Keep the packaging clause and plugin.py link current — if
+  the descriptor and this contract disagree about the action inventory or the
+  manual skill, the descriptor is the source of truth.
 ---
 
 # System capability contract
@@ -62,6 +70,48 @@ are unchanged, and the children consume no additional model tool slots.
 `system` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
 (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
 it advertises is actually honored.
+
+## Packaging
+
+`system` is a **packaged intrinsic plugin**. `src/lingtai/tools/system/plugin.py`
+is the single place this package states its identity — the registry/family name
+`system`, the mount module `lingtai.tools.system`, the summary and homepage its
+mount record publishes, the `system-manual` skill behind the reserved `manual`
+action, and the eleven actions system itself declares. The shared mechanism is
+`src/lingtai/tools/_plugin.py` (`IntrinsicPlugin`), the `lingtai.tools` twin of
+`src/lingtai/mcp_servers/_plugin.py`.
+
+Three promises follow, and each is enforced rather than documented:
+
+- **`manual` is the plugin's, not the package's.** `SYSTEM_DECLARED_ACTIONS`
+  omits it; the plugin appends it from the skill it names. Declaring,
+  re-schemaing, or rebinding `manual` raises `IntrinsicPluginError` at import.
+- **The declared skill must exist and be the declared skill.** The descriptor
+  resolves and name-checks the shipped
+  `src/lingtai/intrinsic_skills/system-manual/SKILL.md` at construction, so a
+  renamed, moved, or emptied manual fails this package's import instead of
+  degrading every agent's `manual` to an empty body. It adds no fallback: a
+  missing *installed* copy still returns the established `degraded` result.
+- **The registry mounts from the descriptor.** `registry.INTRINSICS` is built by
+  `_plugin.mount_intrinsics()`, which reads each module's `PLUGIN` attribute and
+  rejects a mount whose key, declared `name`, and declared `package` disagree.
+  Membership stays the registry's (still a hand-written mapping, still no
+  manifest gate for intrinsics), the record shape is unchanged
+  (`{"module": <module>}`) so `BaseAgent._wire_intrinsics` is untouched, and
+  intrinsics that ship no descriptor are mounted exactly as before.
+
+Packaging is **model-facing-invisible**: the composed schema is byte-identical
+to the pre-packaging one, and the action inventory, order, description, receipts,
+privilege gates, and error strings are unchanged. `contract_version` is
+consequently not bumped.
+
+The manual bundle deliberately stays in `lingtai.intrinsic_skills` rather than
+moving to a `tools/system/manual/` folder: `system-manual` is the second-layer
+*router* the resident prompt sections and every runtime/substrate/procedure
+reference cite under that name, and moving it would rename the model-visible
+`.library/intrinsic/capabilities/system-manual/` install path. Ownership is what
+the descriptor adds — it names the bundle, validates it, and derives the install
+destination the same way `Agent._install_intrinsic_manuals` does.
 
 ## Routing Card
 
@@ -246,6 +296,12 @@ drive it are `context`'s.
 | A cross-action smuggle is rejected before any lifecycle I/O | `src/lingtai/tools/tool_family/__init__.py:ToolFamily.handle` | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` |
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |
 | `manual` is the reserved family-owned child, returned without double wrap | `src/lingtai/tools/system/__init__.py:_adapt_manual_result` | `tests/test_tool_family_system_migration.py::test_manual_child_is_registered_unwrapped`, `::test_manual_returns_the_pinned_flat_public_shape` |
+| The package declares its own identity and the registry mounts from it | `src/lingtai/tools/system/plugin.py`, `src/lingtai/tools/registry.py` | `tests/test_system_intrinsic_plugin_package.py::test_system_package_declaration_matches_the_registry_mount`, `::test_registry_mounts_through_plugin_discovery_not_a_hand_written_literal` |
+| A packaged intrinsic cannot be mounted under a name or module it disowns | `src/lingtai/tools/_plugin.py:mount_intrinsics` | `tests/test_system_intrinsic_plugin_package.py::test_mount_rejects_a_plugin_whose_identity_disagrees` |
+| The package cannot declare, re-schema, or rebind the reserved `manual` | `src/lingtai/tools/_plugin.py:IntrinsicPlugin` | `tests/test_system_intrinsic_plugin_package.py::test_a_package_cannot_declare_re_schema_or_rebind_the_reserved_manual` |
+| The declared `system-manual` skill is resolved and name-checked at import | `src/lingtai/tools/system/plugin.py` | `tests/test_system_intrinsic_plugin_package.py::test_the_shipped_skill_is_resolved_and_name_checked_at_construction`, `::test_a_broken_descriptor_fails_loudly_at_construction` |
+| The derived install destination matches the boot installer's own two passes | `src/lingtai/tools/_plugin.py:_derive_install_name` | `tests/test_system_intrinsic_plugin_package.py::test_a_standalone_bundle_installs_under_its_own_directory_name`, `::test_a_package_owned_manual_installs_under_the_tool_name` |
+| Packaging changed no model-facing byte | `src/lingtai/tools/system/schema.py`, `src/lingtai/tools/system/__init__.py:get_schema` | `tests/test_system_intrinsic_plugin_package.py::test_public_action_inventory_and_order_are_unchanged`, `::test_root_envelope_and_unknown_action_error_are_unchanged` |
 | `system` is on the kernel `summarize` allowlist | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_system_migration.py::test_system_is_on_the_kernel_summarize_allowlist` |
 
 ## Verification matrix
@@ -260,12 +316,15 @@ drive it are `context`'s.
 | A true name stays immutable and neither name action renames the workdir | `tests/test_tool_family_system_migration.py::test_name_actions_preserve_identity_semantics` | `name_set` twice; inspect `.agent.json` + workdir | Identity overwrite or an unintended physical rename |
 | No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Duplicate notification surfaces diverge |
 | Cross-action input cannot reach a lifecycle handler | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` | Call `sleep` with an `address` in `input` | A weaker action smuggles a privileged target |
+| The reserved `manual` cannot be dropped or rebound by a handler-registry change | `tests/test_system_intrinsic_plugin_package.py::test_manual_is_bound_to_the_plugins_own_skill_and_not_to_an_action_handler` | Remove an entry from `_ACTION_HANDLERS`; `manual` still answers | The family ships with no manual, or one pointing at foreign material |
+| The registry cannot mount `system` under a foreign name or module | `tests/test_system_intrinsic_plugin_package.py::test_mount_rejects_a_plugin_whose_identity_disagrees` | Rename the `INTRINSICS` key without touching `plugin.py` | A tool mounted under an identity it does not claim |
+| `import lingtai.tools` still does not pull high-level `lingtai` modules | `tests/test_kernel_isolation.py::test_import_lingtai_tools_does_not_pull_high_level_lingtai` | `python -c "import sys, lingtai.tools.registry; print('lingtai.intrinsic_skills' in sys.modules)"` | The enforced import DAG breaks and importing the registry gets expensive |
 | `nirvana`'s blast radius is exactly one directory | `tests/test_tool_family_system_migration.py::test_nirvana_destroys_only_the_disposable_target` | Inspect siblings after a disposable-target nirvana | Irreversible over-deletion |
 
 Run before merging system changes:
 
 ```bash
-python -m pytest tests/test_system.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py tests/test_karma.py tests/test_tool_family_system_migration.py tests/test_tool_family_context_migration.py tests/test_intrinsic_manual_actions.py -q
+python -m pytest tests/test_system.py tests/test_system_summarize.py tests/test_system_dismiss.py tests/test_notification_tool.py tests/test_karma.py tests/test_tool_family_system_migration.py tests/test_tool_family_context_migration.py tests/test_intrinsic_manual_actions.py tests/test_system_intrinsic_plugin_package.py tests/test_kernel_isolation.py -q
 ```
 
 ## Schema and glossary ownership

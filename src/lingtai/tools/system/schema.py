@@ -42,26 +42,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from .plugin import SYSTEM_ACTIONS, SYSTEM_PLUGIN
 
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three. The order
-# is the pre-migration enum order, unchanged.
-ACTION_ORDER = (
-    "refresh",
-    "sleep",
-    "lull",
-    "interrupt",
-    "suspend",
-    "cpr",
-    "clear",
-    "nirvana",
-    "presets",
-    "name_set",
-    "name_nickname",
-    "manual",
-)
+# is the pre-migration enum order, unchanged; it is now *composed* by the
+# package's plugin descriptor (``plugin.py``) from the eleven actions system
+# declares plus the reserved ``manual`` the plugin appends, rather than
+# restated here — so this tuple and the family's children cannot disagree
+# about which actions exist.
+ACTION_ORDER = SYSTEM_ACTIONS
 
 # --- Shared field descriptions, carried over verbatim from the flat schema ---
 
@@ -189,7 +180,11 @@ _NAME_NICKNAME_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+#: The eleven schemas system itself declares — one per action in
+#: :data:`~.plugin.SYSTEM_DECLARED_ACTIONS`. ``manual`` is deliberately absent:
+#: the plugin appends it below from the ``tool_family``-owned literal, and
+#: declaring it here would raise ``IntrinsicPluginError`` at import.
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "refresh": _REFRESH_INPUT_SCHEMA,
     "sleep": _SLEEP_INPUT_SCHEMA,
     "lull": _address_input_schema(),
@@ -201,11 +196,16 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "presets": _PRESETS_INPUT_SCHEMA,
     "name_set": _NAME_SET_INPUT_SCHEMA,
     "name_nickname": _NAME_NICKNAME_INPUT_SCHEMA,
-    # Referenced, not restated: ``build_manual_child`` owns this literal, so
-    # the schema-only family and the dispatching family cannot drift
-    # (``tool_family/CONTRACT.md`` Contract rules).
-    "manual": MANUAL_INPUT_SCHEMA,
 }
+
+# The complete per-action registry: system's own eleven plus the reserved
+# ``manual``, appended by the plugin. ``manual``'s schema is the one
+# ``tool_family.manual.MANUAL_INPUT_SCHEMA`` literal referenced, not restated,
+# so the schema-only family and the dispatching family cannot drift
+# (``tool_family/CONTRACT.md`` Contract rules).
+INPUT_SCHEMAS: dict[str, dict[str, Any]] = SYSTEM_PLUGIN.action_input_schemas(
+    _DECLARED_INPUT_SCHEMAS
+)
 
 # The per-action prose the model reads to choose an action. Carried over
 # verbatim from the pre-migration flat ``action`` enum description, with the
