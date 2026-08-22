@@ -5,12 +5,14 @@ contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/descriptor.py
   - src/lingtai/tools/soul/config.py
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_soul_migration.py
+  - tests/test_soul_model_descriptor.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -77,8 +79,12 @@ claims; log/notification paths -> §State & storage.
 
 ## Tool surface
 
-Schema and dispatch both live in `src/lingtai/tools/soul/__init__.py`
-(`get_schema`, `handle`).
+`src/lingtai/tools/soul/descriptor.py` owns the consumed package-local
+model-facing root name, description, and installed manual skill name;
+`src/lingtai/tools/soul/__init__.py` consumes those values while retaining schema
+composition and dispatch (`get_schema`, `handle`). The descriptor is not a global
+registration or activation path and does not own scheduler, notification,
+lifecycle, config, or auth behavior.
 
 Inputs below are fields of that action's own `input` object, never of the root.
 
@@ -183,6 +189,7 @@ init.json                   — manifest.soul persistence for config (delay_seco
 | Claim | Source | Test |
 |---|---|---|
 | Schema exposes `inquiry`/`flow`/`config`/`voice`/`dismiss`/`manual` as action-separated children behind one closed LTP v2 root | `src/lingtai/tools/soul/__init__.py:get_schema` | `tests/test_soul.py`, `tests/test_tool_family_soul_migration.py` |
+| Model-facing root name, exact prose, and installed manual identity are package-local descriptor values actively consumed by the existing root | `src/lingtai/tools/soul/descriptor.py`, `src/lingtai/tools/soul/__init__.py` | `tests/test_soul_model_descriptor.py` |
 | Each action's parameters live only in that action's own strict `input` branch | `src/lingtai/tools/soul/__init__.py` (child `input_schema` objects) | `tests/test_tool_family_soul_migration.py::test_action_parameters_are_no_longer_advertised_to_every_action` |
 | Cross-action `input` is rejected before any handler I/O | `src/lingtai/tools/soul/__init__.py:handle` via `tool_family.ToolFamily.handle` | `tests/test_tool_family_soul_migration.py::test_cross_action_input_is_rejected_before_any_handler_io` |
 | `manual` returns the full body plus host-local `manual_path`, no double wrap, and performs no soul operation | `src/lingtai/tools/soul/__init__.py:_adapt_manual_result`, `tool_family/manual.py:build_manual_child` | `tests/test_tool_family_soul_migration.py` (manual section), `tests/test_intrinsic_manual_actions.py` |

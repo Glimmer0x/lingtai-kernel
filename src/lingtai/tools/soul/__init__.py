@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from .descriptor import SOUL_MODEL_DESCRIPTOR
+
 # Re-export constants from config.py
 from lingtai.kernel.config import DEFAULT_SOUL_DELAY_SECONDS
 from ..tool_family import ChildTool, ToolFamily
@@ -196,7 +198,7 @@ def _build_children(agent) -> list[ChildTool]:
     return [
         ChildTool(name, schema, make_handler(agent), title=f"{name} input")
         for name, schema, make_handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, "soul-manual")]
+    ] + [build_manual_child(agent, SOUL_MODEL_DESCRIPTOR.manual_skill_name)]
 
 
 # Composes the model-facing schema. Building it at import time is also the
@@ -205,11 +207,12 @@ def _build_children(agent) -> list[ChildTool]:
 # soul is an intrinsic *module*, not a per-Agent manager object, so there is no
 # instance to hang a family off; ``handle()`` binds one to the passed agent per
 # call from this same registry.
-_FAMILY = ToolFamily("soul", _build_children(None))
+_FAMILY = ToolFamily(SOUL_MODEL_DESCRIPTOR.root_name, _build_children(None))
 
 
 def get_description(lang: str = "en") -> str:
-    return "Your inner voice. One tool, six actions, each with its own strict input object: soul(action=..., input={...}, reasoning='why'). flow is OPT-IN and DISABLED by default: it runs only when the operator sets env LINGTAI_SOUL_FLOW_ENABLED=1 (then refreshes). While disabled, soul(action='flow', input={}) returns status='disabled' (not an error — do not retry); inquiry/config/voice/dismiss still work. When enabled, flow fires periodic past-self consultation every soul_delay seconds while IDLE — M=1+K parallel LLM calls (1 stepped-back read of current chat + K past-snapshot voices) arrive as an involuntary soul(action='flow') pair. delay_seconds is only the cadence after opt-in, NOT an off switch, and no action in this family can enable flow. inquiry: ask a deep copy of yourself a question; answer returns in the tool result. config: tune flow knobs at runtime (delay_seconds, consultation_past_count) — does not enable flow. voice: read or choose how your own soul-flow voice sounds. dismiss: clear the current flow notification. manual: return the installed soul-manual skill without performing any soul operation. Results are small, so leave root summarize false (short-result profile); call manual with summarize=false so the exact procedure is not summarized away. See soul-manual for details."
+    """Return the exact model-facing prose owned by the local descriptor."""
+    return SOUL_MODEL_DESCRIPTOR.description
 
 
 def get_schema(lang: str = "en") -> dict:
@@ -385,7 +388,7 @@ def handle(agent, args: dict) -> dict:
     raw.pop("_tc_id", None)
 
     action = raw.get("action")
-    result = ToolFamily("soul", _build_children(agent)).handle(raw)
+    result = ToolFamily(SOUL_MODEL_DESCRIPTOR.root_name, _build_children(agent)).handle(raw)
 
     if action == "manual" and "content" in result:
         return _adapt_manual_result(result)

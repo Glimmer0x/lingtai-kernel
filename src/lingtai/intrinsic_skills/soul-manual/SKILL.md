@@ -6,6 +6,7 @@ version: 1.2.0
 last_changed_at: "2026-08-07T00:00:00Z"
 related_files:
 - src/lingtai/tools/soul/__init__.py
+- src/lingtai/tools/soul/descriptor.py
 - src/lingtai/tools/soul/CONTRACT.md
 - src/lingtai/tools/CONTRACT.md
 - src/lingtai/tools/soul/flow.py
