@@ -34,12 +34,14 @@ one registered public tool.
 
 Two behaviors deliberately do NOT move here:
 
-* ``manual`` is served by the shared ``build_manual_child(agent, "daemon")``
-  reserved child, which reads the same installed
-  ``.library/intrinsic/capabilities/daemon/SKILL.md`` body/path the
+* ``manual`` is served by the plugin-owned reserved child
+  (``DAEMON_PLUGIN.manual_child(agent)``, ``plugin.py``), which reads the same
+  installed ``.library/intrinsic/capabilities/daemon/SKILL.md`` body/path the
   pre-migration ``DaemonManager.handle({"action": "manual"})`` branch read via
-  ``load_installed_manual``. It returns the canonical
-  ``content``/``structuredContent`` shape and performs no daemon operation.
+  ``load_installed_manual`` — that mount is the descriptor's own
+  ``manual_mount``, so the child cannot point at another tool's skill. It
+  returns the canonical ``content``/``structuredContent`` shape and performs no
+  daemon operation.
 * The legacy flat root ``summary`` boolean is replaced by the canonical root
   ``summarize`` control, which ``ToolFamily.build_schema`` advertises and
   ``ToolFamily.handle`` strips before any child handler runs. ``daemon`` joins
@@ -52,8 +54,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from ..tool_family import ChildTool
+from .plugin import DAEMON_ACTIONS, DAEMON_DECLARED_ACTIONS, DAEMON_PLUGIN
 
 # Re-exported engine constants the child schemas pin. Imported lazily inside
 # ``_emanate_input_schema`` would hide them from readers; a module-level import
@@ -64,15 +66,12 @@ DEFAULT_MAX_TURNS = 5000
 CHECK_LAST_MAX = 1000
 LIST_DEFAULT_LAST = 1000
 
-#: The canonical action order, model-facing enum order, and dispatch order.
-DAEMON_ACTIONS: tuple[str, ...] = (
-    "emanate",
-    "list",
-    "ask",
-    "check",
-    "reclaim",
-    "manual",
-)
+# The canonical action order, model-facing enum order, and dispatch order is
+# the plugin descriptor's (``plugin.py``): Daemon's own five declared actions
+# followed by the reserved ``manual`` the plugin appends from the packaged
+# skill. It is imported above and re-exported under its historical name, so
+# every existing importer of ``_tool_family.DAEMON_ACTIONS`` keeps working
+# while there is exactly one list.
 
 
 def _backend_option_env_schema() -> dict[str, Any]:
@@ -343,12 +342,14 @@ RECLAIM_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
-def _child_specs(backend_enum: list[str]) -> tuple[tuple[str, dict[str, Any]], ...]:
-    """The one child registry source: canonical action name → strict input schema.
+def _declared_child_specs(
+    backend_enum: list[str],
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """Daemon's *own* five children: canonical action name → strict input schema.
 
-    Both the module-level schema-only family and each dispatcher's
-    handler-bound family are built from this single source, so the composed
-    schema and the dispatch registry cannot drift apart.
+    The reserved ``manual`` is deliberately absent — the plugin appends it, and
+    :meth:`BuiltinToolPlugin.action_input_schemas` rejects a package that tries
+    to declare or re-schema it here.
     """
     return (
         ("emanate", _emanate_input_schema(backend_enum)),
@@ -356,8 +357,27 @@ def _child_specs(backend_enum: list[str]) -> tuple[tuple[str, dict[str, Any]], .
         ("ask", ASK_INPUT_SCHEMA),
         ("check", CHECK_INPUT_SCHEMA),
         ("reclaim", RECLAIM_INPUT_SCHEMA),
-        ("manual", MANUAL_INPUT_SCHEMA),
     )
+
+
+def _child_specs(backend_enum: list[str]) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """The one child registry source: canonical action name → strict input schema.
+
+    Daemon's declared children plus the plugin-appended ``manual`` schema, in
+    the descriptor's order. Both the module-level schema-only family and each
+    dispatcher's handler-bound family are built from this single source, so the
+    composed schema and the dispatch registry cannot drift apart — and neither
+    can spell the reserved action itself.
+    """
+    return DAEMON_PLUGIN.action_input_schemas(_declared_child_specs(backend_enum))
+
+
+# The declared child registry and the descriptor's declared action list are the
+# same names in the same order. An action added to one without the other is a
+# packaging defect, caught here at import rather than as a silently missing
+# branch in the composed schema. The backend enum is irrelevant to the names,
+# so the cheapest possible one is used.
+assert tuple(name for name, _ in _declared_child_specs([])) == DAEMON_DECLARED_ACTIONS
 
 
 def build_schema(backend_enum: list[str], lang: str = "en") -> dict[str, Any]:
@@ -366,7 +386,9 @@ def build_schema(backend_enum: list[str], lang: str = "en") -> dict[str, Any]:
     Generated purely from the child registry by the generic ``ToolFamily``
     infra (root ``allOf`` correlation plus ``input.oneOf`` disclosure) — this
     is the schema registered for the public ``daemon`` tool, and the only one
-    the package defines. Constructing the family here is also the registry's
+    the package defines. The family is composed through the plugin descriptor,
+    so the public tool name is the descriptor's and ``manual`` is appended
+    rather than declared; constructing it here is also the registry's
     duplicate/reserved-``manual``-collision check.
     """
     _ = lang  # The daemon tool surface is canonical English.
@@ -374,12 +396,14 @@ def build_schema(backend_enum: list[str], lang: str = "en") -> dict[str, Any]:
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the schema-only ToolFamily never dispatches")
 
-    family = ToolFamily(
-        "daemon",
+    family = DAEMON_PLUGIN.build_family(
         [
             ChildTool(name, schema, _unused, title=f"{name} input")
-            for name, schema in _child_specs(backend_enum)
+            for name, schema in _declared_child_specs(backend_enum)
         ],
+        # No agent exists at module import; the schema-only family never
+        # dispatches, so its manual child never reads a workdir.
+        None,
     )
     return family.build_schema()
 
@@ -397,8 +421,9 @@ class DaemonFamilyDispatcher:
     process interaction, notification, and error string stays exactly what the
     engine already produces.
 
-    ``manual`` is registered directly, unwrapped, from ``build_manual_child``
-    — the shared reserved-name contract every LingTai family uses — so
+    ``manual`` is appended directly, unwrapped, by the plugin descriptor
+    (``DAEMON_PLUGIN.manual_child``) — the shared reserved-name contract every
+    LingTai family uses, bound to this package's own mounted skill — so
     ``ToolFamily.handle()`` returns its canonical
     ``content``/``structuredContent`` result verbatim with no double wrap. It
     is the family's sole manual surface and reaches no engine method, so
@@ -409,17 +434,16 @@ class DaemonFamilyDispatcher:
 
     def __init__(self, manager: Any, agent: Any, backend_enum: list[str]) -> None:
         self._manager = manager
-        specs = dict(_child_specs(backend_enum))
-        self._family = ToolFamily(
-            "daemon",
+        specs = dict(_declared_child_specs(backend_enum))
+        self._family = DAEMON_PLUGIN.build_family(
             [
                 ChildTool("emanate", specs["emanate"], self._dispatch_emanate, title="emanate input"),
                 ChildTool("list", specs["list"], self._dispatch_list, title="list input"),
                 ChildTool("ask", specs["ask"], self._dispatch_ask, title="ask input"),
                 ChildTool("check", specs["check"], self._dispatch_check, title="check input"),
                 ChildTool("reclaim", specs["reclaim"], self._dispatch_reclaim, title="reclaim input"),
-                build_manual_child(agent, "daemon"),
             ],
+            agent,
         )
 
     @staticmethod
@@ -474,6 +498,8 @@ class DaemonFamilyDispatcher:
         result = self._family.handle(args)
         if result.get("error_code") == "ACTION_REQUIRED":
             result["message"] = (
-                "action must be one of emanate, list, ask, check, reclaim, or manual"
+                "action must be one of "
+                + ", ".join(DAEMON_ACTIONS[:-1])
+                + f", or {DAEMON_ACTIONS[-1]}"
             )
         return result

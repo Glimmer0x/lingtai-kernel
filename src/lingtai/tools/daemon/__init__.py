@@ -60,6 +60,7 @@ from ._tool_family import (
     DaemonFamilyDispatcher,
     build_schema as _family_build_schema,
 )
+from .plugin import DAEMON_PLUGIN
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
@@ -1864,7 +1865,11 @@ class DaemonManager:
     def handle(self, args: dict) -> dict:
         action = args.get("action")
         if action == "manual":
-            return load_installed_manual(self._agent, "daemon")
+            # Retained legacy flat branch (never the registered model-facing
+            # path — the family's plugin-owned ``manual`` child is). It reads
+            # the same mounted skill the descriptor declares, so the two
+            # spellings cannot point at different documents.
+            return load_installed_manual(self._agent, DAEMON_PLUGIN.name)
         backend = _normalize_backend(args.get("backend", "lingtai"))
         if action == "emanate":
             return self._handle_emanate(
@@ -9708,6 +9713,9 @@ def setup(agent: "Agent",
     # engine's legacy flat ``handle``. Still exactly one registered public
     # tool named ``daemon`` — the six children consume no extra tool slot.
     dispatcher = DaemonFamilyDispatcher(mgr, agent, list(_BACKEND_SCHEMA_ENUM))
-    agent.add_tool("daemon", schema=schema, handler=dispatcher.handle,
+    # The registered public name is the plugin descriptor's (``plugin.py``) —
+    # the same name the capability registry keys this package under and the
+    # same directory its packaged manual is mounted at.
+    agent.add_tool(DAEMON_PLUGIN.name, schema=schema, handler=dispatcher.handle,
                    description=get_description(), glossary_package=__package__)
     return mgr

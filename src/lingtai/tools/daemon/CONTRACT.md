@@ -8,12 +8,15 @@ description: >
   terminal notifications, and compaction boundaries.
 status: active
 contract_version: 10
-last_changed_at: "2026-08-18"
+last_changed_at: "2026-08-22"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/plugin.py
+  - src/lingtai/tools/_plugin.py
+  - tests/test_builtin_tool_plugin_package.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
@@ -63,6 +66,8 @@ related_files:
 review_triggers:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/services/mcp.py
@@ -205,17 +210,34 @@ The former flat root `summary` boolean is replaced by the canonical root
 rather than silently ignored, and the legacy `summary` spelling remains
 accepted there for historical/pending calls.
 
+`plugin.py` owns this package's plugin identity: the public capability name,
+the module the capability registry imports, the packaged `manual/` bundle and
+the `daemon-manual` skill it declares, and Daemon's own five declared actions.
 `_tool_family.py` owns the child registry, the composed schema, and the
 `DaemonFamilyDispatcher` that translates one envelope call into
-`DaemonManager.handle`'s unchanged legacy flat shape. `DaemonManager` remains
+`DaemonManager.handle`'s unchanged legacy flat shape; it composes both through
+the descriptor, so the public tool name and the appended reserved `manual` are
+the plugin's, not literals restated per call site. `DaemonManager` remains
 the untouched engine: batch emanation, backend routing, run directories, the
 detached supervisor, `daemon_common` completion signaling, cancellation,
 timeouts, terminal notifications, and result/error persistence are unchanged by
-the migration. `DaemonManager.handle`'s own `action="manual"` branch is retained
-as that internal flat shape only; the registered model-facing `manual` is the
-shared reserved `build_manual_child(agent, "daemon")` child, returning the
-canonical `content[0].text` / `structuredContent.manual_path` result verbatim
-with no double wrap, and reaching no engine method.
+the migration and by the packaging. `DaemonManager.handle`'s own
+`action="manual"` branch is retained as that internal flat shape only; the
+registered model-facing `manual` is the plugin-owned reserved child
+(`DAEMON_PLUGIN.manual_child(agent)`), bound to this package's own mounted
+skill, returning the canonical `content[0].text` /
+`structuredContent.manual_path` result verbatim with no double wrap, and
+reaching no engine method. A package that declares, re-schemas, or rebinds
+`manual` raises `BuiltinToolPluginError` at import.
+
+Packaging is declarative. `registry.BUILTIN_TOOLS`/`CORE_DEFAULTS` remain the
+tables the host reads, `setup_capability` remains the only activation path, and
+`Agent._install_intrinsic_manuals` remains the only thing that mounts the
+`manual/` bundle. `DAEMON_PLUGIN.capability_declaration()` states the record
+those must agree with — `module` equal to `BUILTIN_TOOLS["daemon"]` and
+`manual_mount` equal to `.library/intrinsic/capabilities/daemon/SKILL.md` — and
+`tests/test_builtin_tool_plugin_package.py` proves the agreement rather than
+generating either at import.
 
 `list`, `check`, and `manual` are read-only. `emanate`, `ask`, and `reclaim`
 are the three side-effectful actions.

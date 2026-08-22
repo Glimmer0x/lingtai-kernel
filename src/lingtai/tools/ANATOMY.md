@@ -46,6 +46,7 @@ related_files:
   - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
@@ -158,6 +159,18 @@ capability names and lazy adapters.
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
   (`src/lingtai/tools/_manual.py:1-29`).
+- `_plugin.py` — built-in tool **plugin packaging** descriptor:
+  `BuiltinToolPlugin` binds one package's identity, its bundled `manual/`
+  skill (loaded and name-checked at construction), and the capability record
+  the host registry publishes for it (`capability_declaration()`). It also owns
+  the reserved-action promise: `actions()`, `action_input_schemas()`, and
+  `build_family()` append `manual` from the packaged skill — bound to that
+  skill's mounted destination — and raise `BuiltinToolPluginError` if a package
+  declares, re-schemas, or rebinds it. Declarative only — no discovery,
+  import-by-name, activation, workdir I/O, or config reading; capability
+  lookup/setup stays in `registry.py` and manual mounting stays in
+  `lingtai/agent.py`'s `_install_intrinsic_manuals`. It is the `lingtai.tools`
+  twin of `src/lingtai/mcp_servers/_plugin.py`.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -229,3 +242,15 @@ registry, schema, prompt, check-caps, manual, or catalog entries under those old
 public names. The five pre-migration file packages are not among them: they were
 deleted outright into `file/`, so there is no legacy directory, contract,
 glossary, or alias left for that surface.
+
+**Built-in plugin packaging is declarative, not a runtime.** `_plugin.py` adds
+no in-process plugin runtime, no config flag, and no second registry: a
+`BuiltinToolPlugin` is a package-local descriptor its own package imports
+explicitly. `registry.py`'s `BUILTIN_TOOLS`/`CORE_DEFAULTS` remain the tables
+the host reads for capability lookup, `setup_capability` remains the only
+activation path, and `Agent._install_intrinsic_manuals` remains the only thing
+that mounts a `manual/` bundle — the descriptor is what those must agree with,
+proven by test rather than by generating them at import. `daemon/` is the one
+package wired through it today (`src/lingtai/tools/daemon/plugin.py`,
+`tests/test_builtin_tool_plugin_package.py`); every other tool still declares
+these facts inline and is unchanged.

@@ -5,6 +5,8 @@ related_files:
   - src/lingtai/tools/daemon/CONTRACT.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/_tool_family.py
+  - src/lingtai/tools/daemon/plugin.py
+  - src/lingtai/tools/_plugin.py
   - src/lingtai/tools/daemon/system_prompt.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/tool_family/__init__.py
@@ -35,6 +37,7 @@ related_files:
   - tests/test_daemon_attention_delay.py
   - tests/test_daemon_central_manager.py
   - tests/test_tool_family_daemon_migration.py
+  - tests/test_builtin_tool_plugin_package.py
   - tests/test_daemon_empty_parity.py
   - tests/test_apriori_summary_executor.py
   - tests/test_daemon_run_dir.py
@@ -169,6 +172,16 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 - `adapters/posix/daemon_execution_child_entrypoint.py` — fresh-interpreter execution boundary launched by the supervisor before its watcher. It registers exact execution PID/PGID/start identity and composes the existing production host; it does not duplicate backend parsers. `daemon_resume_owner_entrypoint.py` provides the bounded detached owner for one terminal supported-CLI resume generation. Durable `resume-claims/` records enforce one writer, and `followups/` plus `daemon.json` expose follow-up truth to `daemon(check)`.
 - `adapters/posix/process_identity.py` — shared POSIX process-incarnation helper. Linux identities combine boot ID and `/proc/<pid>/stat` start ticks; Darwin/BSD identities use bounded `ps` start time plus PPID. It returns `None` when observation is unavailable, and all ownership-sensitive signal paths refuse unknown or mismatched identities.
 - `daemon/runtime.py` — stateless daemon backend runtime primitives shared by the LingTai in-process loop and transitional CLI runners. Port-owned Codex, Cursor, OpenCode-family, Qwen, and Kimi runners use the daemon-local process Port for stderr draining and stdout iteration; only ask workers use a local deadline, while initial streams remain watchdog-owned. The historical private names remain for unmigrated paths and compatibility tests.
+- `daemon/plugin.py` — Daemon's **plugin descriptor**, the reference slice for
+  `src/lingtai/tools/_plugin.py`. `DAEMON_PLUGIN` states the public capability
+  name, the module the capability registry imports, the packaged `manual/`
+  bundle and the `daemon-manual` skill it declares;
+  `DAEMON_DECLARED_ACTIONS` lists Daemon's own five actions with `manual`
+  deliberately absent, and `DAEMON_ACTIONS` is the plugin-composed public list.
+  `_tool_family.py` builds the schema/dispatch from it and `__init__.py`
+  registers the public tool under its name. Packaging only: no manager
+  construction, backend routing, supervision, lifecycle, config, or auth
+  decision lives here.
 - `daemon/CONTRACT.md` — maintained daemon contract for the public tool surface, selected skills catalog/path semantics, MCP registration redaction/native mounting, `daemon_common` checkpoint/inbox delivery and completion enforcement, backend implementation status, run artifacts, review triggers, and the acceptance gate for new backend or contract-impacting changes.
 
 - `daemon/interactive_terminal/` — capability-local immutable command/exit values and the
@@ -210,8 +223,10 @@ remains deferred until ConPTY has its own accepted adapter. `ClaudeInteractiveBr
 
 `daemon` is one model-facing tool carrying the LTP v2 action-separated envelope
 (`action`, `input`, required `reasoning`, optional `summarize`) composed by
-`_tool_family.py` from six internal `ChildTool`s. The children consume no extra
-model tool slot. Each action's own strict `input` fields are listed in
+`_tool_family.py` from six internal `ChildTool`s — Daemon's own five, declared
+in `plugin.py`, plus the reserved `manual` that `BuiltinToolPlugin` appends from
+the packaged skill and no package may declare, re-schema, or rebind. The
+children consume no extra model tool slot. Each action's own strict `input` fields are listed in
 `CONTRACT.md` §Tool Surface; `list`/`check`/`manual` are read-only and
 `emanate`/`ask`/`reclaim` are the side-effectful three.
 
