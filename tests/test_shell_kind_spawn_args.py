@@ -257,11 +257,12 @@ def test_setup_honors_shell_kind_override(tmp_path):
     from lingtai.tools.bash import ShellManager, setup
 
     agent = MagicMock()
-    agent._working_dir = Path(tmp_path)
+    agent.official_tool_plugins = {}
+    agent.working_dir = Path(tmp_path)
     manager = setup(agent, yolo=True, shell_kind="cmd")
     assert isinstance(manager, ShellManager)
     assert manager.shell_kind is ShellKind.CMD
-    description = agent.add_tool.call_args.kwargs["description"]
+    description = agent._mount_official_tool.call_args.args[0].plugin.description
     assert "Active shell dialect: cmd" in description
     assert "Active shell: cmd.exe" in description
     assert "'&&'" in description

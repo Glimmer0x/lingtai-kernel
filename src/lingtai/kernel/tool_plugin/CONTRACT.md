@@ -13,8 +13,14 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -51,8 +57,9 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
-   which a plugin controls the live Agent body, and the `ToolPluginHost` facade
+2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `NotificationPort`,
+   `ConfigurationPort`, `ToolMountPort`) through which a plugin controls the
+   live Agent body or reads its explicit setup values, and the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -98,8 +105,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. The declared families are `mcp`
+  and `shell`; each retains its own vertical contract tests.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -126,13 +133,16 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. |
+| `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override today); no Agent configuration lookup or write operation. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
-`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. `mcp` earns
+`workdir` and `prompt_section`; `shell` earns `workdir`, `notifications`, and
+`configuration` for its existing durable async execution semantics. Families
+that later need to drive the live Agent body — molt/summarize/rebuild, the
+involuntary tool-call inbox, intrinsic override — earn their ports one real
+slice at a time.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -144,9 +154,10 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
-(`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
-`AgentPromptSectionAdapter` translate the live
-`BaseAgent` into the grantable ports, each constructed from a bound method rather
+(`Adapter -> Port <- Core`). `AgentWorkdirAdapter`, `AgentPromptSectionAdapter`,
+and `AgentNotificationAdapter` translate the live `BaseAgent` into the narrow
+ports; `StaticConfigurationAdapter` carries only copied setup values. Each
+Agent-backed adapter is constructed from the needed bound method/reader rather
 than from the agent object. `agent_host_ports` builds one declaration's grantable
 table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
 

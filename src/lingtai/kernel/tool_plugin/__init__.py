@@ -45,6 +45,8 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "NotificationPort",
+    "ConfigurationPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +66,21 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
-#: actually needs together with its own slice.
+#: Earned, not enumerated: ``mcp`` consumes ``workdir``/``prompt_section`` and
+#: ``shell`` consumes ``workdir`` plus its explicit setup ``configuration`` and
+#: durable ``notifications`` ports. Root ``CONTRACT.md`` rules 10-11 forbid a
+#: speculative port taxonomy, so a later family adds a port only with its real
+#: vertical slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "prompt_section",
+    "notifications",
+    "configuration",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +91,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "shell")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +176,49 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class NotificationPort(Protocol):
+    """Publish a bounded durable notification without reaching the Agent.
+
+    The Shell slice needs exactly two already-existing notification operations:
+    an idempotent append to the durable system-event stream for its async
+    watchdog, and a latest-channel completion publication.  The port carries no
+    prompt, tool, lifecycle, or arbitrary filesystem operation; an adapter owns
+    the Agent/store details and preserves those existing notification semantics.
+    """
+
+    def publish_system(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        skip_if_ref_id_exists: bool = False,
+    ) -> bool:
+        """Append one durable system event; return whether publication completed."""
+
+    def publish_channel(
+        self,
+        channel: str,
+        payload: Mapping[str, Any],
+        *,
+        ref_id: str,
+    ) -> bool:
+        """Publish one idempotent latest-channel payload for *channel*."""
+
+
+class ConfigurationPort(Protocol):
+    """Read the immutable capability configuration selected by composition.
+
+    A declaration is static, while capability setup supplies its policy and
+    platform overrides at boot.  This port exposes only that explicit copied
+    mapping; it is not an Agent configuration API and does not permit writes.
+    """
+
+    @property
+    def values(self) -> Mapping[str, Any]:
+        """The static, copied configuration mapping for this plugin binding."""
 
 
 class ToolMountPort(Protocol):

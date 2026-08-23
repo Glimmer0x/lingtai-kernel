@@ -12,10 +12,16 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
@@ -34,8 +40,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how declared
+families reach the live Agent body through narrow ports. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +55,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the five host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `NotificationPort`, `ConfigurationPort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -71,20 +77,30 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. `AgentWorkdirAdapter`,
   `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), plus `agent_host_ports` and
-  `register_agent_tool_plugins`. The registrar constructs its mount seam
+  `protected=True`), `AgentNotificationAdapter`, `StaticConfigurationAdapter`,
+  plus `agent_host_ports` and `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
+- `src/lingtai/tools/mcp/__init__.py` — the MCP declaring family.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+  composition wiring.
+- `src/lingtai/tools/bash/_tool_family.py` — the Shell declaring family.
+  Its static `DECLARATION` derives the existing three action schemas and
+  packaged manual destination, binds the retained `ShellManager` through only
+  workdir/configuration/notification ports, and returns a `BoundToolPlugin`
+  whose activation resumes the unchanged durable async state. `bash/__init__.py`
+  `setup(agent, ...)` only supplies configuration and calls the registrar.
 
 ## Connections
 
 - `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
   on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
+- `lingtai.tools.bash._tool_family` imports `lingtai.kernel.tool_plugin`; its
+  lazy `_bind` sees a `ToolPluginHost`, never an Agent. The retained Shell
+  manager receives only the granted workdir/notification ports, while copied
+  setup values arrive through `ConfigurationPort`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only

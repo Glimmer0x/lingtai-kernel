@@ -417,7 +417,7 @@ current model-facing family gaining one declaration that *wraps* it.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical PR lands.
-  `mcp` is the only one today.
+  `mcp` and `shell` are declared today.
 
 **Authority: manager, declaration, host stay separate.**
 
