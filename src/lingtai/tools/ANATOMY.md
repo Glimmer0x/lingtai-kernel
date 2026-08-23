@@ -160,8 +160,9 @@ capability names and lazy adapters.
   family: `check`, three atomic dismiss actions, and `manual`
   (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
   is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
-  builds its dispatching family per call, because an intrinsic receives `agent`
-  per call rather than owning a manager.
+  retains a legacy dispatching family per call, because an intrinsic receives `agent`
+  per call rather than owning a manager; this is not the generic registrar/bridge
+  dispatch path.
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -234,16 +235,19 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
-each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
+kernel-owned declared host-plugin contract. `mcp` is the current base reference
+slice; the shared C integration register targets `mcp`, `email`, `file`,
+`context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
+`task_card`, and does not imply that every candidate family has merged. These are
+the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
 the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
 the one declared slice — `mcp` binds against two granted host ports instead of
 the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
-with the whole `Agent` and is a future migration unit.
+shapes unchanged. Candidate-local families may still boot through their legacy `setup(agent)`
+paths until their own vertical slice lands; that compatibility fact is not the
+generic registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

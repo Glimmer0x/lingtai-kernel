@@ -12,7 +12,7 @@ related_files:
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
-  Keep the manual-only public route through psyche, generic file ownership, the no-hot-load rule, identity modes, and the context reconstruction route synchronized with code.
+  Keep the manual-only public route through psyche, generic file ownership, the no-hot-load rule, identity modes, and the context reconstruction route synchronized with code. The retained context-manual link is a legacy redirect; an installed package-owned `src/lingtai/tools/context/manual/` manual is canonical. This does not claim candidate package manuals have merged.
 ---
 
 # LingTai Manual

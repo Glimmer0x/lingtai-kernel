@@ -18,7 +18,9 @@ maintenance: |
   This is the psyche family's own manual, loaded by
   `psyche(action='manual', input={}, reasoning='...')`.
   It is a routing table by design: keep it short and keep the depth in the four
-  domain manuals it points to. Update it together with
+  domain manuals it points to. Its retained context-manual link is a legacy
+  redirect; an installed package-owned `src/lingtai/tools/context/manual/`
+  manual is canonical, and this does not claim candidate manuals have merged. Update it together with
   src/lingtai/tools/psyche/{CONTRACT,ANATOMY}.md whenever the public action
   inventory, a domain's durable source, or the rebuild model changes.
 ---

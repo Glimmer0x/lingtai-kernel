@@ -23,3 +23,5 @@ maintenance: >
   relation needs that link.
 ---
 Summarize records an agent-authored replacement in runtime history; provider-context reconstruction happens later at the threshold. Runtime token/context state, rebuild/molt hints, and the one-shot reconstruction event are under `_meta.agent_meta.agent_state`; immutable per-execution facts remain under `_meta.tool_meta`. The latest whole `_meta.agent_meta` is current and every older holder is a historical trace. A fresh replay preserves those historical holders without rewriting canonical history; only the summarize replacement changes a historical tool-result body. At 0.85, deliberate rebuild is permitted; at 1.0, one forced rebuild occurs per continuous overflow episode, followed by the recovery/molt guidance when needed.
+
+> **Manual authority:** the retained intrinsic context-manual link is a legacy redirect; an installed package-owned Context manual is canonical. This shared register does not claim that candidate package manual has merged.

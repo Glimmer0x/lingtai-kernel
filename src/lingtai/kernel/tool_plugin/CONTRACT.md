@@ -40,10 +40,13 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
-follows one declared plugin contract: a static declaration of its identity and
-public actions, a bind step against a least-privilege host facade, and a
+This component is the kernel's boundary for every declared official
+model-facing tool plugin. Each official tool family follows the same generic
+declaration contract. The C integration target names `mcp`, `email`, `file`,
+`context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
+`task_card`; this target is not a claim that every candidate has merged. Each
+family supplies a static declaration of its identity and public actions, a bind
+step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
 before anything is bound or mounted.
 
@@ -98,8 +101,9 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. The base checkout proves the
+  `mcp` slice; the shared C register names additional target declarations
+  without claiming that their candidate worktrees have merged.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -128,11 +132,15 @@ capability.
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
-`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. The base
+checkout currently exposes `workdir` and `prompt_section` for the `mcp` slice.
+The C integration target extends this vocabulary one real family slice at a time
+with `intrinsic_dispatch`, `file_io`, `context_runtime`,
+`notification_state`, `soul_runtime`, `active_provider`, `configuration`,
+`runtime`, `provider_identity`, `daemon_runtime`, `system_runtime`, `identity`,
+`shutdown`, `task_card_lifecycle`, and `task_card_notifications`; each family
+must earn only the subset it consumes. This target wording does not claim those
+candidate-local runtime changes have merged.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference

@@ -13,6 +13,15 @@ maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---
 
+## Authority and legacy redirect
+
+This retained intrinsic manual is migration-compatible legacy material. For an
+installed `context` package, the canonical manual is
+`src/lingtai/tools/context/manual/SKILL.md` (including its summarize/rebuild
+reference). Do not treat this retained path as package ownership; consult the
+package manual first. Candidate-local package manual installation is outside the
+shared C register.
+
 # Context Manual
 
 This manual is the router for `context` operations — `molt`, `summarize`, and `rebuild`. Keep routine guidance here; load the supporting asset or reference only when you need the full scaffold or the detailed summarize/rebuild procedure.
