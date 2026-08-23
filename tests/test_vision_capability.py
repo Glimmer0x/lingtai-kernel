@@ -41,11 +41,32 @@ def make_mock_service():
 
 
 def make_mock_agent(tmp_path, svc=None):
+    """Build a recording host that exercises the official mount route."""
     agent = MagicMock()
     agent.service = svc or make_mock_service()
     agent._config = MagicMock()
     agent._config.language = "en"
     agent._working_dir = tmp_path
+    agent.working_dir = tmp_path
+    agent.official_tool_plugins = {}
+
+    def mount(transaction):
+        transaction.consume()
+        plugin = transaction.plugin
+        agent.add_tool(
+            plugin.name,
+            schema=plugin.schema,
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(agent)
+
+    def claim(transaction):
+        agent.official_tool_plugins[transaction.declaration.name] = transaction.declaration
+
+    agent._mount_official_tool.side_effect = mount
+    agent._claim_official_tool.side_effect = claim
     return agent
 
 

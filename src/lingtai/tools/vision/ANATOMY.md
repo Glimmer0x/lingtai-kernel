@@ -11,6 +11,9 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/services/vision/ANATOMY.md
   - src/lingtai/tools/vision/settings.py
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_tool_plugin_declaration.py
 maintenance: |
   Keep related_files as repo-relative paths to real files and keep anatomy links
   reciprocal. Update citations with structural code changes and run the document
@@ -34,9 +37,17 @@ result shape.
 - `__init__.py:46-99` — Codex-family gate and bucket-driven route resolution plus the same-provider alias check; GLM/Zhipu and Codex spelling pairs share current identity, provider spelling is only a Codex-family compatibility gate, `_normalize_codex_auth_path` trims the bucket `codex_auth_path` once, and `_codex_bucket_route` picks direct (nonblank trimmed `codex_auth_path` in the active bucket) vs pool exactly as the canonical Codex factory does.
 - `__init__.py:120-128` — exact advertised provider registry; the local pseudo-provider remains explicit opt-in and intentionally excluded.
 - `__init__.py:130-150` — the two canonical child input schemas: `analyze` owns the strict `image_path`/nullable-`question` object, `manual` is strict empty.
-- `__init__.py:152-199` — `_build_family`, the one canonical child declaration consumed by both the module-level schema-only family and every `VisionManager`, plus `get_description`/`get_schema`; the reserved `manual` child registers the generic `tool_family.manual.MANUAL_INPUT_SCHEMA` rather than a local copy, and the composed root exposes both exact child inputs and correlates each `action` const with its own `input`.
-- `__init__.py:202-316` — `VisionManager`; builds its family through `_build_family` with the `analyze` handler bound to instance state and the reserved `manual` child from `tool_family.manual.build_manual_child`, `handle()` owns the canonical dispatch/presentation ordering and flattens the manual child's canonical result afterwards, `_dispatch_analyze` validates and reads the image.
-- `__init__.py:319-614` — `setup`; resolves only the same current model/endpoint/credential/headers/wire, routes active Codex-family services by the bucket-driven direct (trimmed `codex_auth_path`) vs pool (pool-selected candidate token path) rule, creates supported services, fails closed to manual guidance when identity is incomplete, and always registers the one public `vision` tool.
+- `__init__.py` — `VisionConfiguration`, static `DECLARATION`, and the
+  declaration-derived `_build_family` are one source for identity, action
+  schemas, and the package-owned reserved manual. Import-time schema composition
+  catches a malformed fixed family before an Agent exists.
+- `__init__.py` — `_bind(host)` creates `VisionManager` from only the granted
+  workdir/current-provider/configuration ports; it retains same-provider route,
+  credential, Codex bucket, and local-settings behavior without retaining an
+  Agent. `handle()` owns canonical dispatch/manual flattening.
+- `__init__.py` — `setup` supplies the immutable public capability-kwargs
+  snapshot to `register_agent_tool_plugins`; the kernel registrar is the sole
+  mount path for the public `vision` name.
 
 - `settings.py` — strict per-Agent settings for the `provider: local` route. `settings/vision.json` is the family-owned provider configuration holding the operator-configured local OpenAI-compatible endpoint (`base_url`, `model`, optional `api_key`/`max_tokens`). It mirrors the `settings/web.json` pattern from `lingtai.tools.web_search.settings`: a bounded, race-checked read with a stable digest, so "default applied" is a truthful, verifiable fact (`src/lingtai/tools/vision/settings.py:1-8`).
 
@@ -57,10 +68,11 @@ result shape.
 
 ## Composition
 
-`VisionManager` owns the agent, optional service, safe manual reason, and its
-per-instance `ToolFamily`. The capability is registered by the built-in
-capability loader and registers exactly one `vision` tool with the composed
-schema and the glossary package.
+`VisionManager` owns only the granted workdir/current-provider ports, optional
+service, safe manual reason, and its per-instance `ToolFamily`; it holds no
+Agent. The built-in capability loader passes the setup configuration through
+`register_agent_tool_plugins`, whose kernel registrar claims and mounts exactly
+one `vision` tool with the declaration-derived schema and glossary package.
 
 ## State
 

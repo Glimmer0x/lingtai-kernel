@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
   Keep this manual provider-neutral and read-only. It must not import, name, or
   link to a TUI package, credential, endpoint secret, or automatic MCP action.
@@ -16,7 +17,10 @@ maintenance: |
 # Vision manual
 
 This is the provider-neutral fallback for `vision`. It contains guidance only;
-it does not discover, install, start, or invoke a backend.
+it does not discover, install, start, or invoke a backend. The static official
+Vision declaration owns this package as its `manual="vision"` destination, so
+the registrar-bound `manual` action reads this installed `SKILL.md` and not a
+host-global or another family’s skill.
 
 ## Call shape
 

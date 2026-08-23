@@ -12,6 +12,9 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/vision/ANATOMY.md
+  - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -34,8 +37,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how declared
+families reach the live Agent body through it. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +52,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the five host Port Protocols `WorkdirPort`, `ActiveProviderPort`,
+    `ConfigurationPort`, `PromptSectionPort`, and `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -74,17 +77,20 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `protected=True`), plus `agent_host_ports` and
   `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
-  `DECLARATION` is built at module import; `_bind(host)` composes the
-  per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
-  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+- `src/lingtai/tools/mcp/__init__.py` — one declaring family. `DECLARATION`
+  is built at module import; `_bind(host)` composes the per-host `ToolFamily`
+  and `handle_mcp` Host wrapper, with `activate` as its boot reconcile.
+- `src/lingtai/tools/vision/__init__.py` — the second declaring family.
+  Its static `DECLARATION` binds a `VisionConfiguration` plus only `workdir`
+  and `active_provider`, composes the provider-preserving dispatcher and its
+  package-owned manual, then returns the mountable `VisionManager`.
 
 ## Connections
 
-- `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
-  on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
-  swept by `tests/test_tool_plugin_declaration.py`.
+- `lingtai.tools.mcp` and `lingtai.tools.vision` import
+  `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
+  imports nothing from `lingtai.tools`; that edge is swept by
+  `tests/test_tool_plugin_declaration.py`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only

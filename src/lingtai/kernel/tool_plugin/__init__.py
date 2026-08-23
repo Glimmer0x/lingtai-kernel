@@ -24,7 +24,7 @@ Three deliberate absences define this module as much as its exports:
   grantable at all — an official plugin cannot mount itself.
 
 See the sibling ``CONTRACT.md`` for the normative rules and ``ANATOMY.md`` for
-where the production adapter and the first declaration live.
+where the production adapter and declared families live.
 """
 
 from __future__ import annotations
@@ -44,6 +44,8 @@ __all__ = [
     "OfficialToolNameCollisionError",
     "HostPortError",
     "WorkdirPort",
+    "ActiveProviderPort",
+    "ConfigurationPort",
     "PromptSectionPort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -64,15 +66,17 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
+#: Earned, not enumerated: each name below is consumed by a shipped real
+#: vertical slice (``mcp`` or ``vision``). Root ``CONTRACT.md`` rules 10-11
 #: forbid a speculative port taxonomy, so a later family adds the port it
 #: actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir", "active_provider", "configuration", "prompt_section"
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +87,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "vision")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -155,6 +159,36 @@ class WorkdirPort(Protocol):
     @property
     def path(self) -> Path:
         """The agent working directory."""
+
+
+class ActiveProviderPort(Protocol):
+    """Read the current provider service selected by the host.
+
+    The service is intentionally opaque to the kernel: a family that genuinely
+    shares its active provider may inspect its provider/model/credential route,
+    but receives neither the Agent nor a generic route to another capability.
+    The adapter reads through on every access so refresh cannot leave a plugin
+    with a stale provider identity.
+    """
+
+    @property
+    def service(self) -> Any:
+        """The current active provider service, or ``None`` when absent."""
+
+
+class ConfigurationPort(Protocol):
+    """One opaque, composition-root supplied configuration value.
+
+    Capability setup kwargs are not Agent authority. A configured declaration
+    receives only this one value, supplied for its own registration by the
+    Composition Root, rather than recovering configuration through the live
+    Agent. The kernel deliberately gives the value no schema or lifecycle:
+    the consuming real slice owns both.
+    """
+
+    @property
+    def value(self) -> Any:
+        """The configuration value supplied for this registration."""
 
 
 class PromptSectionPort(Protocol):

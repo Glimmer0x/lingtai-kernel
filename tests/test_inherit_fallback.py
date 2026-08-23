@@ -4,6 +4,7 @@ When a capability's resolved provider isn't in its supported list, it should
 either fall back to its declared agnostic fallback or silently skip
 registration. Never raise."""
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -29,6 +30,28 @@ def _stub_agent(language: str = "en"):
         a._tool_schemas[name] = kw.get("schema")
     a.add_tool = _add_tool
     a.add_capability = MagicMock()
+    a.working_dir = Path.cwd()
+    a.official_tool_plugins = {}
+
+    def _mount_official(transaction):
+        transaction.consume()
+        plugin = transaction.plugin
+        a.add_tool(
+            plugin.name,
+            schema=plugin.schema,
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(a)
+
+    def _claim_official(transaction):
+        a.official_tool_plugins[transaction.declaration.name] = transaction.declaration
+
+    a._mount_official_tool = _mount_official
+    a._claim_official_tool = _claim_official
+    a._authorize_official_tool_declaration = lambda _declaration: None
+    a._record_official_tool_binding = lambda _declaration, _plugin: None
     return a
 
 

@@ -10,6 +10,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/vision/__init__.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
@@ -46,12 +47,13 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 1. Prove the declaration exists and validates before any Agent does:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION; print(DECLARATION.name, DECLARATION.actions, DECLARATION.public_actions, DECLARATION.requires)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as M; from lingtai.tools.vision import DECLARATION as V; print(M.name, M.public_actions, M.requires); print(V.name, V.public_actions, V.requires)"
    ```
 
-   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')`. No
-   `Agent` was constructed; the reserved `manual` action is appended, not
-   declared.
+   Expect MCP’s `('info', 'manual') ('workdir', 'prompt_section')` and Vision’s
+   `('analyze', 'check', 'list', 'manual') ('workdir', 'active_provider',
+   'configuration')`. No `Agent` was constructed; the reserved `manual` action
+   is appended, not declared.
 
 2. Prove the public model-facing surface is unchanged by the recut:
 
@@ -68,7 +70,8 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.mcp import DECLARATION; h = ToolPluginHost('mcp', {'workdir': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
-   Expect `('workdir', 'prompt_section') ('workdir',)` printed, then an
+   Expect `('workdir', 'active_provider', 'configuration', 'prompt_section')
+   ('workdir',)` printed, then an
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`.

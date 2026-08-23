@@ -8,6 +8,9 @@ related_files:
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_tool_plugin_declaration.py
 maintenance: |
   Keep this contract aligned with the vision tool and its tests. Bump the
   version only for a repository-policy-required breaking contract change.
@@ -29,11 +32,15 @@ Guarded by: [VN001](BEHAVIORS.md#behavior-vn001)
 `vision` is one action-separated family in the LingTai Tool Protocol v2 shape
 defined in `src/lingtai/tools/CONTRACT.md`, built on the generic
 `src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool` plus
-the reusable ManualTool builder). The public tool name stays `vision` and the
-public action values stay exactly `analyze` and `manual`; adopting the shared
-infrastructure changed no provider route, identity rule, or result shape in this
-file. Exactly one public model-facing `vision` root is registered; the two
-canonical children are not separate tools and consume no model tool slots.
+the reusable ManualTool builder). Its module-level `DECLARATION` is the static
+official declared-host-plugin record reserved by
+`src/lingtai/kernel/tool_plugin/`; it owns `analyze`, `check`, and `list`, while
+the family-owned packaged manual supplies the final reserved `manual` action.
+The binder receives only `workdir`, a read-only `active_provider`, and one
+opaque capability-configuration snapshot—never the Agent—and derives the
+family/schema/manual from that declaration. Exactly one public model-facing
+`vision` root is registered through the kernel registrar; its four canonical
+children are not separate tools and consume no model tool slots.
 
 The model shape is the strict envelope `action` + `input` + `reasoning` +
 optional `summarize`, with `required: [action, input, reasoning]` and
@@ -50,7 +57,7 @@ name equals public action value equals dispatch key — there is no mapping laye
 `Describe what you see in this image.`), both required as branch properties per
 the strict-object convention. `manual` is the family-owned reserved child with
 strict empty input. Analyze resolves relative `image_path` values against the
-agent working directory. Unknown actions and invalid or cross-action `input`
+read-only granted workdir port. Unknown actions and invalid or cross-action `input`
 fail at dispatch, before any handler runs and therefore before any provider I/O,
 credential read, or image read.
 
@@ -130,7 +137,9 @@ provider and exception type.
 
 ## Invariants and tests
 
-- `setup` always registers exactly one public `vision` tool:
+- `setup` always registers exactly one public `vision` tool through the
+  official registrar, claims the static declaration, and serves the packaged
+  manual: `tests/test_tool_plugin_declaration.py`,
   `tests/test_vision_capability.py`, `tests/test_tool_family_vision_migration.py`.
 - Both child schemas and handlers, invalid/cross-action rejection before
   provider I/O, manual-without-provider-call, exact success/failure shapes, and

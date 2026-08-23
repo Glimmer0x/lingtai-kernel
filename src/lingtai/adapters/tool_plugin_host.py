@@ -21,7 +21,7 @@ only builds the ports.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
@@ -31,6 +31,8 @@ from lingtai.kernel.tool_plugin import (
 
 __all__ = [
     "AgentWorkdirAdapter",
+    "AgentActiveProviderAdapter",
+    "StaticConfigurationAdapter",
     "AgentPromptSectionAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
@@ -52,6 +54,38 @@ class AgentWorkdirAdapter:
     @property
     def path(self) -> Path:
         return self._read()
+
+
+class AgentActiveProviderAdapter:
+    """``ActiveProviderPort`` over the Agent's current provider service.
+
+    This is a read-only route to the one active service. It deliberately does
+    not expose the Agent, its capability map, tool surface, or provider
+    registry; Vision consumes exactly this active-provider identity to retain
+    its direct-route semantics.
+    """
+
+    __slots__ = ("_read",)
+
+    def __init__(self, read: Callable[[], Any]) -> None:
+        self._read = read
+
+    @property
+    def service(self) -> Any:
+        return self._read()
+
+
+class StaticConfigurationAdapter:
+    """``ConfigurationPort`` over one composition-root supplied value."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    @property
+    def value(self) -> Any:
+        return self._value
 
 
 class AgentPromptSectionAdapter:
@@ -85,6 +119,7 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     """
     return {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
+        "active_provider": AgentActiveProviderAdapter(lambda: getattr(agent, "service", None)),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
         ),
@@ -94,6 +129,8 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
+    *,
+    configurations: Mapping[str, Any] | None = None,
 ) -> tuple[BoundToolPlugin, ...]:
     """Wire *declarations* onto *agent* through the kernel registrar.
 
@@ -107,12 +144,15 @@ def register_agent_tool_plugins(
 
     The port table is built per declaration, on demand, because
     :class:`AgentPromptSectionAdapter` is bound to the declaring plugin's own
-    section name. The mount seam is deliberately constructed inside this
-    registrar call: it accepts only the kernel's one-use declaration/bound
-    transaction, never a caller-supplied plugin or token. Claims are observed
-    through the public read-only view and changed through BaseAgent's narrow
-    internal claim hook.
+    section name. ``configurations`` supplies an optional, opaque value by
+    declaration name; it is a one-value setup input, not a route back to the
+    Agent. The mount seam is deliberately constructed inside this registrar
+    call: it accepts only the kernel's one-use declaration/bound transaction,
+    never a caller-supplied plugin or token. Claims are observed through the
+    public read-only view and changed through BaseAgent's narrow internal claim
+    hook.
     """
+    configurations = dict(configurations or {})
 
     class _InternalMount:
         def mount_tool(self, transaction) -> None:
@@ -120,7 +160,14 @@ def register_agent_tool_plugins(
 
     return register_official_tool_plugins(
         list(declarations),
-        ports_for=lambda declaration: agent_host_ports(agent, declaration.name),
+        ports_for=lambda declaration: {
+            **agent_host_ports(agent, declaration.name),
+            **(
+                {"configuration": StaticConfigurationAdapter(configurations[declaration.name])}
+                if declaration.name in configurations
+                else {}
+            ),
+        },
         mount=_InternalMount(),
         claimed=agent.official_tool_plugins,
         claim=agent._claim_official_tool,

@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/settings.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - tests/test_tool_plugin_declaration.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a

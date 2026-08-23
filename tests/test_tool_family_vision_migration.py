@@ -13,6 +13,7 @@ wrapping of the manual child's canonical result.
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,14 +24,71 @@ from lingtai.tools.vision import VisionManager, get_schema, setup
 
 
 class _StubAgent:
-    """Minimal agent surface: a working dir plus one recorded ``add_tool``."""
+    """Minimal controlled host for the Vision declaration tests."""
 
     def __init__(self, working_dir: Path):
         self._working_dir = working_dir
+        self.service = None
         self.tools: dict[str, dict] = {}
+        self._official_tool_plugins: dict[str, object] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        return None
+
+    def _authorize_official_tool_declaration(self, _declaration) -> None:
+        return None
+
+    def _record_official_tool_binding(self, _declaration, _plugin) -> None:
+        return None
+
+    def _mount_official_tool(self, transaction) -> None:
+        transaction.consume()
+        plugin = transaction.plugin
+        self.add_tool(
+            plugin.name,
+            schema=plugin.schema,
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(self)
+
+    def _claim_official_tool(self, transaction) -> None:
+        self._official_tool_plugins[transaction.declaration.name] = transaction.declaration
 
     def add_tool(self, name: str, **kwargs) -> None:
         self.tools[name] = kwargs
+
+
+class _Workdir:
+    def __init__(self, path: Path):
+        self.path = path
+
+
+class _ActiveProvider:
+    def __init__(self, agent: _StubAgent):
+        self._agent = agent
+
+    @property
+    def service(self):
+        return self._agent.service
+
+
+def _bound_manager(agent: _StubAgent, service=None, manual_reason: str = "") -> VisionManager:
+    return VisionManager(
+        _Workdir(agent.working_dir),
+        _ActiveProvider(agent),
+        vision_service=service,
+        manual_reason=manual_reason,
+    )
 
 
 def _install_manual(workdir: Path) -> tuple[str, Path]:
@@ -51,7 +109,7 @@ def _never_called_service() -> MagicMock:
 
 
 def _manager(tmp_path: Path, service=None) -> VisionManager:
-    return VisionManager(_StubAgent(tmp_path), vision_service=service)
+    return _bound_manager(_StubAgent(tmp_path), service=service)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +409,7 @@ def test_analyze_without_a_direct_route_returns_the_setup_manual_reason(tmp_path
         "No direct vision provider was configured; use vision(action='manual', "
         "input={}, reasoning='no direct vision provider is configured')."
     )
-    mgr = VisionManager(_StubAgent(tmp_path), vision_service=None, manual_reason=reason)
+    mgr = _bound_manager(_StubAgent(tmp_path), service=None, manual_reason=reason)
     result = mgr.handle(
         {"action": "analyze", "input": {"image_path": "x.png", "question": None}, "reasoning": "r"}
     )
@@ -722,7 +780,7 @@ def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
     identity = kwargs["identity_service"]
     # ``provider`` is consumed positionally; the capability's provider copy is
     # dropped before the call (regression: duplicate keyword -> TypeError).
-    assert mock_resolve.call_args.args[1] == "codex-pool"
+    assert mock_resolve.call_args.args[2] == "codex-pool"
     assert "provider" not in kwargs
     assert identity.provider == "codex-pool"
     assert identity._model == "gpt-5.6"
@@ -811,7 +869,7 @@ def test_check_default_route_reports_ok_without_image(tmp_path):
     agent.service = MagicMock()
     agent.service.provider = "codex-pool"
     agent.service.model = "gpt-5.6"
-    mgr = VisionManager(agent, vision_service=svc)
+    mgr = _bound_manager(agent, service=svc)
 
     result = mgr.handle(
         {"action": "check", "input": {"preset": None}, "reasoning": "which vision works"}
@@ -830,7 +888,7 @@ def test_check_no_default_route_returns_manual_reason(tmp_path):
         "No direct vision provider was configured; use vision(action='manual', "
         "input={}, reasoning='no direct vision provider is configured')."
     )
-    mgr = VisionManager(_StubAgent(tmp_path), vision_service=None, manual_reason=reason)
+    mgr = _bound_manager(_StubAgent(tmp_path), service=None, manual_reason=reason)
     result = mgr.handle(
         {"action": "check", "input": {"preset": None}, "reasoning": "r"}
     )
@@ -1024,7 +1082,7 @@ def test_list_action_enumerates_default_route_and_vision_capable_presets(tmp_pat
     agent.service = MagicMock()
     agent.service.provider = "codex"
     agent.service._model = "gpt-5.5"
-    mgr = VisionManager(agent, vision_service=None)
+    mgr = _bound_manager(agent, service=None)
 
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         result = mgr.handle(

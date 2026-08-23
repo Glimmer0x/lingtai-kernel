@@ -24,6 +24,8 @@ related_files:
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/tools/vision/__init__.py
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/system/CONTRACT.md
@@ -62,9 +64,9 @@ maintenance: |
   route layered over a declaration, not the required form of every official
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
-  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp` is the only
-  declared family today; do not widen that claim without another family's own
-  evidence.
+  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp` and `vision`
+  are declared families today; do not widen that claim without another family's
+  own vertical evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -417,7 +419,7 @@ current model-facing family gaining one declaration that *wraps* it.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical PR lands.
-  `mcp` is the only one today.
+  `mcp` and `vision` are the only declared families today.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -578,15 +580,16 @@ non-goal for third-party-versus-third-party mounts.
 
 **Current evidence versus migration target.**
 
-- The selected form ships for exactly one family:
+- The selected form ships for exactly two families:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
   host ports, the reserved official-name list, and the fail-fast registrar;
-  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
-  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the reference slice; and
-  `tests/test_tool_plugin_declaration.py` is the shared contract suite. `mcp`'s
-  public surface is unchanged by that recut
-  (`tests/test_tool_family_mcp_migration_parity.py`,
-  `tests/test_mcp_capability.py`).
+  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set.
+  `src/lingtai/tools/mcp/__init__.py` and
+  `src/lingtai/tools/vision/__init__.py` are the real static declaration slices;
+  `tests/test_tool_plugin_declaration.py` proves both on a real Agent. MCP’s
+  public surface and Vision’s active-provider/manual semantics remain unchanged
+  by their respective recuts (`tests/test_mcp_capability.py`,
+  `tests/test_vision_capability.py`, `tests/test_tool_family_vision_migration.py`).
 - The curated **external-transport** route ships for the curated MCP families
   only, and is cited as precedent for that route rather than as conformance to
   the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one
