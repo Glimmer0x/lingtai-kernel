@@ -12,7 +12,7 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |

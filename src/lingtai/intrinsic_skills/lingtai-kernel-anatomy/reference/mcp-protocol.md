@@ -6,7 +6,7 @@ related_files:
 - src/lingtai/tools/daemon/__init__.py
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/mcp_servers/ANATOMY.md
-- src/lingtai/tools/mcp/manual/SKILL.md
+- src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
 - pyproject.toml
 - tests/test_mcp_sdk_v2_contract.py
 - tests/test_mcp_capability.py

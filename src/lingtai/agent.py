@@ -552,13 +552,18 @@ class Agent(BaseAgent):
         """Wipe and rewrite ``.library/intrinsic/`` from kernel-shipped manuals.
 
         Runs near the end of ``__init__`` and ``_setup_from_init``. Installs
-        every capability's ``manual/`` bundle into
-        ``.library/intrinsic/capabilities/<name>/``, **regardless of whether
-        this agent enabled the capability**. The library is kernel-shipped
-        documentation — agents should be able to read about a capability
-        before they configure it.
+        every capability manual into ``.library/intrinsic/capabilities/<name>/``,
+        **regardless of whether this agent enabled the capability**. The library
+        is kernel-shipped documentation — agents should be able to read about a
+        capability before they configure it.
 
-        Never touches ``.library/custom/``. That is the agent's territory.
+        Legacy tool packages contribute their ``manual/`` directory. A built-in
+        tool package with ``plugin.json`` instead contributes its one owned
+        Agent Skill, validated by the existing ``plugin_registry.read_plugin``
+        reader before it is copied under its manifest name. This is packaging
+        only: it neither registers an Agent Plugin nor writes/activates an MCP
+        registry record. Never touches ``.library/custom/``. That is the
+        agent's territory.
         """
         import shutil
         import lingtai.tools as tools_pkg
@@ -573,6 +578,51 @@ class Agent(BaseAgent):
             shutil.rmtree(intrinsic_dir)
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
 
+        def install_tool_plugin(entry: Path, subdir: str) -> None:
+            """Install one built-in tool package's sole owned manual skill.
+
+            The Agent Plugins reader remains the only manifest and containment
+            validator. Built-in model-facing packages are documentation sources,
+            not declared external plugins: a bundled ``mcp.json`` is rejected
+            here so this installer cannot become a second route into the
+            per-agent MCP registry.
+            """
+            from .services.plugin_registry import read_plugin
+
+            record, problems = read_plugin(entry)
+            for problem in problems:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=entry.name,
+                    reason=str(problem.get("error", "")),
+                )
+            if record is None:
+                return
+            if record["mcp_servers"]:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugins must not carry mcp.json; "
+                        "their servers are not registered"
+                    ),
+                )
+                return
+            skill_paths = record["skill_paths"]
+            if len(skill_paths) != 1:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugin must provide exactly one owned "
+                        "manual skill"
+                    ),
+                )
+                return
+            destination = intrinsic_dir / subdir / record["name"]
+            if not destination.exists():
+                shutil.copytree(skill_paths[0], destination)
+
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
@@ -584,6 +634,9 @@ class Agent(BaseAgent):
                 # Browser is an internal browse subcomponent. Its former manual
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
+                    continue
+                if (entry / "plugin.json").is_file():
+                    install_tool_plugin(entry, subdir)
                     continue
                 src = entry / "manual"
                 if src.is_dir():
@@ -617,12 +670,12 @@ class Agent(BaseAgent):
                     continue
                 shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
 
-        # Every tool package with a manual/ installs into
-        # intrinsic/capabilities/<name>/ — agents see one flat capability
-        # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan; tools without a manual/ (the
-        # file tools, the non-email intrinsics whose manuals ship as
-        # intrinsic_skills bundles below) are simply skipped.
+        # Every tool package with a legacy manual/ or a validated owned skill
+        # installs into intrinsic/capabilities/<name>/ — agents see one flat
+        # capability namespace. Scanning the consolidated ``lingtai.tools``
+        # package replaces the former core/ + capabilities/ dual scan; tools
+        # without either (the file tools, the non-email intrinsics whose manuals
+        # ship as intrinsic_skills bundles below) are simply skipped.
         install_from(tools_pkg, "capabilities")
         install_skills_from(skills_pkg, "capabilities")
 

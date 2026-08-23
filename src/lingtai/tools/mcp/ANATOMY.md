@@ -4,15 +4,18 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/mcp/BEHAVIORS.md
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/plugin.json
+  - src/lingtai/agent.py
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_mcp_builtin_plugin_package.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -23,10 +26,10 @@ related_files:
   - src/lingtai/tools/mcp/glossary-zh.md
   - src/lingtai/tools/mcp/glossary-wen.md
   - ENVIRONMENT_VARIABLES.md
-  - src/lingtai/tools/mcp/manual/reference/curated-addons.md
-  - src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md
-  - src/lingtai/tools/mcp/manual/reference/troubleshooting.md
-  - src/lingtai/tools/mcp/manual/scripts/find_readme.py
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py
   - src/lingtai/tools/ANATOMY.md
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -56,7 +59,7 @@ The model-visible notification projection for LICC events is governed by `src/li
 - `src/lingtai/services/mcp_inbox.py` — LICC v1 filesystem inbox poller (the **consumer** half). `validate_event` validates required `from`/`subject`/`body` fields; `_format_notification_summary` is **deprecated** legacy helper (retained for backward compat); `_extract_preview_meta` pulls optional IM/chat scalars (`conversation_ref`, `message_ref`, `platform`, and the additive per-update `event_id` used by the persistent lane for event-identity dedup/delivery) out of `event["metadata"]` when present as non-empty strings, each capped at `_PREVIEW_META_FIELD_CAP` (200 chars), and curated IM structured fields (`latest_incoming`, `recent_messages`, `referenced_messages` — the full reply target when it falls outside the last-20 window) after a bounded JSON-safe copy (a right-typed structured field that is unserializable or over the `_PREVIEW_STRUCTURED_META_JSON_CAP` is replaced by an explicit `licc_structured_omitted` marker carrying the reason and a read-action recovery hint, never silently dropped) — these feed the kernel builder for `_meta.agent_meta.notifications.persistent.mcp.<channel>` (currently Telegram, WeChat, Feishu, WhatsApp) and are then stripped from the model-visible ephemeral lane by the per-channel `meta_block.sanitize_*_notification_after_persistent` wrappers (move, not duplicate — Jason #6148); `_consume_event` returns `(wake, preview)` where `preview = {"from": sender, "subject": subject, "preview": body[:_PREVIEW_FIELD_CAP], "preview_truncated": bool, **extracted_meta}` — only the body snippet gets capped (sender/subject are bounded by upstream construction); `_dispatch_summary` publishes to `.notification/mcp.<mcp_name>.json` via `notifications.submit`, embedding full body snippets once in `data.previews` while keeping `instructions` to read/check guidance plus lightweight sender/subject/metadata routing context; `_scan_once` coalesces per MCP, threading the preview list through; `MCPInboxPoller` class drives the poll loop. Body snippet cap is `_PREVIEW_FIELD_CAP = 10000`. Defines the shared contract constants `LICC_VERSION` / `INBOX_DIRNAME` / `DEAD_DIRNAME` / `TMP_SUFFIX` / `EVENT_SUFFIX`.
 - `src/lingtai/services/mcp_licc.py` — LICC v1 client (the **producer** half). One public function, `push_inbox_event(sender, subject, body, *, metadata=None, wake=True, received_at=None, agent_dir=None, mcp_name=None, event_id=None) -> bool`, that an out-of-process MCP imports to drop one event into `<agent_dir>/.mcp_inbox/<mcp_name>/<event_id>.json`. Lightweight by design — importing it starts no threads and re-exports the contract constants (`LICC_VERSION`, `INBOX_DIRNAME`, `TMP_SUFFIX`, `EVENT_SUFFIX`) straight from `src/lingtai/services/mcp_inbox.py` so producer and consumer never drift. `agent_dir`/`mcp_name` default to env vars `LINGTAI_AGENT_DIR`/`LINGTAI_MCP_NAME` (kernel-injected per MCP); explicit params override for tests/advanced callers. Writes atomically: serialize → `<event_id>.json.tmp` → `flush`+`os.fsync` → `os.replace` onto the final `.json` (the poller ignores `.tmp`, so half-writes are never observed). `event_id` defaults to a fresh `uuid4().hex` (guarantees per-call uniqueness); explicit `mcp_name`/`event_id` path components are validated before use. The payload is checked with `validate_event` before writing, so the canonical producer does not intentionally emit dead-letterable events. Best-effort/silent: missing/invalid target, unsafe path component, invalid payload, or filesystem/serialization error → `False` (never raises into the MCP), with a terse, content-free log that never echoes `body`/`subject`/`metadata`.
 - **Declared host-plugin route** — `mcp` is the first and only family declared under the kernel-owned declared host-plugin contract (`src/lingtai/kernel/tool_plugin/ANATOMY.md`, `src/lingtai/kernel/tool_plugin/CONTRACT.md`, LABTs TP001/TP002). `DECLARATION` (`src/lingtai/tools/mcp/__init__.py:308`) is a static `ToolPluginDeclaration` built at module import with no Agent in existence: `actions=("info",)` (the reserved `manual` is appended by the declaration, never declared), one strict-empty `input` schema per action, `manual="mcp"` naming the installed manual destination that `_build_family` reads back out of it (one literal, not two), and `requires=("workdir", "prompt_section")` — the two host ports this family actually consumes. `_bind` (`src/lingtai/tools/mcp/__init__.py:233`) composes the family and the `handle_mcp` wrapper and returns a `BoundToolPlugin` whose `activate` is the boot reconcile; it mounts nothing, and `ToolPluginDeclaration.bind` refuses it outright if the composed schema advertises an action inventory other than the declared `public_actions`. `setup` (`src/lingtai/tools/mcp/__init__.py:333`) is now only composition wiring: it calls `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, which reserves the official `mcp` name, grants the two ports, binds, activates, and mounts — in that order, so a name conflict is refused before the live tool surface is touched. The recut changed no public behavior: same tool name, same `["info", "manual"]` enum, same strict-empty inputs, same result shapes including the tool-specific `mcp_manual` body key (`tests/test_tool_family_mcp_migration_parity.py`, `tests/test_mcp_capability.py`, `tests/test_tool_plugin_declaration.py`).
-- `mcp/manual/` — skill documentation (`SKILL.md`) plus reference docs (`curated-addons.md`, `third-party-and-legacy.md`, `troubleshooting.md`) and scripts (`find_readme.py`).
+- `mcp/plugin.json` + `mcp/skills/mcp-manual/` — the built-in Agent Plugins v1.0.0 documentation package. `Agent._install_intrinsic_manuals` validates this one-skill package through `services.plugin_registry.read_plugin` and mounts the skill as `intrinsic/capabilities/mcp/`; it does not register a plugin or an MCP server. The retained `mcp/manual/` tree is a source-layout compatibility copy, never the installed manual source.
 
 ## Public API
 
@@ -201,6 +204,6 @@ src/lingtai/services/mcp_licc.py  (client-side producer; mirrors src/lingtai/ser
 
 - **Parent:** `src/lingtai/tools/` (tool slice); infra siblings live in `src/lingtai/services/`.
 - **Siblings:** `daemon/`, `avatar/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Manual:** `mcp/manual/SKILL.md` — registration contract and usage guide.
+- **Manual:** `mcp/skills/mcp-manual/SKILL.md` — registration contract and usage guide.
 - **Declared contract:** `src/lingtai/kernel/tool_plugin/` owns the declaration shape, the host ports, the reserved official-name list, and the fail-fast registrar; `src/lingtai/adapters/tool_plugin_host.py` is the production adapter over the live Agent body.
 - **Kernel hooks:** `setup()` is called during capability initialization; `decompress_addons()` is called by the Agent initializer before `setup`. `MCPInboxPoller.start()/stop()` are called by the agent lifecycle.
