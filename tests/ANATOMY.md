@@ -418,6 +418,7 @@ related_files:
   - tests/test_vision_capability.py
   - tests/test_vision_services.py
   - tests/test_web_canonical_provider_routing.py
+  - tests/test_web_official_plugin.py
   - tests/test_web_output_spill.py
   - tests/test_web_search_capability.py
   - tests/test_wechat_config_resolution.py

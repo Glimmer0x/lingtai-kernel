@@ -1,6 +1,7 @@
 """Tests for the canonical unified web capability's search path."""
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,6 +11,14 @@ from lingtai.tools.web_search import WebManager, setup
 from lingtai.services.websearch import SearchResult, SearchService, create_search_service
 from tests._service_helpers import make_gemini_mock_service as make_mock_service
 
+
+class _WorkdirPort:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+
+class _ProviderIdentityPort:
+    provider = None
 
 
 
@@ -22,26 +31,24 @@ def test_web_missing_query(tmp_path):
     assert result.get("error_code") == "INVALID_QUERY"
 
 
-def test_web_manager_uses_search_service():
+def test_web_manager_uses_search_service(tmp_path):
     """WebManager should call search_service.search() when available."""
     mock_svc = MagicMock(spec=SearchService)
     mock_svc.search.return_value = [
         SearchResult(title="Result", url="https://example.com", snippet="A snippet")
     ]
-    agent = MagicMock()
-    mgr = WebManager(agent, search_service=mock_svc)
+    mgr = WebManager(_WorkdirPort(tmp_path), _ProviderIdentityPort(), search_service=mock_svc)
     result = mgr.handle({"action": "search", "input": {"query": "test"}})
     assert result["status"] == "ok"
     assert result["results"][0]["title"] == "Result"
     mock_svc.search.assert_called_once_with("test", max_results=None)
 
 
-def test_web_service_exception():
+def test_web_service_exception(tmp_path):
     """WebManager should return error if SearchService raises."""
     mock_svc = MagicMock(spec=SearchService)
     mock_svc.search.side_effect = RuntimeError("connection failed")
-    agent = MagicMock()
-    mgr = WebManager(agent, search_service=mock_svc)
+    mgr = WebManager(_WorkdirPort(tmp_path), _ProviderIdentityPort(), search_service=mock_svc)
     result = mgr.handle({"action": "search", "input": {"query": "test"}})
     assert result["status"] == "failed"
     assert result["error_code"] == "SEARCH_FAILED"
@@ -100,44 +107,42 @@ def test_web_with_provider_kwarg(tmp_path):
     assert "web" in agent._tool_handlers
 
 
-def test_web_setup_resolves_api_key_env(monkeypatch):
+def test_web_setup_resolves_api_key_env(tmp_path, monkeypatch):
     """setup() resolves api_key_env before constructing provider services."""
     monkeypatch.setenv("WEB_SEARCH_TEST_API_KEY", "sk-from-env")
-    agent = MagicMock()
-    agent._config.language = "en"
-    agent.service.provider = "openai"
-    agent.service._base_url = None
+    agent = Agent(service=make_mock_service(), agent_name="web-env", working_dir=tmp_path)
+    try:
+        with patch("lingtai.services.websearch.create_search_service") as mock_factory:
+            mock_factory.return_value = MagicMock(spec=SearchService)
+            mgr = setup(agent, provider="openai", api_key_env="WEB_SEARCH_TEST_API_KEY")
+            mgr.handle({"action": "search", "input": {"query": "test"}})
 
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=SearchService)
-        mgr = setup(agent, provider="openai", api_key_env="WEB_SEARCH_TEST_API_KEY")
-        mgr.handle({"action": "search", "input": {"query": "test"}})
-
-    assert isinstance(mgr, WebManager)
-    mock_factory.assert_called_once()
-    assert mock_factory.call_args.args == ("openai",)
-    assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+        assert isinstance(mgr, WebManager)
+        mock_factory.assert_called_once()
+        assert mock_factory.call_args.args == ("openai",)
+        assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+    finally:
+        agent.stop(timeout=1.0)
 
 
-def test_web_setup_api_key_env_overrides_raw_key(monkeypatch):
+def test_web_setup_api_key_env_overrides_raw_key(tmp_path, monkeypatch):
     """api_key_env takes precedence over a raw api_key, matching vision."""
     monkeypatch.setenv("WEB_SEARCH_TEST_API_KEY", "sk-from-env")
-    agent = MagicMock()
-    agent._config.language = "en"
-    agent.service.provider = "openai"
-    agent.service._base_url = None
+    agent = Agent(service=make_mock_service(), agent_name="web-env-priority", working_dir=tmp_path)
+    try:
+        with patch("lingtai.services.websearch.create_search_service") as mock_factory:
+            mock_factory.return_value = MagicMock(spec=SearchService)
+            mgr = setup(
+                agent,
+                provider="openai",
+                api_key="sk-raw",
+                api_key_env="WEB_SEARCH_TEST_API_KEY",
+            )
+            mgr.handle({"action": "search", "input": {"query": "test"}})
 
-    with patch("lingtai.services.websearch.create_search_service") as mock_factory:
-        mock_factory.return_value = MagicMock(spec=SearchService)
-        mgr = setup(
-            agent,
-            provider="openai",
-            api_key="sk-raw",
-            api_key_env="WEB_SEARCH_TEST_API_KEY",
-        )
-        mgr.handle({"action": "search", "input": {"query": "test"}})
-
-    assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+        assert mock_factory.call_args.kwargs["api_key"] == "sk-from-env"
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_inherited_web_env_key_registers(tmp_path, monkeypatch):

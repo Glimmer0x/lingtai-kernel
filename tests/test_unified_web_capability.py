@@ -15,13 +15,39 @@ from lingtai.tools.browser.port import TransportResponse
 
 
 class _Agent:
+    """Minimal official-plugin host used by Web's focused behavior tests."""
+
     def __init__(self, root: Path) -> None:
         self._working_dir = root
+        self._official_tool_plugins = {}
+        self._bound_plugins = {}
 
-    def add_tool(self, *args, **kwargs) -> None:
-        self.tool_name = args[0]
-        self.schema = kwargs["schema"]
-        self.handler = kwargs["handler"]
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return self._official_tool_plugins
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        pass
+
+    def _authorize_official_tool_declaration(self, _declaration) -> None:
+        pass
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        self._bound_plugins[declaration.name] = plugin
+
+    def _mount_official_tool(self, transaction) -> None:
+        transaction.consume()
+        self.tool_name = transaction.plugin.name
+        self.schema = transaction.plugin.schema
+        self.handler = transaction.plugin.handler
+        transaction.mark_mounted(self)
+
+    def _claim_official_tool(self, transaction) -> None:
+        self._official_tool_plugins[transaction.declaration.name] = transaction.declaration
 
 
 class _Search:

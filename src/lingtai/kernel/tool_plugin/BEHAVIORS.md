@@ -18,8 +18,8 @@ maintenance: |
   the least-privilege grant, the reserved official name list, or the
   check-before-bind ordering — update the guarding LABT here in the same change.
   Keep every command copy-paste executable from the repository root. When a
-  second family recuts onto the contract, or when authoring-time line numbers
-  drift, replace the affected evidence with that family's own proof rather than
+  another family recuts onto the contract, or when authoring-time line numbers
+  drift, add or replace the affected evidence with that family's own proof rather than
   leaving a stale pass.
 ---
 # Declared Host Tool Plugin Behavior Tests

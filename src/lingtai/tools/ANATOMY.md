@@ -234,15 +234,18 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
-each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
-selected form's own component: the static `ToolPluginDeclaration`, the
-least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
-the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
-the one declared slice — `mcp` binds against two granted host ports instead of
-the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
+kernel-owned declared host-plugin contract, and two families in this package are
+wired onto it today. These are the roles it separates, and where each one
+already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the selected
+form's own component: the static `ToolPluginDeclaration`, the least-privilege
+host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and the fail-fast
+registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is one declared
+slice — `mcp` binds against workdir/prompt-section ports instead of the whole
+`Agent`, with its public tool name, actions, inputs, and result shapes unchanged.
+`src/lingtai/tools/web_search/__init__.py` is the other: its static `web`
+declaration binds existing search/browser configuration through explicit runtime,
+workdir, and provider-identity ports, preserving the same public tool and
+package-owned manual. Every other family here still boots through `setup(agent)`
 with the whole `Agent` and is a future migration unit.
 
 `registry.py` remains the current first-party composition point and stays a

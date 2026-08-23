@@ -44,6 +44,8 @@ __all__ = [
     "OfficialToolNameCollisionError",
     "HostPortError",
     "WorkdirPort",
+    "RuntimePort",
+    "ProviderIdentityPort",
     "PromptSectionPort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -64,15 +66,20 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
-#: actually needs together with its own slice.
+#: Earned, not enumerated: each name below is consumed by a real vertical slice
+#: (``mcp`` or ``web``). Root ``CONTRACT.md`` rules 10-11 forbid a speculative
+#: port taxonomy, so a later family adds the port it actually needs together with
+#: its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "runtime",
+    "provider_identity",
+    "prompt_section",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +90,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "web")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -155,6 +162,35 @@ class WorkdirPort(Protocol):
     @property
     def path(self) -> Path:
         """The agent working directory."""
+
+
+class RuntimePort(Protocol):
+    """One explicit setup-time value for a declared plugin.
+
+    A nontrivial capability can need per-agent composition inputs (for example,
+    a preselected browser transport and search-service specs) while its
+    declaration must remain static and its binder must never receive the live
+    Agent. The Composition Root supplies that one value for this registration;
+    the port grants no Agent method, filesystem access, or implicit config
+    lookup. The value's type and validation stay owned by the consuming family.
+    """
+
+    @property
+    def value(self) -> Any:
+        """The explicitly supplied per-registration runtime value."""
+
+
+class ProviderIdentityPort(Protocol):
+    """Read the current canonical LLM provider identity, if one exists.
+
+    This is intentionally only the bounded provider label used by a capability
+    authorization gate. It grants neither the provider service, credentials,
+    model configuration, nor a mutable Agent/service reference.
+    """
+
+    @property
+    def provider(self) -> str | None:
+        """The current canonical provider name, or ``None`` when unavailable."""
 
 
 class PromptSectionPort(Protocol):

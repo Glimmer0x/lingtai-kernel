@@ -13,8 +13,12 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_web_official_plugin.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -51,8 +55,9 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
-   which a plugin controls the live Agent body, and the `ToolPluginHost` facade
+2. The host Ports (`WorkdirPort`, `RuntimePort`, `ProviderIdentityPort`,
+   `PromptSectionPort`, `ToolMountPort`) through which a plugin controls the
+   live Agent body or receives its explicit setup value, and the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -98,8 +103,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today the declared families are
+  `mcp` and `web`; every other family remains a future migration unit.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -125,14 +130,16 @@ capability.
 | Port | Operation | Promise |
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
+| `RuntimePort` | `value -> Any` | One explicit setup-time value supplied for this declaration's bind. It is not read from the Agent and grants no Agent API, filesystem, or implicit configuration lookup; the consuming family owns its type and validation. |
+| `ProviderIdentityPort` | `provider -> str | None` | The current canonical provider label only. It grants neither the LLM service, credentials, model configuration, nor a mutable Agent/service reference. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`workdir`, `runtime`, `provider_identity`, and `prompt_section`: `mcp` consumes
+the workdir/prompt-section pair; `web` consumes workdir, its explicit runtime,
+and the provider identity gate. Families that later need to drive the live Agent
+body earn their ports one real slice at a time.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference

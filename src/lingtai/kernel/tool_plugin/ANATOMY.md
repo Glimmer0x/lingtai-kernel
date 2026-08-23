@@ -12,6 +12,9 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -34,8 +37,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how the two
+declared families reach only their granted Agent-facing ports through it. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +52,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the five host Port Protocols `WorkdirPort`, `RuntimePort`,
+    `ProviderIdentityPort`, `PromptSectionPort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -69,16 +72,21 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
-  outside the kernel package. `AgentWorkdirAdapter`,
-  `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), plus `agent_host_ports` and
-  `register_agent_tool_plugins`. The registrar constructs its mount seam
-  locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
-  `DECLARATION` is built at module import; `_bind(host)` composes the
-  per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
-  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+  outside the kernel package. `AgentWorkdirAdapter`, `StaticRuntimeAdapter`,
+  `AgentProviderIdentityAdapter`, and `AgentPromptSectionAdapter` (bound to one
+  plugin's section name and to `protected=True`) feed `agent_host_ports` and
+  `register_agent_tool_plugins`; the latter accepts explicit per-declaration
+  runtime values without exposing the Agent. The registrar constructs its mount
+  seam locally; no public mount adapter or factory exists.
+- `src/lingtai/tools/mcp/__init__.py` — one declaring family. `DECLARATION` is
+  built at module import; `_bind(host)` composes the per-host `ToolFamily` and
+  `handle_mcp` Host wrapper and returns a `BoundToolPlugin` whose `activate` is
+  the boot reconcile; `setup(agent)` is composition wiring.
+- `src/lingtai/tools/web_search/__init__.py` — the second declaring family.
+  Its static `DECLARATION` owns `search`/`browse` plus the package manual;
+  `_bind(host)` receives only workdir, explicit Web runtime, and canonical
+  provider identity ports, constructs the existing lazy service/browser manager,
+  and returns its bound handler with no activation side effect.
 
 ## Connections
 

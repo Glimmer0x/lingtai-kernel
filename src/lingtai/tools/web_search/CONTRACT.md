@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_web_official_plugin.py
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
   - src/lingtai/adapters/browser_transport.py
@@ -39,7 +42,12 @@ subcomponents. `web` is the first family migrated to the LingTai Tool Protocol
 v2 shape defined in `src/lingtai/tools/CONTRACT.md`, and the first family to
 build its schema composition and envelope dispatch on the generic
 `src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool`);
-using it changed no observable promise in this file.
+using it changed no observable promise in this file. `web` is also an official
+static declared host plugin: its `DECLARATION` owns the same public name,
+`search`/`browse` action schemas, and installed `web` manual destination; its
+binder receives only workdir, explicit setup runtime, and canonical provider
+identity ports. Registration, mounting, and name reservation stay kernel-owned
+in `lingtai.kernel.tool_plugin`; no Web code receives or retains the whole Agent.
 
 ## Behavior
 
@@ -83,7 +91,11 @@ ever receives it.
 Search uses the existing internal `SearchService.search(query)` boundary.
 Browse uses the existing Core-owned `BrowserPort` implemented by the pinned
 transport adapter. The public dispatcher never invokes search from browse or
-browser transport from search.
+browser transport from search. The declared host plugin additionally receives
+only `WorkdirPort` (settings, artifacts, and installed manual), `RuntimePort`
+(the explicit precomposed browser/spec configuration), and `ProviderIdentityPort`
+(the one canonical label needed for Anthropic/Gemini eligibility); it never
+receives the Agent or its LLM service/credentials.
 
 ## Provider ownership and routing
 
@@ -137,10 +149,10 @@ still declare a bounded spec for one of them — credential/service injection
 for tests/integration — without that composition selecting it as the
 default). Once selected through settings, the call fails loudly with
 `PROVIDER_BACKEND_INELIGIBLE` — no provider construction, no search call —
-unless the current Agent's own live LLM backend truthfully IS that same
-canonical provider, per the module-private `_same_provider_identity()`
-predicate in `web_search/__init__.py` (exact match against
-`agent.service.provider`; Claude Code, `custom`, `openrouter`, and every
+unless the current Agent's live LLM backend truthfully IS that same canonical
+provider, per the module-private `_same_provider_identity()` predicate in
+`web_search/__init__.py` (exact match against the declared
+`ProviderIdentityPort.provider`; Claude Code, `custom`, `openrouter`, and every
 other aliased/wire-compatible provider name are never treated as canonical
 Anthropic/Gemini identity, regardless of API compatibility). This predicate
 is private to `web` — no cross-tool identity API was created for one policy.
