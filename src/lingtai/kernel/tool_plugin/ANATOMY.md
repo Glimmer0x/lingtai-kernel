@@ -15,11 +15,14 @@ related_files:
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
@@ -54,7 +57,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
   - the four host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `AvatarParentPort`, `ToolMountPort`;
+    `AvatarParentPort`, `ContextRuntimePort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -84,17 +87,23 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
   only composition wiring. The shared-C integration register remains
   family-generic — `mcp`, `email`, `file`, `context`, `notification`, `soul`,
-  `vision`, `web`, `daemon`, `system`, and `task_card` are its target names,
-  not a claim that candidate slices landed.
+  `vision`, `web`, `daemon`, `system`, and `task_card` are its target names.
+  That register remains generic: Context is now actual vertical evidence below,
+  while the remaining target names are not claims that their candidate slices landed.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
   `workdir` plus the earned, narrow `avatar_parent` port; the local packaged
   manual stays a reserved child owned by the family, and `setup(agent)` only
   routes it through the registrar.
+- `src/lingtai/tools/context/__init__.py` — current in-process vertical evidence.
+  Its static `DECLARATION` preserves `molt | summarize | rebuild | manual` and
+  binds only `workdir` plus the earned `context_runtime` operation port; the
+  port delegates the established lifecycle engines without handing Context the
+  Agent. Its package manual is the canonical runtime-installed `context-manual`.
 
 ## Connections
 
-- `lingtai.tools.mcp` and `lingtai.tools.avatar` import
+- `lingtai.tools.mcp`, `lingtai.tools.avatar`, and `lingtai.tools.context` import
   `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
   imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
@@ -113,7 +122,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   performs the reserved-name guard; its seal check and same-name replacement
   for nonreserved tools remain unchanged. This is trusted-in-process Python
   provenance, not an absolute defense against deliberate private-state mutation.
-- `lingtai.tools.mcp.setup()` and `lingtai.tools.avatar.setup()` call
+- `lingtai.tools.mcp.setup()`, `lingtai.tools.avatar.setup()`, and `lingtai.tools.context.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, reached
   through the ordinary capability boot loop in `src/lingtai/agent.py`
   (`_setup_capability` → `lingtai.tools.registry.setup_capability`).
@@ -125,7 +134,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Composition
 
-`import lingtai.tools.mcp` or `import lingtai.tools.avatar` →
+`import lingtai.tools.mcp`, `import lingtai.tools.avatar`, or `import lingtai.tools.context` →
 `ToolPluginDeclaration.__post_init__` validates the declared shape, with no
 Agent in existence.
 

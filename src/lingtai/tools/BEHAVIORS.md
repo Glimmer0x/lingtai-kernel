@@ -14,6 +14,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/context/__init__.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
   - src/lingtai/mcp_servers/_plugin.py
@@ -29,9 +30,10 @@ maintenance: |
   envelope or settings rule changes, update the guarding LABT here in the same
   change. LP002 guards the `### Tool-to-MCP Plugin Contract` section: it
   verifies only what is true today (the section's scope-qualified status
-  wording — current `mcp` base evidence, the family-generic C integration target,
-  and Avatar's separately landed vertical evidence — its two-class governed surface, its
-  single selected form as the kernel-owned declared host-plugin contract, the retained
+  wording — current `mcp` base evidence, Avatar's and Context's separately landed
+  vertical evidence, and the family-generic C integration register's remaining targets —
+  its two-class governed surface, its single selected form as the kernel-owned declared
+  host-plugin contract, the retained
   and reclassified curated transport route, the resolved official-name
   collision decision and its exact scope, the document graph, and the cited
   current evidence). Its steps inspect the
@@ -72,10 +74,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the shared declared host-plugin contract is family-generic; `mcp` is current base evidence and Avatar is landed evidence
+## Behavior LP002 — the shared declared host-plugin contract is family-generic; `mcp` is current base evidence, Avatar and Context are landed evidence, and the remaining C register is a target
 
 - **id**: LP002
-- **title**: the shared declared host-plugin contract is family-generic; `mcp` is current base evidence, the C register is a target, and Avatar is landed evidence
+- **title**: the shared declared host-plugin contract is family-generic; `mcp` is current base evidence, Avatar and Context are landed evidence, and the remaining C register is a target
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` and `file` access to a clean
@@ -94,12 +96,14 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
    `### Relationship to current runtime`; at authoring time lines 285-613).
    Confirm its opening **Status** paragraph distinguishes the current base
-   `mcp` evidence and the family-generic C integration target from the separately
-   landed `avatar` evidence; that `mcp` is named as the current base reference
-   slice and Avatar's `DECLARATION` in `src/lingtai/tools/avatar/__init__.py` is
-   named as actual landed vertical proof; that the C register's remaining names
-   are targets rather than candidate-merge claims; and that each claim is scoped
-   scoped to the declaration clauses only; that every remaining negative claim
+   `mcp` evidence and the family-generic C integration register's remaining
+   targets from the separately landed `avatar` and `context` evidence; that
+   `mcp` is named as the current base reference slice and Avatar's `DECLARATION`
+   in `src/lingtai/tools/avatar/__init__.py` and Context's `DECLARATION` in
+   `src/lingtai/tools/context/__init__.py` are named as actual landed vertical
+   proof; that the C register's remaining names are targets rather than
+   candidate-merge claims; and that each claim is scoped to the declaration
+   clauses only; that every remaining negative claim
    is **scope-qualified** — every other family registered through
    `src/lingtai/tools/registry.py` is a future migration unit and none ships as
    an MCP plugin package today; that the kernel-shipped curated MCP families
@@ -163,15 +167,15 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove the current base reference declaration and the separately landed
-   Avatar declaration, neither of which goes through packaging; the C register is
-   broader but its remaining candidate-local proofs stay separate:
+   Then prove all three landed declarations — the current base `mcp`, Avatar,
+   and Context — none of which goes through packaging; the C register is broader
+   but its remaining candidate-local proofs stay separate:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; print(mcp.name, mcp.public_actions, mcp.requires, avatar.name, avatar.public_actions, avatar.requires, OFFICIAL_TOOL_PLUGIN_NAMES)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; print(mcp.name, mcp.public_actions, mcp.requires, avatar.name, avatar.public_actions, avatar.requires, context.name, context.public_actions, context.requires, OFFICIAL_TOOL_PLUGIN_NAMES)"
    ```
 
-   Expect `mcp ('info', 'manual') ('workdir', 'prompt_section') avatar ('spawn', 'rules', 'manual') ('workdir', 'avatar_parent') ('mcp', 'avatar')` — two declarations constructed at import with no Agent, two reserved official names, and no server, transport, or catalog record involved.
+   Expect `mcp ('info', 'manual') ('workdir', 'prompt_section') avatar ('spawn', 'rules', 'manual') ('workdir', 'avatar_parent') context ('molt', 'summarize', 'rebuild', 'manual') ('workdir', 'context_runtime') ('mcp', 'avatar', 'context')` — three declarations constructed at import with no Agent, their actual narrow host ports, three reserved official names, and no server, transport, or catalog record involved.
 5. Inspect the **kernel-shipped MCP class** of the governed surface. A
    registry-only grep proves nothing about these families, so check them
    directly:
@@ -292,9 +296,9 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Expected evidence
 
 - [ ] Step 1: the section exists in `src/lingtai/tools/CONTRACT.md` and opens
-      by distinguishing current `mcp` evidence and the family-generic C
-      integration target from Avatar's actual landed vertical evidence, with each
-      remaining negative claim properly scoped.
+      by distinguishing current `mcp` evidence, Avatar's and Context's actual
+      landed vertical evidence, and the family-generic C integration register's
+      remaining targets, with each remaining negative claim properly scoped.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"
       sentence survives (exit 1), and all three remaining `MCP plugin` matches
       are registry-scoped.
@@ -306,9 +310,11 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       Plugins v1.0.0 and raw third-party MCP schemas stay excluded, and no
       manifest compiler, admission engine, or wrapper runtime is introduced.
 - [ ] Step 4: `src/lingtai/tools/registry.py` contains no `lingtai.mcp_servers`
-      import and no `CuratedMcpPlugin` reference (grep exit status 1), and both
-      the current base reference and landed Avatar `DECLARATION`s import with no
-      Agent, carry reserved official names, and require only their narrow host ports.
+      import and no `CuratedMcpPlugin` reference (grep exit status 1), and all
+      three landed `DECLARATION`s import with no Agent: `mcp` requires only
+      `workdir`/`prompt_section`, Avatar only `workdir`/`avatar_parent`, and
+      Context only `workdir`/`context_runtime`; the official reservation is
+      exactly `('mcp', 'avatar', 'context')`.
 - [ ] Step 5: exactly six curated `plugin.py` descriptors and six
       `lingtai-curated` catalog records exist, and the built-in daemon MCP
       families carry no descriptor (grep exit status 1) — matching the
@@ -332,8 +338,9 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Pass / Fail
 
 Pass when every box above is observed. **Fail loudly** — do not soften the
-report — if the contract section asserts that any family other than `mcp` is
-already declared or already ships as a *conforming* MCP plugin wrapper under
+report — if the contract section asserts that any family other than `mcp`,
+`avatar`, or `context` is already declared or already ships as a *conforming*
+MCP plugin wrapper under
 this section, if it makes an unqualified global claim that no LingTai-owned
 family is packaged as an MCP plugin, if it leaves the first-party form
 unselected or admits more than one form, if it re-mandates an external stdio

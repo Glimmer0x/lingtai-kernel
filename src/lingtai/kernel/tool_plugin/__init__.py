@@ -45,6 +45,7 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "ContextRuntimePort",
     "AvatarParentPort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -66,16 +67,18 @@ MANUAL_ACTION = "manual"
 #: Every host port an official declaration may name in ``requires``.
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
-#: slice this component ships with (``mcp`` or ``avatar``). Root
-#: ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a later
-#: family adds the port it
-#: actually needs together with its own slice.
+#: slice this component ships with (``mcp``, ``avatar``, or ``context``).
+#: Root ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a
+#: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
 GRANTABLE_HOST_PORTS: tuple[str, ...] = (
-    "workdir", "prompt_section", "avatar_parent",
+    "workdir",
+    "prompt_section",
+    "avatar_parent",
+    "context_runtime",
 )
 
 
@@ -87,7 +90,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "avatar")
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "avatar", "context")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -172,6 +175,27 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class ContextRuntimePort(Protocol):
+    """Run the Context family's live lifecycle operations.
+
+    This is intentionally a capability-shaped operation port rather than the
+    Agent or a bag of its private state. ``molt`` preserves the live chat
+    selection/wipe/replay transaction; ``summarize`` preserves record-only
+    history compaction; ``rebuild`` preserves full prompt composition before
+    summary application and provider replay. Context receives no other live
+    Agent authority through this port.
+    """
+
+    def molt(self, args: dict) -> dict:
+        """Run one agent-initiated Context molt with validated action arguments."""
+
+    def summarize(self, args: dict) -> dict:
+        """Record Context summaries without reconstructing provider context."""
+
+    def rebuild(self, args: dict) -> dict:
+        """Reconstruct prompt/context, then apply summaries and provider replay."""
 
 
 class AvatarParentPort(Protocol):

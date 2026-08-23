@@ -21,7 +21,7 @@ only builds the ports.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
@@ -32,6 +32,7 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentContextRuntimeAdapter",
     "AgentAvatarParentAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
@@ -77,6 +78,38 @@ class AgentPromptSectionAdapter:
         self._write(self._section, body, protected=True)
 
 
+class AgentContextRuntimeAdapter:
+    """``ContextRuntimePort`` over three bound Context operations.
+
+    It stores only its narrow callbacks, never the Agent. The Context
+    composition root supplies callbacks that retain the established live molt,
+    summary, and reconstruction engines; the declared family receives only these
+    three capability-native methods.
+    """
+
+    __slots__ = ("_molt", "_summarize", "_rebuild")
+
+    def __init__(
+        self,
+        *,
+        molt: Callable[[dict], dict],
+        summarize: Callable[[dict], dict],
+        rebuild: Callable[[dict], dict],
+    ) -> None:
+        self._molt = molt
+        self._summarize = summarize
+        self._rebuild = rebuild
+
+    def molt(self, args: dict) -> dict:
+        return self._molt(args)
+
+    def summarize(self, args: dict) -> dict:
+        return self._summarize(args)
+
+    def rebuild(self, args: dict) -> dict:
+        return self._rebuild(args)
+
+
 class AgentAvatarParentAdapter:
     """Avatar's narrow parent-context port over the live Agent.
 
@@ -115,9 +148,7 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
 
     Every key is a name in
     :data:`~lingtai.kernel.tool_plugin.GRANTABLE_HOST_PORTS`; the registrar
-    grants each declaration only the subset it named in ``requires``. ``mcp``
-    consumes ``workdir`` and ``prompt_section``; ``avatar`` consumes ``workdir``
-    and its dedicated ``avatar_parent`` context port.
+    grants each declaration only the subset it named in ``requires``.
     """
     return {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
@@ -135,6 +166,8 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
+    *,
+    extra_ports: Mapping[str, Any] | None = None,
 ) -> tuple[BoundToolPlugin, ...]:
     """Wire *declarations* onto *agent* through the kernel registrar.
 
@@ -161,7 +194,10 @@ def register_agent_tool_plugins(
 
     return register_official_tool_plugins(
         list(declarations),
-        ports_for=lambda declaration: agent_host_ports(agent, declaration.name),
+        ports_for=lambda declaration: {
+            **agent_host_ports(agent, declaration.name),
+            **dict(extra_ports or {}),
+        },
         mount=_InternalMount(),
         claimed=agent.official_tool_plugins,
         claim=agent._claim_official_tool,

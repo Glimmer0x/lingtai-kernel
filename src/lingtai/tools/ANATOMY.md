@@ -76,9 +76,9 @@ maintenance: |
   descriptor/catalog route is the retained external-transport/launcher adapter
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
-  not a claim that any shared-C target has merged: `mcp` and the separately
-  landed `avatar` slice are the actual declared evidence here, while the remaining
-  target names stay candidates. The normative rules — including the selected form,
+  not a claim that every shared-C target has merged: `mcp` is the base reference,
+  while the separately landed `avatar` and Context vertical slices are actual
+  declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
   the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
@@ -241,7 +241,9 @@ slice; the shared C integration register targets `mcp`, `email`, `file`,
 `context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
 `task_card`, and does not imply that every candidate family has merged. Avatar
 is separately landed actual evidence: its `DECLARATION` binds only `workdir` and
-`avatar_parent`, while the remaining C target names remain candidate targets.
+`avatar_parent`. Context is current in-process vertical evidence: its declaration
+binds only `workdir` and `context_runtime`, preserving molt/summarize/rebuild.
+The remaining C target names remain candidate targets.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
@@ -250,10 +252,13 @@ the current base reference slice — `mcp` binds against `workdir` and
 `prompt_section` instead of the whole `Agent`, with its public tool name,
 actions, inputs, and result shapes unchanged. `src/lingtai/tools/avatar/__init__.py`
 `DECLARATION` is the landed detached-peer slice — `avatar` binds against
-`workdir` and `avatar_parent` instead of the whole `Agent`. Candidate-local
-families may still boot through their legacy `setup(agent)` paths until their
-own vertical slice lands; that compatibility fact is not the generic
-registrar/bridge dispatch model.
+`workdir` and `avatar_parent` instead of the whole `Agent`.
+`src/lingtai/tools/context/__init__.py` is the current in-process lifecycle
+slice: it binds `workdir` plus `context_runtime`, keeps the established live
+engines behind that narrow port, and owns the canonical package manual installed
+as `context-manual`. Candidate-local families may still boot through their legacy
+`setup(agent)` paths until their own vertical slice lands; that compatibility fact
+is not the generic registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

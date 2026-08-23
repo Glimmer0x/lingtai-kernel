@@ -53,6 +53,7 @@ recursive-include src/lingtai/tools glossary-en.md
 recursive-include src/lingtai/tools glossary-zh.md
 recursive-include src/lingtai/tools glossary-wen.md
 graft src/lingtai/tools/email/manual
+graft src/lingtai/tools/context/manual
 graft src/lingtai/tools/system/manual
 graft src/lingtai/tools/psyche/manual
 graft src/lingtai/tools/soul/manual
