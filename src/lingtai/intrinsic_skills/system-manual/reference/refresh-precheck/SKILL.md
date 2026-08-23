@@ -26,8 +26,7 @@ maintenance: |
   (preset runtime model → substrate-manual §11; installer/update authority →
   runtime-update-checks + resident substrate §I; env var catalogue →
   environment-variables → root ENVIRONMENT_VARIABLES.md; MCP registry health →
-  mcp-manual; molt/rebuild → retained context-manual legacy redirect (the
-  package-owned context manual is canonical when installed). Do not restate an owned fact
+  mcp-manual; molt/rebuild → context-manual). Do not restate an owned fact
   here — add or reorder a step and keep the citation. Update when
   `system(action="refresh")` / `system(action="presets")` semantics, the
   preset `allowed` gate, or the nudge kinds change.

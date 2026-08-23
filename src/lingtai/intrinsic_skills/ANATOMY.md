@@ -58,20 +58,18 @@ maintenance: |
 # src/lingtai/intrinsic_skills/
 
 Kernel-shipped skill bundles that are **not** tied to a specific tool package.
-Retained intrinsic trees are copied into `.library/intrinsic/capabilities/<name>/`
-for migration-compatible documentation-only skills. They are not automatically
-the authority for a capability whose package owns a canonical manual under
-`src/lingtai/tools/<family>/manual/`; in that case the package manual is the
-source of truth and the retained intrinsic tree is legacy/redirect material.
+Every subdirectory is copied verbatim into
+`.library/intrinsic/capabilities/<name>/` on each agent boot, so this package is
+the delivery mechanism for documentation-only skills that have no companion
+code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 
 ## Components
 
 - `__init__.py` — the package marker that states the contract above: one
   subdirectory per bundle, copied verbatim, for skills without companion code.
-- `context-manual/` — retained legacy/redirect material for the `context`
-  package manual, with `assets/` and the nested summarize reference. The
-  package-owned `src/lingtai/tools/context/manual/` is canonical when that
-  candidate slice is installed.
+- `context-manual/` — the `context` family's manual, with `assets/`
+  (`molt-template.md`, `session-journal-entry-template.md`) and the nested
+  `reference/summarize-manual/SKILL.md` sub-skill.
 - `system-manual/` — the largest bundle: the `system` family manual plus ten
   `reference/` sub-skills (`environment-variables`, `goal-manual`,
   `how-to-change-name`, `llm-adapters`, `procedures-manual`,

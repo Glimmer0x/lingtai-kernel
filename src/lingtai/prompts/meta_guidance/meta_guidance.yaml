@@ -1,8 +1,5 @@
 kind: prompt-section-definition
 section: meta_guidance
-manual_authority: >
-  Package-owned manuals are canonical when installed; retained intrinsic manuals are legacy redirects.
-  The context package manual is a candidate dependency and is not claimed merged by this register.
 name_definition: >
   "meta_guidance" is the kernel-generated resident runtime-signal guidance layer. It is
   named for the guidance it carries about the dynamic runtime `_meta` blocks: the
