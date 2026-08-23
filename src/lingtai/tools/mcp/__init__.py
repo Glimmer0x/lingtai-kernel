@@ -28,17 +28,33 @@ addon decompression, XML build) is a service and lives at
 ``lingtai/services/mcp_registry.py``; it is imported lazily inside ``setup`` and
 the handlers, per the ``lingtai.tools → lingtai`` lazy-back-edge rule.
 
+Declared host plugin: ``mcp`` is the first official family to recut onto the
+kernel-owned declared host-plugin contract
+(``lingtai/kernel/tool_plugin/CONTRACT.md``). :data:`DECLARATION` is a static
+``ToolPluginDeclaration`` built at import, before any Agent exists; ``mcp`` is a
+reserved official name in ``lingtai.kernel.tool_plugin``, so a second
+declaration of it is refused before anything binds or mounts. The family no
+longer receives the whole ``Agent``: :func:`_bind` gets a ``ToolPluginHost``
+granting exactly the two ports this capability actually consumes — ``workdir``
+(read the registry and the installed manual) and ``prompt_section`` (rewrite
+its own protected ``mcp`` section). Nothing about the public tool — name,
+``["info", "manual"]`` action enum, strict-empty inputs, result shapes
+including the tool-specific ``mcp_manual`` body key — changed with it.
+
 Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
 
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -55,8 +71,15 @@ def _registered_entry(record: dict, identity: dict | None) -> dict:
     return entry
 
 
-def _reconcile(agent: "BaseAgent") -> dict:
-    """Read registry, render into prompt, return health snapshot."""
+def _reconcile(host: "ToolPluginHost") -> dict:
+    """Read registry, render into prompt, return health snapshot.
+
+    Reached through the two granted host ports, never through the Agent: the
+    registry and the installed manual are resolved below ``host.workdir.path``
+    (formerly the private ``agent._working_dir``), and the rendered XML goes to
+    ``host.prompt_section``, which is bound to this plugin's own protected
+    ``mcp`` section and cannot address another's.
+    """
     from lingtai.services.mcp_registry import (
         read_registry,
         read_identities,
@@ -64,12 +87,12 @@ def _reconcile(agent: "BaseAgent") -> dict:
         _registry_path,
     )
 
-    working_dir = agent._working_dir
+    working_dir = host.workdir.path
     records, problems = read_registry(working_dir)
     identities = read_identities(working_dir)
 
     xml = _build_registry_xml(records, identities)
-    agent.update_system_prompt("mcp", xml, protected=True)
+    host.prompt_section.write_protected_section(xml)
 
     # Health: the umbrella manual must be present.
     intrinsic_dir = working_dir / ".library" / "intrinsic"
@@ -144,41 +167,53 @@ _ACTION_DESCRIPTION = (
 )
 
 
-def _build_family(agent: "BaseAgent | None") -> ToolFamily:
+def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
     """Build the two-child ``mcp`` family; the registry is declared exactly once.
 
-    With an ``agent``, children are bound to real handlers for dispatch. With
-    ``None``, the module-level schema-only family is built: its handlers raise
-    if ever called, and constructing it at import time proves the fixed
+    With a granted ``host``, children are bound to real handlers for dispatch.
+    With ``None``, the module-level schema-only family is built: its handlers
+    raise if ever called, and constructing it at import time proves the fixed
     registry has no duplicate or reserved-name collision (``ToolFamilyError``
     raises here rather than shipping silently). Both paths declare the same
     ordered children, so the composed schema and the dispatching family can
     never drift apart.
+
+    Every identity this composition needs is *derived* from :data:`DECLARATION`
+    rather than restated: the public tool name, the per-action ``input``
+    schemas, and the installed-manual destination the reserved ``manual`` child
+    reads. ``src/lingtai/tools/CONTRACT.md`` requires the declared identity,
+    action list, and manual to agree with what actually ships; deriving them
+    makes the two structurally the same value instead of two literals that can
+    silently diverge. (``DECLARATION`` is defined below this function and read
+    at call time — the schema-only build is the first call, and it runs after
+    the declaration is constructed.)
     """
-    if agent is None:
+    manual_input = DECLARATION.manual_input_schema
+    info_input = DECLARATION.input_schemas["info"]
+    if host is None:
         def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
         info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
+        manual_child = ChildTool("manual", manual_input, _unused, title="manual input")
     else:
-        info_handler = lambda _input: _reconcile(agent)  # noqa: E731
+        info_handler = lambda _input: _reconcile(host)  # noqa: E731
         # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
         # this child's own canonical MCP-compatible result verbatim (no double
         # wrap). mcp's flat public shape is reconstructed from that canonical
         # result strictly *after* dispatch, in ``handle_mcp`` — never inside a
         # registered child.
-        manual_child = build_manual_child(agent, "mcp")
+        # Only the workdir port is handed over: the manual child reads one
+        # installed ``SKILL.md`` below the agent working directory and needs
+        # nothing else from the host.
+        manual_child = build_manual_child(host.workdir, DECLARATION.manual)
     return ToolFamily(
-        "mcp",
+        DECLARATION.name,
         [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
+            ChildTool("info", info_input, info_handler, title="info input"),
             manual_child,
         ],
     )
-
-
-_FAMILY = _build_family(None)
 
 
 def get_description(lang: str = "en") -> str:
@@ -195,17 +230,17 @@ def get_schema(lang: str = "en") -> dict:
     return schema
 
 
-def setup(agent: "BaseAgent", **_ignored) -> None:
-    """Set up the mcp capability.
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose the ``mcp`` family against a granted host. Mounts nothing.
 
-    The capability is pure presentation: it reads the registry from disk and
-    renders it into the system prompt. Decompression of init.json's addons:
-    field happens in the Agent initializer via
-    ``lingtai.services.mcp_registry.decompress_addons()`` before setup is called.
+    Pure composition, per the declared host-plugin contract: it builds the
+    per-host ``ToolFamily`` and the Host-layer dispatch wrapper and returns
+    them. The boot presentation — the first registry reconcile that writes the
+    protected ``mcp`` prompt section — is the separately declared ``activate``
+    step below, which the kernel registrar runs only after every official
+    name check has passed.
     """
-    _reconcile(agent)
-
-    family = _build_family(agent)
+    family = _build_family(host)
 
     def handle_mcp(args: dict) -> dict:
         # The generic ``ToolFamily`` dispatcher validates ``action``,
@@ -239,10 +274,77 @@ def setup(agent: "BaseAgent", **_ignored) -> None:
             return _flatten_manual_result(result)
         return result
 
-    agent.add_tool(
-        "mcp",
+    return BoundToolPlugin(
+        # Derived, never restated: the kernel checks this against the
+        # declaration it reserved the name for, and the family has exactly one
+        # spelling of its own identity.
+        name=DECLARATION.name,
         schema=get_schema(),
         handler=handle_mcp,
         description=get_description(),
         glossary_package=__package__,
+        activate=lambda: _reconcile(host),
     )
+
+
+#: The static declaration of the official ``mcp`` tool plugin.
+#:
+#: Constructed at import, with no Agent in existence: the kernel validates the
+#: shape here (one operational action, no attempt to declare the reserved
+#: ``manual`` action, one strict input schema per action, only grantable host
+#: ports required), so a packaging defect fails at import rather than at boot.
+#:
+#: ``actions`` holds the *operational* actions only. The reserved ``manual`` is
+#: appended by ``DECLARATION.public_actions`` and owned by this family's own
+#: ``build_manual_child``; ``manual="mcp"`` names the installed manual
+#: destination that child reads, matching ``Agent._install_intrinsic_manuals``.
+#:
+#: This declaration is the family's single source of its own identity. The
+#: composition below reads ``name``, ``input_schemas``, ``manual_input_schema``,
+#: and ``manual`` back out of it rather than repeating any of them, so there is
+#: no second literal to drift; the kernel additionally rejects, at every
+#: ``bind()``, a bound plugin advertising an action inventory other than
+#: ``public_actions``.
+DECLARATION = ToolPluginDeclaration(
+    name="mcp",
+    actions=("info",),
+    input_schemas={"info": _EMPTY_INPUT},
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="mcp",
+    description=_DESCRIPTION,
+    binder=_bind,
+    # Earned from this slice, not enumerated: ``workdir`` replaces the private
+    # ``agent._working_dir`` read, ``prompt_section`` replaces the
+    # ``agent.update_system_prompt("mcp", ..., protected=True)`` call. ``mcp``
+    # needs nothing else from the live Agent body, so it is granted nothing
+    # else — mounting included, which stays host-only.
+    requires=("workdir", "prompt_section"),
+    glossary_package=__package__,
+)
+
+
+#: The module-level schema-only family, built from the declaration above. It is
+#: constructed at import (after ``DECLARATION``, which it reads) so a duplicate
+#: or reserved-name collision in the fixed child registry raises here rather
+#: than shipping silently; ``get_schema()`` composes the public schema from it.
+_FAMILY = _build_family(None)
+
+
+def setup(agent: "BaseAgent", **_ignored) -> None:
+    """Set up the mcp capability through its declared host-plugin route.
+
+    The capability is pure presentation: it reads the registry from disk and
+    renders it into the system prompt. Decompression of init.json's addons:
+    field happens in the Agent initializer via
+    ``lingtai.services.mcp_registry.decompress_addons()`` before setup is called.
+
+    This function is now only composition wiring. It builds the production host
+    adapters for this Agent and hands :data:`DECLARATION` to the kernel
+    registrar, which reserves the official ``mcp`` name, binds against a
+    least-privilege host, runs the boot reconcile, and mounts the tool — in that
+    order, so a name conflict is refused before the live tool surface is
+    touched. Registering the same declaration again on refresh is idempotent.
+    """
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])

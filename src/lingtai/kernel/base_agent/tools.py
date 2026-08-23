@@ -152,8 +152,27 @@ def _add_tool(
     description: str = "",
     system_prompt: str = "",
     glossary_package: str | None = None,
+    _official_mount_token=None,
 ) -> None:
-    """Register a dynamic tool."""
+    """Register a dynamic tool at the common model-facing mount boundary.
+
+    Official names are statically reserved by the kernel. Only the private
+    registrar-owned mount route may publish one; ordinary ``add_tool`` callers
+    retain the historical same-name replacement behavior for every other name.
+    """
+    from ..tool_plugin import (
+        OFFICIAL_TOOL_PLUGIN_NAMES,
+        OfficialToolNameCollisionError,
+        _OFFICIAL_MOUNT_TOKEN,
+    )
+    if (
+        name in OFFICIAL_TOOL_PLUGIN_NAMES
+        and _official_mount_token is not _OFFICIAL_MOUNT_TOKEN
+    ):
+        raise OfficialToolNameCollisionError(
+            f"tool name {name!r} is reserved for an official plugin and cannot "
+            "be mounted by a generic or external MCP route"
+        )
     if agent._sealed:
         raise RuntimeError("Cannot modify tools after start()")
     if handler is not None:
@@ -177,7 +196,13 @@ def _add_tool(
 
 
 def _remove_tool(agent, name: str) -> None:
-    """Unregister a dynamic tool."""
+    """Unregister a dynamic tool, except for a statically reserved official name."""
+    from ..tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES, OfficialToolNameCollisionError
+    if name in OFFICIAL_TOOL_PLUGIN_NAMES:
+        raise OfficialToolNameCollisionError(
+            f"tool name {name!r} is reserved for an official plugin and cannot "
+            "be removed by a generic route"
+        )
     if agent._sealed:
         raise RuntimeError("Cannot modify tools after start()")
     agent._tool_handlers.pop(name, None)

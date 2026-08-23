@@ -4,6 +4,7 @@ contract_version: 1
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/config.py
   - src/lingtai/kernel/meta_block.py
   - ENVIRONMENT_VARIABLES.md

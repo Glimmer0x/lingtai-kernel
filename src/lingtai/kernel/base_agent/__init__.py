@@ -22,6 +22,7 @@ import queue
 import threading
 import time
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
 from ..config import AgentConfig
@@ -712,6 +713,26 @@ class BaseAgent:
         self._tool_handlers: dict[str, Callable[[dict], dict]] = {}
         self._tool_schemas: list[FunctionSchema] = []
 
+        # The live official model-facing namespace: reserved plugin name → the
+        # one declaration that claimed it. Owned here because the kernel owns
+        # the live tool surface; written only by
+        # ``lingtai.kernel.tool_plugin.register_official_tool_plugins``, which
+        # refuses a second, different declaration for a claimed name *before*
+        # it binds or mounts anything. Re-registering the same declaration on
+        # refresh is idempotent. Cleared by ``_setup_from_init`` together with
+        # the tool surface it describes, so the claim map never outlives the
+        # tools it claims — a capability dropped from ``manifest.disable`` on
+        # refresh leaves no stale claim. Read publicly through
+        # ``official_tool_plugins``.
+        self._official_tool_plugins: dict[str, Any] = {}
+        # Persistent provenance for the official surface. Unlike the live claim
+        # view, these anchors are not cleared by refresh: clearing/replacing the
+        # public backing map must not admit a foreign declaration on the next
+        # registration. The bound-result map is rebuilt with the live tool
+        # surface and is checked by the mount and claim seams.
+        self._official_tool_declarations: dict[str, Any] = {}
+        self._official_tool_bindings: dict[str, Any] = {}
+
         # --- Wire intrinsic tools ---
         # Intrinsics are injected by the composing layer (``lingtai.Agent``
         # passes ``lingtai.tools.registry.INTRINSICS``). The kernel owns the tool
@@ -1027,6 +1048,66 @@ class BaseAgent:
     def working_dir(self) -> Path:
         """The agent's working directory."""
         return self._workdir.path
+
+    @property
+    def official_tool_plugins(self) -> Mapping[str, Any]:
+        """The live official model-facing namespace: plugin name -> declaration.
+
+        The documented seam ``register_official_tool_plugins`` claims reserved
+        official names through (``kernel/tool_plugin/CONTRACT.md``). It is the
+        live mapping, not a copy — the registrar records claims in it and
+        refuses a different declaration of a name already there — and it tracks
+        the live tool surface: ``_setup_from_init`` clears it beside
+        ``_tool_handlers`` / ``_tool_schemas``. Treat it as read-only elsewhere.
+        """
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration: Any) -> None:
+        """Anchor one official declaration before its first bind.
+
+        The anchor survives refresh and is deliberately separate from the
+        read-only live claim view. This is not a public security boundary (a
+        trusted in-process caller can inspect private state), but ordinary
+        extension/public registration cannot clear claims and then substitute a
+        different declaration for a live official name.
+        """
+        from ..tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES, ToolPluginDeclaration
+
+        if not isinstance(declaration, ToolPluginDeclaration):
+            raise PermissionError("official registration requires a declared plugin")
+        name = declaration.name
+        if name not in OFFICIAL_TOOL_PLUGIN_NAMES:
+            raise PermissionError("cannot anchor an unreserved official name")
+        current = self._official_tool_declarations.get(name)
+        if current is not None and current is not declaration:
+            from ..tool_plugin import DuplicateToolPluginNameError
+
+            raise DuplicateToolPluginNameError(
+                f"official tool plugin name {name!r} is anchored to a different "
+                "declaration; official names are not overwritable"
+            )
+        self._official_tool_declarations[name] = declaration
+
+    def _record_official_tool_binding(self, declaration: Any, plugin: Any) -> None:
+        """Record the exact bound result issued by the kernel registrar."""
+        self._authorize_official_tool_declaration(declaration)
+        self._official_tool_bindings[declaration.name] = plugin
+
+    def _claim_official_tool(self, transaction: Any) -> None:
+        """Record a claim only after this Agent mounted an issued transaction."""
+        from ..tool_plugin import _OfficialMountTransaction
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError("official claims require a registrar transaction")
+        declaration = transaction.declaration
+        name = declaration.name
+        if transaction.mounted_agent is not self:
+            raise PermissionError("official claim requires a completed official mount")
+        if self._official_tool_declarations.get(name) is not declaration:
+            raise PermissionError("official claim is not for the anchored declaration")
+        if self._official_tool_bindings.get(name) is not transaction.plugin:
+            raise PermissionError("official claim is not for the canonical bound result")
+        self._official_tool_plugins[name] = declaration
 
     @property
     def _chat(self) -> Any:
@@ -2549,6 +2630,53 @@ class BaseAgent:
     def has_capability(self, name: str) -> bool:
         from .tools import _has_capability
         return _has_capability(self, name)
+
+    def _mount_official_tool(self, transaction) -> None:
+        """Publish only a registrar-issued canonical official transaction.
+
+        The public ``add_tool`` path cannot publish a statically reserved
+        official name. The registrar issues the transaction after binding and
+        the Agent adapter records the exact declaration/bound result first;
+        this route verifies both identities before trusting any handler/schema.
+        A caller-supplied ``BoundToolPlugin`` or forged transaction therefore
+        cannot replace the live official surface through this seam.
+        """
+        from ..tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OFFICIAL_MOUNT_TOKEN,
+            _OfficialMountTransaction,
+        )
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError(
+                "official tool mounting requires a registrar transaction"
+            )
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        from .tools import _add_tool
+        _add_tool(
+            self,
+            name,
+            schema=dict(plugin.schema),
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+            _official_mount_token=_OFFICIAL_MOUNT_TOKEN,
+        )
+        transaction.mark_mounted(self)
 
     def add_tool(
         self,

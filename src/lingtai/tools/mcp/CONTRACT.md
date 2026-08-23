@@ -5,6 +5,9 @@ contract_version: 1
 related_files:
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_tool_plugin_declaration.py
   - src/lingtai/tools/mcp/manual/SKILL.md
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/tools/CONTRACT.md
@@ -14,7 +17,11 @@ maintenance: |
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits. mcp's schema
   composition and envelope dispatch build on the generic tool_family package;
-  keep that link current when either side's boundary changes.
+  keep that link current when either side's boundary changes. mcp is the first
+  and only family declared under the kernel-owned declared host-plugin contract
+  (src/lingtai/kernel/tool_plugin/CONTRACT.md): keep §Declared host plugin below
+  and that contract in step, and if this family's required host ports change,
+  move the declaration, the port set, the adapter, and both contracts together.
 ---
 
 # MCP capability contract
@@ -63,8 +70,9 @@ back-edge -> §Scope; the generic composition/dispatch infrastructure ->
   given a new capability, and external MCP registration remains entirely
   outside this tool.
 - Ownership boundary: the module is the agent-callable tool slice only. The
-  registry service is imported lazily inside `setup` and the handlers, per the
-  `lingtai.tools → lingtai` lazy-back-edge rule.
+  registry service is imported lazily inside `_reconcile` and the handlers, per
+  the `lingtai.tools → lingtai` lazy-back-edge rule, as is the host adapter
+  inside `setup`.
 
 ## Tool surface
 
@@ -103,17 +111,59 @@ matching identity record with non-empty `accounts` exists. `manual` returns
 `.library/intrinsic/capabilities/mcp/SKILL.md` is missing.
 
 `manual` is the family-owned reserved child, registered directly from
-`tool_family.manual.build_manual_child(agent, "mcp")`. `ToolFamily.handle()`
-returns that child's canonical `content`/`structuredContent` result verbatim
-(no double wrap); mcp's pre-migration flat public shape — body under the
-tool-specific key `mcp_manual`, not the generic `manual` — is reconstructed by
-the Host-owned `_flatten_manual_result` strictly *after* dispatch returns,
-never inside a registered child. `manual` performs no registry read, rescan, or
-mutation.
+`tool_family.manual.build_manual_child(host.workdir, DECLARATION.manual)`.
+`ToolFamily.handle()` returns that child's canonical `content`/`structuredContent`
+result verbatim (no double wrap); mcp's pre-migration flat public shape — body
+under the tool-specific key `mcp_manual`, not the generic `manual` — is
+reconstructed by the Host-owned `_flatten_manual_result` strictly *after*
+dispatch returns, never inside a registered child. `manual` performs no registry
+read, rescan, or mutation.
 
 **Error shapes** (plain dicts):
 - Unknown action: `{"status": "error", "message": "unknown action: <action>, only 'info' or 'manual' is supported"}`. This exact envelope is Host-owned and predates the family migration, so `handle_mcp` renders it *before* delegating: it restores the pre-migration empty-string default for a missing `action` key and routes an unhashable `action` (`[]`, `{}` from invalid JSON — issue #513) here instead of into the generic dispatcher's dict lookup. An unknown action is rejected before any input validation or handler I/O.
 - Invalid envelope/input (from the generic dispatcher, canonical and unwrapped): `{"status": "failed", "error_code": "INVALID_ARGUMENT", "message": ...}` for a non-object `input` (`input must be an object`), an unknown root field (`unsupported mcp argument`), a non-boolean `summarize` (`summarize must be a boolean`), or any `input` key outside the selected action's strict-empty schema (`unsupported mcp input field`). Because both actions declare an empty `input`, any extra input field fails **before** the registry is re-read or the manual is loaded.
+
+## Declared host plugin
+
+`mcp` is the first family declared under the kernel-owned declared host-plugin
+contract, [`src/lingtai/kernel/tool_plugin/CONTRACT.md`](../../kernel/tool_plugin/CONTRACT.md).
+This section is this family's own conformance evidence for that contract; the
+normative rules stay there.
+
+- **Static declaration.** `DECLARATION` is a module-level
+  `ToolPluginDeclaration` built at import, before any `Agent` exists. It
+  declares `actions=("info",)` — the reserved `manual` is appended by the
+  declaration and never declared as an operational action — one strict-empty
+  `input` schema per action, `manual="mcp"` (the installed manual destination
+  the reserved child reads), the canonical description, and
+  `glossary_package="lingtai.tools.mcp"`. It reaches the registrar because
+  `setup` hands it over, never because anything was scanned.
+- **Reserved official name.** `mcp` is in the kernel's static
+  `OFFICIAL_TOOL_PLUGIN_NAMES`. A second, different declaration of `mcp` is
+  refused before any bind, activate, or official mount, and cannot replace the live
+  claim. Re-registering the same declaration on refresh is idempotent.
+- **Required host ports.** `requires=("workdir", "prompt_section")`, and
+  nothing else is reachable. `workdir` supplies the working directory used by
+  `_reconcile` and by the reserved `manual` child; `prompt_section` is the
+  declaration-bound port that writes this plugin's own protected section;
+  `mcp` can neither
+  address another section nor write an unprotected one. `mcp` never receives
+  the `Agent`, and never receives the mount port.
+- **Bind versus activate versus mount.** `_bind(host)` composes the per-host
+  `ToolFamily` and the `handle_mcp` wrapper and returns a `BoundToolPlugin`; it
+  performs no I/O and mounts nothing. The boot reconcile — the first registry
+  read and protected prompt render — is the separately declared `activate`
+  step, which the kernel registrar runs after the name check and immediately
+  before mounting. `setup(agent)` is composition wiring only.
+- **No public change.** The recut is internal. Tool name, the
+  `["info", "manual"]` action enum, both strict-empty `input` branches, the
+  closed root envelope, `info`'s health snapshot, and `manual`'s flat
+  `status`/`mcp_manual`/`manual_path` shape (including the degraded shape) are
+  all unchanged, as is the exact unknown-action error envelope.
+- **No transport.** Nothing here spawns a process, opens a connection, or
+  publishes a catalog record. The curated MCP server packages and
+  `src/lingtai/mcp_catalog.json` remain a separate external-transport concern
+  that this family does not use.
 
 ## State & storage
 
@@ -135,10 +185,13 @@ Do not change any of the following; documented for reviewers only.
 
 - **Registry path:** resolved by `_registry_path(working_dir)` in the service; the
   file sits beside `init.json` in the agent working dir.
-- **Prompt injection:** the registry XML is written to the protected `mcp` section
-  via `agent.update_system_prompt("mcp", xml, protected=True)`.
-- **Lazy import:** `src/lingtai/services/mcp_registry.py` is imported lazily inside
-  `_reconcile` / `setup`, keeping the `lingtai.tools → lingtai` back-edge deferred.
+- **Prompt injection:** `_reconcile(host)` writes the registry XML through the
+  declaration-granted `host.prompt_section.write_protected_section(xml)` port,
+  which is bound to `mcp` and `protected=True`; it does not receive a whole
+  Agent or call `agent.update_system_prompt`.
+- **Lazy import:** `src/lingtai/services/mcp_registry.py` is imported lazily
+  inside `_reconcile`; `setup` only imports the production host adapter and
+  hands `DECLARATION` to the kernel registrar.
 - **Identity safety:** identity projection strips secret fields before they can
   reach the prompt; only allowlisted, non-secret account fields are surfaced.
 
@@ -154,6 +207,9 @@ Do not change any of the following; documented for reviewers only.
 | `manual` returns the exact body/path with no registry rescan and no double wrap | `src/lingtai/tools/mcp/__init__.py` (`_flatten_manual_result`) | `tests/test_tool_family_mcp_migration_parity.py::test_manual_returns_exact_body_and_path`, `::test_manual_performs_no_registry_rescan_or_mutation`, `::test_manual_result_is_not_double_wrapped` |
 | init.json `addons: [...]` triggers append-only decompression | `src/lingtai/services/mcp_registry.py` | `tests/test_mcp_capability.py::test_addons_list_triggers_decompression`, `::test_decompress_is_idempotent` |
 | Duplicate / invalid registry lines are dropped | `src/lingtai/services/mcp_registry.py` | `tests/test_mcp_capability.py::test_registry_drops_duplicates_by_name`, `::test_registry_drops_invalid_lines` |
+| `mcp` is declared statically, with a reserved official name and only two required host ports | `src/lingtai/tools/mcp/__init__.py` (`DECLARATION`) | `tests/test_tool_plugin_declaration.py::test_mcp_declaration_is_static_and_needs_no_agent`, `::test_mcp_is_reserved_and_declares_only_the_ports_it_consumes` |
+| Boot claims the official name and mounts exactly one `mcp` tool; a foreign declaration cannot take it | `src/lingtai/tools/mcp/__init__.py` (`setup`) | `tests/test_tool_plugin_declaration.py::test_boot_claims_the_official_name_and_mounts_exactly_one_mcp_tool`, `::test_a_foreign_declaration_cannot_take_the_live_mcp_name` |
+| The family never receives the `Agent`; binding alone activates and mounts nothing | `src/lingtai/tools/mcp/__init__.py` (`_bind`, `_reconcile`) | `tests/test_tool_plugin_declaration.py::test_host_facade_and_bound_plugin_never_expose_the_agent`, `::test_bind_alone_activates_nothing_and_mounts_nothing` |
 | Identity is attached only when present and secrets are stripped | `src/lingtai/tools/mcp/__init__.py` (`_registered_entry`) / service | `tests/test_mcp_identity_discovery.py::test_show_action_includes_identity_when_present`, `::test_secret_fields_are_stripped_from_accounts` |
 
 ## Verification matrix
@@ -172,7 +228,8 @@ Run before merging:
 
 ```bash
 python -m pytest tests/test_mcp_capability.py tests/test_mcp_identity_discovery.py \
-  tests/test_tool_family_mcp_migration_parity.py tests/test_signpost_tool_descriptions.py -q
+  tests/test_tool_family_mcp_migration_parity.py tests/test_signpost_tool_descriptions.py \
+  tests/test_tool_plugin_declaration.py -q
 ```
 
 ## Schema and glossary ownership

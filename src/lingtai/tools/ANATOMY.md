@@ -4,6 +4,7 @@ related_files:
   - src/lingtai/intrinsic_skills/ANATOMY.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/tools/feishu/BEHAVIORS.md
   - src/lingtai/tools/psyche/ANATOMY.md
   - src/lingtai/tools/plugin/ANATOMY.md
@@ -69,12 +70,16 @@ maintenance: |
   structural claims with code and keep reciprocal graph edges valid.
   The curated-MCP packaging, catalog, Agent Plugins, and host tool-registration
   entries in related_files are navigation for the paired Contract's
-  `### Tool-to-MCP Plugin Contract`: the curated descriptor/catalog route is the
-  form that Contract selects, and the Agent Plugins entry is the excluded
-  external standard kept only as the registration-versus-activation precedent.
-  They are not a claim that any family here is wrapped today, and the normative
-  rules — including the selected form and the governed-surface classification —
-  stay in the Contract.
+  `### Tool-to-MCP Plugin Contract`. The form that Contract selects is now the
+  kernel-owned declared host-plugin contract
+  (`src/lingtai/kernel/tool_plugin/ANATOMY.md`, linked here); the curated
+  descriptor/catalog route is the retained external-transport/launcher adapter
+  over a declaration, and the Agent Plugins entry is the excluded external
+  standard kept only as the registration-versus-activation precedent. They are
+  not a claim that any family here beyond `mcp` is declared or wrapped today,
+  and the normative rules — including the selected form, the reserved
+  official-name rule, and the governed-surface classification — stay in the
+  Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -177,7 +182,12 @@ capability names and lazy adapters.
   search, contacts, and delivery, migrated to the LTP v2 family envelope
   (`src/lingtai/tools/email/ANATOMY.md`).
 - `_manual.py` — bounded installed-manual loader
-  (`src/lingtai/tools/_manual.py:1-29`).
+  (`src/lingtai/tools/_manual.py:1-61`). `load_installed_manual(source,
+  skill_name)` resolves the agent working directory from either shape a family
+  can hold: the live `Agent` (private `_working_dir`) for an unmigrated family,
+  or a `lingtai.kernel.tool_plugin.WorkdirPort` (`path`) for one recut onto the
+  declared host-plugin contract, so one loader still serves every family. A
+  source that is neither raises an `AttributeError` naming that fact.
 - `__init__.py` — the package docstring that fixes the flat one-directory-per-tool
   layout and the `lingtai → lingtai.tools → lingtai.kernel` import DAG enforced by
   `tests/test_kernel_isolation.py` (`src/lingtai/tools/__init__.py:1-12`).
@@ -223,36 +233,59 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 `taskcard/status` and `taskcard/taskcard.md`; consumer-specific reading,
 polling, and projection stay outside this package.
 
-The route the paired Contract's `### Tool-to-MCP Plugin Contract` targets is
-not wired here today. These are the roles it separates, and where each one
-already lives. `registry.py` is the current first-party composition point — it
-imports no `lingtai.mcp_servers` packaging, so no family *in this package* is
-wrapped; the Contract's governed surface is wider than this directory and also
+The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
+kernel-owned declared host-plugin contract, and exactly one family in this
+package is wired onto it today. These are the roles it separates, and where
+each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
+selected form's own component: the static `ToolPluginDeclaration`, the
+least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
+the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
+the one declared slice — `mcp` binds against two granted host ports instead of
+the whole `Agent`, with its public tool name, actions, inputs, and result
+shapes unchanged. Every other family here still boots through `setup(agent)`
+with the whole `Agent` and is a future migration unit.
+
+`registry.py` remains the current first-party composition point and stays a
+hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no
+plugin discovery, so no family *in this package* is wrapped as an MCP plugin
+package; the Contract's governed surface is wider than this directory and also
 classifies the kernel-shipped MCP families under `src/lingtai/mcp_servers/`.
-`src/lingtai/mcp_servers/_plugin.py` is the *selected* wrapper form, not merely
-one precedent among several: one curated package binding its server, bundled
-`SKILL.md`, declaration, and reserved `manual` child, and it is explicitly not
-a plugin runtime. `src/lingtai/mcp_servers/telegram/plugin.py` is its reference
-descriptor slice and `src/lingtai/mcp_catalog.json` the shipped catalog record
-each descriptor must agree with.
+`src/lingtai/mcp_servers/_plugin.py` is the retained curated
+*external-transport/launcher* route — one curated package binding its server,
+bundled `SKILL.md`, launch record, and reserved `manual` child, explicitly not
+a plugin runtime — reclassified by the Contract as one adapter form over a
+declaration rather than the required form of every official tool.
+`src/lingtai/mcp_servers/telegram/plugin.py` is its reference descriptor slice
+and `src/lingtai/mcp_catalog.json` the shipped catalog record each descriptor
+must agree with.
 `src/lingtai/services/plugin_registry.py` is the external Agent Plugins v1.0.0
 *declaration and boot-registration* path, with activation kept separate (the
 rendering tool is `src/lingtai/tools/plugin/ANATOMY.md`). The Contract excludes
 that standard from conversion; it is navigation to the precedent for
-registration versus activation, not an alternative wrapper form.
-`src/lingtai/kernel/base_agent/tools.py` is the *host* mount point whose
-`_add_tool` replaces a schema of the same name, which is why the Contract
-records live tool-name collision policy as an open decision rather than a
-promise. Read the Contract for the rules; this file only names the route.
+registration versus activation, not an alternative declaration form.
+`src/lingtai/kernel/base_agent/tools.py` is the final common model-facing mount
+point. `_add_tool` retains same-name replacement for nonreserved tools, but its static reserved-name guard rejects generic `add_tool` and external stdio/HTTP catalogs before publication.
+
+The registrar reaches the boundary only through a registrar-issued one-use
+transaction created after the declaration's successful bind. The Agent mount
+seam verifies the persistent declaration anchor and exact canonical bound result
+before publication; a caller-supplied foreign plugin or constructed transaction
+is refused. A live official claim is read-only through its public view and can
+be recorded only from that transaction after mount. This is trusted-in-process
+Python provenance, not an absolute defense against deliberate private-state
+mutation. The Contract's collision policy is scoped to official declared names,
+which the registrar refuses before any bind or mount. Read the Contract for the
+rules; this file only names the route.
 
 ## Composition
 
 The parent [`src/lingtai/ANATOMY.md`](../ANATOMY.md) owns Agent composition.
 The paired tools Contract owns LTP: the future canonical `action` / `input` /
 `reasoning` / `summarize` public call shape, family/action settings ownership,
-the migration boundary, and the Tool-to-MCP Plugin Contract. Read it there;
-this Anatomy does not restate those promises, and `BEHAVIORS.md` LP002 owns
-their verification. The web Contract specializes
+the migration boundary, and the Tool-to-MCP Plugin Contract — whose selected
+form is owned by `src/lingtai/kernel/tool_plugin/CONTRACT.md`. Read them there;
+this Anatomy does not restate those promises, and `BEHAVIORS.md` LP002 (with
+the kernel component's TP001/TP002) owns their verification. The web Contract specializes
 that promise for the first real implementation; its Anatomy and the internal
 browser Anatomy provide progressive disclosure. Other tool packages retain their
 existing public shapes until explicitly migrated.

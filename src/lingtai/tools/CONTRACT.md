@@ -4,6 +4,7 @@ contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/base_agent/tools.py
@@ -47,16 +48,23 @@ maintenance: |
   each migrated family, the `_LTP_V2_MIGRATED_FAMILIES` allowlist, and this
   contract together when the canonical call boundary changes. LTP alignment is documentary — this pair is the source of
   truth, not a central validator. Migrate one real family at a time; do not
-  claim legacy tools already conform. `### Tool-to-MCP Plugin Contract` is an
-  additive, not-yet-implemented migration target guarded by LP002 in the paired
-  BEHAVIORS.md: keep its status paragraph, its governed-surface classification,
-  its selected wrapper form, its open collision decision, and its
-  current-evidence list honest, and update it, the paired ANATOMY.md, and
-  BEHAVIORS.md together when a family actually recuts onto a plugin wrapper.
-  The selected form is the `CuratedMcpPlugin` descriptor plus the curated
-  catalog/package route; changing that choice is a normative change, so move
+  claim legacy tools already conform. `### Tool-to-MCP Plugin Contract` is
+  guarded by LP002 in the paired BEHAVIORS.md: keep its status paragraph, its
+  governed-surface classification, its selected form, its resolved collision
+  decision, and its current-evidence list honest, and update it, the paired
+  ANATOMY.md, and BEHAVIORS.md together when a family actually recuts.
+  The selected form is the kernel-owned declared host-plugin contract
+  (`src/lingtai/kernel/tool_plugin/CONTRACT.md`), a governed component contract
+  in its own right — keep that link reciprocal, and mirror any change to the
+  declaration shape, the host ports, or the reserved official-name rule in both
+  files. The curated `CuratedMcpPlugin` descriptor plus
+  `src/lingtai/mcp_catalog.json` is the retained external-transport/launcher
+  route layered over a declaration, not the required form of every official
+  tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
-  `src/lingtai/mcp_catalog.json` in related_files with it.
+  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp` is the only
+  declared family today; do not widen that claim without another family's own
+  evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -277,21 +285,28 @@ an unrelated domain field that happens to be named `summary` — see
 ### Tool-to-MCP Plugin Contract
 Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
-**Status.** This is a shared **migration target**, not shipped state. It fixes
-the activation, dispatch, manual, host, identifier, and migration vocabulary
-that later per-family recuts MUST share, so those recuts do not each invent
-their own. It converts nothing by itself.
+**Status.** This section fixes the declaration, activation, dispatch, manual,
+host, identifier, and migration vocabulary that every official model-facing
+tool family shares, so per-family recuts do not each invent their own. It is
+shipped state for exactly **one** family and a migration target for every
+other.
 
-No family registered through `src/lingtai/tools/registry.py` ships as an MCP
-plugin package today. The kernel-shipped curated MCP families under
-`src/lingtai/mcp_servers/` do already ship in the plugin-style package form
-this section selects below, and they are the current first-party precedent for
-it — but that is evidence about *packaging* only. It is not a claim that those
-families already satisfy every clause of this section, and no clause here may
-be read as certifying them. Nothing here says the families listed under
-`### Relationship to current runtime` have become a compatible universal
-runtime either — those are LTP *envelope* migrations, and a plugin wrapper is a
-separate, later, per-family change with its own evidence.
+`mcp` is the first family declared under the form this section selects: it owns
+a static `ToolPluginDeclaration`
+(`src/lingtai/tools/mcp/__init__.py`, `DECLARATION`), its name is reserved in
+the kernel-owned official list, and it binds against a least-privilege host
+facade instead of receiving the whole `Agent`. That is one family's evidence,
+for the declaration clauses only. Every other family registered through
+`src/lingtai/tools/registry.py` remains an explicit future migration unit, and
+none of them ships as an MCP plugin package today.
+
+The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
+the *external stdio transport* form described below — evidence about
+packaging and launch, not conformance to this section's declaration clauses,
+and no clause here may be read as certifying them. Nothing here says the
+families listed under `### Relationship to current runtime` have become a
+compatible universal runtime either — those are LTP *envelope* migrations, and
+a declaration recut is a separate, per-family change with its own evidence.
 
 **Governed surface.** Every LingTai-owned first-party model-facing tool family
 shipped in this distribution. That is two classes today, and both are inside
@@ -300,18 +315,21 @@ this contract's classification:
 - **Registry families** — the intrinsics and built-in capability rows
   registered through `src/lingtai/tools/registry.py`. `mcp` and `plugin` are
   first-party families and are in scope *as families*; the external records
-  they render are not. No family in this class is wrapped as an MCP plugin
-  package today, so each one is a future migration unit.
+  they render are not. `mcp` is declared under the selected form below; every
+  other family in this class is a future migration unit, and no family in this
+  class is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
   distribution ships as MCP server packages under `src/lingtai/mcp_servers/`.
   The curated catalog families (`imap`, `telegram`, `feishu`, `wechat`,
   `whatsapp`, `cloud_mail`) each own a `CuratedMcpPlugin` descriptor and a
   matching `src/lingtai/mcp_catalog.json` record, and are therefore the current
-  first-party precedent for the form selected below, not a separate standard
-  and not exempt from this section. The built-in daemon MCP families
+  first-party precedent for the curated **external-transport** route the
+  selected form layers over, not a separate standard and not exempt from this
+  section. The built-in daemon MCP families
   (`lingtai.mcp_servers.daemon_common`, `lingtai.mcp_servers.daemon_email`) are
-  also in this class but carry no descriptor and no packaged `SKILL.md` today,
-  so adopting the selected form is future work for them.
+  also in this class but carry no descriptor and no packaged `SKILL.md` today.
+  No family in this class is declared under the selected form yet, so adopting
+  it is future work for all of them.
 
 Classification is not conformance. A family in either class conforms to a
 clause of this section only with its own evidence for that clause; this
@@ -324,72 +342,112 @@ transport and catalog paths are **not** converted by this contract. Their wire
 shape stays theirs, and adopting any individual one of them is separate,
 explicitly authorized, later work.
 
-**Selected wrapper form.** There is exactly **one** in-distribution form a
-LingTai-owned wrapper may take, and it is the form the curated packages already
-use: the `lingtai.mcp_servers._plugin.CuratedMcpPlugin` descriptor plus the
-curated catalog/package route. A first-party wrapper MUST:
+**Selected wrapper form.** There is exactly **one** form a LingTai-owned
+official model-facing tool family may take, and it is the kernel-owned
+**declared host-plugin contract**:
+[`src/lingtai/kernel/tool_plugin/CONTRACT.md`](../kernel/tool_plugin/CONTRACT.md).
+An official family MUST:
 
-- live as a Python package inside this distribution under
-  `src/lingtai/mcp_servers/<family>/`, shipping its server module, its stdio
-  `__main__.py` entry point, and its bundled `SKILL.md`;
-- own exactly one `CuratedMcpPlugin` descriptor
-  (`src/lingtai/mcp_servers/_plugin.py`) naming the registry/family name, the
-  Python package, the server name, the summary, the homepage, and the packaged
-  skill name, with its own actions declared beside that descriptor and `manual`
-  never declared there;
-- express the "declarative launch/identity record" required below as that
-  descriptor's catalog-record shape (`CuratedMcpPlugin.mcp_declaration()`), and
-  — for a family published through the curated catalog — keep the shipped
-  `src/lingtai/mcp_catalog.json` entry equal to it. That equality is what makes
-  the identity/action/manual agreement objectively checkable rather than a
-  matter of taste.
+- own exactly one static `ToolPluginDeclaration`, constructed at import in that
+  family's own module under `src/lingtai/tools/<family>/`, before any `Agent`
+  exists — naming the model-facing family name, its ordered operational
+  actions, one strict `input` schema per action, its description, its manual,
+  the host ports it requires, and how it binds. Discovery is prohibited: a
+  declaration is reached because the hand-edited static capability table in
+  `src/lingtai/tools/registry.py` names its module and that module hands the
+  declaration to the registrar — never because a directory, entry point, or
+  manifest was scanned;
+- carry a name reserved in the kernel-owned static
+  `OFFICIAL_TOOL_PLUGIN_NAMES` list. The kernel registers official
+  implementations, so a name absent from that list is not official, and a
+  second, different declaration of a reserved name is refused **before** any
+  bind and before any `add_tool` (see the identifier clause below);
+- receive only the host capabilities it declared. The kernel injects a
+  least-privilege facade granting exactly the ports the declaration named; a
+  port it did not name is not reachable, the mount port is never grantable, and
+  no clause of this section authorizes handing a plugin the whole `Agent`;
+- never declare the reserved `manual` action; the declaration appends it, and
+  the family owns that child's handler and its manual source.
+
+**Implementation and transport are not a separate product category.** Where an
+official family's implementation runs — in this process, behind a stdio MCP
+server package, in a spawned peer process (Avatar), or over a channel
+(Telegram) — is an adapter decision at the boundary where that technology
+actually varies (root `CONTRACT.md` rule 8), layered *over* one declaration. It
+is not a second declaration form and not a second class of official tool.
+
+That corrects a normative error in the form this section previously selected,
+which required **every** first-party wrapper to live as a Python package under
+`src/lingtai/mcp_servers/<family>/`, ship a stdio `__main__.py` entry point, own
+a `CuratedMcpPlugin` descriptor, and express its declaration as that
+descriptor's `mcp_declaration()` catalog record. Mandating an external stdio
+process of every official tool was wrong: it made a transport choice the
+definition of the product.
+
+The curated route itself is **retained unchanged and reclassified**, not
+removed. `lingtai.mcp_servers._plugin.CuratedMcpPlugin`,
+`CuratedMcpPlugin.mcp_declaration()`, the six curated packages, and the shipped
+`src/lingtai/mcp_catalog.json` remain the curated **external-transport and
+launcher** concern for families published through the curated catalog, with
+their descriptor↔catalog record equality still the objectively checkable
+identity/action/manual agreement for that route. A curated family MUST still
+keep that equality. What changed is only its status: one transport adapter
+form, not the required form of every official tool.
 
 External **Agent Plugins v1.0.0** filesystem packages (`plugin.json`,
 `skills/`, `mcp.json`; `src/lingtai/services/plugin_registry.py`) and raw
 third-party MCP schemas are a **separate standard, excluded** from this
 conversion contract: no first-party family may be recut into them under this
 section, and they are cited below only as the precedent for
-`**Registration is not activation**`. Selecting one form is the point — this
-section introduces no generic manifest compiler, no plugin-admission engine,
-and no multi-form compatibility layer, and defines no implementation or wire
-behavior for the selected form beyond the documentary requirements above.
+`**Registration is not activation**`. Selecting one form is still the point —
+this section introduces no generic manifest compiler, no
+plugin-admission engine, and no multi-form compatibility layer.
 
-**One family, one wrapper, retained form.** The unit of migration is one
-current model-facing family becoming one plugin package, in the selected form
-above, that *wraps* it.
+**One family, one declaration, retained form.** The unit of migration is one
+current model-facing family gaining one declaration that *wraps* it.
 
-- The wrapper MUST preserve that family's public tool name, action inventory
-  and spelling, per-action strict `input` schemas, the closed root
+- The declaration MUST preserve that family's public tool name, action
+  inventory and spelling, per-action strict `input` schemas, the closed root
   (`action`, `input`, `reasoning`, `summarize`), result shapes, error
   vocabulary, authorization gates, side effects, and public manual result
   shape. It is an adapter, not a rename, flattening, aggregation, split, or new
   public capability.
-- A wrapper MAY translate at its own private boundary — the division `shell`
+- A family MAY translate at its own private boundary — the division `shell`
   already uses to keep `ShellManager`'s flat call shape and `daemon` to keep
   `DaemonManager`'s — but public semantics MUST survive unchanged.
-- Adopting this section makes no family a plugin. Blanket conformance claims
-  are prohibited: a family is a plugin only once its own vertical PR lands.
+- Adopting this section makes no family declared. Blanket conformance claims
+  are prohibited: a family is declared only once its own vertical PR lands.
+  `mcp` is the only one today.
 
-**Authority: manager, wrapper, host stay separate.**
+**Authority: manager, declaration, host stay separate.**
 
 - The original family or domain **manager** remains the sole semantic authority
   for business actions, validation, state, side effects, and family errors.
-- The **wrapper** owns only MCP adaptation and its packaged manual. It MUST NOT
-  become a second tool registry, a hidden configuration owner, an alternate
-  execution path, or a place domain decisions migrate into.
-- The **host** owns discovery, registration, activation, process and connection
-  lifecycle, mounting, audit, and the live model-facing namespace. A wrapper
-  MUST NOT self-register, self-spawn a host route, or leave a live-looking
-  route behind after close.
+- The **declaration and its bind** own only adaptation and the family's manual.
+  They MUST NOT become a second tool registry, a hidden configuration owner, an
+  alternate execution path, or a place domain decisions migrate into.
+- The **host** owns registration, activation, process and connection
+  lifecycle, mounting, audit, and the live model-facing namespace — and, for an
+  official family, the reserved-name list that namespace is claimed from. A
+  family MUST NOT self-register, self-spawn a host route, or leave a
+  live-looking route behind after close. It cannot: the mount port is host-only
+  and is never granted to a declaration.
 
-**The package owns the manual and its submanuals.** Per root Design principles
+**The family owns the manual and its submanuals.** Per root Design principles
 3 and 4, the manual travels with the capability:
 
-- One package ships the server entry point, the declarative launch/identity
-  record, the public action descriptor, the bundled `SKILL.md`, and every
-  submanual, reference, or asset that skill routes to. Package identity,
-  registered server name, launcher, action list, and manual MUST agree and MUST
-  fail loudly at construction or import when they do not.
+- One declaration names its own manual alongside its public action inventory,
+  and the family ships that manual with every submanual, reference, or asset
+  the skill routes to. Declared identity, action list, and manual MUST agree
+  and MUST fail loudly at construction or import when they do not. Agreement is
+  upheld by *derivation, then check*: a family MUST compose its tool name, its
+  per-action `input` schemas, and its installed manual destination from its own
+  declaration rather than restating any of them as a second literal, and
+  `ToolPluginDeclaration.bind()` refuses, on every boot, a bound plugin
+  advertising an action inventory other than the declared `public_actions`. A family
+  additionally published over the curated external transport ships its server
+  entry point and declarative launch/identity record in that same package, and
+  its registered server name and launcher MUST agree with the rest.
 - Submanuals stay progressive-disclosure skill files referenced by the parent
   `SKILL.md`. They MUST NOT be inlined into schemas or copied into a second
   host-side catalog.
@@ -397,21 +455,24 @@ above, that *wraps* it.
   owner twins still carry them.
 
 **Reserved `manual`.** The reserved-action rule under
-`### Dispatch and actions` is unchanged and binds wrappers. An operational
-action MUST NOT declare, schema, or handle `manual`; the wrapper appends
-exactly one strict-empty `manual` child sourced from its own packaged skill,
-and a duplicate or reserved-name collision fails at construction, before any
-server is advertised. Where a family's current public manual result differs
-from the canonical child result, the wrapper MUST preserve the current family
-shape through an explicit presentation adapter applied after canonical
-dispatch, rather than double-wrapping it or silently changing what the model
-sees.
+`### Dispatch and actions` is unchanged and binds declarations. An operational
+action MUST NOT declare, schema, or handle `manual`; the declaration appends
+exactly one strict-empty `manual` child sourced from the family's own manual,
+and a duplicate or reserved-name collision fails at construction — at import,
+before any Agent exists and before any server is advertised. Where a family's
+current public manual result differs from the canonical child result, the
+family MUST preserve the current public shape through an explicit presentation
+adapter applied after canonical dispatch, rather than double-wrapping it or
+silently changing what the model sees.
 
 **Registration is not activation.** Declaration or boot registration validates
 a plugin and MAY compose its validated skills and register its MCP declaration;
 it MUST NOT start a server. Starting a registered server requires explicit host
-activation. Discovery is read-only: a directory found on a skills search path
-MUST NEVER be silently mounted or executed.
+activation. For a declared official family the same split is structural:
+`bind()` is pure composition, and the separately declared boot-presentation
+step runs only after every reserved-name check has passed and immediately
+before mounting. Discovery is read-only: a directory found on a skills search
+path MUST NEVER be silently mounted or executed.
 
 **One host lifecycle owner.** The host starts the selected transport client,
 injects only bounded host metadata and only where the wire permits, mounts the
@@ -421,89 +482,135 @@ clients and removes stale metadata so no false-live route survives. The host
 MUST NOT widen an existing tool's public schema in order to transport plugin
 metadata.
 
-**Strict dispatch boundary.** Envelope mapping happens only at the wrapper's
-adapter boundary. A strict LTP wrapper receives and restores root `reasoning`;
+**Strict dispatch boundary.** Envelope mapping happens only at the family's own
+adapter boundary. A strict LTP family receives and restores root `reasoning`;
 a flat third-party MCP schema does not, and MUST NOT have it injected. The host
 forwards only schema-permitted arguments. Malformed envelopes and wrong-branch
 keys are rejected *before* the manager performs any I/O, exactly as
 `### Dispatch and actions` already requires.
 
-**Identifiers, provenance, and collisions — an explicit open decision.**
+**Identifiers, provenance, and collisions — the decision, and its scope.**
 
 - Three identifier scopes stay separate: plugin package name, registered server
   record name, and model-facing tool family name. Server records retain source
   provenance, and a registry conflict MUST NOT overwrite a record the plugin
   does not own; a same-plugin change converges by replacing only the
   plugin-owned record.
-- **The live model-facing tool namespace has no fail-closed collision policy
-  today.** Every advertised MCP tool name is registered, and
-  `lingtai.kernel.base_agent.tools._add_tool` replaces an existing schema of
-  the same name, so current behavior is last-registration-wins with the
-  collision recorded after mounting rather than refused before it. This section
-  records that as the current fact and as an implementation target. It does
-  **not** claim a fail-closed policy exists. Choosing the target — reject
-  before mount, namespacing, or a stated deterministic precedence — is an
-  explicit maintainer decision that MUST be made and written here before the
-  first wrapper is mounted, and no clause above may be read as pre-empting it.
+- **Decided: official names are reserved first and are not overwritable.** The
+  maintainer decision this section previously reserved is made. The kernel owns
+  a static, auditable list of official plugin names
+  (`OFFICIAL_TOOL_PLUGIN_NAMES`, `src/lingtai/kernel/tool_plugin/__init__.py`).
+  `register_official_tool_plugins` validates every declared name in a batch —
+  reserved, unique in the batch, and not already claimed by a *different*
+  declaration — **before** the first `bind()`, the first activation, and the
+  first official mount. A conflict raises and leaves the live tool surface and the
+  claim map untouched: there is no last-registration-wins path for an official
+  name and no partially mounted batch. Re-registering the *same* declaration is
+  idempotent, because refresh re-runs the whole boot.
+- **Scope of that decision, stated exactly.** It governs official names at the
+  common model-facing mount boundary, not only declarations. The kernel-owned
+  `_add_tool` primitive rejects generic `Agent.add_tool` and external/legacy
+  MCP attempts to publish a statically reserved name; only the production
+  registrar route carries the opaque authorization needed to mount the bound
+  official declaration. Nonreserved names retain the existing same-name
+  replacement behavior. External MCP catalogs are preflighted and rejected
+  before their client, metadata, or reverse route is retained, so an official
+  handler/schema/claim cannot be replaced and no stale external route survives.
 
-**Observable failures.** An invalid manifest or unsupported version rejects the
-whole plugin. An invalid or path-escaping skill or server component is skipped
-with a bounded, source-attributed reason instead of failing the agent. A
+**Observable failures.** A malformed declaration — empty or duplicate actions,
+an operational action claiming the reserved `manual`, a missing per-action
+input schema, or a host port that is not grantable — fails at import, loudly,
+before an Agent exists. An unreserved or conflicting official name fails at
+registration, before any bind or mount, and a family that ships a public action
+inventory other than the one it declared fails at `bind()`. None of these are
+swallowed by the Composition Root's capability skip-guard: they descend from
+`ToolPluginError`, which is deliberately not a `ValueError`, so they fail the
+boot instead of leaving an agent up with the official tool silently missing (a
+capability that genuinely cannot register still returns `CAPABILITY_UNAVAILABLE`
+instead of raising). An invalid manifest or unsupported
+version rejects the whole plugin. An invalid or path-escaping skill or server
+component is skipped with a bounded, source-attributed reason instead of
+failing the agent. A
 malformed call or envelope is rejected before manager I/O. A missing packaged
 manual degrades honestly and says so rather than fabricating content. A launch
 or transport failure is observable and retries only through the lifecycle
 policy above. Business-tool errors stay exactly as the family already returns
-them: a wrapper MUST NOT rewrite a domain error as a plugin error, and no
-failure path may leak secrets or resolved configuration.
+them: a declaration or its adapter MUST NOT rewrite a domain error as a plugin
+error, and no failure path may leak secrets or resolved configuration.
 
 **Compatibility.** Existing declaration surfaces are unchanged — the canonical
 spelling and its read-compatible alias both keep working, and current init and
 registry files are not rewritten. Legacy tool names, inputs, actions, manual
 paths and results, direct external MCP schemas, and existing tool lifecycle
-semantics MUST NOT be silently altered. Migration is additive at the packaging
-and host boundaries only; a wire or schema change requires that family's own
-explicitly authorized PR.
+semantics MUST NOT be silently altered. Migration is additive at the
+declaration, packaging, and host-composition boundaries only; a wire or schema
+change requires that family's own explicitly authorized PR.
 
-**Vertical migration.** Each family recuts vertically in its own later PR:
-wrapper and server, declaration, host wiring, package data, its local
-Contract/Anatomy/Behaviors and manual, and the evidence that migration's
-reviewer asks for. Until then the family's runtime and schema are unchanged,
-exactly as `### Scope` already requires for LTP itself.
+**Vertical migration.** Each family recuts vertically in its own later PR: its
+declaration and the host ports it earns, its bind, host composition wiring, any
+transport package data, its local Contract/Anatomy/Behaviors and manual, and
+the evidence that migration's reviewer asks for. Until then the family's
+runtime and schema are unchanged, exactly as `### Scope` already requires for
+LTP itself.
 
 **Non-goals of this section.** It introduces none of the following, and a later
 migration MUST NOT add one merely to satisfy this file: a generic wrapper
-runtime or shared base class; a universal MCP server compiler; a generic
-manifest compiler or plugin-admission engine; a multi-form manifest
-compatibility layer; a universal validator or conformance suite; an implemented
-collision mechanism; automatic discovery, activation, install, or uninstall; a
-registry rewrite; a provider protocol rewrite; or conversion of arbitrary
-third-party MCP schemas. It does not state that registration launches a server,
-and it changes no wire, schema, or runtime behavior by itself.
+runtime; a universal MCP server compiler; a generic manifest compiler or
+plugin-admission engine; a multi-form manifest compatibility layer; a universal
+validator or conformance suite; automatic discovery, activation, install, or
+uninstall; a registry rewrite; a provider protocol rewrite; or conversion of
+arbitrary third-party MCP schemas. It does not state that registration launches
+a server, and it changes no wire or schema behavior for any family.
 
-**Current evidence versus migration target.** Cited here as precedent, not as
-conformance:
+The one shared declared contract type (`ToolPluginDeclaration` and its host
+ports) is deliberately **not** banned by this clause: it *is* the selected form
+above, and one declared contract is what makes "every model-facing tool follows
+one contract" checkable. What stays banned is the generic wrapper *runtime*
+around it — a universal executor, a plugin-admission engine, a manifest
+compiler, or a discovery mechanism. The distinction is the point: a declaration
+is data plus one bind callable, validated at import; a runtime is a machine
+that finds, admits, and executes plugins. The reserved-name list is likewise a
+list, not a registry service.
 
-- The selected form already ships, for the curated MCP families only:
-  `src/lingtai/mcp_servers/_plugin.py` binds one package's server, bundled
-  `SKILL.md`, declaration, and reserved `manual` child, and refuses a package
-  that declares `manual` itself; `src/lingtai/mcp_servers/telegram/plugin.py`
-  is the reference descriptor slice; `src/lingtai/mcp_catalog.json` carries the
-  matching record for each of the six curated families. Its own docstring
-  states it is deliberately not a plugin runtime. This is packaging evidence
-  about those six families — nothing more.
+The **implemented** collision mechanism is now in scope and shipped for
+official declared names only, per the identifier clause above; it remains a
+non-goal for third-party-versus-third-party mounts.
+
+**Current evidence versus migration target.**
+
+- The selected form ships for exactly one family:
+  `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
+  host ports, the reserved official-name list, and the fail-fast registrar;
+  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
+  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the reference slice; and
+  `tests/test_tool_plugin_declaration.py` is the shared contract suite. `mcp`'s
+  public surface is unchanged by that recut
+  (`tests/test_tool_family_mcp_migration_parity.py`,
+  `tests/test_mcp_capability.py`).
+- The curated **external-transport** route ships for the curated MCP families
+  only, and is cited as precedent for that route rather than as conformance to
+  the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one
+  package's server, bundled `SKILL.md`, launch record, and reserved `manual`
+  child, and refuses a package that declares `manual` itself;
+  `src/lingtai/mcp_servers/telegram/plugin.py` is the reference descriptor
+  slice; `src/lingtai/mcp_catalog.json` carries the matching record for each of
+  the six curated families. Its own docstring states it is deliberately not a
+  plugin runtime. This is packaging and launch evidence about those six
+  families — nothing more.
 - External Agent Plugins v1.0.0 already separate declaration from activation
   (`src/lingtai/services/plugin_registry.py`, and
   `src/lingtai/tools/plugin/CONTRACT.md` for the tool that renders the result).
   That standard is excluded from conversion by `**Selected wrapper form**`; it
   is cited only for the registration-versus-activation rule.
 
-Not evidenced, and therefore stated above only as a target: any family
-registered through `src/lingtai/tools/registry.py` shipping as an MCP plugin
-package (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin`
-descriptor or packaged `SKILL.md` for the built-in daemon MCP families; the
-retention, dispatch, host-lifecycle, and manual clauses above proven for any
-family, curated ones included; and fail-closed live tool-name collision
-behavior.
+Not evidenced, and therefore stated above only as a target: a declaration for
+any family other than `mcp`; any family registered through
+`src/lingtai/tools/registry.py` shipping as an MCP plugin package
+(`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
+packaged `SKILL.md` for the built-in daemon MCP families; the retention,
+dispatch, host-lifecycle, and manual clauses above proven for every family,
+curated ones included; and fail-closed collision behavior for a *third-party*
+MCP tool colliding with a reserved official name at mount time.
 
 ### Relationship to current runtime
 
@@ -517,6 +624,14 @@ its public tool name and both public action values are unchanged, both children
 take the canonical strict-empty `input`, and it supports no settings file (see
 `src/lingtai/tools/knowledge/CONTRACT.md`). It remains a signpost capability
 with no authoring, search, or edit action.
+
+`mcp` (`info | manual`) is the first family declared under
+`### Tool-to-MCP Plugin Contract`: that recut is internal only — the public
+tool name, both public action values, both strict-empty `input` branches, and
+every result shape including the tool-specific `mcp_manual` body key are
+unchanged, while the family now reaches the live Agent body through two granted
+host ports instead of the whole `Agent` (see
+`src/lingtai/tools/mcp/CONTRACT.md`).
 
 `file` (`read | write | edit | glob | grep | manual`) is the fourth family
 migrated to this contract, and the first aggregation of several former public

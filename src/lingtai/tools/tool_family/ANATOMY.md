@@ -5,6 +5,7 @@ related_files:
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/tool_family/BEHAVIORS.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/__init__.py
@@ -146,9 +147,15 @@ This division follows `../CONTRACT.md` "Implementation independence": using
 consumer and the minimal shape of one: a two-child family (`info`, `manual`)
 whose public tool name and action values are unchanged by the migration, where
 both children take the canonical strict-empty `input`. It follows the same
-division — the `manual` child from `build_manual_child(agent, "mcp")` is
-registered directly and unwrapped, and `mcp`'s own flat `mcp_manual` public
-shape is reconstructed post-dispatch by a Host-owned adapter. It also shows
+division — the `manual` child from
+`build_manual_child(host.workdir, DECLARATION.manual)` is registered directly
+and unwrapped, and `mcp`'s own flat `mcp_manual` public shape is reconstructed
+post-dispatch by a Host-owned adapter. `mcp` is the one family recut onto the
+kernel-owned declared host-plugin contract
+(`src/lingtai/kernel/tool_plugin/ANATOMY.md`), so it never receives the `Agent`
+at all: the builder is handed the granted `WorkdirPort`, and the installed
+manual's destination name is read back out of the family's own declaration
+rather than restated here. It also shows
 what a family, not this package, must own when a pre-migration public error
 envelope predates the generic dispatcher: `mcp` renders its exact
 unknown-action envelope in its own `handle_mcp` *before* delegating, including
