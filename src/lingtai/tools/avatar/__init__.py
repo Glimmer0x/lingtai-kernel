@@ -24,6 +24,11 @@ Usage (LTP v2 envelope — one action, one strict child input):
 
 The spawn mission brief is root ``reasoning`` (normalized to ``_reasoning`` by
 ToolExecutor), never an ``input`` property — see ``handle()``.
+
+This module is the static declared official plugin slice: its binder receives
+only the `workdir` and Avatar-specific parent-context ports, while the kernel
+registrar alone reserves and mounts the public `avatar` name. The package-local
+manual child deliberately keeps Avatar's current local-manual behavior.
 """
 from __future__ import annotations
 
@@ -38,6 +43,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 from lingtai.kernel.agent_presence import observe_alive as _presence_observe_alive
 from lingtai.kernel.i18n import t
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from ._launcher import AvatarLaunchReceipt, AvatarLaunchRequest, AvatarLauncherPort
@@ -94,7 +100,8 @@ def _mission_looks_unsafe(mission: str) -> tuple[bool, str]:
 
 
 if TYPE_CHECKING:
-    from lingtai.agent import Agent
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
@@ -168,58 +175,124 @@ _RULES_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# The one child spec: canonical action name → its own strict input schema, in
-# model-facing enum order. Both the module-level schema-only family and each
-# manager's handler-bound family are built from this single source by
-# ``_build_family`` below, so the two listings cannot drift apart.
-_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
+# Avatar's own action registry. The reserved ``manual`` child is appended by
+# this module's official declaration rather than being an operational action.
+_DECLARED_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
     ("spawn", _SPAWN_INPUT_SCHEMA),
     ("rules", _RULES_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
+)
+
+_DESCRIPTION = (
+    "Spawn an independent agent (他我), set network rules for descendants, "
+    "or read the avatar manual. Requires an explicit action — no default. "
+    "avatar(action='spawn', input={'name': 'researcher', ...}, "
+    "reasoning='<the avatar's mission>'): inherits init.json, boots on "
+    "default preset; your reasoning becomes the avatar's first prompt. "
+    "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
+    "distribute rules to self + all descendants (requires karma). "
+    "avatar(action='manual', input={}, reasoning='...'): return the "
+    "avatar-manual skill body. See avatar-manual skill for full guidance."
 )
 
 
-def _build_family(handlers: Mapping[str, Any]) -> ToolFamily:
-    """Build avatar's family, binding each spec'd action to *handlers[name]*.
-
-    Construction validates the registry, so a duplicate or reserved-name
-    collision raises ``ToolFamilyError`` here — at import time for ``_FAMILY``
-    — rather than shipping silently.
-    """
-    return ToolFamily(
-        "avatar",
-        [
-            ChildTool(name, schema, handlers[name], title=f"{name} input")
-            for name, schema in _CHILD_SPECS
-        ],
-    )
+def _manual_payload(_input: Mapping[str, Any]) -> dict:
+    """Return Avatar's packaged local manual without touching the host or disk tree."""
+    resource = resources.files(__package__).joinpath("manual/SKILL.md")
+    try:
+        body = resource.read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, AttributeError, OSError):
+        return {
+            "status": "degraded",
+            "action": "manual",
+            "manual": "",
+            "manual_path": str(resource),
+            "error": "avatar manual missing",
+        }
+    return {
+        "status": "ok",
+        "action": "manual",
+        "manual": body,
+        "manual_path": str(resource),
+    }
 
 
 def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
 
-# Composes the model-facing schema only; ``AvatarManager`` builds its own
-# per-instance family with real handlers bound to that instance.
-_FAMILY = _build_family({name: _unused for name, _ in _CHILD_SPECS})
-
-
-def get_description(lang: str = "en") -> str:
-    return (
-        "Spawn an independent agent (他我), set network rules for descendants, "
-        "or read the avatar manual. Requires an explicit action — no default. "
-        "avatar(action='spawn', input={'name': 'researcher', ...}, "
-        "reasoning='<the avatar's mission>'): inherits init.json, boots on "
-        "default preset; your reasoning becomes the avatar's first prompt. "
-        "avatar(action='rules', input={'rules_content': '...'}, reasoning='...'): "
-        "distribute rules to self + all descendants (requires karma). "
-        "avatar(action='manual', input={}, reasoning='...'): return the "
-        "avatar-manual skill body. See avatar-manual skill for full guidance."
+def _build_family(handlers: Mapping[str, Any] | None = None) -> ToolFamily:
+    """Compose Avatar's declared actions plus its local, reserved manual child."""
+    action_handlers = (
+        {name: _unused for name, _ in _DECLARED_CHILD_SPECS}
+        if handlers is None
+        else handlers
+    )
+    return ToolFamily(
+        DECLARATION.name,
+        [
+            *[
+                ChildTool(name, schema, action_handlers[name], title=f"{name} input")
+                for name, schema in _DECLARED_CHILD_SPECS
+            ],
+            ChildTool(
+                "manual",
+                DECLARATION.manual_input_schema,
+                _manual_payload,
+                title="manual input",
+            ),
+        ],
     )
 
 
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose Avatar against its granted ports; the registrar owns mounting."""
+    manager = AvatarManager(host)
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=manager,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+    )
+
+
+#: Static official declaration. Avatar consumes only the working directory and
+#: its dedicated parent-context port; it has no prompt, mount, or whole-Agent
+#: access. ``manual`` names Avatar's own packaged local-manual slot.
+DECLARATION = ToolPluginDeclaration(
+    name="avatar",
+    actions=tuple(name for name, _ in _DECLARED_CHILD_SPECS),
+    input_schemas=dict(_DECLARED_CHILD_SPECS),
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="avatar",
+    description=_DESCRIPTION,
+    binder=_bind,
+    requires=("workdir", "avatar_parent"),
+    glossary_package=__package__,
+)
+
+# Kept as the compatibility-visible complete action/spec registry, but derived
+# from the declaration so schema-only and host-bound families cannot drift.
+_CHILD_SPECS: tuple[tuple[str, dict[str, Any]], ...] = (
+    *_DECLARED_CHILD_SPECS,
+    ("manual", DECLARATION.manual_input_schema),
+)
+_SUPPORTED_ACTIONS_PHRASE = (
+    "".join(f"{action!r}, " for action in DECLARATION.public_actions[:-1])
+    + f"or {DECLARATION.public_actions[-1]!r}"
+)
+
+# Schema-only family: dispatchable families are built per granted host by
+# ``AvatarManager``. Construction catches a malformed child registry at import.
+_FAMILY = _build_family()
+
+
+def get_description(lang: str = "en") -> str:
+    return DECLARATION.description
+
+
 def get_schema(lang: str = "en") -> dict[str, Any]:
-    """Compose the LTP v2 model-facing schema for the single public ``avatar`` tool."""
+    """Compose the LTP v2 model-facing schema for the official ``avatar`` tool."""
     return _FAMILY.build_schema()
 
 
@@ -231,8 +304,8 @@ class AvatarManager:
     is checked via the filesystem through the agent-presence store.
     """
 
-    def __init__(self, agent: "Agent", launcher: AvatarLauncherPort | None = None):
-        self._agent = agent
+    def __init__(self, host: "ToolPluginHost", launcher: AvatarLauncherPort | None = None):
+        self._host = host
         if launcher is None:
             from lingtai.adapters.avatar_launcher import select_avatar_launcher
             launcher = select_avatar_launcher()
@@ -242,13 +315,16 @@ class AvatarManager:
         self._family = _build_family({
             "spawn": self._dispatch_spawn,
             "rules": self._dispatch_rules,
-            "manual": self._dispatch_manual,
         })
         self._pending_reasoning: str | None = None
 
     # ------------------------------------------------------------------
     # Handler
     # ------------------------------------------------------------------
+
+    def __call__(self, args: dict | None) -> dict:
+        """The official registrar mounts this manager itself as the handler."""
+        return self.handle(args)
 
     def handle(self, args: dict | None) -> dict:
         """Dispatch one action through the family, normalizing avatar's errors.
@@ -276,8 +352,8 @@ class AvatarManager:
             action = raw.get("action", "")
             return {
                 "error": (
-                    f"unknown action: {action!r}, only 'spawn', 'rules', or "
-                    f"'manual' is supported"
+                    f"unknown action: {action!r}, only "
+                    f"{_SUPPORTED_ACTIONS_PHRASE} is supported"
                 ),
             }
         return result
@@ -295,43 +371,13 @@ class AvatarManager:
     def _dispatch_rules(self, action_input: Mapping[str, Any]) -> dict:
         return self._rules(self._strip_nulls(action_input))
 
-    def _dispatch_manual(self, _action_input: Mapping[str, Any]) -> dict:
-        return self._manual()
-
-    def _manual(self) -> dict:
-        """Return the exact packaged avatar-manual body; performs no mutation.
-
-        Avatar's manual ships inside this package (``manual/SKILL.md``) rather
-        than in the agent's installed ``.library`` catalog, so this action owns
-        its own loader instead of the shared
-        ``load_installed_manual``/``build_manual_child`` pair — reusing that
-        builder here would report a ``.library`` path this family never reads.
-        """
-        resource = resources.files(__package__).joinpath("manual/SKILL.md")
-        try:
-            body = resource.read_text(encoding="utf-8")
-        except (FileNotFoundError, ModuleNotFoundError, AttributeError, OSError):
-            return {
-                "status": "degraded",
-                "action": "manual",
-                "manual": "",
-                "manual_path": str(resource),
-                "error": "avatar manual missing",
-            }
-        return {
-            "status": "ok",
-            "action": "manual",
-            "manual": body,
-            "manual_path": str(resource),
-        }
-
     # ------------------------------------------------------------------
     # Ledger (append-only JSONL log of avatar spawn events)
     # ------------------------------------------------------------------
 
     @property
     def _ledger_path(self) -> Path:
-        return self._agent._working_dir / "delegates" / "ledger.jsonl"
+        return self._host.workdir.path / "delegates" / "ledger.jsonl"
 
     def _append_ledger(self, event: str, name: str, **fields) -> None:
         """Append a single event record to the ledger."""
@@ -348,7 +394,7 @@ class AvatarManager:
         """Create one avatar. ``reasoning`` is the mission brief from the root
         envelope (``handle()``), not an ``input`` property — it becomes the
         newborn's first prompt and gates the mission-quality check."""
-        parent = self._agent
+        parent_working_dir = self._host.workdir.path
         peer_name = args.get("name")
         avatar_type = args.get("type", "shallow")
         dry_run = bool(args.get("dry_run", False))
@@ -423,7 +469,7 @@ class AvatarManager:
                     }
 
         # Parent must have init.json
-        parent_init_path = parent._working_dir / "init.json"
+        parent_init_path = parent_working_dir / "init.json"
         if not parent_init_path.is_file():
             return {"error": "parent has no init.json — cannot spawn avatar"}
 
@@ -437,7 +483,7 @@ class AvatarManager:
         # already validated name/type and confirmed parent has a usable
         # init.json, so the preview reflects what a real spawn would do.
         if dry_run:
-            avatar_working_dir = parent._working_dir.parent / peer_name
+            avatar_working_dir = parent_working_dir.parent / peer_name
             preview_mission = (reasoning or "").strip()
             unsafe, reason = _mission_looks_unsafe(reasoning or "")
             return {
@@ -460,8 +506,8 @@ class AvatarManager:
         # scope check — resolve and assert the target's parent equals the network
         # root, so even if peer_name validation is ever loosened, this still
         # prevents writing outside .lingtai/<siblings>/.
-        avatar_working_dir = parent._working_dir.parent / peer_name
-        network_root = parent._working_dir.parent.resolve()
+        avatar_working_dir = parent_working_dir.parent / peer_name
+        network_root = parent_working_dir.parent.resolve()
         try:
             resolved = avatar_working_dir.resolve(strict=False)
         except (OSError, RuntimeError) as e:
@@ -477,11 +523,11 @@ class AvatarManager:
             return {"error": f"Directory '{peer_name}' already exists. Choose another name."}
 
         # Prepare the avatar's working directory
-        parent_name = parent.agent_name or parent._working_dir.name
+        parent_name = self._host.avatar_parent.parent_name or parent_working_dir.name
 
         # Copy init.json and launch lingtai
         if avatar_type == "deep":
-            self._prepare_deep(parent._working_dir, avatar_working_dir)
+            self._prepare_deep(parent_working_dir, avatar_working_dir)
         else:
             avatar_working_dir.mkdir(parents=True, exist_ok=True)
 
@@ -494,13 +540,14 @@ class AvatarManager:
                     "base_prompt_file", "comment_file"):
             val = parent_init.get(key)
             if val and not os.path.isabs(val):
-                resolved = parent._working_dir / val
+                resolved = parent_working_dir / val
                 if resolved.is_file():
                     parent_init[key] = str(resolved)
 
-        # Inherit parent's venv_path so avatar can find the runtime
-        if hasattr(parent, "_venv_path") and parent._venv_path:
-            parent_init["venv_path"] = parent._venv_path
+        # Inherit the parent runtime location through Avatar's narrow host port.
+        venv_path = self._host.avatar_parent.venv_path
+        if venv_path:
+            parent_init["venv_path"] = venv_path
 
         # Clean stale signal files before launch
         for sig in (".suspend", ".sleep", ".interrupt"):
@@ -512,7 +559,7 @@ class AvatarManager:
         # caller's reasoning (task brief). Written to the avatar's `.prompt`
         # file — picked up by the kernel's signal-file watcher on first poll
         # and delivered as a one-shot system message (consumed-once via unlink).
-        parent_address = parent._working_dir.name
+        parent_address = parent_working_dir.name
         avatar_lang = parent_init.get("manifest", {}).get("language", "en")
         parent_prompt = t(
             avatar_lang, "avatar.parent_prompt",
@@ -527,7 +574,7 @@ class AvatarManager:
         avatar_comment = args.get("comment", "")
         avatar_init = self._make_avatar_init(
             parent_init, peer_name, comment=avatar_comment,
-            parent_working_dir=parent._working_dir,
+            parent_working_dir=parent_working_dir,
         )
         (avatar_working_dir / "init.json").write_text(
             json.dumps(avatar_init, indent=2, ensure_ascii=False),
@@ -581,14 +628,14 @@ class AvatarManager:
             }
 
         # Auto-distribute rules to all descendants (including newborn) — read from canonical system/rules.md
-        parent_rules_md = parent._working_dir / "system" / "rules.md"
+        parent_rules_md = parent_working_dir / "system" / "rules.md"
         if parent_rules_md.is_file():
             try:
                 rules_content = parent_rules_md.read_text(encoding="utf-8")
             except OSError:
                 rules_content = ""
             if rules_content.strip():
-                self._distribute_rules_to_descendants(rules_content, parent._working_dir)
+                self._distribute_rules_to_descendants(rules_content, parent_working_dir)
 
         result = {
             "status": "ok",
@@ -858,30 +905,30 @@ class AvatarManager:
         system prompt if the content changed. The caller's own prompt refresh
         happens on its next heartbeat tick (within ~1s).
         """
-        parent = self._agent
+        parent_working_dir = self._host.workdir.path
         content = args.get("rules_content", "").strip()
         if not content:
             return {"error": "rules_content is required"}
 
-        # Admin check: at least one admin privilege must be truthy
-        admin = getattr(parent, "_admin", {}) or {}
-        if not any(admin.values()):
+        # The host decides the existing any-admin-value rule once and exposes
+        # only this action-specific authorization bit to the plugin.
+        if not self._host.avatar_parent.has_rule_privilege():
             return {"error": "Not authorized — admin privilege required to set rules"}
 
         # Write .rules signal to self — heartbeat will consume and persist
         try:
-            (parent._working_dir / ".rules").write_text(content, encoding="utf-8")
+            (parent_working_dir / ".rules").write_text(content, encoding="utf-8")
         except OSError as e:
             return {"error": f"failed to write .rules signal: {e}"}
 
         # Write .rules signal file to all descendants
-        distributed = self._distribute_rules_to_descendants(content, parent._working_dir)
+        distributed = self._distribute_rules_to_descendants(content, parent_working_dir)
 
         # Include self in the reported distribution for transparency
         return {
             "status": "ok",
             "message": f"Rules set; signal written to self and {len(distributed)} descendant(s).",
-            "distributed_to": [parent._working_dir.name] + distributed,
+            "distributed_to": [parent_working_dir.name] + distributed,
         }
 
     @staticmethod
@@ -951,14 +998,11 @@ class AvatarManager:
         return distributed
 
 
-def setup(agent: "Agent", **kwargs) -> AvatarManager:
-    """Set up the avatar capability on an agent."""
-    mgr = AvatarManager(agent)
-    agent.add_tool(
-        "avatar",
-        schema=get_schema(),
-        handler=mgr.handle,
-        description=get_description(),
-        glossary_package=__package__,
-    )
-    return mgr
+def setup(agent: "BaseAgent", **_ignored) -> AvatarManager:
+    """Register Avatar through the official declared-host-plugin route."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    (bound,) = register_agent_tool_plugins(agent, [DECLARATION])
+    if not isinstance(bound.handler, AvatarManager):
+        raise RuntimeError("avatar declaration did not bind its AvatarManager")
+    return bound.handler
