@@ -43,8 +43,8 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
+This component is the kernel's boundary for **one declared official**
+model-facing tool plugin. Every official tool family in this distribution
 follows one declared plugin contract: a static declaration of its identity and
 public actions, a bind step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
@@ -134,11 +134,13 @@ capability.
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir`, `prompt_section`, and `avatar_parent`: `mcp` consumes the first two,
-while Avatar consumes `workdir` plus the narrow parent facts necessary for its
-existing spawn/rules behavior. Families that later need to drive the live Agent
-body — molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic
-override — earn their ports one real slice at a time.
+`workdir`, `prompt_section`, and `avatar_parent`: `mcp` consumes the first two
+as the current base reference, while the landed Avatar slice consumes `workdir`
+plus the narrow parent facts necessary for its existing spawn/rules behavior.
+The family-generic shared-C register remains a target register, not permission to
+pre-enumerate candidate ports: any later slice adds one named, capability-native
+port only together with its implementation, adapter wiring, declaration, and
+vertical evidence.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference

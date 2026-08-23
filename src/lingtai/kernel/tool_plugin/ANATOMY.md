@@ -38,8 +38,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how declared
-families reach the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how each official
+landed family reaches the live Agent body through a runtime-bound host bridge. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -78,13 +78,19 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `protected=True`), plus `agent_host_ports` and
   `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the presentation declaring family.
-  `DECLARATION` is built at module import; `_bind(host)` composes the per-host
-  `ToolFamily` and `handle_mcp` wrapper, with `activate` as the boot reconcile.
-- `src/lingtai/tools/avatar/__init__.py` — the detached-peer declaring family.
-  Its static `DECLARATION` binds `AvatarManager` to `workdir` plus
-  `avatar_parent`; the local packaged manual stays a reserved child owned by
-  the family, and `setup(agent)` only routes it through the registrar.
+- `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
+  `DECLARATION` is built at module import; `_bind(host)` composes the
+  per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
+  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
+  only composition wiring. The shared-C integration register remains
+  family-generic — `mcp`, `email`, `file`, `context`, `notification`, `soul`,
+  `vision`, `web`, `daemon`, `system`, and `task_card` are its target names,
+  not a claim that candidate slices landed.
+- `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
+  not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
+  `workdir` plus the earned, narrow `avatar_parent` port; the local packaged
+  manual stays a reserved child owned by the family, and `setup(agent)` only
+  routes it through the registrar.
 
 ## Connections
 

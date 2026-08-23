@@ -287,20 +287,25 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing
-tool family shares, so per-family recuts do not each invent their own. It is
-shipped state for exactly **two** families and a migration target for every
-other.
+tool family shares, so per-family recuts do not each invent their own. The
+shared-C base evidence is `mcp`; its family-generic integration register names
+`mcp`, `email`, `file`, `context`, `notification`, `soul`, `vision`, `web`,
+`daemon`, `system`, and `task_card` as a target, not as proof that candidate
+slices merged. This worktree additionally contains one separately landed
+vertical slice: `avatar`. Thus the actual declared evidence here is exactly two
+families, while every other candidate remains a migration target.
 
-`mcp` is the first family declared under the form this section selects: it owns
+`mcp` is the current base reference under the form this section selects: it owns
 a static `ToolPluginDeclaration`
 (`src/lingtai/tools/mcp/__init__.py`, `DECLARATION`), its name is reserved in
 the kernel-owned official list, and it binds against a least-privilege host
-facade instead of receiving the whole `Agent`. `avatar` is the second: its
-static `DECLARATION` (`src/lingtai/tools/avatar/__init__.py`) is likewise
-reserved and binds only `workdir` and `avatar_parent`. Those are the two
-families' evidence for the declaration clauses only. Every other family
-registered through `src/lingtai/tools/registry.py` remains an explicit future
-migration unit, and none of them ships as an MCP plugin package today.
+facade instead of receiving the whole `Agent`. `avatar` is the landed
+independent slice: its static `DECLARATION`
+(`src/lingtai/tools/avatar/__init__.py`) is likewise reserved and binds only
+`workdir` and the earned `avatar_parent` port. Those are the two families'
+evidence for the declaration clauses only. Every other family registered through
+`src/lingtai/tools/registry.py` remains an explicit future migration unit, and
+none of them ships as an MCP plugin package today.
 
 The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
 the *external stdio transport* form described below — evidence about
@@ -405,8 +410,9 @@ section, and they are cited below only as the precedent for
 this section introduces no generic manifest compiler, no
 plugin-admission engine, and no multi-form compatibility layer.
 
-**One family, one declaration, retained form.** The unit of migration is one
-current model-facing family gaining one declaration that *wraps* it.
+**One family slice, one declaration, retained form.** The unit of migration is one
+current model-facing family gaining one declaration that *wraps* it. The shared
+register is family-generic rather than MCP-only.
 
 - The declaration MUST preserve that family's public tool name, action
   inventory and spelling, per-action strict `input` schemas, the closed root
@@ -418,8 +424,12 @@ current model-facing family gaining one declaration that *wraps* it.
   already uses to keep `ShellManager`'s flat call shape and `daemon` to keep
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
-  are prohibited: a family is declared only once its own vertical PR lands.
-  `mcp` and `avatar` are the declared families today.
+  are prohibited: a family is declared only once its own vertical slice lands.
+  `mcp` is the current base reference and Avatar's separately landed slice is
+  actual evidence here. The family-generic shared-C integration register names
+  `mcp`, `email`, `file`, `context`, `notification`, `soul`, `vision`, `web`,
+  `daemon`, `system`, and `task_card`; its remaining names are targets, not a
+  claim that their candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -435,8 +445,10 @@ current model-facing family gaining one declaration that *wraps* it.
   live-looking route behind after close. It cannot: the mount port is host-only
   and is never granted to a declaration.
 
-**The family owns the manual and its submanuals.** Per root Design principles
-3 and 4, the manual travels with the capability:
+**The package owns the canonical manual and its submanuals.** Per root Design
+principles 3 and 4, a package-owned manual travels with the capability; a
+retained intrinsic manual tree is migration-compatible legacy/redirect material,
+not a competing authority:
 
 - One declaration names its own manual alongside its public action inventory,
   and the family ships that manual with every submanual, reference, or asset
@@ -580,14 +592,20 @@ non-goal for third-party-versus-third-party mounts.
 
 **Current evidence versus migration target.**
 
-- The selected form ships for exactly two families:
+- The selected form is generic. `mcp` is the current base reference slice; the
+  shared-C integration target additionally names `email`, `file`, `context`,
+  `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and `task_card`
+  without claiming those candidate worktrees have merged. Avatar is separately
+  landed vertical evidence: `src/lingtai/tools/avatar/__init__.py`
+  `DECLARATION` binds the detached-peer slice against `workdir` and the earned
+  `avatar_parent` port. The shared test seam is `tests/_tool_plugin_helpers.py`;
+  each other family still needs its own vertical evidence:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
   host ports, the reserved official-name list, and the fail-fast registrar;
   `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
-  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the presentation slice,
-  and `src/lingtai/tools/avatar/__init__.py` `DECLARATION` is the detached-peer
-  slice. `tests/test_tool_plugin_declaration.py` is the shared contract suite.
-  `mcp`'s public surface is unchanged by that recut
+  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the base reference slice;
+  and `tests/test_tool_plugin_declaration.py` plus the generic helper are shared
+  contract evidence. `mcp`'s public surface is unchanged by that recut
   (`tests/test_tool_family_mcp_migration_parity.py`,
   `tests/test_mcp_capability.py`), while
   `tests/test_tool_family_avatar_migration.py` covers Avatar's static

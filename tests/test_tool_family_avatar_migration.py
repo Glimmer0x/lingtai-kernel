@@ -145,3 +145,117 @@ def test_agent_mounts_avatar_only_through_the_official_registrar(tmp_path):
         assert isinstance(agent.get_capability("avatar"), AvatarManager)
     finally:
         agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ({"action": "spawn"}, "input must be an object"),
+        ({"action": "spawn", "input": "not-an-object"}, "input must be an object"),
+        (
+            {
+                "action": "spawn",
+                "input": {"name": "child", "confirm": True},
+                "dir": "somewhere-else",
+            },
+            "unsupported avatar argument",
+        ),
+        (
+            {
+                "action": "spawn",
+                "input": {"name": "child", "rules_content": "No deleting."},
+            },
+            "unsupported avatar input field",
+        ),
+    ],
+)
+def test_avatar_rejects_invalid_input_object_or_root_before_any_io(tmp_path, args, message):
+    """The declared family still validates its closed root/input before handlers."""
+    parent_dir = _parent_dir(tmp_path)
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+
+    result = manager.handle(args)
+
+    assert result == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": message,
+    }
+    assert not (parent_dir.parent / "child").exists()
+    assert not (parent_dir / ".rules").exists()
+    assert not (parent_dir / "delegates" / "ledger.jsonl").exists()
+
+
+@pytest.mark.parametrize("summarize", ["yes", 1, None])
+def test_avatar_rejects_non_boolean_summarize_before_any_action_io(tmp_path, summarize):
+    """The root presentation control is strict and never reaches Avatar actions."""
+    parent_dir = _parent_dir(tmp_path)
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+
+    result = manager.handle(
+        {
+            "action": "spawn",
+            "input": {"name": "child", "confirm": True},
+            "summarize": summarize,
+        }
+    )
+
+    assert result == {
+        "status": "failed",
+        "error_code": "INVALID_ARGUMENT",
+        "message": "summarize must be a boolean",
+    }
+    assert not (parent_dir.parent / "child").exists()
+    assert not (parent_dir / "delegates" / "ledger.jsonl").exists()
+
+
+def test_avatar_clears_normalized_reasoning_between_dispatches(tmp_path):
+    """ToolExecutor-normalized reasoning is a one-call mission, never ambient state."""
+    parent_dir = _parent_dir(tmp_path)
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+    mission = "Investigate the heartbeat regression and report the evidence."
+
+    first = manager.handle(
+        {
+            "action": "spawn",
+            "input": {"name": "first", "dry_run": True},
+            "_reasoning": mission,
+        }
+    )
+    second = manager.handle({"action": "spawn", "input": {"name": "second"}})
+
+    assert first["status"] == "dry_run"
+    assert first["preview"]["mission"] == mission
+    assert second["status"] == "confirmation_needed"
+    assert second["preview"]["mission"] == ""
+    assert not (parent_dir.parent / "second").exists()
+
+
+def test_avatar_missing_packaged_manual_degrades_truthfully(tmp_path, monkeypatch):
+    """Avatar's declaration promises a package-local manual; no host fallback is hidden."""
+    parent_dir = _parent_dir(tmp_path)
+    manager = AvatarManager(_host(parent_dir), launcher=_Launcher())
+
+    class _MissingPackageResource:
+        def joinpath(self, _path):
+            return self
+
+        def read_text(self, *, encoding):
+            raise FileNotFoundError("simulated missing package resource")
+
+        def __str__(self):
+            return "missing-avatar-package-resource"
+
+    monkeypatch.setattr(avatar.resources, "files", lambda _package: _MissingPackageResource())
+
+    result = manager.handle({"action": "manual", "input": {}})
+
+    assert result == {
+        "status": "degraded",
+        "action": "manual",
+        "manual": "",
+        "manual_path": "missing-avatar-package-resource",
+        "error": "avatar manual missing",
+    }
+    assert not (parent_dir / ".rules").exists()
+    assert not (parent_dir / "delegates" / "ledger.jsonl").exists()
