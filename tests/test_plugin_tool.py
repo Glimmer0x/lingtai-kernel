@@ -538,10 +538,15 @@ def test_both_actions_declare_the_canonical_strict_empty_input():
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(tmp_path):
-    from lingtai.tools.plugin import _FAMILY, _build_family
+    from lingtai.adapters.tool_plugin_host import agent_host_ports
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.plugin import DECLARATION, _FAMILY, _build_family
 
     agent, _workdir = _mk_agent(tmp_path)
-    assert _build_family(agent).child_names == _FAMILY.child_names == ("info", "manual")
+    host = ToolPluginHost.grant(
+        DECLARATION, agent_host_ports(agent, DECLARATION.name)
+    )
+    assert _build_family(host).child_names == _FAMILY.child_names == ("info", "manual")
 
 
 def test_info_returns_catalog_snapshot(tmp_path):
@@ -1049,10 +1054,8 @@ def test_uninstalling_removes_the_skill_from_the_plugin_field(tmp_path):
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
     assert "<skill_names>greeter</skill_names>" in _prompt_section_named(agent, "plugin")
 
-    from lingtai.tools import plugin as pluginmod
-
     _refresh_plugins(agent, [])
-    pluginmod._reconcile(agent, [])
+    _info(agent)
     assert "greeter" not in _prompt_section_named(agent, "plugin")
 
 
@@ -1348,8 +1351,7 @@ def test_default_plugin_root_is_scanned_without_declaration(tmp_path):
     root = workdir / "plugin"
     _write_plugin(root, "auto", skills=["hi"], mcp_servers={"s": {"type": "stdio", "command": "node"}})
     _refresh_plugins(agent, [])
-    from lingtai.tools import plugin as pluginmod
-    pluginmod._reconcile(agent, [])
+    _info(agent)
 
     assert "<name>auto</name>" in _prompt_section_named(agent, "plugin")
     assert "<skill_names>hi</skill_names>" in _prompt_section_named(agent, "plugin")

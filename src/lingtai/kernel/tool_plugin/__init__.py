@@ -45,6 +45,8 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "PluginCatalogState",
+    "PluginCatalogPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +66,20 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
+#: Earned, not enumerated: every name below is consumed by a real vertical
+#: slice (``mcp`` uses ``workdir``/``prompt_section``; ``plugin`` also consumes
+#: the read-only ``plugin_catalog`` projection). Root ``CONTRACT.md`` rules
+#: 10-11 forbid a speculative port taxonomy, so a later family adds the port it
 #: actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "prompt_section",
+    "plugin_catalog",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +90,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "plugin")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +175,37 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+@dataclass(frozen=True)
+class PluginCatalogState:
+    """Read-only facts the official ``plugin`` family presents.
+
+    This is intentionally a projection, not an Agent Plugins implementation:
+    the host owns registration, the service owns manifest/component validation,
+    and the family merely needs the latest boot snapshot plus the three path/
+    availability inputs that define discovery.  The state has no mutation,
+    lifecycle, launch, or filesystem operation.
+    """
+
+    registration: Mapping[str, Any]
+    configured_paths: tuple[str, ...]
+    skill_paths: tuple[str, ...]
+    skills_enabled: bool
+
+
+class PluginCatalogPort(Protocol):
+    """Read the current Agent Plugins catalog presentation inputs.
+
+    The official ``plugin`` family needs exactly this one read-only projection to
+    preserve its pre-declaration behavior: the registration snapshot produced at
+    boot, its own configured discovery paths, inherited skill paths, and whether
+    the skills catalog is enabled.  It cannot register, prune, launch, or alter
+    any of those facts through this port.
+    """
+
+    def read_state(self) -> PluginCatalogState:
+        """Return the current detached catalog presentation state."""
 
 
 class ToolMountPort(Protocol):

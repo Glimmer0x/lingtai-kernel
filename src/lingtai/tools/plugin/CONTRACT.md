@@ -6,6 +6,8 @@ related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/services/plugin_registry.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/mcp/CONTRACT.md
@@ -33,6 +35,15 @@ before capability setup — no model-facing action can reach it. The tool slice
 lives in `src/lingtai/tools/plugin/__init__.py`; the scanning, registration, and
 pruning machinery lives in `src/lingtai/services/plugin_registry.py` (imported
 lazily). The code is the source of truth.
+
+This is an official declared host plugin. Its module-level `DECLARATION` is
+constructed before any Agent exists; the kernel reserves `plugin`, grants only
+`workdir`, `prompt_section`, and the read-only `plugin_catalog` projection, then
+activates and mounts the bound family. The tool never receives a whole Agent:
+its catalog snapshot and discovery inputs arrive through that projection, its
+manual is read through `workdir`, and it writes only its own protected section.
+The declaration/adapter do not validate, register, prune, launch, or execute an
+Agent Plugin; those semantics remain with the existing host and service.
 
 ## The two-tier mount contract
 Guarded by: [PL001](BEHAVIORS.md#behavior-pl001)
@@ -170,7 +181,8 @@ alone still reports its health here. `problems` entries are
 `.library/intrinsic/capabilities/plugin/SKILL.md` is missing.
 
 `manual` is the family-owned reserved child, registered directly from
-`tool_family.manual.build_manual_child(agent, "plugin")`. `ToolFamily.handle()`
+`tool_family.manual.build_manual_child(host.workdir, DECLARATION.manual)`.
+`ToolFamily.handle()`
 returns that child's canonical `content`/`structuredContent` result verbatim
 (no double wrap); the flat public shape — body under the tool-specific key
 `plugin_manual`, matching the `mcp_manual` precedent — is reconstructed by the
@@ -226,8 +238,9 @@ Do not change any of the following; documented for reviewers only.
 - **Idempotent and convergent:** running registration twice leaves the same
   registry as once, and the registry converges on the current declaration rather
   than accumulating stale records.
-- **Prompt injection:** the catalog XML is written to the protected `plugin`
-  section via `agent.update_system_prompt("plugin", xml, protected=True)`.
+- **Prompt injection:** the catalog XML is written only through
+  `host.prompt_section.write_protected_section(xml)`, whose adapter is bound to
+  this protected `plugin` section.
 - **Lazy import:** `src/lingtai/services/plugin_registry.py` is imported lazily
   inside `_reconcile`, keeping the `lingtai.tools → lingtai` back-edge deferred.
 - **Path containment (§4.1):** every plugin-relative path MUST start with `./`
@@ -276,6 +289,7 @@ Do not change any of the following; documented for reviewers only.
 
 | Claim | Source | Test |
 |---|---|---|
+| The static official declaration is reserved, uses only the three narrow ports, and preserves real info/manual dispatch | `src/lingtai/tools/plugin/__init__.py` (`DECLARATION`, `_bind`) | `tests/test_tool_plugin_declaration.py::test_official_plugin_mount_uses_only_catalog_state_and_real_dispatch` |
 | The capability renders discovered plugins into the `plugin` prompt section | `src/lingtai/tools/plugin/__init__.py` (`_reconcile`) | `tests/test_plugin_tool.py::test_plugin_capability_renders_catalog_into_prompt` |
 | `info` returns a health snapshot without the manual body | `src/lingtai/tools/plugin/__init__.py` (`_reconcile`) | `tests/test_plugin_tool.py::test_info_returns_catalog_snapshot` |
 | Unknown actions return a `{status: error}` dict, including the unhashable case | `src/lingtai/tools/plugin/__init__.py` (`handle_plugin`) | `tests/test_plugin_tool.py::test_unknown_action_returns_error_envelope` |

@@ -26,7 +26,7 @@ description: >
   https://agent-plugins.org/specification.md with web when you need normative
   wording this router does not carry).
 version: 2.1.0
-last_changed_at: 2026-08-08T00:00:00Z
+last_changed_at: 2026-08-23T00:00:00Z
 related_files:
 - src/lingtai/tools/plugin/__init__.py
 - src/lingtai/tools/plugin/ANATOMY.md
@@ -314,6 +314,19 @@ register. Mounting happens at boot, so a plugin you just declared needs
 
 Every worked call in this manual is written in this full form; there is no
 shorthand to expand.
+
+## Settings and result size
+
+This capability owns **no** `<agent-dir>/settings/plugin.json` or
+`settings/plugin.<action>.json` file. Plugin declarations are init.json
+configuration, not tool settings: use `manifest.plugins` and refresh as described
+above.
+
+`info` is usually small, so leave root `summarize` absent or false when you need
+exact plugin names, source paths, skipped-component reasons, or registry facts.
+For a deliberately large catalog, `summarize=true` can make the visible result
+shorter; raw output remains recorded by the host. Leave `summarize=false` for
+`manual` so its installation and containment procedure is never summarized away.
 
 ## See also
 
