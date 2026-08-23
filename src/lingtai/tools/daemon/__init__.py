@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.kernel.i18n import t as _t
 from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.message import MSG_REQUEST, _make_message
 from lingtai.kernel.notifications import (
@@ -49,7 +50,6 @@ from lingtai.kernel.meta_block import (
     attach_daemon_agent_meta,
     render_system_prompt_pressure_context,
 )
-from lingtai.kernel.time_veil import now_iso
 from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
@@ -57,9 +57,12 @@ from ._tool_family import (
     CHECK_LAST_MAX as _FAMILY_CHECK_LAST_MAX,
     DEFAULT_MAX_TURNS as _FAMILY_DEFAULT_MAX_TURNS,
     LIST_DEFAULT_LAST as _FAMILY_LIST_DEFAULT_LAST,
+    DAEMON_DECLARED_ACTIONS,
     DaemonFamilyDispatcher,
     build_schema as _family_build_schema,
+    declared_input_schemas,
 )
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
@@ -1374,14 +1377,12 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
 
 
 class _ToolCollector:
-    """Captures add_tool calls during preset-driven capability setup.
+    """Legacy sandbox collector retained for detached and CLI host facades.
 
-    A capability's setup() expects something with add_tool plus the rest of
-    the parent's interface (_log, _config, _working_dir, inbox, ...). The
-    collector intercepts add_tool into local dicts and forwards every other
-    attribute read to the real parent agent, so the parent's tool registry
-    stays untouched while we still get the schema + handler the capability
-    wanted to register.
+    Official Agent boot uses ``DaemonRuntimePort.setup_preset_capability``;
+    detached and read-only host facades still compose established capability
+    setup against this private forwarding collector without mounting tools on a
+    live Agent.
     """
 
     def __init__(self, parent):
@@ -1401,23 +1402,69 @@ class _ToolCollector:
                 glossary_package=glossary_package,
             )
 
-    def __getattr__(self, n):
-        return getattr(self._parent, n)
+    def __getattr__(self, name):
+        return getattr(self._parent, name)
+
+
+_DESCRIPTION = 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+    return _DESCRIPTION
+
+
+def _bind_daemon(host) -> BoundToolPlugin:
+    """Compose Daemon against its granted ports without mounting or starting work."""
+    options = host.daemon_runtime.manager_options
+    manager = DaemonManager(
+        host.daemon_runtime,
+        max_turns=options["max_turns"],
+        timeout=options["timeout"],
+        notify_threshold=options["notify_threshold"],
+        manager_pool_size=options["manager_pool_size"],
+        system_prompt_budget_chars=options["system_prompt_budget_chars"],
+        workdir=host.workdir,
+        process_port=options.get("process_port"),
+        interactive_terminal_port=options.get("interactive_terminal_port"),
+    )
+    host.daemon_runtime.attach_daemon_manager(manager)
+    dispatcher = DaemonFamilyDispatcher(
+        manager,
+        host.workdir,
+        list(_BACKEND_SCHEMA_ENUM),
+        declaration=DECLARATION,
+    )
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=dispatcher.handle,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+    )
+
+
+#: Static official identity of the Daemon tool.  Its five operational actions
+#: and their strict schemas are declared before an Agent exists; the kernel
+#: appends the reserved installed-manual action and checks the bound schema on
+#: every registration.
+DECLARATION = ToolPluginDeclaration(
+    name="daemon",
+    actions=DAEMON_DECLARED_ACTIONS,
+    input_schemas=declared_input_schemas(list(_BACKEND_SCHEMA_ENUM)),
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="daemon",
+    description=_DESCRIPTION,
+    binder=_bind_daemon,
+    requires=("workdir", "daemon_runtime"),
+    glossary_package=__package__,
+)
 
 
 def get_schema(lang: str = "en") -> dict:
-    """Compose the LTP v2 model-facing schema for the single public ``daemon`` tool.
-
-    The composition itself lives in ``_tool_family.py`` (the package's one
-    canonical child registry); this stays the package's public entry point.
-    ``_BACKEND_SCHEMA_ENUM`` is passed in rather than imported there so the
-    child schema and the engine's own backend routing cannot drift apart.
-    """
-    return _family_build_schema(list(_BACKEND_SCHEMA_ENUM), lang)
+    """Compose the declaration-derived LTP v2 public Daemon schema."""
+    return _family_build_schema(
+        list(_BACKEND_SCHEMA_ENUM), lang, declaration=DECLARATION,
+    )
 
 
 # Sentinel strings a cooperatively-exited run returns through the future.
@@ -1542,14 +1589,36 @@ class DaemonManager:
     # callers/configs.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent",
+    def __init__(self, runtime: Any,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
                  system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
-                 *, process_port: DaemonProcessPort | None = None,
+                 *, workdir: Any | None = None,
+                 process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
-        self._agent = agent
+        """Construct against Daemon's narrow runtime/workdir ports.
+
+        The no-``workdir`` form remains a direct-construction compatibility
+        seam for existing in-process callers and tests.  It is immediately
+        adapted in the production adapter module, so the manager itself still
+        consumes only the same named runtime/workdir operations used by the
+        declared-plugin binder; normal Agent boot always supplies both ports.
+        """
+        if workdir is None:
+            from lingtai.adapters.tool_plugin_host import (
+                AgentWorkdirAdapter,
+                daemon_runtime_for_agent,
+            )
+
+            agent = runtime
+            runtime = daemon_runtime_for_agent(agent, {})
+            workdir = AgentWorkdirAdapter(
+                lambda: getattr(agent, "_working_dir")
+                if hasattr(agent, "_working_dir") else agent.working_dir
+            )
+        self._runtime = runtime
+        self._workdir = workdir
         self._max_turns = max_turns
         self._timeout = timeout
         self._manager_pool_size = self._env_nonnegative_int(
@@ -1561,7 +1630,7 @@ class DaemonManager:
                 system_prompt_budget_chars, DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
             ),
         )
-        self._default_model = agent.service.model
+        self._default_model = self._runtime.service.model
         self._notify_threshold = notify_threshold
         # Direct construction is a supported test/in-process composition path
         # as well as setup(). POSIX and Windows each have one production
@@ -1673,7 +1742,7 @@ class DaemonManager:
           A refreshed parent must recognize a live manager pidfile or per-run
           manager identity and leave the record alone.
         """
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if not daemons_dir.is_dir():
             return
 
@@ -1772,7 +1841,7 @@ class DaemonManager:
         try:
             from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 
-            pid_path = self._agent._working_dir / MANAGER_DIR / "manager.pid"
+            pid_path = self._workdir.path / MANAGER_DIR / "manager.pid"
             info = json.loads(pid_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return False
@@ -1802,7 +1871,7 @@ class DaemonManager:
 
     def _reconcile_terminal_notifications(self) -> None:
         """Retry terminal daemon notifications that lack a published receipt."""
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if not daemons_dir.is_dir():
             return
         for daemon_json_path in daemons_dir.glob("*/daemon.json"):
@@ -1864,7 +1933,7 @@ class DaemonManager:
     def handle(self, args: dict) -> dict:
         action = args.get("action")
         if action == "manual":
-            return load_installed_manual(self._agent, "daemon")
+            return load_installed_manual(self._workdir, "daemon")
         backend = _normalize_backend(args.get("backend", "lingtai"))
         if action == "emanate":
             return self._handle_emanate(
@@ -2105,7 +2174,7 @@ class DaemonManager:
             return None, [], []
         if not isinstance(raw, list):
             raise ValueError("plugin must be an array of plugin directory paths")
-        working_dir = self._agent._working_dir
+        working_dir = self._workdir.path
         resolved_paths: list[Path] = []
         for idx, item in enumerate(raw):
             if not isinstance(item, str) or not item.strip():
@@ -2564,7 +2633,7 @@ class DaemonManager:
         handlers: dict = {}
         clients: list[object] = []
         metadata: dict[str, dict] = {}
-        licc_env = {"LINGTAI_AGENT_DIR": str(self._agent._working_dir)}
+        licc_env = {"LINGTAI_AGENT_DIR": str(self._workdir.path)}
         try:
             for cfg in registrations:
                 name = cfg["name"]
@@ -2667,7 +2736,7 @@ class DaemonManager:
         for idx, item in enumerate(raw):
             if not isinstance(item, str) or not item.strip():
                 raise ValueError(f"skills[{idx}] must be a non-empty string path")
-            skill_file = self._resolve_task_skill_path(item.strip(), self._agent._working_dir)
+            skill_file = self._resolve_task_skill_path(item.strip(), self._workdir.path)
             if skill_file in seen:
                 continue
             seen.add(skill_file)
@@ -2720,7 +2789,7 @@ class DaemonManager:
 
     def _task_files_store_dir(self) -> Path:
         """The internal content-addressed task input store for this agent."""
-        return self._agent._working_dir / "daemons" / _TASK_FILES_STORE_DIR_NAME
+        return self._workdir.path / "daemons" / _TASK_FILES_STORE_DIR_NAME
 
     def _snapshot_task_files(self, spec: dict) -> list[dict] | None:
         """Validate ``spec['task_files']`` and plan its snapshot rows.
@@ -2774,7 +2843,7 @@ class DaemonManager:
                     f"{_TASK_FILES_ANNOTATION_MAX_CHARS} characters"
                 )
             resolved = self._resolve_task_file_path(
-                path.strip(), self._agent._working_dir
+                path.strip(), self._workdir.path
             )
             try:
                 data = resolved.read_bytes()
@@ -3016,7 +3085,7 @@ class DaemonManager:
         construction path in ``_run_emanation`` can mirror the parent service.
         The api_key is never logged or persisted.
         """
-        parent_service = self._agent.service
+        parent_service = self._runtime.service
         provider = str(getattr(parent_service, "provider", "")).lower()
         parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
         if not isinstance(parent_defaults, dict):
@@ -3089,7 +3158,7 @@ class DaemonManager:
         intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
         mcp_schemas, mcp_handlers = mcp_surface or ({}, {})
         parent_mcp_names = self._parent_mcp_tool_names()
-        reserved_names = ({s.name for s in self._agent._tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
+        reserved_names = ({s.name for s in self._runtime.tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
         mcp_collisions = set(mcp_schemas) & reserved_names
         if mcp_collisions:
             raise ValueError(
@@ -3119,7 +3188,7 @@ class DaemonManager:
             # NOT auto-inherit (they must come through task `mcp` registrations);
             # that exclusion is enforced by the ``parent_mcp_requested`` guard
             # above and by the floor's exclusion of `mcp`.
-            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
+            parent_schema_map = {s.name: s for s in self._runtime.tool_schemas}
             parent_host_names = (set(parent_schema_map)
                                  & _parent_host_tool_floor()) - parent_mcp_names
             # Available surface = preset capabilities ∪ parent host-floor tools
@@ -3162,8 +3231,8 @@ class DaemonManager:
                         dispatch[n] = mcp_handlers[n]
                 elif n in parent_schema_map:
                     schemas.append(parent_schema_map[n])
-                    if n in self._agent._tool_handlers:
-                        dispatch[n] = self._agent._tool_handlers[n]
+                    if n in self._runtime.tool_handlers:
+                        dispatch[n] = self._runtime.tool_handlers[n]
             return schemas, dispatch
 
         # Default path: emanation runs on the parent's capability surface plus
@@ -3171,7 +3240,7 @@ class DaemonManager:
         tool_names |= set(mcp_schemas)
 
         # Validate requested tools exist
-        available = ({s.name for s in self._agent._tool_schemas}
+        available = ({s.name for s in self._runtime.tool_schemas}
                      | set(intrinsic_schemas) | set(mcp_schemas)
                      | _DAEMON_AUTO_MCP_TOOL_NAMES)
         missing = tool_names - available
@@ -3179,7 +3248,7 @@ class DaemonManager:
             raise ValueError(f"Unknown tools for emanation: {missing}")
 
         # Build schemas and dispatch
-        schema_map = {s.name: s for s in self._agent._tool_schemas}
+        schema_map = {s.name: s for s in self._runtime.tool_schemas}
         schemas = []
         for n in sorted(tool_names):
             if n in intrinsic_schemas:
@@ -3188,8 +3257,8 @@ class DaemonManager:
                 schemas.append(mcp_schemas[n])
             elif n in schema_map:
                 schemas.append(schema_map[n])
-        dispatch = {n: self._agent._tool_handlers[n]
-                    for n in tool_names if n in self._agent._tool_handlers}
+        dispatch = {n: self._runtime.tool_handlers[n]
+                    for n in tool_names if n in self._runtime.tool_handlers}
         for n in tool_names:
             if n in mcp_handlers:
                 dispatch[n] = mcp_handlers[n]
@@ -3199,11 +3268,8 @@ class DaemonManager:
 
 
     def _parent_mcp_tool_names(self) -> set[str]:
-        """Return parent MCP tool names tracked by the parent agent."""
-        names = getattr(self._agent, "_mcp_tool_names", set())
-        if not isinstance(names, set):
-            return set()
-        return {n for n in names if isinstance(n, str)}
+        """Return parent MCP tool names through Daemon's narrow runtime port."""
+        return set(self._runtime.mcp_tool_names)
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
@@ -3240,7 +3306,6 @@ class DaemonManager:
         from lingtai.tools.registry import (
             BUILTIN_TOOLS,
             canonical_capability_name,
-            setup_capability,
         )
         from lingtai.presets import expand_inherit
 
@@ -3255,7 +3320,8 @@ class DaemonManager:
         # capability or an unknown one that ``setup_capability`` rejects.
         expanded: dict = dict(resolved)
 
-        collector = _ToolCollector(self._agent)
+        collected_schemas: dict = {}
+        collected_handlers: dict = {}
         required = required_tools
         for name, kwargs in expanded.items():
             name = canonical_capability_name(name)
@@ -3277,7 +3343,9 @@ class DaemonManager:
             if not isinstance(kwargs, dict):
                 kwargs = {}
             try:
-                setup_capability(collector, name, **kwargs)
+                schemas, handlers = self._runtime.setup_preset_capability(name, kwargs)
+                collected_schemas.update(schemas)
+                collected_handlers.update(handlers)
             except Exception as e:
                 if required is not None and name not in required:
                     self._log(
@@ -3290,7 +3358,7 @@ class DaemonManager:
                     f"preset capability {name!r} failed to set up: {e}"
                 ) from e
 
-        return collector.schemas, collector.handlers
+        return collected_schemas, collected_handlers
 
     def _build_emanation_prompt(
         self,
@@ -3300,7 +3368,7 @@ class DaemonManager:
     ) -> str:
         """Build the system prompt for an emanation."""
         return _build_emanation_prompt_standalone(
-            self._agent._config.language,
+            self._runtime.language,
             task,
             schemas,
             system_prompt=system_prompt,
@@ -3395,7 +3463,7 @@ class DaemonManager:
         manifest = build_manifest(
             run_id=run_dir.run_id,
             backend="lingtai",
-            parent_working_dir=str(self._agent._working_dir),
+            parent_working_dir=str(self._workdir.path),
             run_dir=str(run_dir.path),
             task=task,
             prompt=prompt,
@@ -3406,7 +3474,7 @@ class DaemonManager:
             context_token_limit=context_token_limit,
             llm=resolved_llm,
             mcp=mcp,
-            language=getattr(self._agent._config, "language", "en"),
+            language=self._runtime.language,
             preset_name=preset_name,
             preset_llm=preset_llm,
             preset_capabilities=preset_capabilities,
@@ -3519,7 +3587,7 @@ class DaemonManager:
         from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
 
         enqueue_manager_run(
-            agent_working_dir=self._agent._working_dir,
+            agent_working_dir=self._workdir.path,
             request=request,
             capsule=capsule,
             pool_size=pool_size,
@@ -3550,7 +3618,7 @@ class DaemonManager:
         existing LLM configuration is used as an implicit/effective preset (see
         ``_implicit_parent_preset_llm``). Either way a dedicated daemon-scoped
         LLMService is built from the effective preset — the daemon never reuses
-        ``self._agent.service`` directly and never runs provider-name env-var
+        ``self._runtime.service`` directly and never runs provider-name env-var
         fallback resolution for its primary key.
 
         context_token_limit: the task's optional ``context_token_limit``
@@ -3750,11 +3818,11 @@ class DaemonManager:
             # per-execution tool_meta. Parent agent/session and communication state
             # are intentionally not shared across this boundary.
             meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
-            working_dir=self._agent._working_dir,
-            tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
+            working_dir=self._workdir.path,
+            tool_call_guard=self._runtime.tool_call_guard,
             summarizer_fn=daemon_summarizer_fn,
             raw_log_path=run_dir.events_path.relative_to(
-                self._agent._working_dir
+                self._workdir.path
             ).as_posix(),
             raw_event_type="daemon_tool_result",
         )
@@ -3849,7 +3917,7 @@ class DaemonManager:
             try:
                 stats = compact_oversized_history(
                     interface,
-                    working_dir=self._agent._working_dir,
+                    working_dir=self._workdir.path,
                     logger_fn=lambda event, **fields: run_dir.append_event(
                         event, em_id=em_id, run_id=run_dir.run_id, **fields
                     ),
@@ -3889,14 +3957,14 @@ class DaemonManager:
 
         def _daemon_aed_retry_message(err_desc: str) -> str:
             """Build the daemon-local localized ``MSG_REQUEST`` recovery message."""
-            language = getattr(getattr(self._agent, "_config", None), "language", "en")
+            language = getattr(self._runtime, "language", "en")
             return _make_message(
                 MSG_REQUEST,
                 "system",
                 _t(
                     language,
                     "system.stuck_revive",
-                    ts=now_iso(self._agent),
+                    ts=self._runtime.now_iso(),
                     err_desc=err_desc,
                 ),
             ).content
@@ -3913,7 +3981,7 @@ class DaemonManager:
             # location of the post-tool send that triggered recovery.
             error = _daemon_empty_response_error(in_tool_loop=in_tool_loop)
             max_aed_attempts = getattr(
-                getattr(self._agent, "_config", None), "max_aed_attempts", 3
+                self._runtime, "max_aed_attempts", 3
             )
             if (
                 not isinstance(max_aed_attempts, int)
@@ -4317,7 +4385,7 @@ class DaemonManager:
             spawn_env.update(backend_env)
 
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir, tuple(spawn_env.items()),
+            tuple(cmd), self._workdir.path, tuple(spawn_env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -4595,7 +4663,7 @@ class DaemonManager:
             result = run_claude_interactive(
                 em_id=em_id,
                 run_dir=run_dir,
-                working_dir=self._agent._working_dir,
+                working_dir=self._workdir.path,
                 task=task,
                 cancel_event=cancel_event,
                 timeout_event=timeout_event,
@@ -4681,12 +4749,12 @@ class DaemonManager:
         # Codex normally inherits the parent environment untouched; an explicit
         # env is materialized only when the caller supplied a
         # ``backend_options.env`` overlay.
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         if backend_env:
             env = os.environ.copy()
             env.update(backend_env)
             command = DaemonProcessCommand(
-                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                tuple(cmd), self._workdir.path, tuple(env.items()),
             )
         try:
             handle = self._process_port.spawn(
@@ -4909,7 +4977,7 @@ class DaemonManager:
             parts.append(f"Preview:\n{preview}")
         body = "\n".join(parts)
         try:
-            self._agent._enqueue_system_notification(
+            self._runtime.enqueue_daemon_notification(
                 source="daemon",
                 ref_id=em_id,
                 body=body,
@@ -5169,14 +5237,7 @@ class DaemonManager:
         if any(spec.get("preset") for spec in tasks):
             from lingtai.kernel.presets import _preset_ref_in
 
-            read_raw_preset = getattr(self._agent, "_read_preset_from_init", None)
-            if callable(read_raw_preset):
-                try:
-                    raw_preset_block = read_raw_preset()
-                except Exception:
-                    raw_preset_block = {}
-            else:
-                raw_preset_block = {}
+            raw_preset_block = self._runtime.read_preset_from_init()
             allowed = (
                 raw_preset_block.get("allowed")
                 if isinstance(raw_preset_block, dict) else None
@@ -5186,7 +5247,7 @@ class DaemonManager:
                 requested = spec.get("preset")
                 if not requested:
                     continue
-                if not _preset_ref_in(requested, allowed, working_dir=self._agent._working_dir):
+                if not _preset_ref_in(requested, allowed, working_dir=self._workdir.path):
                     self._log("daemon_preset_refused_unauthorized", requested=requested)
                     return {
                         "status": "error",
@@ -5211,7 +5272,7 @@ class DaemonManager:
             # composed preset-loader hook so the daemon never constructs a
             # migration workspace adapter itself.
             try:
-                preset = self._agent.load_preset(preset_name)
+                preset = self._runtime.load_preset(preset_name)
             except (KeyError, ValueError) as e:
                 return {"status": "error",
                         "message": f"preset {preset_name!r} unloadable: {e}"}
@@ -5251,7 +5312,7 @@ class DaemonManager:
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
-        parent_addr = self._agent._working_dir.name
+        parent_addr = self._workdir.path.name
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
@@ -5313,7 +5374,7 @@ class DaemonManager:
             # propagate as a tool-level error and skip scheduling for this spec.
             try:
                 run_dir = DaemonRunDir(
-                    parent_working_dir=self._agent._working_dir,
+                    parent_working_dir=self._workdir.path,
                     handle=em_id,
                     run_id=em_id,
                     task=spec["task"],
@@ -5354,7 +5415,7 @@ class DaemonManager:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
                 if "email" in (spec.get("tools") or []):
                     task_mcp_regs = self._with_daemon_email_mcp(
-                        task_mcp_regs, run_dir, self._agent._working_dir,
+                        task_mcp_regs, run_dir, self._workdir.path,
                     )
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
@@ -5449,15 +5510,7 @@ class DaemonManager:
             or requested_timeout_s < DAEMON_CARD_NUDGE_MIN_TIMEOUT_S
         ):
             return False
-        has_active = getattr(
-            getattr(self._agent, "_task_card_manager", None), "has_active_watch", None
-        )
-        if not callable(has_active):
-            return False
-        try:
-            return not has_active()
-        except Exception:
-            return False
+        return not self._runtime.has_active_task_card_watch()
 
     def _handle_emanate_cli(
         self,
@@ -5539,7 +5592,7 @@ class DaemonManager:
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
-        parent_addr = self._agent._working_dir.name
+        parent_addr = self._workdir.path.name
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
@@ -5584,7 +5637,7 @@ class DaemonManager:
                 )
             try:
                 run_dir = DaemonRunDir(
-                    parent_working_dir=self._agent._working_dir,
+                    parent_working_dir=self._workdir.path,
                     handle=em_id,
                     run_id=em_id,
                     task=spec["task"],
@@ -5624,7 +5677,7 @@ class DaemonManager:
                 )
                 if _cli_backend_loads_common_mcp(backend) and "email" in (spec.get("tools") or []):
                     mcp_regs = self._with_daemon_email_mcp(
-                        mcp_regs, run_dir, self._agent._working_dir,
+                        mcp_regs, run_dir, self._workdir.path,
                     )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
@@ -5712,7 +5765,7 @@ class DaemonManager:
                 manifest = build_manifest(
                     run_id=run_dir.run_id,
                     backend=backend,
-                    parent_working_dir=str(self._agent._working_dir),
+                    parent_working_dir=str(self._workdir.path),
                     run_dir=str(run_dir.path),
                     task=cli_task,
                     tools=spec.get("tools", []),
@@ -5721,7 +5774,7 @@ class DaemonManager:
                     group_id=group_id,
                     mcp=mcp_regs,
                     backend_argv=backend_argv,
-                    language=getattr(self._agent._config, "language", "en"),
+                    language=self._runtime.language,
                 )
                 write_manifest(run_dir.path, manifest)
                 request = DaemonSupervisorRequest(
@@ -6105,7 +6158,7 @@ class DaemonManager:
             return None
 
     def _iter_daemon_history_states(self, skip_run_ids: set[str] | None = None) -> list[tuple[Path, dict]]:
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if not daemons_dir.is_dir():
             return []
         skip_run_ids = skip_run_ids or set()
@@ -6648,7 +6701,7 @@ class DaemonManager:
                 result = run_claude_interactive(
                     em_id=em_id,
                     run_dir=run_dir,
-                    working_dir=self._agent._working_dir,
+                    working_dir=self._workdir.path,
                     task=message,
                     cancel_event=ask_cancel,
                     timeout_event=ask_timeout,
@@ -6729,7 +6782,7 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir,
+            tuple(cmd), self._workdir.path,
             tuple(_claude_code_env().items()),
         )
         try:
@@ -6951,7 +7004,7 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(tuple(cmd), self._workdir.path),
                 group_id=None,
             )
         except FileNotFoundError:
@@ -7429,7 +7482,7 @@ class DaemonManager:
         if backend_env:
             env.update(backend_env)
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir, tuple(env.items()),
+            tuple(cmd), self._workdir.path, tuple(env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -7700,7 +7753,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -7877,7 +7930,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -8044,7 +8097,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -8205,7 +8258,7 @@ class DaemonManager:
         self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         try:
             handle = self._process_port.spawn(command, group_id=None)
         except FileNotFoundError:
@@ -8550,12 +8603,12 @@ class DaemonManager:
 
         # Cursor normally inherits the parent environment untouched; an explicit
         # env is materialized only for a ``backend_options.env`` overlay.
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         if backend_env:
             env = os.environ.copy()
             env.update(backend_env)
             command = DaemonProcessCommand(
-                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                tuple(cmd), self._workdir.path, tuple(env.items()),
             )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -8732,7 +8785,7 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(tuple(cmd), self._workdir.path),
                 group_id=None,
             )
         except FileNotFoundError:
@@ -9120,7 +9173,7 @@ class DaemonManager:
         em_id = (em_id or "").strip()
         if not em_id:
             return None
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if not daemons_dir.is_dir():
             return None
 
@@ -9311,7 +9364,7 @@ class DaemonManager:
         # facades (`_durable_detached_entry`/`_handle_ask_detached`); this is
         # a control facade, not an execution-owner adoption path.
         skipped_dead_manager = 0
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if daemons_dir.is_dir():
             for run_path in daemons_dir.iterdir():
                 if not self._looks_like_daemon_run_dir(run_path):
@@ -9620,7 +9673,7 @@ class DaemonManager:
         the user-facing id, daemon.json handle, and run directory name.
         """
         reserved_ids = reserved_ids or set()
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         now_ns = time.time_ns()
         digest = ((now_ns >> 16) ^ now_ns) & 0xFFFF
         base = f"em-{digest:04x}"
@@ -9636,9 +9689,8 @@ class DaemonManager:
         return candidate
 
     def _log(self, event_type: str, **fields) -> None:
-        """Log through the parent agent's logging system."""
-        if hasattr(self._agent, '_log'):
-            self._agent._log(event_type, **fields)
+        """Log through Daemon's narrow parent-runtime port."""
+        self._runtime.log(event_type, **fields)
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
@@ -9655,27 +9707,20 @@ def setup(agent: "Agent",
           system_prompt_budget_chars: int | None = None,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
-    """Set up the daemon capability on an agent.
+    """Set up Daemon through its official declared-host plugin route.
 
-    ``max_turns`` is the parent ceiling (and therefore the per-emanation
-    default when ``emanate`` omits it). When the caller omits it here, it
-    resolves from the agent's per-agent config file
-    (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
-    ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
-    invalid. ``manager_pool_size`` and ``system_prompt_budget_chars`` follow
-    the same valid-explicit-argument, config-file, built-in fallback order.
-    Malformed or non-positive explicit system-prompt budgets retain the file
-    result; a valid environment value remains the final manager override.
+    The per-agent daemon configuration and explicit capability kwargs resolve
+    exactly as before.  A live ``BaseAgent`` receives only the static
+    :data:`DECLARATION`; the production adapter supplies Daemon's narrow runtime
+    port and the kernel registrar owns activation/mounting.  The lightweight
+    non-Agent fallback retains the historical direct setup seam used by isolated
+    engine tests and does not participate in an official Agent tool surface.
     """
     config = _load_config(agent._working_dir)
     if max_turns is None:
         max_turns = config.max_turns
     if manager_pool_size is None:
         manager_pool_size = config.manager_pool_size
-    # Validity-based, not None-based: a malformed or non-positive explicit
-    # budget (e.g. manifest capability kwargs) must retain the daemon.json/
-    # default resolution instead of displacing it or raising during
-    # capability setup, which would drop the whole daemon capability.
     system_prompt_budget_chars = _config_positive_int(
         system_prompt_budget_chars, config.system_prompt_budget_chars
     )
@@ -9689,25 +9734,64 @@ def setup(agent: "Agent",
             raise NotImplementedError(
                 f"daemon process supervision is unsupported on {os.name!r}"
             )
-    # Interactive terminal stays POSIX-only (no ConPTY adapter exists); on
-    # Windows the manager receives None and the claude-interactive backend
-    # fails loudly instead of pretending PTY support.
     if interactive_terminal_port is None and os.name == "posix":
         from lingtai.adapters.posix.interactive_terminal import (
             PosixInteractiveTerminalAdapter,
         )
         interactive_terminal_port = PosixInteractiveTerminalAdapter()
-    mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold,
-                        manager_pool_size=manager_pool_size,
-                        system_prompt_budget_chars=system_prompt_budget_chars,
-                        process_port=process_port,
-                        interactive_terminal_port=interactive_terminal_port)
-    schema = get_schema()
-    # The model-facing handler is the LTP v2 envelope dispatcher, not the
-    # engine's legacy flat ``handle``. Still exactly one registered public
-    # tool named ``daemon`` — the six children consume no extra tool slot.
-    dispatcher = DaemonFamilyDispatcher(mgr, agent, list(_BACKEND_SCHEMA_ENUM))
-    agent.add_tool("daemon", schema=schema, handler=dispatcher.handle,
-                   description=get_description(), glossary_package=__package__)
-    return mgr
+
+    options = {
+        "max_turns": max_turns,
+        "timeout": timeout,
+        "notify_threshold": notify_threshold,
+        "manager_pool_size": manager_pool_size,
+        "system_prompt_budget_chars": system_prompt_budget_chars,
+        "process_port": process_port,
+        "interactive_terminal_port": interactive_terminal_port,
+    }
+
+    from lingtai.kernel.base_agent import BaseAgent
+    if isinstance(agent, BaseAgent):
+        from lingtai.adapters.tool_plugin_host import (
+            daemon_runtime_for_agent,
+            register_agent_tool_plugins,
+        )
+
+        runtime = daemon_runtime_for_agent(agent, options)
+        register_agent_tool_plugins(
+            agent,
+            [DECLARATION],
+            extra_ports_for=lambda declaration: (
+                {"daemon_runtime": runtime}
+                if declaration is DECLARATION else {}
+            ),
+        )
+        manager = runtime.daemon_manager
+        if not isinstance(manager, DaemonManager):
+            raise RuntimeError("daemon official plugin binding did not retain its manager")
+        return manager
+
+    # Compatibility for pre-existing direct test/in-process facades.  Real
+    # Agent boot always takes the declared path above, where generic add_tool
+    # cannot claim the kernel-reserved ``daemon`` name.
+    manager = DaemonManager(
+        agent,
+        max_turns=max_turns,
+        timeout=timeout,
+        notify_threshold=notify_threshold,
+        manager_pool_size=manager_pool_size,
+        system_prompt_budget_chars=system_prompt_budget_chars,
+        process_port=process_port,
+        interactive_terminal_port=interactive_terminal_port,
+    )
+    dispatcher = DaemonFamilyDispatcher(
+        manager, agent, list(_BACKEND_SCHEMA_ENUM), declaration=DECLARATION,
+    )
+    agent.add_tool(
+        DECLARATION.name,
+        schema=get_schema(),
+        handler=dispatcher.handle,
+        description=get_description(),
+        glossary_package=__package__,
+    )
+    return manager

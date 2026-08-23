@@ -288,17 +288,18 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing
 tool family shares, so per-family recuts do not each invent their own. It is
-shipped state for exactly **one** family and a migration target for every
+shipped state for exactly **two** families and a migration target for every
 other.
 
-`mcp` is the first family declared under the form this section selects: it owns
-a static `ToolPluginDeclaration`
-(`src/lingtai/tools/mcp/__init__.py`, `DECLARATION`), its name is reserved in
-the kernel-owned official list, and it binds against a least-privilege host
-facade instead of receiving the whole `Agent`. That is one family's evidence,
-for the declaration clauses only. Every other family registered through
-`src/lingtai/tools/registry.py` remains an explicit future migration unit, and
-none of them ships as an MCP plugin package today.
+`mcp` is the first family declared under the selected form: its static
+`DECLARATION` binds against `workdir` and `prompt_section` instead of receiving
+the whole `Agent`. `daemon` is the second: its static
+`src/lingtai/tools/daemon/__init__.py` `DECLARATION` binds its established
+manager and family dispatcher against `workdir` plus the capability-native
+`daemon_runtime` port. Both recuts preserve their public names, action
+inventories, strict input schemas, manuals, result/error shapes, and lifecycle
+semantics; every other registry family remains an explicit future migration
+unit. None of those families ships as an MCP plugin package today.
 
 The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
 the *external stdio transport* form described below — evidence about
@@ -578,15 +579,16 @@ non-goal for third-party-versus-third-party mounts.
 
 **Current evidence versus migration target.**
 
-- The selected form ships for exactly one family:
+- The selected form ships for exactly two families:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
-  host ports, the reserved official-name list, and the fail-fast registrar;
-  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
-  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the reference slice; and
-  `tests/test_tool_plugin_declaration.py` is the shared contract suite. `mcp`'s
-  public surface is unchanged by that recut
-  (`tests/test_tool_family_mcp_migration_parity.py`,
-  `tests/test_mcp_capability.py`).
+  earned host ports, the reserved official-name list, and the fail-fast
+  registrar; `src/lingtai/adapters/tool_plugin_host.py` is the production
+  adapter set; `mcp` and `daemon` own their static declarations; and
+  `tests/test_tool_plugin_declaration.py` is the shared real-Agent contract
+  suite. `mcp`'s public presentation behavior remains covered by
+  `tests/test_tool_family_mcp_migration_parity.py`/`tests/test_mcp_capability.py`;
+  Daemon's manager/family behavior remains covered by
+  `tests/test_tool_family_daemon_migration.py`.
 - The curated **external-transport** route ships for the curated MCP families
   only, and is cited as precedent for that route rather than as conformance to
   the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one
@@ -604,7 +606,7 @@ non-goal for third-party-versus-third-party mounts.
   is cited only for the registration-versus-activation rule.
 
 Not evidenced, and therefore stated above only as a target: a declaration for
-any family other than `mcp`; any family registered through
+any family other than `mcp` or `daemon`; any family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
 packaged `SKILL.md` for the built-in daemon MCP families; the retention,

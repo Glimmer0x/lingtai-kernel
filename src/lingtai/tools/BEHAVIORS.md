@@ -69,10 +69,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` only
+## Behavior LP002 — the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` and `daemon`
 
 - **id**: LP002
-- **title**: the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` only
+- **title**: the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` and `daemon`
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` and `file` access to a clean
@@ -91,10 +91,10 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
    `### Relationship to current runtime`; at authoring time lines 285-613).
    Confirm its opening **Status** paragraph says the section is shipped state
-   for exactly **one** family and a migration target for every other; that
-   `mcp` is named as that one family, with its `DECLARATION` in
-   `src/lingtai/tools/mcp/__init__.py` cited as the evidence and the claim
-   scoped to the declaration clauses only; that every remaining negative claim
+   for exactly **two** families and a migration target for every other; that
+   `mcp` and `daemon` are named with declarations in
+   `src/lingtai/tools/mcp/__init__.py` and `src/lingtai/tools/daemon/__init__.py`,
+   each scoped to evidence-backed declaration clauses only; that every remaining negative claim
    is **scope-qualified** — every other family registered through
    `src/lingtai/tools/registry.py` is a future migration unit and none ships as
    an MCP plugin package today; that the kernel-shipped curated MCP families
@@ -158,7 +158,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove the one declared family, which does **not** go through packaging:
+   Then prove the two declared families, which do **not** go through packaging:
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; print(DECLARATION.name, DECLARATION.public_actions, DECLARATION.requires, OFFICIAL_TOOL_PLUGIN_NAMES)"
@@ -302,8 +302,8 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       manifest compiler, admission engine, or wrapper runtime is introduced.
 - [ ] Step 4: `src/lingtai/tools/registry.py` contains no `lingtai.mcp_servers`
       import and no `CuratedMcpPlugin` reference (grep exit status 1), and the
-      one declared family's `DECLARATION` imports with no Agent, carries a
-      reserved official name, and requires only two host ports.
+      declared families' `DECLARATION`s import with no Agent, carry reserved
+      official names, and require only their earned host ports.
 - [ ] Step 5: exactly six curated `plugin.py` descriptors and six
       `lingtai-curated` catalog records exist, and the built-in daemon MCP
       families carry no descriptor (grep exit status 1) — matching the

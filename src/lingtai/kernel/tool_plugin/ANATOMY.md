@@ -12,6 +12,9 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/daemon/ANATOMY.md
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -20,8 +23,8 @@ maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
-  upward; src/lingtai/tools/ANATOMY.md and src/lingtai/tools/mcp/ANATOMY.md
-  across to the declaring side). Code is the structural source of truth: update
+  upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md,
+  and src/lingtai/tools/daemon/ANATOMY.md across to the declaring side). Code is the structural source of truth: update
   this anatomy in the same change that moves files, symbols, connections,
   composition, or state — in particular when a host port is added, when a family
   recuts onto the declared contract, or when OFFICIAL_TOOL_PLUGIN_NAMES changes.
@@ -34,8 +37,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how the two
+verified declared families reach the live Agent body through it. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +52,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the four host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `DaemonRuntimePort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -71,19 +74,23 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. `AgentWorkdirAdapter`,
   `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), plus `agent_host_ports` and
-  `register_agent_tool_plugins`. The registrar constructs its mount seam
+  `protected=True`), and `AgentDaemonRuntimeAdapter` (Daemon's named model,
+  tool, preset, notification, time, Task Card, and logging operations), plus
+  `agent_host_ports` and `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
+- `src/lingtai/tools/mcp/__init__.py` — the presentation declaring family.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
-  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+  `BoundToolPlugin` whose `activate` is the boot reconcile.
+- `src/lingtai/tools/daemon/__init__.py` — the manager-owning declaring family.
+  Its static `DECLARATION` binds the established manager and family dispatcher
+  to `workdir` plus `daemon_runtime`, preserving the public surface without a
+  whole-Agent binder argument.
 
 ## Connections
 
-- `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
-  on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
+- `lingtai.tools.mcp` and `lingtai.tools.daemon` import
+  `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
