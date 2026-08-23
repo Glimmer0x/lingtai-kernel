@@ -12,16 +12,20 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
-  upward; src/lingtai/tools/ANATOMY.md and src/lingtai/tools/mcp/ANATOMY.md
-  across to the declaring side). Code is the structural source of truth: update
+  upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
+  src/lingtai/tools/email/ANATOMY.md across to the declaring side). Code is the structural source of truth: update
   this anatomy in the same change that moves files, symbols, connections,
   composition, or state — in particular when a host port is added, when a family
   recuts onto the declared contract, or when OFFICIAL_TOOL_PLUGIN_NAMES changes.
@@ -34,8 +38,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how declared
+families reach the live Agent body through narrow ports. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +53,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the four host Port Protocols `WorkdirPort`, `IntrinsicDispatchPort`,
+    `PromptSectionPort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -70,21 +74,32 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     (guarded by TP002).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
   outside the kernel package. `AgentWorkdirAdapter`,
-  `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), plus `agent_host_ports` and
+  `AgentIntrinsicDispatchAdapter` (bound to one pre-wired same-name intrinsic
+  handler), `AgentPromptSectionAdapter` (bound to one plugin's section name and
+  to `protected=True`), plus `agent_host_ports` and
   `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
+- `src/lingtai/tools/mcp/__init__.py` — the signpost declaring family.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
   now only composition wiring.
+- `src/lingtai/tools/email/__init__.py` — the intrinsic-backed declaring family.
+  Its static `DECLARATION` derives Email's existing action inventory, binds
+  operational children through only `host.intrinsic_dispatch`, and builds its
+  package-owned `manual` child from only `host.workdir`. The controlled official
+  mount replaces the retained same-name intrinsic handler so kernel hooks and
+  direct internal callers keep the real Agent-bound mailbox manager while the
+  model-facing surface is published once.
 
 ## Connections
 
 - `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
   on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
+- `lingtai.tools.email` imports `lingtai.kernel.tool_plugin` and remains an
+  injected intrinsic module for the real mailbox manager and kernel hook exports;
+  its default-on `setup()` reaches the same registrar after that runtime boots.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only

@@ -8,11 +8,15 @@ related_files:
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_email_migration.py
   - tests/test_tool_family_email_wire_parity.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -151,6 +155,33 @@ Envelope metadata never reaches an action implementation: `reasoning`,
 `_reasoning`, `summarize`, and the kernel-injected `_tc_id` (which
 `base_agent._dispatch_tool` adds to every intrinsic's args) are all stripped at
 this family's own boundary.
+
+## Declared host plugin
+
+`email` is an official declared host plugin under
+[`src/lingtai/kernel/tool_plugin/CONTRACT.md`](../../kernel/tool_plugin/CONTRACT.md).
+Its module-level `DECLARATION` is static: it derives its thirteen operational
+actions and per-action schemas from the existing family registry, appends the
+reserved `manual` only through the declaration, and names the existing package
+manual destination `email`.
+
+The recut preserves the real Agent-bound mailbox manager rather than creating a
+shadow manager or passing the Agent to the plugin. `boot(agent)` still creates
+that manager and retains the module for the kernel's inbound-mail hook. Email is
+still mandatory: construction and refresh always retain its effective setup,
+even when `capabilities={"email": None}` or `disable=["email"]` is supplied.
+The host grants Email only `workdir` (to load its package-owned installed manual)
+and declaration-bound `intrinsic_dispatch` (to run Email's already-wired intrinsic
+handler). `_bind(host)` composes the public `ToolFamily` from those ports; the
+controlled official mount replaces the same-name intrinsic handler with the exact
+official handler, while the model inventory omits that retained internal alias.
+Those opt-out forms therefore never expose a generic reserved `email` fallback.
+The public name, action order, closed LTP envelope, manual result, mailbox side
+effects, and error shapes are unchanged.
+
+`tests/test_email_official_tool_plugin.py` proves a real `Agent` claims and
+mounts `email` once, retains the real manager behind the narrow port, publishes
+one model-facing schema, and serves the installed package manual.
 
 ## State & storage
 

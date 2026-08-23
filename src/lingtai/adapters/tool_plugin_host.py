@@ -31,6 +31,7 @@ from lingtai.kernel.tool_plugin import (
 
 __all__ = [
     "AgentWorkdirAdapter",
+    "AgentIntrinsicDispatchAdapter",
     "AgentPromptSectionAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
@@ -52,6 +53,24 @@ class AgentWorkdirAdapter:
     @property
     def path(self) -> Path:
         return self._read()
+
+
+class AgentIntrinsicDispatchAdapter:
+    """One declaration-bound intrinsic dispatch operation.
+
+    Constructed from the already-wired handler for the declaring plugin's own
+    intrinsic name. It deliberately receives that callable rather than an
+    Agent: the official plugin can preserve its real Agent-bound runtime but
+    cannot choose, inspect, or invoke a different intrinsic.
+    """
+
+    __slots__ = ("_dispatch",)
+
+    def __init__(self, dispatch: Callable[[dict], dict]) -> None:
+        self._dispatch = dispatch
+
+    def dispatch(self, args: dict) -> dict:
+        return self._dispatch(args)
 
 
 class AgentPromptSectionAdapter:
@@ -83,12 +102,21 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     :data:`~lingtai.kernel.tool_plugin.GRANTABLE_HOST_PORTS`; the registrar
     grants each declaration only the subset it named in ``requires``.
     """
-    return {
+    ports = {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
         ),
     }
+    # An intrinsic-backed official slice (Email today) can retain its real
+    # Agent-bound manager through exactly its own already-wired handler. The
+    # adapter is intentionally absent when no same-name intrinsic exists, so a
+    # declaration that requires it fails loudly at grant rather than receiving
+    # a generic lookup or a whole Agent.
+    dispatch = agent._intrinsics.get(plugin_name)
+    if dispatch is not None:
+        ports["intrinsic_dispatch"] = AgentIntrinsicDispatchAdapter(dispatch)
+    return ports
 
 
 def register_agent_tool_plugins(

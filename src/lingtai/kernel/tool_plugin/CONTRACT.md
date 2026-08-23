@@ -13,8 +13,11 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -22,8 +25,8 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
-  Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
+  (src/lingtai/tools/CONTRACT.md), the declared slices and their manuals, the Composition Root, and the contract
+  tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
   tests/test_tool_plugin_declaration.py together. Ports are earned by real
@@ -98,8 +101,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today `mcp` and `email` are
+  declared; every other family remains a future migration unit.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -125,12 +128,14 @@ capability.
 | Port | Operation | Promise |
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
+| `IntrinsicDispatchPort` | `dispatch(args) -> dict` | Run only the declaration's own pre-wired intrinsic handler. The adapter binds that one callable before the official mount replaces the generic surface; it offers no intrinsic-name lookup, Agent access, or mount authority. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
-`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
+`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. `mcp` earns
+`workdir` and `prompt_section`; `email` earns `workdir` plus the
+declaration-bound `intrinsic_dispatch` port so its existing Agent-bound mailbox
+runtime stays real without receiving an Agent. Families that later need to drive the live Agent body —
 molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
 earn their ports one real slice at a time.
 

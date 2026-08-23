@@ -9,6 +9,9 @@ related_files:
   - src/lingtai/tools/email/primitives.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/_family_schema.py
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_email_official_tool_plugin.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/email/glossary-en.md
   - src/lingtai/tools/email/glossary-zh.md
@@ -39,6 +42,14 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
   - `_adapt_manual_result()` — Host/presentation-only flattening of the canonical ManualTool result to Email's pinned `{status, manual, manual_path}` public shape, strictly *after* dispatch.
   - `handle(agent, args)` — strips `_tc_id`, renders the reserved `unread` rejection before dispatch, delegates to the family, then adapts `manual` and restores Email's own unknown/absent-action results.
   - `boot(agent)` — idempotent boot hook wiring a fresh `EmailManager` onto the agent.
+
+  - `DECLARATION` / `_bind(host)` — static official-plugin declaration and
+    host-bound composition. Operational children use only the
+    declaration-bound intrinsic-dispatch port to preserve the real manager;
+    the reserved manual child uses only `host.workdir`. The official mount swaps
+    the same-name intrinsic handler while the module remains available to the
+    kernel hook resolver, so there is one model-facing `email` schema and no
+    replacement mailbox runtime.
 
 - `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
 

@@ -279,7 +279,11 @@ def _mail(agent, address: str, message: str, subject: str = "") -> dict:
     ``send``'s own strict ``input`` object. The returned result is the
     unchanged ``{"status": "sent", ...}`` send result.
     """
-    return agent._intrinsics["email"]({
+    # Email's public surface is an official host plugin. Its intrinsic runtime
+    # remains available while the host binds it, so retain that fallback for a
+    # bare BaseAgent; a composed Agent dispatches through the official handler.
+    handler = agent._tool_handlers.get("email") or agent._intrinsics["email"]
+    return handler({
         "action": "send",
         "input": {"address": address, "message": message, "subject": subject},
     })

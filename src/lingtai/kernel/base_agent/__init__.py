@@ -2676,6 +2676,14 @@ class BaseAgent:
             glossary_package=plugin.glossary_package,
             _official_mount_token=_OFFICIAL_MOUNT_TOKEN,
         )
+        # A declared slice may recut an existing intrinsic whose real runtime is
+        # still needed by kernel hooks. Keep that same key reachable for internal
+        # callers, but replace its generic handler with the exact official one;
+        # `_build_tool_schemas` and `_refresh_tool_inventory_section` omit this
+        # retained alias once the registrar records the live official claim, so
+        # it never becomes a duplicate model-facing tool.
+        if name in self._intrinsics:
+            self._intrinsics[name] = plugin.handler
         transaction.mark_mounted(self)
 
     def add_tool(

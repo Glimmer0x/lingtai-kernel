@@ -44,6 +44,7 @@ __all__ = [
     "OfficialToolNameCollisionError",
     "HostPortError",
     "WorkdirPort",
+    "IntrinsicDispatchPort",
     "PromptSectionPort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -72,7 +73,11 @@ MANUAL_ACTION = "manual"
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "intrinsic_dispatch",
+    "prompt_section",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +88,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "email")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -155,6 +160,21 @@ class WorkdirPort(Protocol):
     @property
     def path(self) -> Path:
         """The agent working directory."""
+
+
+class IntrinsicDispatchPort(Protocol):
+    """Dispatch through this declaration's already-wired intrinsic runtime.
+
+    The adapter binds one pre-existing intrinsic handler to the declaration's
+    own name before that generic surface is replaced by the official mount. It
+    exposes one operation only; a declaration cannot select another intrinsic,
+    inspect the Agent, or mount itself. This keeps a real Agent-bound runtime
+    available to an official family that has already earned one, without
+    widening the host facade to the whole Agent.
+    """
+
+    def dispatch(self, args: dict) -> dict:
+        """Run one request through this declaration's retained intrinsic handler."""
 
 
 class PromptSectionPort(Protocol):

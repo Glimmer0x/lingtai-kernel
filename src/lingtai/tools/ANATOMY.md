@@ -53,6 +53,8 @@ related_files:
   - src/lingtai/tools/__init__.py
   - src/lingtai/tools/_manual.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/__init__.py
+  - tests/test_email_official_tool_plugin.py
   - src/lingtai/tools/i18n/__init__.py
   - src/lingtai/tools/i18n/en.json
   - src/lingtai/tools/i18n/wen.json
@@ -76,7 +78,7 @@ maintenance: |
   descriptor/catalog route is the retained external-transport/launcher adapter
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
-  not a claim that any family here beyond `mcp` is declared or wrapped today,
+  not a claim that any family here beyond `mcp` and `email` is declared or wrapped today,
   and the normative rules — including the selected form, the reserved
   official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
@@ -234,16 +236,20 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
+kernel-owned declared host-plugin contract, and two families in this package
+are wired onto it today. These are the roles it separates, and where
 each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
 the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
-the one declared slice — `mcp` binds against two granted host ports instead of
+one declared slice — `mcp` binds against two granted host ports instead of
 the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
-with the whole `Agent` and is a future migration unit.
+shapes unchanged. `src/lingtai/tools/email/__init__.py` `DECLARATION` is the
+intrinsic-backed slice: it gets only a same-name intrinsic-dispatch callable for
+the real mailbox manager and `workdir` for the package-owned manual; its mount
+replaces the retained internal handler and publishes one official schema. Every
+other family here still boots through `setup(agent)` with the whole `Agent` and
+is a future migration unit.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

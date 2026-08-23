@@ -76,6 +76,14 @@ def _refresh_tool_inventory_section(agent) -> None:
     lang = agent._config.language
     lines = []
     for name in agent._intrinsics:
+        # An intrinsic-backed official plugin retains this handler key for
+        # kernel/internal callers, but its sole model-facing schema and prose
+        # are published through the official dynamic mount below.
+        if (
+            name in agent.official_tool_plugins
+            or name in agent._official_tool_bindings
+        ):
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             base = module.get_description()
@@ -112,6 +120,14 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
 
     # Intrinsic schemas — canonical English, language-independent.
     for name in agent._intrinsics:
+        # Keep an intrinsic-backed official handler reachable to kernel code,
+        # while publishing exactly one model-facing schema through its official
+        # dynamic mount below.
+        if (
+            name in agent.official_tool_plugins
+            or name in agent._official_tool_bindings
+        ):
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             params = dict(module.get_schema())

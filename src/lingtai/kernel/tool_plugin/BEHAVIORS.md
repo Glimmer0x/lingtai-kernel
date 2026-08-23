@@ -10,7 +10,9 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/email/__init__.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
@@ -25,8 +27,10 @@ maintenance: |
 # Declared Host Tool Plugin Behavior Tests
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
-`src/lingtai/kernel/tool_plugin/CONTRACT.md`. Run every command from the
-repository root (`git rev-parse --show-toplevel`) with the repository virtual
+`src/lingtai/kernel/tool_plugin/CONTRACT.md`. MCP is the signpost reference;
+Email's focused real-Agent proof in `tests/test_email_official_tool_plugin.py`
+adds the intrinsic-backed declaration/port case without changing these shared
+rules. Run every command from the repository root (`git rev-parse --show-toplevel`) with the repository virtual
 environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 `AGENTS.md`). No network, no agent runtime, and no MCP server is needed.
 
