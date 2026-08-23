@@ -77,8 +77,8 @@ maintenance: |
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
   not a claim that every shared-C target has merged: `mcp` is the base reference,
-  while the separately landed `avatar` and Context vertical slices are actual
-  declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
+  while the separately landed `avatar`, Context, and Daemon vertical slices are
+  actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
   the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional

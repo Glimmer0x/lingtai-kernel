@@ -9,6 +9,8 @@ legacy_redirect: src/lingtai/tools/context/manual/reference/summarize-manual/SKI
 related_files:
 - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
+maintenance: |
+  Legacy redirect only. Keep this leaf aligned with its canonical package target and the parent redirect contract; it owns no independent procedure.
 ---
 
 # Context manual legacy redirect

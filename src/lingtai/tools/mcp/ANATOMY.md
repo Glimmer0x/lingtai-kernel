@@ -58,12 +58,14 @@ The model-visible notification projection for LICC events is governed by `src/li
 - **Declared host-plugin route** — `mcp` is the current base reference slice
 under the kernel-owned declared host-plugin contract; the shared-C integration
 register retains `email`, `file`, `notification`, `soul`, `vision`, `web`,
-`daemon`, `system`, and `task_card` as remaining targets without claiming those
-candidate slices have merged. Avatar and Context are separately landed vertical
+`system`, and `task_card` as remaining targets without claiming those candidate
+slices have merged. Avatar, Context, and Daemon are separately landed vertical
 evidence, rather than evidence that any remaining C target merged: Avatar has
-its own declaration and earned `avatar_parent` port, while Context's static
+its own declaration and earned `avatar_parent` port; Context's static
 `DECLARATION` in `src/lingtai/tools/context/__init__.py` requires only `workdir`
-and the earned `context_runtime` port (`src/lingtai/kernel/tool_plugin/ANATOMY.md`,
+and the earned `context_runtime` port; and Daemon's static `DECLARATION` in
+`src/lingtai/tools/daemon/__init__.py` requires only `workdir` and the earned
+`daemon_runtime` port (`src/lingtai/kernel/tool_plugin/ANATOMY.md`,
 `src/lingtai/kernel/tool_plugin/CONTRACT.md`, LABTs TP001/TP002). `DECLARATION`
 (`src/lingtai/tools/mcp/__init__.py:308`) is a static `ToolPluginDeclaration`
 built at module import with no Agent in existence: `actions=("info",)` (the

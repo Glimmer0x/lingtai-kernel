@@ -17,10 +17,13 @@ related_files:
   - src/lingtai/tools/avatar/manual/SKILL.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -58,7 +61,8 @@ It owns exactly four things:
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
 2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `AvatarParentPort`,
-   `ContextRuntimePort`, `ToolMountPort`) through which a plugin controls the
+   `ContextRuntimePort`, `DaemonRuntimePort`, `ToolMountPort`) through which a
+   plugin controls the
    live Agent body, and the
    `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
@@ -106,8 +110,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today `mcp`, `avatar`, and
-  `context` are declared; every remaining target stays outside this contract.
+  vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
+  and `daemon` are declared; every remaining target stays outside this contract.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -136,13 +140,16 @@ capability.
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
 | `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
+| `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir`, `prompt_section`, `avatar_parent`, and `context_runtime`: `mcp`
-consumes the first two as the shared-C base reference, Avatar consumes `workdir`
-plus the narrow parent facts necessary for existing spawn/rules behavior, and
-Context consumes `workdir` plus its three-operation lifecycle boundary. The
+`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`, and
+`daemon_runtime`: `mcp` consumes the first two as the shared-C base reference,
+Avatar consumes `workdir` plus the narrow parent facts necessary for existing
+spawn/rules behavior, Context consumes `workdir` plus its three-operation
+lifecycle boundary, and Daemon consumes `workdir` plus the named runtime
+operations its established manager already needs. The
 family-generic shared-C register remains a target register, not permission to
 pre-enumerate ports for remaining candidates: any later slice adds one named,
 capability-native port only with its implementation, adapter wiring, declaration,
@@ -163,8 +170,12 @@ placed outside the kernel package so the dependency points inward
 `BaseAgent` into the grantable ports, each constructed from a bound method or
 one narrow read closure rather than from the agent object.
 `AgentAvatarParentAdapter` supplies Avatar's identity/runtime/authorization
-facts without passing the Agent through. `agent_host_ports` builds one
-declaration's grantable table; `register_agent_tool_plugins` is the
+facts without passing the Agent through. `AgentDaemonRuntimeAdapter` supplies
+Daemon's named runtime operations; its notification operation looks up the
+current host route when publishing, so a replaced failing route keeps terminal
+state retryable rather than reporting a stale callback as published.
+`agent_host_ports` builds one declaration's grantable table;
+`register_agent_tool_plugins` is the
 composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
@@ -263,13 +274,14 @@ component never selects.
 
 `tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
 `tests/test_tool_family_avatar_migration.py` supplies Avatar's focused declared
-vertical proof, and `tests/test_context_declared_tool_plugin.py` supplies Context's
+vertical proof; `tests/test_context_declared_tool_plugin.py` supplies Context's
 focused static-declaration, restricted-runtime-port, canonical-manual, and
-installer-collision proof:
+installer-collision proof; and `tests/test_daemon.py` preserves Daemon manager
+lifecycle coverage, including terminal-notification retry behavior:
 
-- declaration staticness and the `mcp` declared-versus-composed surface
-  agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,
-  `test_mcp_is_reserved_and_declares_only_the_ports_it_consumes`);
+- declaration staticness and the `mcp`/`avatar`/`context`/`daemon`
+  declared-versus-composed surfaces, including the official Daemon binding
+  manager's live notification-route retry regression;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;

@@ -64,8 +64,8 @@ maintenance: |
   route layered over a declaration, not the required form of every official
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
-  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`, and `context`
-  are the declared families today; do not widen that claim without another
+  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
+  `context`, and `daemon` are the declared families today; do not widen that claim without another
   family's own evidence.
 ---
 # LingTai Tool Protocol (LTP)
@@ -294,8 +294,8 @@ shared-C base evidence is `mcp`; its family-generic integration register names
 `mcp`, `email`, `file`, `context`, `notification`, `soul`, `vision`, `web`,
 `daemon`, `system`, and `task_card` as a target, not as proof that candidate
 slices merged. This worktree contains two additional actual vertical slices:
-Avatar and Context. Thus the actual declared evidence here is exactly three
-families, while every remaining candidate stays a migration target.
+Avatar, Context, and Daemon. Thus the actual declared evidence here is exactly
+four families, while every remaining candidate stays a migration target.
 
 `mcp` is the current base reference under the form this section selects: it owns
 a static `ToolPluginDeclaration`
@@ -307,8 +307,12 @@ independent slice: its static `DECLARATION`
 `workdir` and the earned `avatar_parent` port. Context is the current in-process
 lifecycle slice: its static `DECLARATION` preserves `molt | summarize | rebuild |
 manual` and binds only `workdir` plus the earned `context_runtime` port, which
-delegates the established engines. Those are the three families' evidence for
-the declaration clauses only. Every other family registered through
+delegates the established engines. Daemon is the fourth actual manager-owning
+slice: `src/lingtai/tools/daemon/__init__.py` `DECLARATION` preserves its
+public family while binding only `workdir` plus `daemon_runtime`; the runtime
+reads the current notification route at publish time so a replaced failure is
+retryable. Those are the four families' evidence for the declaration clauses
+only. Every other family registered through
 `src/lingtai/tools/registry.py` remains an explicit future migration unit, and
 none of them ships as an MCP plugin package today.
 
@@ -325,10 +329,9 @@ shipped in this distribution. That is two classes today, and both are inside
 this contract's classification:
 
 - **Registry families** — the intrinsics and built-in capability rows
-  registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`, and `plugin` are first-party families and are in
-scope *as families*; the external
-  records they render are not. `mcp`, `avatar`, and `context` are declared under the
-  selected form below; every other family in this class is a future migration
+  registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`, `daemon`, and `plugin` are first-party families and
+  are in scope *as families*; the external records they render are not. `mcp`,
+  `avatar`, `context`, and `daemon` are declared under the selected form below; every other family in this class is a future migration
   unit, and no family in this class is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
   distribution ships as MCP server packages under `src/lingtai/mcp_servers/`.
@@ -430,8 +433,9 @@ register is family-generic rather than MCP-only.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
-  `mcp` is the current base reference; Avatar's separately landed slice and
-  Context's current in-process lifecycle slice are actual evidence here. The
+  `mcp` is the current base reference; Avatar's separately landed slice,
+  Context's current in-process lifecycle slice, and Daemon's manager-owning
+  slice are actual evidence here. The
   family-generic shared-C integration register names
   `mcp`, `email`, `file`, `context`, `notification`, `soul`, `vision`, `web`,
   `daemon`, `system`, and `task_card`; its remaining names are targets, not a
@@ -607,8 +611,12 @@ non-goal for third-party-versus-third-party mounts.
   `avatar_parent` port. Context is current in-process vertical evidence:
   `src/lingtai/tools/context/__init__.py` binds only `workdir` and
   `context_runtime`, while `tests/test_context_declared_tool_plugin.py` proves
-  its declaration, runtime boundary, and canonical manual installation. The shared
-  test seam is `tests/_tool_plugin_helpers.py`;
+  its declaration, runtime boundary, and canonical manual installation. Daemon
+  is the fourth actual vertical slice: `src/lingtai/tools/daemon/__init__.py`
+  binds its established manager only to `workdir` and `daemon_runtime`;
+  `tests/test_tool_plugin_declaration.py` proves the official binding observes a
+  replaced failing notification route and leaves terminal state retryable. The
+  shared test seam is `tests/_tool_plugin_helpers.py`;
   each other family still needs its own vertical evidence:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
   host ports, the reserved official-name list, and the fail-fast registrar;
@@ -637,7 +645,7 @@ non-goal for third-party-versus-third-party mounts.
   is cited only for the registration-versus-activation rule.
 
 Not evidenced, and therefore stated above only as a target: a declaration for
-any family beyond `mcp`, `avatar`, and `context`; any family registered through
+any family beyond `mcp`, `avatar`, `context`, and `daemon`; any family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
 packaged `SKILL.md` for the built-in daemon MCP families; the retention,
@@ -677,6 +685,13 @@ vertical slice. It keeps Context's LTP shape, molt transport seam, and live
 rebuild behavior while binding only `workdir` and `context_runtime`; its package
 manual is the canonical source installed at the historical `context-manual` path
 (see `src/lingtai/tools/context/CONTRACT.md`).
+
+`daemon` (`emanate | list | ask | check | reclaim | manual`) is the fourth
+actual declared vertical slice. It preserves Daemon's existing manager and
+family dispatch semantics while binding only `workdir` and `daemon_runtime`; the
+runtime notification operation resolves the host route at publication time so
+terminal publication failure remains retryable (see
+`src/lingtai/tools/daemon/CONTRACT.md`).
 
 `file` (`read | write | edit | glob | grep | manual`) is the fourth family
 migrated to this contract, and the first aggregation of several former public

@@ -26,7 +26,7 @@ maintenance: |
   drift, extend the affected evidence with that family's own focused proof rather
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
-  reference; Avatar and Context are current vertical evidence. Ports remain least-
+  reference; Avatar, Context, and Daemon are current vertical evidence. Ports remain least-
   privilege and tool-specific, while registrar mounts are runtime-bound rather
   than per-call Agent dispatch.
 ---
@@ -76,7 +76,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.mcp import DECLARATION; h = ToolPluginHost('mcp', {'workdir': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
-   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime') ('workdir',)` printed, then an
+   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime', 'daemon_runtime') ('workdir',)` printed, then an
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`.
@@ -132,7 +132,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py tests/test_context_declared_tool_plugin.py
+     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py tests/test_context_declared_tool_plugin.py tests/test_daemon.py
    ```
 
 ### Expected evidence
@@ -151,7 +151,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 - [ ] Step 6: the family derives its name, `input` schemas, and manual
       destination from its declaration, and `bind()` refuses a plugin
       advertising anything other than `public_actions`.
-- [ ] Step 7: the shared suite plus Avatar's and Context's focused declared slices pass.
+- [ ] Step 7: the shared suite plus Avatar's, Context's, and Daemon's focused declared slices pass.
 
 ### Pass / Fail
 
