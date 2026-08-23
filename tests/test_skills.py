@@ -299,7 +299,7 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
             / ".library"
             / "intrinsic"
             / "capabilities"
-            / "file-manual"
+            / "file"
             / "SKILL.md"
         )
         assert skill_md.is_file()

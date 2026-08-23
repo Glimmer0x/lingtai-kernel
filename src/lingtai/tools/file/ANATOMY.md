@@ -6,6 +6,9 @@ related_files:
   - src/lingtai/tools/file/BEHAVIORS.md
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/file/_read.py
   - src/lingtai/tools/file/_write.py
   - src/lingtai/tools/file/_edit.py
@@ -13,11 +16,12 @@ related_files:
   - src/lingtai/tools/file/_grep.py
   - src/lingtai/tools/_file_paths.py
   - src/lingtai/tools/tool_family/ANATOMY.md
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
   - src/lingtai/tools/file/glossary-en.md
   - src/lingtai/tools/file/glossary-wen.md
   - src/lingtai/tools/file/glossary-zh.md
+  - tests/test_file_tool_family.py
+  - tests/test_file_tool_plugin_package.py
 maintenance: |
   Keep this public file Anatomy and its Contract reciprocal, and keep the
   parent link bidirectional. This package is the single owner of the file
@@ -39,9 +43,9 @@ infrastructure; everything else about the file surface lives here.
 
 ## Components
 
-- `__init__.py` — the six child input schemas, the one registry builder, the
-  `FileManager` dispatcher, and `setup()` registration
-  (`src/lingtai/tools/file/__init__.py:1-273`).
+- `__init__.py` — the static `DECLARATION`, six child input schemas, the one
+  declaration-derived family builder, pure bind step, and official-registrar
+  `setup()` wiring (`src/lingtai/tools/file/__init__.py`).
 - `_build_family()` — the single handler-parameterized registry builder. Called
   with no arguments it yields the module-level schema-only `_FAMILY` used by
   `get_schema()`; called with bound handlers it yields the dispatching family.
@@ -64,17 +68,18 @@ infrastructure; everything else about the file surface lives here.
 
 `registry.py` maps public `file` to this package. There are no capability
 aliases for the five pre-migration names: `read`, `write`, `edit`, `glob`, and
-`grep` are unknown capabilities and fail loudly. `FileManager` binds each
-operation once at construction; no import or closure rebuild happens per call.
-Every operation reaches the working tree only through the injected
-`agent._file_io` service, resolving relative paths via the shared
-`_file_paths.resolve_workdir_path`; this package performs no I/O of its own.
+`grep` are unknown capabilities and fail loudly. The kernel registrar binds the
+static declaration once per setup; the bound family closes over only `WorkdirPort`
+and `FileIOPort`. Every operation reaches the working tree through that narrow
+port and resolves relative paths via `_file_paths.resolve_workdir_path`; this
+package performs no I/O of its own.
 `write` and `edit` stop at that durable I/O boundary: they have no prompt-manager
 or context-reconstruction connection and never hot-load a changed prompt source.
 Activation is owned separately by `context.rebuild` and passive refresh/molt.
-The reserved `manual` child loads the `file-manual` intrinsic skill bundle
-through `tool_family.manual`, which reads it from the agent's installed
-`.library/intrinsic/capabilities/` tree.
+The reserved `manual` child loads the package-owned `manual/SKILL.md` through
+`tool_family.manual`, from the agent's installed
+`.library/intrinsic/capabilities/file/` tree; its frontmatter keeps the
+user-facing `file-manual` skill identity.
 
 ## Composition
 
@@ -90,10 +95,11 @@ every per-action input, output, cap, and error string.
 
 ## State
 
-No mutable state lives here. `FileManager` holds only its agent reference, its
-bound operations, and its child registry; it owns no cache, no cursor, and no
-settings. The read cap's runtime ceiling is observed from the executor rather
-than stored. The family surfaces no LTP settings file, and its manual says so.
+No mutable state lives here. The bound family holds only closures over granted
+ports and its child registry; it owns no Agent reference, cache, cursor, or
+settings. The read cap's runtime ceiling is observed through `FileIOPort`
+rather than stored. The family surfaces no LTP settings file, and its manual
+says so.
 
 ## Notes
 

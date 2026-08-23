@@ -62,9 +62,9 @@ maintenance: |
   route layered over a declaration, not the required form of every official
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
-  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp` is the only
-  declared family today; do not widen that claim without another family's own
-  evidence.
+  `src/lingtai/mcp_catalog.json` in related_files with it. `mcp` and `file` are
+  the declared families today; do not widen that claim without another family's
+  own evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -417,7 +417,7 @@ current model-facing family gaining one declaration that *wraps* it.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical PR lands.
-  `mcp` is the only one today.
+  `mcp` and `file` are the declared families today.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -578,15 +578,16 @@ non-goal for third-party-versus-third-party mounts.
 
 **Current evidence versus migration target.**
 
-- The selected form ships for exactly one family:
+- The selected form ships for two families:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
   host ports, the reserved official-name list, and the fail-fast registrar;
-  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
-  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the reference slice; and
-  `tests/test_tool_plugin_declaration.py` is the shared contract suite. `mcp`'s
-  public surface is unchanged by that recut
+  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set.
+  `src/lingtai/tools/mcp/__init__.py` is the prompt/workdir reference slice and
+  `src/lingtai/tools/file/__init__.py` is the real-I/O reference slice, proven
+  by `tests/test_tool_plugin_declaration.py` and the compact
+  `tests/test_file_tool_plugin_package.py`. Their public surfaces are unchanged
   (`tests/test_tool_family_mcp_migration_parity.py`,
-  `tests/test_mcp_capability.py`).
+  `tests/test_mcp_capability.py`, `tests/test_file_tool_family.py`).
 - The curated **external-transport** route ships for the curated MCP families
   only, and is cited as precedent for that route rather than as conformance to
   the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one

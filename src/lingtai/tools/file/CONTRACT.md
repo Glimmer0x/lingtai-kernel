@@ -1,9 +1,12 @@
 ---
 name: file-contract
 tool: file
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/file/_read.py
   - src/lingtai/tools/file/_write.py
   - src/lingtai/tools/file/_edit.py
@@ -15,8 +18,9 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/services/file_io_sidecar.py
   - src/lingtai/kernel/tool_result_summary.py
-  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/intrinsic_skills/read-manual/SKILL.md
+  - tests/test_file_tool_family.py
+  - tests/test_file_tool_plugin_package.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -33,7 +37,11 @@ maintenance: |
 searching the working tree. It is an LTP v2 family (`../CONTRACT.md`) composed
 from six canonical children through the generic `ToolFamily` infrastructure.
 The implementation lives in `src/lingtai/tools/file/__init__.py`; the code is
-the source of truth.
+the source of truth. `DECLARATION` is a static official host-plugin declaration:
+the kernel reserves `file`, the production host grants only `workdir` and
+`file_io`, and the registrar — not this package — mounts the bound family.
+`FileIOPort` carries precisely File's text read/write/search and runtime-cap
+vocabulary; no operation receives a whole Agent or raw service object.
 
 ## Routing Card
 
@@ -204,12 +212,12 @@ Errors: `pattern is required`; `Grep failed: <exc>`.
 
 ### Cross-action invariants
 
-- **Path handling:** a relative `file_path`/`path` resolves against
-  `agent._working_dir` via `resolve_workdir_path`
+- **Path handling:** a relative `file_path`/`path` resolves against the granted
+  `WorkdirPort.path` via `resolve_workdir_path`
   (`src/lingtai/tools/_file_paths.py`); absolute paths pass through unchanged to
   preserve the historical error strings.
-- **Byte I/O:** every operation reaches the tree only through the injected
-  `FileIOService` (`agent._file_io`). The Rust search sidecar delegates
+- **Byte I/O:** every operation reaches the tree only through granted
+  `FileIOPort` methods. The Rust search sidecar delegates
   read/write/edit verbatim to `LocalFileIOBackend`; `default_file_io_service`
   selects Rust vs a Python-backed fallback per `LINGTAI_FILE_IO_BACKEND`. The
   operations are backend-agnostic.
@@ -246,9 +254,10 @@ likewise stays false so exact procedure is not summarized away.
 
 ## Manual
 
-The family owns exactly one manual: `action="manual"` returns the installed
-`file-manual` intrinsic skill bundle. It performs no target file operation and
-touches no path other than the manual's own, and its input is strict empty.
+The family owns exactly one manual: `action="manual"` returns the packaged
+`tools/file/manual/SKILL.md`, installed at `capabilities/file/SKILL.md` (its
+frontmatter remains `name: file-manual`). It performs no target file operation
+and touches no path other than the manual's own, and its input is strict empty.
 The result is the canonical child shape — full body at `content[0].text`, the
 host-local path at `structuredContent.manual_path` — returned without double
 wrapping.
@@ -262,9 +271,9 @@ manual states this explicitly rather than staying silent.
 
 ## State & storage
 
-None. `FileManager` holds only its agent reference and its child registry. All
-I/O goes through the injected `agent._file_io`; the read cap's runtime ceiling
-is observed from the executor, never stored.
+None. The bound `ToolFamily` holds only operation closures over the granted
+`WorkdirPort` and `FileIOPort`. All I/O goes through the narrow port; the read
+cap's runtime ceiling is observed through that port, never stored.
 
 ## Anchored claims
 

@@ -1,39 +1,29 @@
-"""Unified ``file`` capability: read, write, edit, grep, glob, and its manual.
+"""The declared official ``file`` host plugin.
 
-This package is the single owner of the one public ``file`` tool: the composed
-model-facing schema, the envelope dispatch, and all five operation
-implementations (``_read``, ``_write``, ``_edit``, ``_glob``, ``_grep``). The
-five pre-migration model-facing roots are gone, and so are their packages —
-their behavior lives here unchanged: UTF-8 boundary, absolute-path/workdir
-resolution, numbered-line read output, continuation metadata, ``max_chars``
-cap, ``line_truncated``, edit ambiguity/missing handling, the full-write
-receipt, glob sorting, and grep regex/line/path results and caps.
-
-Per ``../CONTRACT.md`` "Implementation independence", the six children share
-nothing but the family name and the wire envelope: each operation module is
-self-contained and none imports another. Each child's canonical raw result is
-returned verbatim by ``ToolFamily.handle``; this module adds no result envelope
-and no second summarizer.
+``file`` remains one public LTP-v2 family with the unchanged six actions
+``read``, ``write``, ``edit``, ``glob``, ``grep``, and ``manual``. This module
+now declares that surface statically and binds it only through the kernel's
+least-privilege host facade: the current workdir, File's narrow I/O service
+port, and no whole Agent. The operation modules retain their real behavior and
+raw result shapes; this module only composes them and hands the bound plugin to
+the host-owned official registrar.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping
+
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 from . import _edit, _glob, _grep, _read, _write
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+
 
 PROVIDERS = {"providers": [], "default": "builtin"}
-
-# The one family-owned manual. ``file-manual`` is the installed intrinsic skill
-# bundle (``src/lingtai/intrinsic_skills/file-manual/``) that already covers all
-# five operations; ``read-manual`` remains a nested parent-owned reference it
-# points at for read pagination/truncation depth, not a competing second
-# top-level manual action.
-FAMILY_MANUAL_SKILL = "file-manual"
 
 _READ_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -121,26 +111,19 @@ _GLOB_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
+# This family owns five operational actions. The kernel appends the reserved
+# manual slot from ``DECLARATION.manual_input_schema`` exactly once and last.
+_DECLARED_ACTIONS: tuple[str, ...] = ("read", "write", "edit", "glob", "grep")
+_DECLARED_SCHEMAS_BY_ACTION: dict[str, dict[str, Any]] = {
+    "read": _READ_INPUT_SCHEMA,
+    "write": _WRITE_INPUT_SCHEMA,
+    "edit": _EDIT_INPUT_SCHEMA,
+    "glob": _GLOB_INPUT_SCHEMA,
+    "grep": _GREP_INPUT_SCHEMA,
 }
+if tuple(_DECLARED_SCHEMAS_BY_ACTION) != _DECLARED_ACTIONS:
+    raise AssertionError("File action order and input-schema inventory diverged")
 
-# Canonical child order: the five operations, then the reserved ``manual``.
-# Each entry pairs a child's public action name with its own strict input
-# schema; the operation modules supply the matching handlers.
-_CHILD_SCHEMAS: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("read", _READ_INPUT_SCHEMA),
-    ("write", _WRITE_INPUT_SCHEMA),
-    ("edit", _EDIT_INPUT_SCHEMA),
-    ("glob", _GLOB_INPUT_SCHEMA),
-    ("grep", _GREP_INPUT_SCHEMA),
-    ("manual", _MANUAL_INPUT_SCHEMA),
-)
-
-# The five operation modules, in the same order as their children above.
 _OPERATION_MODULES = (_read, _write, _edit, _glob, _grep)
 
 
@@ -148,25 +131,56 @@ def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
 
-def _build_family(handlers: Sequence[Callable[[Mapping[str, Any]], dict[str, Any]]] | None = None) -> ToolFamily:
-    """Build the six-child ``file`` family from the one canonical registry.
+def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
+    """Compose File's declared children with or without a granted host.
 
-    One builder serves both uses, so the schema the model sees and the registry
-    that actually dispatches can never drift apart. With *handlers* omitted the
-    result is schema-only: every child gets a handler that raises, which is what
-    module-level :data:`_FAMILY` uses to compose :func:`get_schema` and to prove
-    at import time that the fixed registry has no duplicate or reserved-name
-    collision (``ToolFamilyError`` would raise here rather than shipping
-    silently). :class:`FileManager` passes real agent-bound handlers.
+    The import-time schema-only build and the per-agent dispatching build share
+    this one ordered declaration, so public action names and strict input
+    schemas cannot drift from the family that actually dispatches. A real host
+    grants precisely the ports the operation modules consume; no operation
+    receives the live Agent or a generic service object.
     """
-    children = []
-    for index, (name, schema) in enumerate(_CHILD_SCHEMAS):
-        handler = handlers[index] if handlers is not None else _unused
-        children.append(ChildTool(name, schema, handler, title=f"{name} input"))
-    return ToolFamily("file", children)
-
-
-_FAMILY = _build_family()
+    children: list[ChildTool] = []
+    if host is None:
+        handlers: tuple[Callable[[Mapping[str, Any]], dict[str, Any]], ...] = (
+            _unused,
+            _unused,
+            _unused,
+            _unused,
+            _unused,
+        )
+    else:
+        # ToolFamily validates the strict nullable shape first. Only the child
+        # adapter translates its declared nulls to absent operation arguments,
+        # preserving the historic per-operation defaults without weakening the
+        # public schema.
+        handlers = tuple(
+            lambda action_input, operation=module.build_operation(
+                host.workdir, host.file_io
+            ): operation(_strip_nulls(action_input))
+            for module in _OPERATION_MODULES
+        )
+    for action, handler in zip(_DECLARED_ACTIONS, handlers, strict=True):
+        children.append(
+            ChildTool(
+                action,
+                DECLARATION.input_schemas[action],
+                handler,
+                title=f"{action} input",
+            )
+        )
+    if host is None:
+        children.append(
+            ChildTool(
+                "manual",
+                DECLARATION.manual_input_schema,
+                _unused,
+                title="manual input",
+            )
+        )
+    else:
+        children.append(build_manual_child(host.workdir, DECLARATION.manual))
+    return ToolFamily(DECLARATION.name, children)
 
 
 def get_description(lang: str = "en") -> str:
@@ -199,78 +213,62 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema`` above, rather than hand-assembled: the root ``allOf``
-    # if/then conditions correlate each ``action`` const with that exact
-    # child's ``input`` shape on both the Chat and Responses wires, and the
-    # retained ``input.oneOf`` discloses every action's shape in one place.
+    # Generic ToolFamily composition owns the LTP envelope and action/input
+    # correlation. ``_FAMILY`` is schema-only; the registrar binds the real
+    # same declaration to a narrow host later.
     return _FAMILY.build_schema()
 
 
 def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
-    # Strict OpenAI schemas express optional fields as required nullable
-    # properties. Null means absent to the operation handlers, which then apply
-    # their own historical defaults.
+    """Translate strict-schema nulls back to absent operation arguments."""
     return {key: value for key, value in action_input.items() if value is not None}
 
 
-class FileManager:
-    """One per-Agent dispatcher over the six file children.
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Purely compose File against its granted ports; mount nothing."""
+    family = _build_family(host)
 
-    Holds no mutable state of its own: each operation is bound once here and
-    reaches the working tree only through the injected ``agent._file_io``
-    service.
-    """
-
-    def __init__(self, agent: "BaseAgent") -> None:
-        self._agent = agent
-        operations = [
-            self._bind(module.build_operation(agent)) for module in _OPERATION_MODULES
-        ]
-        # The reserved ``manual`` child is registered directly and unwrapped:
-        # ``ToolFamily.handle()`` returns its own canonical MCP-compatible
-        # result verbatim for ``action="manual"`` (no double wrap), and it
-        # performs no target file operation.
-        operations.append(build_manual_child(agent, FAMILY_MANUAL_SKILL).handler)
-        self._family = _build_family(operations)
-
-    @staticmethod
-    def _bind(operation: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
-        """Adapt one operation to the child-handler signature.
-
-        The only thing between dispatch and the operation is ``_strip_nulls``;
-        nothing else is added to, removed from, or reshaped in either the input
-        or the returned result.
-        """
-        def dispatch(action_input: Mapping[str, Any]) -> dict[str, Any]:
-            return operation(_strip_nulls(action_input))
-
-        return dispatch
-
-    def handle(self, args: dict[str, Any] | None) -> dict[str, Any]:
-        """Validate the envelope, dispatch, and return the child's raw result.
-
-        The generic ``ToolFamily`` dispatcher validates ``action``, type-checks
-        and strips root ``summarize``, rejects unknown root fields, and rejects
-        ``input`` keys outside the selected action's own declared schema —
-        before any handler I/O — then calls the selected operation with only
-        that action's own ``input``. Each child's canonical result (including
-        the ``manual`` child's ``content``/``structuredContent`` shape and every
-        operation's own ``{"status": "error", ...}`` dict) is returned verbatim:
-        this family adds no outer envelope, so a ``write``/``edit`` receipt is
-        never restructured or hidden on its way back to the Host.
-        """
-        return self._family.handle(args)
-
-
-def setup(agent: "BaseAgent") -> FileManager:
-    """Compose the one public ``file`` tool on *agent*."""
-    manager = FileManager(agent)
-    agent.add_tool(
-        "file",
+    return BoundToolPlugin(
+        name=DECLARATION.name,
         schema=get_schema(),
-        handler=manager.handle,
+        handler=family.handle,
         description=get_description(),
         glossary_package=__package__,
     )
-    return manager
+
+
+DECLARATION = ToolPluginDeclaration(
+    name="file",
+    actions=_DECLARED_ACTIONS,
+    input_schemas=_DECLARED_SCHEMAS_BY_ACTION,
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    # The packaged ``manual/SKILL.md`` is installed at capabilities/file. Its
+    # frontmatter remains ``name: file-manual`` as the manual's user-facing
+    # skill identity, but it is not a competing installed destination.
+    manual="file",
+    description=get_description(),
+    binder=_bind,
+    requires=("workdir", "file_io"),
+    glossary_package=__package__,
+)
+
+# Compatibility aliases for internal callers; both are derived from the one
+# static declaration rather than restated tool identity.
+ACTIONS = DECLARATION.public_actions
+FAMILY_MANUAL_SKILL = DECLARATION.manual
+
+# Construct after DECLARATION because the builder derives every public fact from
+# it. The kernel validates the matching advertised enum again on each bind.
+_FAMILY = _build_family(None)
+
+
+def setup(agent: "BaseAgent", **_ignored) -> None:
+    """Register File through the official host-plugin route.
+
+    The registrar reserves ``file``, grants only its workdir and file-I/O
+    ports, binds this declaration, and mounts the resulting family. Re-running
+    setup on refresh is idempotent for this exact declaration.
+    """
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])

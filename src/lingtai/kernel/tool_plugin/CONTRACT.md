@@ -13,8 +13,11 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_file_tool_plugin_package.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -22,7 +25,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), each declared slice and its manual, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -98,8 +101,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today exactly two families are
+  declared: `mcp` and `file`.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -126,13 +129,14 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `FileIOPort` | `read`, `write`, `glob`, `grep`, `last_traversal`, `max_result_chars` | The bounded text-I/O and runtime facts consumed by `file`; it does not publish the Agent or a generic service object. Path rooting remains `WorkdirPort`. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`workdir` and `prompt_section` for the `mcp` slice, and the earned `file_io`
+port for the `file` slice. Families that later need to drive the live Agent
+body — molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic
+override — earn their ports one real slice at a time.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -244,7 +248,7 @@ component never selects.
 
 ## Contract tests
 
-`tests/test_tool_plugin_declaration.py` is the shared contract suite:
+`tests/test_tool_plugin_declaration.py` is the shared contract suite; `tests/test_file_tool_plugin_package.py` is File's compact vertical evidence:
 
 - declaration staticness and the `mcp` declared-versus-composed surface
   agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,

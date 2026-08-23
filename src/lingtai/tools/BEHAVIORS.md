@@ -27,7 +27,7 @@ maintenance: |
   envelope or settings rule changes, update the guarding LABT here in the same
   change. LP002 guards the `### Tool-to-MCP Plugin Contract` section: it
   verifies only what is true today (the section's scope-qualified status
-  wording — shipped for `mcp` only — its two-class governed surface, its single
+  wording — shipped for `mcp` and `file` — its two-class governed surface, its single
   selected form as the kernel-owned declared host-plugin contract, the retained
   and reclassified curated transport route, the resolved official-name
   collision decision and its exact scope, the document graph, and the cited
@@ -69,10 +69,10 @@ repo root with the project's Python.
 ### Pass / Fail
 Pass when the suite passes and the closed-envelope observation holds for a real migrated family. Fail on an extra root property, on `reasoning`/`summarize` leaking into `input`, or on a summary replacing the recorded raw output; record the evidence trail in the task report.
 
-## Behavior LP002 — the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` only
+## Behavior LP002 — the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` and `file`
 
 - **id**: LP002
-- **title**: the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` only
+- **title**: the Tool-to-MCP Plugin Contract selects one declared host-plugin form, shipped for `mcp` and `file`
 - **guards**: `lingtai-tool-protocol` §
   [Tool-to-MCP Plugin Contract](CONTRACT.md#tool-to-mcp-plugin-contract)
 - **runner**: any LingTai agent with `shell` and `file` access to a clean
@@ -287,7 +287,7 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Expected evidence
 
 - [ ] Step 1: the section exists in `src/lingtai/tools/CONTRACT.md` and opens
-      with a Status paragraph declaring it shipped for `mcp` only and a
+      with a Status paragraph declaring it shipped for `mcp` and `file` and a
       migration target for every other family, with each remaining negative
       claim qualified to the `src/lingtai/tools/registry.py` surface.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"

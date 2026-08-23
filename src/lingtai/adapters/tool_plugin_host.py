@@ -32,6 +32,7 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentFileIOAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
 ]
@@ -76,6 +77,74 @@ class AgentPromptSectionAdapter:
         self._write(self._section, body, protected=True)
 
 
+class AgentFileIOAdapter:
+    """``FileIOPort`` assembled from just File's consumed host callables.
+
+    The adapter deliberately owns no Agent and never publishes the backing
+    ``FileIOService``.  It receives individual service methods, two read-only
+    facts, and forwards only the vocabulary that the declared ``file`` family
+    consumes.  The workdir remains a separate port, so this is not an ambient
+    filesystem/Agent escape hatch.
+    """
+
+    __slots__ = (
+        "_read",
+        "_write",
+        "_glob",
+        "_grep",
+        "_last_traversal",
+        "_max_result_chars",
+    )
+
+    def __init__(
+        self,
+        read: Callable[[str], str],
+        write: Callable[[str, str], None],
+        glob: Callable[..., list[str]],
+        grep: Callable[..., list[Any]],
+        last_traversal: Callable[[], Any | None],
+        max_result_chars: Callable[[], int | None],
+    ) -> None:
+        self._read = read
+        self._write = write
+        self._glob = glob
+        self._grep = grep
+        self._last_traversal = last_traversal
+        self._max_result_chars = max_result_chars
+
+    def read(self, path: str) -> str:
+        return self._read(path)
+
+    def write(self, path: str, content: str) -> None:
+        self._write(path, content)
+
+    def glob(self, pattern: str, root: str | None = None) -> list[str]:
+        return self._glob(pattern, root=root)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[Any]:
+        return self._grep(
+            pattern,
+            path=path,
+            max_results=max_results,
+            glob_filter=glob_filter,
+        )
+
+    @property
+    def last_traversal(self) -> Any | None:
+        return self._last_traversal()
+
+    @property
+    def max_result_chars(self) -> int | None:
+        return self._max_result_chars()
+
+
 def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     """Build the full grantable port table for *plugin_name* on *agent*.
 
@@ -83,10 +152,19 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     :data:`~lingtai.kernel.tool_plugin.GRANTABLE_HOST_PORTS`; the registrar
     grants each declaration only the subset it named in ``requires``.
     """
+    file_io = agent._file_io
     return {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
+        ),
+        "file_io": AgentFileIOAdapter(
+            file_io.read,
+            file_io.write,
+            file_io.glob,
+            file_io.grep,
+            lambda: getattr(file_io, "last_traversal", None),
+            lambda: getattr(getattr(agent, "_executor", None), "_max_result_chars", None),
         ),
     }
 

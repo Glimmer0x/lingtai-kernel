@@ -45,6 +45,7 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "FileIOPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +65,15 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
+#: Earned, not enumerated: each name below is consumed by a real vertical
+#: slice this component ships with (``mcp`` or ``file``). Root ``CONTRACT.md`` rules 10-11
 #: forbid a speculative port taxonomy, so a later family adds the port it
 #: actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section", "file_io")
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +84,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "file")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +169,45 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class FileIOPort(Protocol):
+    """The File family's narrow runtime file-operation capability.
+
+    This is deliberately not ``Agent._file_io`` exposed as an attribute and it
+    is not a generic filesystem port.  It is the exact vocabulary the official
+    ``file`` family consumes: text read/write, bounded glob/grep, the latest
+    traversal facts those searches report, and the active result-size ceiling
+    used by its paged reader.  Path rooting remains the separate
+    :class:`WorkdirPort` capability.
+    """
+
+    def read(self, path: str) -> str:
+        """Read one UTF-8 text file."""
+
+    def write(self, path: str, content: str) -> None:
+        """Create or overwrite one UTF-8 text file."""
+
+    def glob(self, pattern: str, root: str | None = None) -> list[str]:
+        """Return sorted paths matching *pattern* below *root*."""
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[Any]:
+        """Return text matches under the bounded search service."""
+
+    @property
+    def last_traversal(self) -> Any | None:
+        """The latest glob/grep traversal facts, if the service reports them."""
+
+    @property
+    def max_result_chars(self) -> int | None:
+        """The live executor result limit, if it exposes a positive integer."""
 
 
 class ToolMountPort(Protocol):

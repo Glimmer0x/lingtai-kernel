@@ -333,7 +333,7 @@ def test_manual_returns_body_and_path_without_double_wrapping(file_agent):
     body = result["content"][0]["text"]
     manual_path = result["structuredContent"]["manual_path"]
     assert "name: file-manual" in body
-    assert manual_path.endswith("capabilities/file-manual/SKILL.md")
+    assert manual_path.endswith("capabilities/file/SKILL.md")
     assert Path(manual_path).read_text(encoding="utf-8") == body
     # No nested child-result envelope inside the action result.
     assert "content" not in result["structuredContent"]
@@ -363,7 +363,7 @@ def test_manual_rejects_any_input_field(file_agent):
 def test_read_manual_is_a_nested_reference_not_an_action():
     """Read pagination depth stays nested under the one family manual."""
     assert "read-manual" not in get_schema()["properties"]["action"]["enum"]
-    body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
+    body = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
     assert "read-manual" in body, "file-manual must point at the nested read reference"
 
 
