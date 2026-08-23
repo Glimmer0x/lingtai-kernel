@@ -12,7 +12,11 @@ related_files:
   - src/lingtai/mcp_servers/feishu/task_card.py
   - src/lingtai/mcp_servers/feishu/manager.py
   - src/lingtai/kernel/base_agent/lifecycle.py
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_task_card_controller.py
+  - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
   - tests/test_feishu_programmable_task_cards.py
@@ -41,24 +45,32 @@ body; `remove` is the terminal lifecycle action that also retires any active
 watch and deletes the body, so a caller never needs to reach around this
 capability with a filesystem delete. It does not own Telegram, Feishu, portals,
 chat IDs, retry policy against a transport, or any resident message state.
+It is the second declared official host-plugin slice: `DECLARATION` is static
+at import and `_bind` receives only `workdir`, `shutdown`,
+`task_card_lifecycle`, and `task_card_notifications` ports. The lifecycle port
+retains the real current-agent manager so existing stop, turn-reminder, and
+restart-resume hooks keep operating; no binder receives a whole Agent.
 Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
-- `__init__.py` — the full capability owner: schema/description, one-watch
-  lifecycle, renderer execution, atomic file writes, error/limit notifications,
-  persisted config loading/validation (`TaskCardManager._load_config`), the
-  one-way legacy-config migration (`TaskCardManager._migrate_legacy_config`),
-  and `setup(agent)` registration.
+- `__init__.py` — the full capability owner: static `DECLARATION`,
+  declaration-derived schema/description/manual family, one-watch lifecycle,
+  renderer execution, atomic file writes, error/limit notifications, persisted
+  config loading/validation (`TaskCardManager._load_config`), the one-way
+  legacy-config migration (`TaskCardManager._migrate_legacy_config`), and the
+  `setup(agent)` composition call into the official registrar.
 - `manual/SKILL.md` — the progressive-disclosure manual for renderer authors
   and lifecycle use.
 
 ## Connections
 
-- `setup(agent)` registers the public `task_card` tool through
-  `lingtai.tools.registry` and rehydrates a persisted active watch
-  (`TaskCardManager.resume_persisted_watch`) so the card survives
-  `refresh`/molt/agent-stop restarts.
+- `setup(agent)` hands `DECLARATION` to
+  `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`; the kernel
+  reserves `task_card`, grants only the four declared ports, binds, resumes a
+  persisted active watch (`TaskCardManager.resume_persisted_watch`), then mounts
+  it, so the card survives `refresh`/molt/agent-stop restarts without a whole
+  Agent entering the manager.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
   writes `inactive`, joins the watch thread best-effort, and re-persists the
   watch descriptor with its carried refresh budget for the next boot.

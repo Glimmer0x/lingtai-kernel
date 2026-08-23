@@ -8,6 +8,7 @@ related_files:
 - src/lingtai/tools/task_card/__init__.py
 - src/lingtai/tools/task_card/ANATOMY.md
 - src/lingtai/tools/task_card/CONTRACT.md
+- src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
   Keep this manual aligned with the intrinsic task_card capability's actual
   action surface, the exact taskcard/status and taskcard/taskcard.md file
@@ -50,6 +51,17 @@ on boot and leaves the card `inactive` rather than silently resurrecting a
 dead watch.
 
 Actions are `start`, `inspect`, `retry`, `stop`, `remove`, and `manual`.
+
+## Call shape and packaged manual
+
+`task_card` is one strict LTP-v2 family: pass `action`, that action's strict
+`input` object, and root `reasoning`; optional `summarize` is root-only.
+`manual` takes `{}`. This document is the package-owned manual named by the
+static official `task_card` declaration. Its reserved `manual` child reads the
+installed `capabilities/task_card/SKILL.md` through the granted workdir port;
+it does not enter the watch manager or require a whole Agent. The declaration
+also fixes the public action inventory, so the schema, dispatch family, and
+manual cannot silently drift.
 
 ## Resident meta projection and the 2000-char cap
 

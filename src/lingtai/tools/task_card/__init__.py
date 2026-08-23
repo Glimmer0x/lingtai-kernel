@@ -11,6 +11,10 @@ The producer writes only those files. Channels consume/project them
 independently. The watch descriptor survives ``refresh``/molt/agent-stop so a
 restart rehydrates the active watch; ``stop``/``remove``/refresh exhaustion
 clear it because those are deliberate terminal ends.
+
+This is an official declared host plugin. Its static declaration is built at
+import; renderer/watch behavior binds only to narrow workdir, shutdown,
+lifecycle, and Task Card notification ports, never a whole Agent.
 """
 
 from __future__ import annotations
@@ -27,12 +31,13 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from lingtai.kernel import notifications
 from lingtai.kernel._fsutil import atomic_write_json, read_json
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 # Built-in fallback defaults, used when no configured value applies (missing
 # config file, missing field, or an invalid field). ``interval_s`` is a pure
@@ -73,8 +78,6 @@ _LEGACY_CONFIG_DIR = "telegram"
 # value forward would silently cap most real agents below the new built-in
 # default instead of leaving them on it.
 _LEGACY_UNTOUCHED_MAX_REFRESHES = 1000
-_MANUAL_SKILL_NAME = "task_card"
-notifications.register_notification_channel("task_card")
 
 
 class _Config(NamedTuple):
@@ -123,53 +126,47 @@ _START_INPUT_SCHEMA = _object(
 _WATCH_INPUT_SCHEMA = _object({"watch_id": {"type": "string"}}, required=["watch_id"])
 _REMOVE_INPUT_SCHEMA = _object({}, required=[])
 
-_CHILDREN: tuple[tuple[str, dict[str, Any]], ...] = (
-    ("start", _START_INPUT_SCHEMA),
-    ("inspect", _WATCH_INPUT_SCHEMA),
-    ("retry", _WATCH_INPUT_SCHEMA),
-    ("stop", _WATCH_INPUT_SCHEMA),
-    ("remove", _REMOVE_INPUT_SCHEMA),
-    ("manual", MANUAL_INPUT_SCHEMA),
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "start": _START_INPUT_SCHEMA,
+    "inspect": _WATCH_INPUT_SCHEMA,
+    "retry": _WATCH_INPUT_SCHEMA,
+    "stop": _WATCH_INPUT_SCHEMA,
+    "remove": _REMOVE_INPUT_SCHEMA,
+}
+
+_DESCRIPTION = (
+    "Manage the intrinsic declarative Task Card artifact. Provide a Python "
+    "renderer under your working directory whose stdout is the full Task Card "
+    "body to write into taskcard/taskcard.md. The capability writes taskcard/"
+    "taskcard.md atomically, writes taskcard/status as exact active/inactive, "
+    "keeps at most one active watch per agent, and leaves projection to "
+    "channel-specific readers. Use it proactively for meaningful long-running, "
+    "multi-step, or parallel work so a human can follow progress; skip it for "
+    "quick single-step work, ritual updates, or a body you cannot keep truthful "
+    "and current. Restart a new watch when one expires mid-task. Use stop to "
+    "pause a watch while preserving its last body, and remove once the work is "
+    "completed, cancelled, or abandoned so the artifact cannot mislead a consumer "
+    "as stale. Actions: start, inspect, retry, stop, remove, manual."
+)
+
+_ACTION_DESCRIPTION = (
+    "Declarative Task Card action. start keeps one renderer watch writing the "
+    "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
+    "and stop read or control that one artifact; remove is the terminal lifecycle "
+    "cleanup; manual explains the full contract."
 )
 
 
-def _schema_family() -> ToolFamily:
-    return ToolFamily(
-        "task_card",
-        [ChildTool(name, schema, lambda _input: {}) for name, schema in _CHILDREN],
-    )
-
-
-_SCHEMA_FAMILY = _schema_family()
-
-
 def get_schema() -> dict[str, Any]:
-    schema = _SCHEMA_FAMILY.build_schema()
-    schema["properties"]["action"]["description"] = (
-        "Declarative Task Card action. start keeps one renderer watch writing the "
-        "agent-local taskcard/status and taskcard/taskcard.md files; inspect, retry, "
-        "and stop read or control that one artifact; remove is the terminal "
-        "lifecycle cleanup; manual explains the full contract."
-    )
+    """Return the declaration-composed public schema, before or after binding."""
+    schema = _FAMILY.build_schema()
+    schema["properties"]["action"]["description"] = _ACTION_DESCRIPTION
     return schema
 
 
 def get_description() -> str:
-    return (
-        "Manage the intrinsic declarative Task Card artifact. Provide a Python "
-        "renderer under your working directory whose stdout is the full Task Card "
-        "body to write into taskcard/taskcard.md. The capability writes taskcard/"
-        "taskcard.md atomically, writes taskcard/status as exact active/inactive, "
-        "keeps at most one active watch per agent, and leaves projection to "
-        "channel-specific readers. Use it proactively for meaningful long-running, "
-        "multi-step, or parallel work so a human can follow progress; skip it for "
-        "quick single-step work, ritual updates, or a body you cannot keep truthful "
-        "and current. Restart a new watch when one expires mid-task. Use stop to "
-        "pause a watch while preserving its last body, and "
-        "remove once the work is completed, cancelled, or abandoned so the artifact "
-        "cannot mislead a consumer as stale. Actions: start, inspect, retry, stop, "
-        "remove, manual."
-    )
+    """The declaration's single model-facing description."""
+    return DECLARATION.description
 
 
 class TaskCardError(Exception):
@@ -231,13 +228,21 @@ class _Watch:
 class TaskCardManager:
     """Own the intrinsic Task Card watch and atomic writer contract."""
 
-    def __init__(self, agent: BaseAgent) -> None:
-        self._agent = agent
+    def __init__(self, host: "ToolPluginHost") -> None:
+        self._host = host
         self._lock = threading.RLock()
         self._counter = 0
         self._completed_text_turns = 0
         self._watch: _Watch | None = None
-        self._taskcard_dir = Path(agent._working_dir) / _TASKCARD_DIR
+        self._set_paths(host.workdir.path)
+
+    def rebind(self, host: "ToolPluginHost") -> None:
+        """Keep this current-Agent manager across refresh with fresh narrow ports."""
+        self._host = host
+        self._set_paths(host.workdir.path)
+
+    def _set_paths(self, workdir: Path) -> None:
+        self._taskcard_dir = Path(workdir) / _TASKCARD_DIR
         self._status_path = self._taskcard_dir / _STATUS_FILENAME
         self._body_path = self._taskcard_dir / _BODY_FILENAME
         self._config_path = self._taskcard_dir / _CONFIG_FILENAME
@@ -251,15 +256,7 @@ class TaskCardManager:
             return {"status": "failed", "message": str(exc)}
 
     def _family(self) -> ToolFamily:
-        children = [
-            ChildTool("start", _START_INPUT_SCHEMA, self._start_child),
-            ChildTool("inspect", _WATCH_INPUT_SCHEMA, self._inspect_child),
-            ChildTool("retry", _WATCH_INPUT_SCHEMA, self._retry_child),
-            ChildTool("stop", _WATCH_INPUT_SCHEMA, self._stop_child),
-            ChildTool("remove", _REMOVE_INPUT_SCHEMA, self._remove_child),
-            build_manual_child(self._agent, _MANUAL_SKILL_NAME),
-        ]
-        return ToolFamily("task_card", children)
+        return _build_family(self._host, self)
 
     def _start_child(self, input_: dict[str, Any]) -> dict[str, Any]:
         renderer_path = self._validate_renderer_path(input_.get("renderer_path"))
@@ -512,13 +509,12 @@ class TaskCardManager:
         watch.thread.start()
 
     def _loop(self, watch: _Watch) -> None:
-        shutdown = getattr(self._agent, "_shutdown", None)
         while not watch.stop_event.is_set():
-            if shutdown is not None and shutdown.is_set():
+            if self._host.shutdown.is_set():
                 return
             if watch.stop_event.wait(timeout=watch.interval_s):
                 return
-            if shutdown is not None and shutdown.is_set():
+            if self._host.shutdown.is_set():
                 return
             try:
                 self._tick(watch)
@@ -616,8 +612,7 @@ class TaskCardManager:
     def _stop_requested(self, watch: _Watch) -> bool:
         if watch.stop_event.is_set():
             return True
-        shutdown = getattr(self._agent, "_shutdown", None)
-        return bool(shutdown is not None and shutdown.is_set())
+        return self._host.shutdown.is_set()
 
     def _publish_active(self, body: str) -> None:
         self._write_body(body)
@@ -663,7 +658,7 @@ class TaskCardManager:
                 capture_output=True,
                 text=True,
                 timeout=timeout_s,
-                cwd=str(self._agent._working_dir),
+                cwd=str(self._host.workdir.path),
             )
         except subprocess.TimeoutExpired as exc:
             raise TaskCardError(f"renderer timed out after {timeout_s}s") from exc
@@ -730,9 +725,7 @@ class TaskCardManager:
         epoch: int,
         recovered: bool,
     ) -> None:
-        enqueue = getattr(self._agent, "_enqueue_system_notification", None)
-        if not callable(enqueue):
-            return
+        enqueue = self._host.task_card_notifications.enqueue_system_notification
         if recovered:
             body = f"Task Card watch {watch.watch_id} recovered."
             extra: dict[str, Any] = {"watch_id": watch.watch_id, "state": "recovered"}
@@ -765,9 +758,7 @@ class TaskCardManager:
             pass
 
     def _emit_limit_event(self, watch: _Watch) -> None:
-        enqueue = getattr(self._agent, "_enqueue_system_notification", None)
-        if not callable(enqueue):
-            return
+        enqueue = self._host.task_card_notifications.enqueue_system_notification
         with watch.lock:
             if watch.limit_notified:
                 return
@@ -833,19 +824,13 @@ class TaskCardManager:
             if self._completed_text_turns < threshold:
                 return
             self._completed_text_turns = 0
-        notifications.submit(
-            self._agent,
-            "task_card",
-            data={"source": "task_card.reminder", "turns": threshold},
-            header="Task Card reminder",
-            instructions="Check whether the Task Card is absent or stale; update or issue one only if useful.",
-        )
+        self._host.task_card_notifications.submit_reminder(threshold)
 
     def _clear_reminder(self) -> None:
         with self._lock:
             self._completed_text_turns = 0
         try:
-            notifications.clear(self._agent, "task_card")
+            self._host.task_card_notifications.clear_reminder()
         except AttributeError:
             pass
 
@@ -889,7 +874,7 @@ class TaskCardManager:
         of the watch, not process-transient stops.
         """
         with watch.lock:
-            workdir = Path(self._agent._working_dir).resolve()
+            workdir = Path(self._host.workdir.path).resolve()
             try:
                 renderer_rel = str(watch.renderer_path.relative_to(workdir))
             except ValueError:
@@ -1151,7 +1136,7 @@ class TaskCardManager:
     def _validate_renderer_path(self, raw: Any) -> Path:
         if not isinstance(raw, str) or not raw.strip():
             raise TaskCardError("renderer_path is required for start")
-        workdir = Path(self._agent._working_dir)
+        workdir = Path(self._host.workdir.path)
         candidate = raw.strip()
         try:
             wd = workdir.resolve()
@@ -1205,30 +1190,102 @@ class TaskCardManager:
         return {"status_value": status_value}
 
 
-def setup(agent: BaseAgent, **_ignored: Any) -> TaskCardManager:
-    manager = getattr(agent, "_task_card_manager", None)
-    if not isinstance(manager, TaskCardManager):
-        manager = TaskCardManager(agent)
-        agent._task_card_manager = manager
+def _build_family(
+    host: "ToolPluginHost | None",
+    manager: TaskCardManager | None,
+) -> ToolFamily:
+    """Compose the declaration-derived family for schema or live dispatch."""
+    if manager is None:
+        def _unused(_input: dict[str, Any]) -> dict[str, Any]:
+            raise AssertionError("the schema-only Task Card family never dispatches")
+
+        handlers: dict[str, Any] = {action: _unused for action in DECLARATION.actions}
+        manual_child = ChildTool(
+            "manual", DECLARATION.manual_input_schema, _unused, title="manual input"
+        )
     else:
-        manager._agent = agent
-    agent.add_tool(
-        "task_card",
+        handlers = {
+            "start": manager._start_child,
+            "inspect": manager._inspect_child,
+            "retry": manager._retry_child,
+            "stop": manager._stop_child,
+            "remove": manager._remove_child,
+        }
+        assert host is not None
+        manual_child = build_manual_child(host.workdir, DECLARATION.manual)
+    return ToolFamily(
+        DECLARATION.name,
+        [
+            *(
+                ChildTool(
+                    action,
+                    DECLARATION.input_schemas[action],
+                    handlers[action],
+                    title=f"{action} input",
+                )
+                for action in DECLARATION.actions
+            ),
+            manual_child,
+        ],
+    )
+
+
+def _activate(manager: TaskCardManager, host: "ToolPluginHost") -> None:
+    """Resume the actual current-Agent watch after the official bind succeeds."""
+    try:
+        manager.resume_persisted_watch()
+    except Exception as exc:
+        host.task_card_lifecycle.report_resume_failure(str(exc))
+
+
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Bind one Task Card family without receiving or mounting an Agent."""
+    lifecycle = host.task_card_lifecycle
+    manager = lifecycle.current_manager()
+    if not isinstance(manager, TaskCardManager):
+        manager = TaskCardManager(host)
+        lifecycle.retain_manager(manager)
+    else:
+        manager.rebind(host)
+    _build_family(host, manager)  # fail closed on malformed live composition
+    return BoundToolPlugin(
+        name=DECLARATION.name,
         schema=get_schema(),
         handler=manager.handle,
         description=get_description(),
         glossary_package=None,
+        activate=lambda: _activate(manager, host),
     )
-    # A watch persisted by a previous process (refresh/molt/agent-stop) is
-    # rehydrated on boot so the card survives process restarts. Deliberate
-    # terminal ends (stop/remove/exhaust) already cleared the descriptor.
-    try:
-        manager.resume_persisted_watch()
-    except Exception as exc:
-        log = getattr(agent, "_log", None)
-        if callable(log):
-            try:
-                log("task_card_resume_failed", error=str(exc))
-            except Exception:
-                pass
+
+
+DECLARATION = ToolPluginDeclaration(
+    name="task_card",
+    actions=("start", "inspect", "retry", "stop", "remove"),
+    input_schemas=_DECLARED_INPUT_SCHEMAS,
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="task_card",
+    description=_DESCRIPTION,
+    binder=_bind,
+    # Every requirement is exercised by the current lifecycle: workdir-owned
+    # artifacts/manual, shutdown polling, the retained manager, and its notices.
+    requires=("workdir", "shutdown", "task_card_lifecycle", "task_card_notifications"),
+)
+
+# Retain the producer's existing notification channel, derived from the one
+# declaration that owns the public family name.
+notifications.register_notification_channel(DECLARATION.name)
+# Declaration-derived schema surface, constructed without an Agent at import.
+_FAMILY = _build_family(None, None)
+
+
+def setup(agent: Any, **_ignored: Any) -> TaskCardManager:
+    """Register Task Card through the declared host-plugin route only."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])
+    # Preserve the established setup return value without handing the Agent to
+    # the binder: the lifecycle port already retained this exact manager.
+    manager = getattr(agent, "_task_card_manager", None)
+    if not isinstance(manager, TaskCardManager):  # pragma: no cover - host wiring defect
+        raise RuntimeError("task_card declaration did not retain its lifecycle manager")
     return manager

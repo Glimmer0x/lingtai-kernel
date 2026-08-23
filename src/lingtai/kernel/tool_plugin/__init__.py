@@ -45,6 +45,9 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "ShutdownPort",
+    "TaskCardLifecyclePort",
+    "TaskCardNotificationsPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +67,22 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
-#: actually needs together with its own slice.
+#: Earned, not enumerated: ``mcp`` consumes ``workdir`` and
+#: ``prompt_section``; ``task_card`` consumes the remaining current-Agent
+#: lifecycle, shutdown-observation, and notification ports. Root
+#: ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so every
+#: name here has a shipped vertical slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "prompt_section",
+    "shutdown",
+    "task_card_lifecycle",
+    "task_card_notifications",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +93,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "task_card")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +178,50 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class ShutdownPort(Protocol):
+    """Observe whether this Agent is stopping.
+
+    A Task Card watch polls this one predicate between renderer runs so an
+    agent stop ends its thread promptly.  It grants no lifecycle transition,
+    join, or event mutation.
+    """
+
+    def is_set(self) -> bool:
+        """Return true after the current Agent has begun shutdown."""
+
+
+class TaskCardLifecyclePort(Protocol):
+    """Retain the one Task Card manager for this current Agent.
+
+    The public producer needs exactly one persistent in-process owner across
+    refreshes so the BaseAgent lifecycle can stop/re-persist the real watch.
+    This is intentionally not a generic state bag: it only reads or replaces
+    this family's manager and records its one boot-resume diagnostic.
+    """
+
+    def current_manager(self) -> Any | None:
+        """Return this Agent's existing Task Card manager, if any."""
+
+    def retain_manager(self, manager: Any) -> None:
+        """Make *manager* the current Agent's Task Card lifecycle owner."""
+
+    def report_resume_failure(self, error: str) -> None:
+        """Record a bounded diagnostic when persisted-watch resume fails."""
+
+
+class TaskCardNotificationsPort(Protocol):
+    """Emit only the Task Card producer's existing current-Agent notices."""
+
+    def enqueue_system_notification(self, **kwargs: Any) -> None:
+        """Queue one deduplicated Task Card error or limit notification."""
+
+    def submit_reminder(self, turns: int) -> None:
+        """Publish the producer's absent/stale Task Card reminder."""
+
+    def clear_reminder(self) -> None:
+        """Clear the producer's current Task Card reminder."""
 
 
 class ToolMountPort(Protocol):

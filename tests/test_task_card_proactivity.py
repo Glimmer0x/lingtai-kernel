@@ -19,7 +19,7 @@ from lingtai.tools.daemon import (
 from lingtai.tools.task_card import TaskCardManager, get_description
 
 from tests._daemon_helpers import make_daemon_agent
-from tests.test_task_card_controller import _FakeAgent, _OK_BODY, _write_renderer
+from tests.test_task_card_controller import _FakeAgent, _OK_BODY, _manager, _write_renderer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,7 +144,7 @@ def test_real_task_card_capability_toggles_the_nudge(tmp_path):
 
 def test_expired_watch_event_asks_for_a_new_watch(tmp_path):
     agent = _FakeAgent(tmp_path)
-    manager = TaskCardManager(agent)
+    manager = _manager(agent)
     assert _start_watch(manager, tmp_path, max_refreshes=1)["status"] == "ok"
     watch = manager._watch
     assert watch is not None
@@ -162,7 +162,7 @@ def test_expired_watch_event_asks_for_a_new_watch(tmp_path):
 def test_exhausted_watch_reports_itself_inactive(tmp_path):
     """The nudge is only useful if an exhausted watch stops counting as active."""
     agent = _FakeAgent(tmp_path)
-    manager = TaskCardManager(agent)
+    manager = _manager(agent)
     assert _start_watch(manager, tmp_path, max_refreshes=1)["status"] == "ok"
     assert manager.has_active_watch()
     manager._tick(manager._watch)

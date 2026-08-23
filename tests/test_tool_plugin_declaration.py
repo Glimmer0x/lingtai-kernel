@@ -28,6 +28,20 @@ def mcp_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
+@pytest.fixture
+def task_card_agent(tmp_path):
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="task-card-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"task_card": {}},
+    )
+    try:
+        yield agent
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
     """Boot registration claims the declaration and dispatches both actions."""
     from lingtai.tools.mcp import DECLARATION
@@ -46,3 +60,25 @@ def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
     assert manual["status"] == "ok"
     assert manual["mcp_manual"]
     assert manual["manual_path"].endswith("capabilities/mcp/SKILL.md")
+
+
+def test_official_task_card_mount_keeps_the_current_agent_lifecycle(task_card_agent):
+    """The second declared slice mounts, retains its manager, and serves its package manual."""
+    from lingtai.tools.task_card import DECLARATION, TaskCardManager
+
+    assert DECLARATION.requires == (
+        "workdir", "shutdown", "task_card_lifecycle", "task_card_notifications"
+    )
+    assert task_card_agent.official_tool_plugins["task_card"] is DECLARATION
+    assert [schema.name for schema in task_card_agent._tool_schemas].count("task_card") == 1
+
+    manager = task_card_agent._task_card_manager
+    assert isinstance(manager, TaskCardManager)
+    handler = task_card_agent._tool_handlers["task_card"]
+    assert handler.__self__ is manager
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["content"][0]["text"]
+    assert manual["structuredContent"]["manual_path"].endswith(
+        "capabilities/task_card/SKILL.md"
+    )

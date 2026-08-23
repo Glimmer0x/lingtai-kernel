@@ -12,6 +12,9 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/task_card/ANATOMY.md
+  - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -34,8 +37,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how the two
+declared families reach the live Agent body through it. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +52,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the six host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `ShutdownPort`, `TaskCardLifecyclePort`, `TaskCardNotificationsPort`, and
+    host-only `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -100,10 +104,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   performs the reserved-name guard; its seal check and same-name replacement
   for nonreserved tools remain unchanged. This is trusted-in-process Python
   provenance, not an absolute defense against deliberate private-state mutation.
-- `lingtai.tools.mcp.setup()` calls
+- `lingtai.tools.mcp.setup()` and `lingtai.tools.task_card.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, reached
   through the ordinary capability boot loop in `src/lingtai/agent.py`
   (`_setup_capability` → `lingtai.tools.registry.setup_capability`).
+  Task Card's adapter ports retain its manager for BaseAgent stop/turn hooks,
+  poll the current shutdown event, and carry only its existing notifications.
 - `_build_family(host)` passes only `host.workdir` to
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
@@ -112,8 +118,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Composition
 
-`import lingtai.tools.mcp` → `ToolPluginDeclaration.__post_init__` validates the
-declared shape, with no Agent in existence.
+`import lingtai.tools.mcp` or `import lingtai.tools.task_card` →
+`ToolPluginDeclaration.__post_init__` validates the declared shape, with no
+Agent in existence.
 
 Boot: `Agent.__init__` / `Agent._setup_from_init` → `_setup_capability("mcp")`
 → `lingtai.tools.mcp.setup(agent)` → `register_agent_tool_plugins(agent,

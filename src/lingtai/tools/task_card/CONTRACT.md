@@ -8,6 +8,8 @@ related_files:
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/mcp_servers/telegram/task_card/CONTRACT.md
   - src/lingtai/mcp_servers/telegram/manager.py
@@ -15,6 +17,7 @@ related_files:
   - src/lingtai/mcp_servers/feishu/manager.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_proactivity.py
+  - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
   - tests/test_feishu_programmable_task_cards.py
@@ -152,10 +155,21 @@ declarative artifact and one active watch per agent.
 ## Port
 
 Public LTP-v2 family root `task_card` with actions `start`, `inspect`, `retry`,
-`stop`, `remove`, and `manual`.
+`stop`, `remove`, and `manual`. It is the static official
+`ToolPluginDeclaration` for the reserved `task_card` name. Its binder receives
+only `workdir`, `shutdown`, `task_card_lifecycle`, and
+`task_card_notifications`: filesystem/manual paths, cooperative watch stop,
+the retained current-agent manager used by the existing lifecycle hooks, and
+its existing reminder/error/limit emissions. It MUST NOT receive a whole Agent
+or mount itself; the kernel registrar binds, activates (resume), and mounts it.
 
 ## Adapters
 
+- Declared host adapter: `lingtai.adapters.tool_plugin_host` translates the
+  live Agent into the four Task Card ports. The lifecycle adapter retains the
+  same manager that `base_agent/lifecycle.py` stops and `turn.py` consults for
+  completed-work reminders; notification and shutdown adapters preserve the
+  existing current-agent behavior without exposing the Agent to the plugin.
 - Renderer subprocess: `sys.executable <renderer>` with `cwd` set to the agent
   working directory.
 - Filesystem artifact writer: atomic temp-file write + `fsync` + `os.replace`

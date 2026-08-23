@@ -13,6 +13,9 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/manual/SKILL.md
+  - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
@@ -22,7 +25,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), every declared slice and its package manual, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -98,8 +101,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today two families are declared:
+  `mcp` and `task_card`; every other family remains a future slice.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -126,13 +129,16 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `ShutdownPort` | `is_set() -> bool` | Observe only whether the current Agent is stopping. It grants no lifecycle transition, join, or state mutation. |
+| `TaskCardLifecyclePort` | `current_manager()`, `retain_manager(manager)`, `report_resume_failure(error)` | The one current-Agent Task Card manager slot and its bounded resume diagnostic; it preserves the existing agent-stop and completed-work lifecycle without becoming a generic state bag. |
+| `TaskCardNotificationsPort` | `enqueue_system_notification(...)`, `submit_reminder(turns)`, `clear_reminder()` | Exactly the Task Card producer's existing error/limit and absent-or-stale reminder operations; no general notification API. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
-`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. `mcp` earns
+`workdir`/`prompt_section`; `task_card` earns `workdir`, `shutdown`,
+`task_card_lifecycle`, and `task_card_notifications`. Future families earn a
+port only with their own real vertical slice — never as speculative access to a
+whole Agent.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -145,10 +151,12 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
 (`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
-`AgentPromptSectionAdapter` translate the live
-`BaseAgent` into the grantable ports, each constructed from a bound method rather
-than from the agent object. `agent_host_ports` builds one declaration's grantable
-table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
+`AgentPromptSectionAdapter` serve `mcp`; `AgentShutdownAdapter`,
+`AgentTaskCardLifecycleAdapter`, and `AgentTaskCardNotificationsAdapter` serve
+the real Task Card lifecycle. Each is constructed from narrow bound methods or
+single-purpose closures, not an Agent argument supplied to a plugin.
+`agent_host_ports` builds one declaration's grantable table;
+`register_agent_tool_plugins` is the composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
 `_add_tool` at the common model-facing boundary

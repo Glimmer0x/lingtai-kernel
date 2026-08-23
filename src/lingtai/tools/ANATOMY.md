@@ -79,7 +79,8 @@ maintenance: |
   not a claim that any family here beyond `mcp` is declared or wrapped today,
   and the normative rules — including the selected form, the reserved
   official-name rule, and the governed-surface classification — stay in the
-  Contract and in the kernel component's own Contract.
+  Contract and in the kernel component's own Contract. The declared slices are
+  `mcp` and `task_card`; all remaining families are still migration units.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
@@ -234,16 +235,14 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
-each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
-selected form's own component: the static `ToolPluginDeclaration`, the
-least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
-the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
-the one declared slice — `mcp` binds against two granted host ports instead of
-the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
-with the whole `Agent` and is a future migration unit.
+kernel-owned declared host-plugin contract, and two families in this package
+are wired onto it today. `src/lingtai/kernel/tool_plugin/ANATOMY.md` owns the
+static `ToolPluginDeclaration`, least-privilege host ports, reserved
+`OFFICIAL_TOOL_PLUGIN_NAMES`, and fail-fast registrar. `mcp` binds against its
+two workdir/prompt-section ports; `task_card` binds against workdir plus its
+narrow shutdown, current-manager lifecycle, and producer-notification ports,
+preserving real watch stop/resume/reminder behavior without a whole Agent.
+Every other family remains a future migration unit.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no
