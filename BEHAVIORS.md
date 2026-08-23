@@ -8,6 +8,7 @@ related_files:
   - dev-guide-skill/SKILL.md
   - tests/CONTRACT.md
   - src/lingtai/kernel/BEHAVIORS.md
+  - src/lingtai/kernel/tool_plugin/BEHAVIORS.md
   - src/lingtai/tools/BEHAVIORS.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/context/BEHAVIORS.md

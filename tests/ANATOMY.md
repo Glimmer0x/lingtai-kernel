@@ -400,6 +400,7 @@ related_files:
   - tests/test_tool_glossary.py
   - tests/test_tool_meta_comment_overflow.py
   - tests/test_tool_meta_reconstruction.py
+  - tests/test_tool_plugin_declaration.py
   - tests/test_tool_result_recovery.py
   - tests/test_tool_result_restore_after_continuation_failure.py
   - tests/test_tool_result_spill.py

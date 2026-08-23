@@ -2,6 +2,7 @@
 related_files:
   - src/lingtai/kernel/base_agent/BEHAVIORS.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/tools/daemon/ANATOMY.md
   - docs/references/windows-support.md
   - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md

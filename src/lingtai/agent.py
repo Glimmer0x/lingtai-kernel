@@ -1425,6 +1425,41 @@ class Agent(BaseAgent):
             .replace("{agent_dir}", str(self._working_dir))
         )
 
+    def _validate_external_mcp_tools(self, tools: list[dict]) -> None:
+        """Reject a server catalog that advertises a kernel-owned official name.
+
+        The shared ``add_tool`` boundary is authoritative, but preflighting the
+        complete external catalog keeps a rejected connection from publishing
+        earlier tools or leaving a client/route sidecar behind.
+        """
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            OfficialToolNameCollisionError,
+        )
+
+        collisions = [
+            tool.get("name")
+            for tool in tools
+            if isinstance(tool, dict)
+            and tool.get("name") in OFFICIAL_TOOL_PLUGIN_NAMES
+        ]
+        if collisions:
+            names = ", ".join(repr(name) for name in collisions)
+            raise OfficialToolNameCollisionError(
+                f"external MCP advertised reserved official tool name(s): {names}"
+            )
+
+    def _discard_mcp_client(self, client: Any) -> None:
+        """Close and forget one client after a failed external mount attempt."""
+        self._forget_mcp_client_tools(client)
+        clients = getattr(self, "_mcp_clients", None)
+        if isinstance(clients, list) and client in clients:
+            clients.remove(client)
+        try:
+            client.close()
+        except Exception:
+            pass
+
     def connect_mcp(
         self,
         command: str,
@@ -1480,58 +1515,93 @@ class Agent(BaseAgent):
         self._mcp_clients.append(client)
 
         # List tools and register each one
-        tools = client.list_tools()
-        registered = []
-        metadata: dict[str, dict] = {}
-        for tool in tools:
-            name = tool["name"]
+        try:
+            tools = client.list_tools()
+            self._validate_external_mcp_tools(tools)
+        except Exception:
+            self._discard_mcp_client(client)
+            raise
+        return self._mount_mcp_tools(client, tools, mcp_service)
 
-            def _make_handler(c: MCPClient, tool_name: str, input_schema: Any):
-                def handler(tool_args: dict) -> dict:
-                    prepared = mcp_service.prepare_mcp_tool_arguments(
-                        tool_args, input_schema
-                    )
-                    return c.call_tool(tool_name, prepared)
-                return handler
+    def _mount_mcp_tools(self, client: Any, tools: list[dict], mcp_service: Any) -> list[str]:
+        """Mount one fully preflighted MCP catalog atomically for this client.
 
-            # ``schema`` is the SDK v2 ``input_schema`` JSON Schema, already
-            # unpacked by the service boundary. ``FunctionSchema.parameters`` is
-            # an opaque JSON-Schema dict — an addon-owned root
-            # ``additionalProperties`` (e.g. a strict LTP-v2 family) must
-            # survive mounting unchanged, so #1081 deliberately neither strips
-            # nor copies it: the exact advertised object is mounted as-is.
-            schema = tool.get("schema", {})
+        A catalog can pass reserved-name preflight and still fail while a tool
+        is mounted (for example, a sealed Agent or malformed later record).
+        Snapshot all model-facing and MCP sidecar state, then restore it after
+        closing/removing the just-started client on *any* publication failure.
+        This is deliberately narrower than a process-wide transaction: it
+        protects one connection and preserves earlier live clients unchanged.
+        """
+        # The caller appends the just-started client before preflight; it is
+        # intentionally absent from the pre-connection snapshot restored below.
+        clients_before = [
+            existing
+            for existing in getattr(self, "_mcp_clients", [])
+            if existing is not client
+        ]
+        handlers_before = dict(self._tool_handlers)
+        schemas_before = list(self._tool_schemas)
+        metadata_before = {
+            name: (dict(value) if isinstance(value, dict) else value)
+            for name, value in getattr(self, "_mcp_tool_metadata", {}).items()
+        }
+        names_before = set(getattr(self, "_mcp_tool_names", set()))
+        routes_before = dict(getattr(self, "_mcp_clients_by_tool", {}))
+        collisions_before = set(getattr(self, "_mcp_tool_collisions", set()))
 
-            # The server's other advertised metadata (title, output_schema,
-            # annotations, icons, execution, meta) has no FunctionSchema field,
-            # so retain it in a sidecar captured from the service record.
-            # Without this the record goes out of scope here and the metadata is
-            # silently lost after registration.
-            metadata[name] = mcp_service.tool_metadata(tool)
+        try:
+            registered: list[str] = []
+            metadata: dict[str, dict] = {}
+            for tool in tools:
+                name = tool["name"]
+                schema = tool.get("schema", {})
 
-            self.add_tool(
-                name,
-                schema=schema,
-                handler=_make_handler(client, name, schema),
-                description=tool.get("description", ""),
-            )
-            registered.append(name)
+                def _make_handler(c: Any, tool_name: str, input_schema: Any):
+                    def handler(tool_args: dict) -> dict:
+                        prepared = mcp_service.prepare_mcp_tool_arguments(
+                            tool_args, input_schema
+                        )
+                        return c.call_tool(tool_name, prepared)
+                    return handler
 
-        self._record_mcp_tool_metadata(metadata)
+                metadata[name] = mcp_service.tool_metadata(tool)
+                self.add_tool(
+                    name,
+                    schema=schema,
+                    handler=_make_handler(client, name, schema),
+                    description=tool.get("description", ""),
+                )
+                registered.append(name)
 
-        if not hasattr(self, "_mcp_tool_names"):
-            self._mcp_tool_names = set()
-        self._mcp_tool_names.update(registered)
-
-        # Build stable tool-name -> MCP client mapping for kernel-driven
-        # reverse calls (e.g. Telegram Task Card update).  Preserve collision
-        # provenance so a later exact-looking pair cannot silently reclaim a
-        # name that another MCP already owned in this mounted surface.
-        for name in registered:
-            self._record_mcp_tool_owner(name, client)
-
-        self._maybe_setup_task_card_controller()
-        return registered
+            self._record_mcp_tool_metadata(metadata)
+            if not hasattr(self, "_mcp_tool_names"):
+                self._mcp_tool_names = set()
+            self._mcp_tool_names.update(registered)
+            for name in registered:
+                self._record_mcp_tool_owner(name, client)
+            self._maybe_setup_task_card_controller()
+            return registered
+        except Exception:
+            # Close/remove the new transport first; then restore every state
+            # surface touched by add_tool and the MCP sidecars. This also
+            # removes any routes/metadata recorded before a later failure.
+            self._discard_mcp_client(client)
+            self._mcp_clients = clients_before
+            self._tool_handlers.clear()
+            self._tool_handlers.update(handlers_before)
+            self._tool_schemas = schemas_before
+            self._mcp_tool_metadata = metadata_before
+            self._mcp_tool_names = names_before
+            self._mcp_clients_by_tool = routes_before
+            self._mcp_tool_collisions = collisions_before
+            try:
+                if self._chat is not None:
+                    self._chat.update_tools(self._build_tool_schemas())
+            except Exception:
+                pass
+            self._token_decomp_dirty = True
+            raise
 
     def _record_mcp_tool_owner(self, name: str, client: Any) -> None:
         """Map one MCP tool name while retaining same-surface collision provenance."""
@@ -1682,49 +1752,13 @@ class Agent(BaseAgent):
             self._mcp_clients: list = []
         self._mcp_clients.append(client)
 
-        tools = client.list_tools()
-        registered = []
-        metadata: dict[str, dict] = {}
-        for tool in tools:
-            name = tool["name"]
-
-            def _make_handler(c: HTTPMCPClient, tool_name: str, input_schema: Any):
-                def handler(tool_args: dict) -> dict:
-                    prepared = mcp_service.prepare_mcp_tool_arguments(
-                        tool_args, input_schema
-                    )
-                    return c.call_tool(tool_name, prepared)
-                return handler
-
-            # Same v2 tool record and the same metadata sidecar as the stdio
-            # path above. Addon-owned root ``additionalProperties`` must survive
-            # mounting unchanged; see the matching comment in ``connect_mcp``.
-            schema = tool.get("schema", {})
-            metadata[name] = mcp_service.tool_metadata(tool)
-
-            self.add_tool(
-                name,
-                schema=schema,
-                handler=_make_handler(client, name, schema),
-                description=tool.get("description", ""),
-            )
-            registered.append(name)
-
-        self._record_mcp_tool_metadata(metadata)
-
-        if not hasattr(self, "_mcp_tool_names"):
-            self._mcp_tool_names = set()
-        self._mcp_tool_names.update(registered)
-
-        # Build stable tool-name -> MCP client mapping for kernel-driven
-        # reverse calls (e.g. Telegram Task Card update).  Preserve collision
-        # provenance so a later exact-looking pair cannot silently reclaim a
-        # name that another MCP already owned in this mounted surface.
-        for name in registered:
-            self._record_mcp_tool_owner(name, client)
-
-        self._maybe_setup_task_card_controller()
-        return registered
+        try:
+            tools = client.list_tools()
+            self._validate_external_mcp_tools(tools)
+        except Exception:
+            self._discard_mcp_client(client)
+            raise
+        return self._mount_mcp_tools(client, tools, mcp_service)
 
     def stop(self, timeout: float = 5.0) -> None:
         # Stop LICC poller before closing MCP clients so any in-flight events
@@ -1968,6 +2002,16 @@ class Agent(BaseAgent):
         self._sealed = False
         self._tool_handlers.clear()
         self._tool_schemas.clear()
+        # The official claim map describes the live tool surface being cleared
+        # one line above, so it is cleared with it: a capability dropped on this
+        # refresh (``manifest.disable``) must not leave a claim behind for a
+        # tool that is no longer mounted. Capabilities that survive the refresh
+        # re-register below and re-claim their names in the same boot, and
+        # re-registering the same declaration is idempotent either way.
+        self._official_tool_plugins.clear()
+        # The declaration anchors survive refresh, but bound results describe
+        # the just-cleared live surface and must be rebuilt by registration.
+        self._official_tool_bindings.clear()
         self._capabilities.clear()
         self._capability_managers.clear()
 

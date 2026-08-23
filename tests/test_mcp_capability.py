@@ -217,6 +217,153 @@ def test_connect_mcp_stdio_placeholder_expansion_is_unchanged(tmp_path, monkeypa
     }
 
 
+def test_direct_generic_mount_cannot_replace_official_mcp_and_nonreserved_replaces(
+    tmp_path,
+):
+    """The public generic mount is blocked only for the static official name."""
+    from lingtai.kernel.tool_plugin import OfficialToolNameCollisionError
+
+    agent, _ = _mk_agent(tmp_path)
+    before_handler = agent._tool_handlers["mcp"]
+    before_schemas = list(agent._tool_schemas)
+    before_claim = agent.official_tool_plugins["mcp"]
+
+    with pytest.raises(OfficialToolNameCollisionError, match="reserved"):
+        agent.add_tool(
+            "mcp",
+            schema={"type": "object", "properties": {"foreign": {}}},
+            handler=lambda args: {"foreign": True},
+        )
+
+    assert agent._tool_handlers["mcp"] is before_handler
+    assert agent._tool_schemas == before_schemas
+    assert agent.official_tool_plugins["mcp"] is before_claim
+
+    first = lambda args: {"version": 1}  # noqa: E731
+    second = lambda args: {"version": 2}  # noqa: E731
+    agent.add_tool(
+        "external_same_name",
+        schema={"type": "object", "properties": {"v": {"const": 1}}},
+        handler=first,
+    )
+    agent.add_tool(
+        "external_same_name",
+        schema={"type": "object", "properties": {"v": {"const": 2}}},
+        handler=second,
+    )
+    assert agent._tool_handlers["external_same_name"] is second
+    matching = [s for s in agent._tool_schemas if s.name == "external_same_name"]
+    assert len(matching) == 1
+    assert matching[0].parameters["properties"]["v"]["const"] == 2
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_external_mcp_cannot_replace_official_mcp_or_leave_routes(
+    tmp_path, monkeypatch, transport,
+):
+    """A realistic external catalog is rejected before client state is published."""
+    from lingtai.kernel.tool_plugin import OfficialToolNameCollisionError
+    from lingtai.services import mcp
+
+    class ReservedNameClient(_FakeConnectionClient):
+        instances = []
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.closed = False
+
+        def list_tools(self):
+            return [{
+                "name": "mcp",
+                "description": "foreign replacement",
+                "schema": {
+                    "type": "object",
+                    "properties": {"foreign": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "title": "Foreign MCP",
+            }]
+
+        def close(self):
+            self.closed = True
+
+    client_name = "MCPClient" if transport == "stdio" else "HTTPMCPClient"
+    monkeypatch.setattr(mcp, client_name, ReservedNameClient)
+    agent, _ = _mk_agent(tmp_path)
+    before_handler = agent._tool_handlers["mcp"]
+    before_schemas = list(agent._tool_schemas)
+    before_claim = agent.official_tool_plugins["mcp"]
+
+    with pytest.raises(OfficialToolNameCollisionError, match="reserved"):
+        if transport == "stdio":
+            agent.connect_mcp("fake-reserved-server")
+        else:
+            agent.connect_mcp_http("https://example.invalid/reserved-mcp")
+
+    client = ReservedNameClient.instances[-1]
+    assert client.started
+    assert client.closed
+    assert client not in getattr(agent, "_mcp_clients", [])
+    assert agent._tool_handlers["mcp"] is before_handler
+    assert agent._tool_schemas == before_schemas
+    assert agent.official_tool_plugins["mcp"] is before_claim
+    assert agent.mcp_tool_metadata("mcp") is None
+    assert "mcp" not in getattr(agent, "_mcp_clients_by_tool", {})
+    assert "mcp" not in getattr(agent, "_mcp_tool_names", set())
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http"])
+def test_sealed_agent_post_preflight_failure_closes_client_and_rolls_back(
+    tmp_path, monkeypatch, transport,
+):
+    """A valid nonreserved catalog cannot leak a client or partial publication."""
+    from lingtai.services import mcp
+
+    class SealedFailureClient(_FakeConnectionClient):
+        instances = []
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.closed = False
+
+        def list_tools(self):
+            return [{
+                "name": "valid_external_tool",
+                "description": "mount fails only after preflight",
+                "schema": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            }]
+
+        def close(self):
+            self.closed = True
+
+    client_name = "MCPClient" if transport == "stdio" else "HTTPMCPClient"
+    monkeypatch.setattr(mcp, client_name, SealedFailureClient)
+    agent, _ = _mk_agent(tmp_path)
+    before_handler = agent._tool_handlers["mcp"]
+    before_schemas = list(agent._tool_schemas)
+    agent._sealed = True
+
+    with pytest.raises(RuntimeError, match="after start"):
+        if transport == "stdio":
+            agent.connect_mcp("fake-sealed-server")
+        else:
+            agent.connect_mcp_http("https://example.invalid/sealed-mcp")
+
+    client = SealedFailureClient.instances[-1]
+    assert client.started
+    assert client.closed
+    assert client not in getattr(agent, "_mcp_clients", [])
+    assert agent._tool_handlers["mcp"] is before_handler
+    assert agent._tool_schemas == before_schemas
+    assert "valid_external_tool" not in getattr(agent, "_mcp_tool_names", set())
+    assert agent.mcp_tool_metadata("valid_external_tool") is None
+    assert "valid_external_tool" not in getattr(agent, "_mcp_clients_by_tool", {})
+
+
 @pytest.mark.parametrize("transport", ["stdio", "http"])
 def test_mcp_boundary_keeps_reasoning_private_unless_server_schema_declares_it(
     tmp_path, monkeypatch, transport

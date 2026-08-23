@@ -65,8 +65,14 @@ def _to_mcp_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
+def build_manual_child(source: Any, skill_name: str) -> ChildTool:
     """Build the reserved ``manual`` :class:`ChildTool` for one family.
+
+    ``source`` is whatever owns the agent working directory the installed
+    manual is read from: the live ``Agent`` for an unmigrated family, or a
+    ``lingtai.kernel.tool_plugin.WorkdirPort`` for a family that has recut onto
+    the declared host-plugin contract. :func:`.._manual.load_installed_manual`
+    accepts both, so one loader still serves every family.
 
     ``skill_name`` is the installed manual's public destination name (e.g.
     ``"web"``), matching ``Agent._install_intrinsic_manuals``'s directory
@@ -82,7 +88,7 @@ def build_manual_child(agent: Any, skill_name: str) -> ChildTool:
     """
 
     def handler(_input: Mapping[str, Any]) -> dict[str, Any]:
-        loaded = load_installed_manual(agent, skill_name)
+        loaded = load_installed_manual(source, skill_name)
         return _to_mcp_result(loaded)
 
     return ChildTool(

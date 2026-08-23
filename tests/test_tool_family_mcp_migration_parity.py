@@ -94,14 +94,19 @@ def test_both_actions_declare_canonical_strict_empty_input():
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(mcp_agent):
-    """The module-level schema-only family and the real agent-bound one are
+    """The module-level schema-only family and the real host-bound one are
     built from a single child-list source, so their advertised input shapes
     cannot drift apart."""
-    from lingtai.tools.mcp import _build_family
+    from lingtai.adapters.tool_plugin_host import agent_host_ports
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.mcp import DECLARATION, _build_family
 
     agent, _ = mcp_agent
+    # The dispatching family is built against the same least-privilege facade
+    # the kernel registrar grants at boot — not against the Agent.
+    host = ToolPluginHost.grant(DECLARATION, agent_host_ports(agent, "mcp"))
     schema_only = _build_family(None).build_schema()
-    dispatching = _build_family(agent).build_schema()
+    dispatching = _build_family(host).build_schema()
     assert schema_only == dispatching
 
 
