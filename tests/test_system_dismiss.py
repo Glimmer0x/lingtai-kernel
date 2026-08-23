@@ -22,12 +22,13 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-from lingtai.tools import notification as notif_intrinsic
 from lingtai.kernel.notifications import (
     DISMISS_CAUSE_ALREADY_EMPTY,
     DISMISS_CAUSE_NO_MATCHING_EVENT,
     is_generic_dismiss_guarded,
 )
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications, publish_test_payload
 
 # Shared with test_notification_tool.py — see tests/_notification_helpers.py.
@@ -45,7 +46,7 @@ from tests._notification_helpers import (
 # that envelope so every test in this file exercises the real dispatch path,
 # including the pre-handler input validation.
 def _call(agent, action, **action_input):
-    return notif_intrinsic.handle(
+    return dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {"action": action, "input": dict(action_input), "reasoning": "test"},
     )
@@ -117,7 +118,7 @@ def test_dismiss_validation_errors(tmp_path: Path) -> None:
     # A malformed envelope (no ``input`` object at all) is a different
     # failure: LTP v2 requires ``input``, so this is rejected at the envelope
     # boundary before dispatch rather than being read as "channel omitted".
-    malformed = notif_intrinsic.handle(agent, {"action": "dismiss_channel"})
+    malformed = dispatch_declared_tool(NOTIFICATION_DECLARATION, agent, {"action": "dismiss_channel"})
     assert malformed["status"] == "failed"
     assert malformed["error_code"] == "INVALID_ARGUMENT"
 

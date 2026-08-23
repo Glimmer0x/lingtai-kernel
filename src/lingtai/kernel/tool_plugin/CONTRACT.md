@@ -13,6 +13,9 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
@@ -98,8 +101,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today two families are declared:
+  `mcp` and `notification`.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -126,13 +129,14 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `NotificationStatePort` | `dismiss`, `delay`, and hook-registry operations | Agent-bound Notification Core operations for the `notification` slice. It exposes neither Agent, Store, delivery fingerprint, nor producer state, so Core retains all dismissal, guard, delay, timer, and registry policy. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`workdir` and `prompt_section` because the `mcp` slice consumes them, plus
+`notification_state` because the `notification` slice delegates real
+agent-scoped Notification Core operations through it. Families that later need
+to drive the live Agent body earn their ports one real slice at a time.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -144,10 +148,10 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
-(`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
-`AgentPromptSectionAdapter` translate the live
-`BaseAgent` into the grantable ports, each constructed from a bound method rather
-than from the agent object. `agent_host_ports` builds one declaration's grantable
+(`Adapter -> Port <- Core`). `AgentWorkdirAdapter`, `AgentPromptSectionAdapter`, and
+`AgentNotificationStateAdapter` translate the live `BaseAgent` into grantable
+ports. The notification adapter stores only Core callbacks bound to the agent,
+not the Agent/Store itself, preserving the existing Core state machine. `agent_host_ports` builds one declaration's grantable
 table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
@@ -246,9 +250,10 @@ component never selects.
 
 `tests/test_tool_plugin_declaration.py` is the shared contract suite:
 
-- declaration staticness and the `mcp` declared-versus-composed surface
-  agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,
-  `test_mcp_is_reserved_and_declares_only_the_ports_it_consumes`);
+- compact live-slice coverage: `mcp` remains claimed/mounted with its
+  prompt/workdir ports, and `notification` is claimed/mounted with its
+  workdir/state ports, package-owned manual, check placeholder, and
+  Core-backed dismissal;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;
@@ -263,9 +268,8 @@ component never selects.
   failing a real `Agent(...)` boot instead of being absorbed as
   `capability_skipped`;
 - declared-versus-shipped agreement — a plugin advertising undeclared actions
-  or no action enum is refused at `bind()` with nothing mounted or claimed, and
-  `mcp`'s manual destination and per-action `input` schemas follow its
-  declaration;
+  or no action enum is refused at `bind()` with nothing mounted or claimed, and both `mcp` and `notification` derive manual destination and per-action
+  input schemas from their declarations;
 - atomicity, stated exactly — a mid-batch host-port failure leaves the earlier
   member mounted and claimed;
 - claim-map lifecycle — the claim is reachable through the public
@@ -288,6 +292,8 @@ component never selects.
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,
+`tests/test_notification_tool.py`, `tests/test_notification_sync.py`,
+`tests/test_notification_delay_alarm.py`,
 `tests/test_mcp_identity_discovery.py` (the slice's unchanged public behavior),
 `tests/test_curated_mcp_plugin_package.py` (the external transport route is
 undisturbed), and `tests/test_architecture_documents.py`.

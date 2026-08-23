@@ -45,6 +45,7 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "NotificationStatePort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +65,19 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
-#: actually needs together with its own slice.
+#: Earned, not enumerated: each name below is consumed by one real vertical
+#: slice this component ships with (``mcp`` or ``notification``). Root
+#: ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a later
+#: family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir",
+    "prompt_section",
+    "notification_state",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +88,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "notification")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +173,47 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class NotificationStatePort(Protocol):
+    """Notification Core operations bound to one live agent's real state.
+
+    The notification family may ask Core to manipulate notification-owned
+    mirrors and hook registration, but it never receives the Agent, its Store,
+    delivery fingerprints, or producer state directly.  The host adapter binds
+    each operation to the real agent before the plugin is composed, preserving
+    Core's allowlist, producer-guard, stale-version, acknowledgement, timer,
+    and Store semantics rather than recreating a parallel local state machine.
+    """
+
+    def dismiss(
+        self,
+        channel: str,
+        *,
+        force: bool,
+        reason: str | None,
+        event_id: str | None = None,
+        ref_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask Notification Core to clear one permitted mirror target."""
+
+    def delay(self, channel: str, seconds: int) -> dict[str, Any]:
+        """Apply consumer-only delay policy without mutating producer state."""
+
+    def add_hook(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Add one hook manifest through Notification Core and its Store."""
+
+    def drop_hook(self, name: str) -> dict[str, Any]:
+        """Drop one hook manifest through Notification Core and its Store."""
+
+    def edit_hook(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Edit one hook manifest through Notification Core and its Store."""
+
+    def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
+        """Read hook manifests through Notification Core and its Store."""
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        """Record a bounded notification action diagnostic."""
 
 
 class ToolMountPort(Protocol):

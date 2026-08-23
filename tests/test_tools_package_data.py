@@ -81,9 +81,9 @@ _BACKEND_MANUAL = (
 )
 
 _NOTIFICATION_MANUAL_FILES = (
-    "lingtai/intrinsic_skills/notification-manual/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md",
-    "lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md",
+    "lingtai/tools/notification/manual/SKILL.md",
+    "lingtai/tools/notification/manual/reference/channel-model/SKILL.md",
+    "lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md",
 )
 
 # The three per-tool glossary languages that each package must ship.

@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+
 LARGE_RESULT_DISMISS_ACTION_NOTE = (
     "Legacy: the kernel no longer raises large_tool_result reminders — large "
     "results are ranked under _meta.agent_meta.agent_state.current_tool_result_chars and "
@@ -47,7 +49,7 @@ LARGE_RESULT_FORCE_NOTE = (
 # child registration order in ``__init__.py`` — one list, not three.
 # Read/clear actions keep the pre-existing prefix stable; hook-registry
 # management (add/drop/edit/list) is administrative and follows.
-ACTION_ORDER = (
+NOTIFICATION_DECLARED_ACTIONS = (
     "check",
     "dismiss_channel",
     "dismiss_event",
@@ -57,8 +59,13 @@ ACTION_ORDER = (
     "edit",
     "list",
     "delay",
-    "manual",
 )
+
+# The official declaration appends the kernel-reserved manual action.  Keep the
+# full public order available to documentation/import-time consumers, while
+# making the operational declaration impossible to mistake for a family that
+# owns its own reserved action.
+ACTION_ORDER = (*NOTIFICATION_DECLARED_ACTIONS, "manual")
 
 _CHANNEL_DESCRIPTION = (
     "Notification channel to act on (e.g. soul, system, mcp.telegram). "
@@ -247,19 +254,12 @@ _DISMISS_REF_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Declared verbatim as ``tool_family.manual.build_manual_child`` declares it,
-# so the schema-only family composed here and the real dispatching family in
-# ``__init__.py`` (which registers the shared ManualTool child, not this dict)
-# advertise byte-identical ``manual`` input. ``test_notification_tool.py``
-# pins that equality so the two cannot drift.
-_MANUAL_INPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {},
-    "required": [],
-    "additionalProperties": False,
-}
-
-INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+# Per-action strict schemas for the actions this package itself declares.
+# ``manual`` is deliberately absent: the kernel declaration appends the one
+# canonical shared schema from ``tool_family.manual`` and the dispatching
+# family registers the matching child directly.  Keeping it absent here makes a
+# package-owned action impossible to drift into the kernel-reserved slot.
+DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "add": _ADD_INPUT_SCHEMA,
     "drop": _DROP_INPUT_SCHEMA,
     "edit": _EDIT_INPUT_SCHEMA,
@@ -269,7 +269,15 @@ INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "dismiss_channel": _DISMISS_CHANNEL_INPUT_SCHEMA,
     "dismiss_event": _DISMISS_EVENT_INPUT_SCHEMA,
     "dismiss_ref": _DISMISS_REF_INPUT_SCHEMA,
-    "manual": _MANUAL_INPUT_SCHEMA,
+}
+
+# Compatibility/readability view of the complete public shape.  The actual
+# declaration is built in ``notification.__init__`` from
+# ``DECLARED_INPUT_SCHEMAS``; it reuses this imported canonical manual schema,
+# rather than treating this map as a second source of truth.
+INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    **DECLARED_INPUT_SCHEMAS,
+    "manual": MANUAL_INPUT_SCHEMA,
 }
 
 ACTION_ENUM_DESCRIPTION = (

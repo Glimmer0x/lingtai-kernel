@@ -1,6 +1,6 @@
 ---
 name: notification-tool
-contract_version: 6
+contract_version: 7
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/notification/ANATOMY.md
@@ -11,6 +11,9 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/registry.py
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/agent.py
   - tests/test_notification_tool.py
@@ -22,9 +25,9 @@ related_files:
   - src/lingtai/tools/notification/glossary-zh.md
   - src/lingtai/tools/notification/glossary-wen.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
 maintenance: |
   <!-- CANONICAL-MAINTENANCE v2 BEGIN -->
   This component contract is governed by the root CONTRACT.md. Keep
@@ -43,8 +46,8 @@ maintenance: |
 
 ## Purpose
 
-The mandatory `notification` tool is the sole agent-callable notification
-surface. It exposes nine operational actions: four hook-registry actions
+The always-on official `notification` tool is the sole agent-callable
+notification surface. It exposes nine operational actions: four hook-registry actions
 (`add`/`drop`/`edit`/`list`), the four pre-existing actions for reading or
 atomically clearing notification mirrors (`check` and the three atomic dismiss
 actions), and consumer-only `delay`, plus one strictly read-only `manual` action
@@ -138,7 +141,7 @@ Observable action contracts are:
   on successful (`cleared: true`) dismissals, and stale-version refusals remain
   a `status: "error"` contract without `cause`.
 - `manual` reads only
-  `<agent>/.library/intrinsic/capabilities/notification-manual/SKILL.md`.
+  `<agent>/.library/intrinsic/capabilities/notification/SKILL.md`.
   Success contains exactly `{status: "ok", notification_manual, manual_path}`.
   Absence contains exactly `{status: "degraded", notification_manual: "",
   manual_path, error}`, where `error` is `notification manual missing —
@@ -221,48 +224,32 @@ source checkout fallback, and no compatibility alias. No public `parameters`,
 
 ## Adapters
 
-`lingtai.tools.registry.INTRINSICS` is the composition wiring that installs the
-package as a mandatory tool. `handle()` is the driving dispatch adapter for the
-ten actions; it composes schema and envelope dispatch onto the generic
-`lingtai.tools.tool_family` infrastructure, which is optional infrastructure
-rather than a required base class (`../CONTRACT.md` "Implementation
-independence"). The turn-loop notification post-hook completes `check` with the
-single canonical model-visible payload. The three dismiss handlers adapt tool
-arguments into `lingtai.kernel.notifications.dismiss_channel(...,
-invoked_by="notification")`, where notification Core owns allowlists, guards,
-stale checks, protected channels, acknowledgement policy, and Store use. The
-four hook-registry handlers adapt tool arguments into Core's
-`add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which validate manifests,
-enforce name/channel uniqueness, and write `.notification/hooks.json` through
-Store family 8. The `delay` handler delegates to Core's consumer-only durable delay/timer/alarm
-policy. Core keeps a per-workdir module-level mirror of registered hook channels (`_REGISTERED_HOOK_CHANNELS`, keyed by the agent's working directory),
-serialized under `_HOOK_REGISTRY_LOCK`; `sync_hook_registry` re-seeds it
-whenever `hooks.json`'s `(st_mtime_ns, st_size)` stat changes — including
-out-of-band writes from another process (sibling CLI, Telegram server, hook
-installer) — and marks a workdir seeded only after a successful load, logging a
-transient failure (`notification_hook_registry_error`, `phase=...`) for retry on
-the next sync.
+`notification` is wired through the declared host-plugin route, not
+`registry.INTRINSICS`. `registry.BUILTIN_TOOLS` and `CORE_DEFAULTS` keep it
+available on every normal Agent; `setup(agent)` hands its static
+`ToolPluginDeclaration` to `register_agent_tool_plugins`. The kernel registrar
+reserves the official name before binding/mounting and grants this family only
+`workdir` (for its installed package manual) and `notification_state`.
 
-The `manual` action is the reserved family child built by
-`tool_family.manual.build_manual_child` over the shared
-`tools/_manual.py::load_installed_manual` loader: one `is_file` check and one
-UTF-8 read at the fixed path. It does not call notification Core,
-`NotificationStorePort`, the post-hook, or a producer. That child's canonical
-`content`/`structuredContent` result is returned by the family dispatcher
-verbatim; flattening it to this Port's pinned `notification_manual` shape is a
-Host presentation step that runs strictly after dispatch, never inside the
-child. Agent initialization copies the bundled first-level
-`notification-manual` skill tree into the installed per-agent intrinsic library.
+`AgentNotificationStateAdapter` in
+`src/lingtai/adapters/tool_plugin_host.py` translates that state port into
+callbacks bound to the real agent's existing Notification Core functions. The
+family's handlers therefore adapt only public arguments and results. The three
+dismiss operations reach `dismiss_channel(..., invoked_by="notification")`; the
+four hook verbs reach Core's persisted registry operations; and `delay` reaches
+Core's durable consumer-delay/timer/alarm policy. No tool-local Store, producer,
+delivery, or dismissal helper is permitted.
 
-`handle()` strips the kernel-injected `_tc_id` before envelope validation.
-`base_agent.tools._dispatch_tool` adds that field to every intrinsic's args as
-pre-existing kernel plumbing; it is not a public root field and only
-`context.molt` consumes it.
+The reserved `manual` child is built by
+`tool_family.manual.build_manual_child(host.workdir, DECLARATION.manual)` over
+the shared `tools/_manual.py::load_installed_manual` loader. It reads exactly
+`<agent>/.library/intrinsic/capabilities/notification/SKILL.md`, never Core or a
+producer. Its canonical child result is flattened to notification's pinned
+`notification_manual` shape strictly after dispatch.
 
-The kernel's IDLE/ASLEEP notification-sync pair is deliberately
-byte-shape-identical to a voluntary `check`, so its synthesized call args carry
-this same envelope. It is spliced onto the wire rather than dispatched, so it
-is not a second inbound adapter.
+The existing IDLE/ASLEEP notification-sync pair is intentionally
+byte-shape-identical to a voluntary `check`. It is spliced onto the wire rather
+than dispatched, so it is not a second inbound adapter.
 
 ## Contract rules
 
@@ -304,7 +291,7 @@ is not a second inbound adapter.
   glossaries require review when this enum changes; the LTP v2 envelope
   restructures how arguments are carried, and the hook-registry change adds
   four new action values (`add`/`drop`/`edit`/`list`) to the enum.
-- `contract_version` is `6`: a `delay` whose target is the aggregate `daemon`
+- `contract_version` is `7`: notification is an official declared host plugin with a package-owned manual and a narrow Core-state port; its public surface is unchanged. Version `6`: a `delay` whose target is the aggregate `daemon`
   channel now masks that channel's attention token instead of omitting it from
   the coherent consumer read, so daemon truth, delivered version, and dismissal
   keep working while it is delayed. Non-daemon targets are unchanged.
@@ -317,7 +304,7 @@ is not a second inbound adapter.
 
 ## Contract tests
 
-`tests/test_notification_tool.py` proves mandatory registration and wiring, the
+`tests/test_tool_plugin_declaration.py` proves the live official mount, package manual, and Core-backed dismissal; `tests/test_notification_tool.py` proves the
 ordered ten-action schema, the closed LTP v2 root, each action's strict input
 branch and its `allOf` action/input correlation, Chat/Responses wire parity,
 the `manual` branch matching the shared ManualTool child, canonical

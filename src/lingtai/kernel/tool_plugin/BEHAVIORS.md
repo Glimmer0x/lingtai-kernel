@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
@@ -68,10 +70,11 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.mcp import DECLARATION; h = ToolPluginHost('mcp', {'workdir': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
-   Expect `('workdir', 'prompt_section') ('workdir',)` printed, then an
+   Expect `('workdir', 'prompt_section', 'notification_state') ('workdir',)` printed, then an
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. Confirm `tool_mount` is absent from
-   `GRANTABLE_HOST_PORTS`.
+   `GRANTABLE_HOST_PORTS`. The `notification_state` port is separately earned
+   by `lingtai.tools.notification`; it is absent from this `mcp` facade.
 
 4. Prove the family reaches the live Agent body only through granted ports:
 

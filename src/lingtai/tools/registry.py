@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 # ``handle(agent, args)``, and optionally ``boot(agent)``. ``BaseAgent`` iterates
 # this mapping in ``_wire_intrinsics``; membership here is the mandatory-include
 # mechanism (there is no manifest gate for intrinsics).
-from . import email, system, context, soul, notification  # noqa: E402  (lingtai.tools.<pkg>)
+from . import email, system, context, soul  # noqa: E402  (lingtai.tools.<pkg>)
 # ``psyche`` is the single model-visible root for the four durable domains:
 # ``pad + lingtai + knowledge + skills = psyche``. It replaced the four former
 # public roots as a clean break: those tool names are unknown and fail loudly,
@@ -77,7 +77,6 @@ INTRINSICS: dict[str, dict[str, Any]] = {
     "context": {"module": context},
     "psyche": {"module": psyche},
     "soul": {"module": soul},
-    "notification": {"module": notification},
 }
 
 
@@ -111,6 +110,9 @@ BUILTIN_TOOLS: dict[str, str] = {
     "avatar": "lingtai.tools.avatar",
     "daemon": "lingtai.tools.daemon",
     "mcp": "lingtai.tools.mcp",
+    # Notification is always-on like the former intrinsic, but now mounts only
+    # through its declared official host-plugin route.
+    "notification": "lingtai.tools.notification",
     # Agent Plugins (agent-plugins.org v1.0.0) catalog. The *tool* is a twin of
     # ``mcp``: pure presentation, zero side effects — it renders the catalog and
     # reports the boot registration snapshot, and no action it exposes mounts
@@ -153,6 +155,9 @@ CORE_DEFAULTS: dict[str, dict] = {
     "avatar": {},
     "daemon": {},
     "mcp": {},
+    # Notification keeps its former mandatory availability, now through the
+    # declared official-plugin registrar rather than direct intrinsic wiring.
+    "notification": {},
     # Default-on for the same reason ``mcp`` is: the capability is pure
     # presentation. It renders a read-only catalog and writes nothing at all,
     # so booting it on every agent costs one directory scan and risks nothing.
@@ -174,18 +179,27 @@ def apply_core_defaults(
     2. Overlay ``capabilities`` from init.json — init.json kwargs win on conflict.
        Entries with name not in ``CORE_DEFAULTS`` (e.g. ``web_search``)
        pass through unchanged.
-    3. Drop any name listed in ``disable``.
+    3. Drop any ordinary name listed in ``disable``; the official
+       ``notification`` mount is retained regardless of capability opt-out
+       spelling.
 
     Returns a fresh dict; does not mutate inputs.
     """
     out: dict[str, dict] = {name: dict(kwargs) for name, kwargs in CORE_DEFAULTS.items()}
+    # Notification is an always-on official mount, not a user-selectable
+    # capability. Keep this small protected set here because both construction
+    # and refresh resolve capability maps through this helper; otherwise either
+    # ``disable=["notification"]`` or ``{"notification": null}`` can silently
+    # remove the declaration before the official registrar runs.
+    always_on_official = {"notification"}
     if capabilities:
         # Normalize here too because callers loading init/preset data may call
         # this helper directly without first passing through Agent.
         for name, kwargs in normalize_capabilities(capabilities).items():
             if kwargs is None:
-                # Explicit ``"name": null`` from JSON — disable without needing
-                # the ``disable`` list. Useful for one-off opt-outs in init.json.
+                # Explicit null is an opt-out for ordinary capabilities only.
+                if name in always_on_official:
+                    continue
                 out.pop(name, None)
                 continue
             if name in out and isinstance(out[name], dict) and isinstance(kwargs, dict):
@@ -196,7 +210,12 @@ def apply_core_defaults(
                 out[name] = kwargs
     if disable:
         for name in disable:
-            out.pop(canonical_capability_name(name), None)
+            canonical = canonical_capability_name(name)
+            if canonical in always_on_official:
+                continue
+            out.pop(canonical, None)
+    for name in always_on_official:
+        out.setdefault(name, {})
     return out
 
 

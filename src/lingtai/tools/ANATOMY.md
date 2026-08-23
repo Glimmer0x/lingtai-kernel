@@ -156,12 +156,13 @@ capability names and lazy adapters.
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
-- `notification/` — mandatory intrinsic owning the public `notification`
-  family: `check`, three atomic dismiss actions, and `manual`
-  (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
-  is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
-  builds its dispatching family per call, because an intrinsic receives `agent`
-  per call rather than owning a manager.
+- `notification/` — always-on official declared host plugin owning the public
+  `notification` family: `check`, three atomic dismiss actions, hook registry,
+  consumer delay, and `manual` (`src/lingtai/tools/notification/ANATOMY.md`).
+  Its ToolFamily-composed LTP v2 envelope is bound through the kernel registrar
+  to `workdir` plus a narrow Notification Core state port; it never receives a
+  whole Agent or recreates producer/dismissal state.
+
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -170,7 +171,7 @@ capability names and lazy adapters.
   the public `system` summarize action moved in. `summarize` records only;
   `rebuild` is the sole active full reconstruction: canonical prompt composition,
   summary application, then provider replay. Refresh/molt invoke the same
-  internal contract passively. Like `soul`/`notification` it builds its family
+  internal contract passively. Like `soul` it builds its family
   per call and alone consumes kernel `_tc_id`.
 - `pad/` — mandatory `append | manual` family. `append` validates/persists pinned
   references without hot-loading; private `_pad_load` participates only in the

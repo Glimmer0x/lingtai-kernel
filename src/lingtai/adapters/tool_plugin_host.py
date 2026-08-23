@@ -20,6 +20,7 @@ only builds the ports.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -32,6 +33,7 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentNotificationStateAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
 ]
@@ -76,6 +78,74 @@ class AgentPromptSectionAdapter:
         self._write(self._section, body, protected=True)
 
 
+class AgentNotificationStateAdapter:
+    """Bind Notification Core's real agent-scoped operations to one narrow port.
+
+    The adapter retains callbacks only.  It never exposes the Agent, Store,
+    notification fingerprints, or producer state to a plugin.  Each callback
+    still enters the existing Core function with the live Agent bound by the
+    composition root, so the only implementation of producer guards, stale
+    delivery checks, acknowledgement, timer, and hook-manifest state remains
+    ``lingtai.kernel.notifications``.
+    """
+
+    __slots__ = ("_dismiss", "_delay", "_add", "_drop", "_edit", "_list", "_log")
+
+    def __init__(
+        self,
+        *,
+        dismiss: Callable[..., dict[str, Any]],
+        delay: Callable[[str, int], dict[str, Any]],
+        add_hook: Callable[[dict[str, Any]], dict[str, Any]],
+        drop_hook: Callable[[str], dict[str, Any]],
+        edit_hook: Callable[[str, dict[str, Any]], dict[str, Any]],
+        list_hooks: Callable[[], list[dict[str, Any]] | dict[str, Any]],
+        log: Callable[..., None],
+    ) -> None:
+        self._dismiss = dismiss
+        self._delay = delay
+        self._add = add_hook
+        self._drop = drop_hook
+        self._edit = edit_hook
+        self._list = list_hooks
+        self._log = log
+
+    def dismiss(
+        self,
+        channel: str,
+        *,
+        force: bool,
+        reason: str | None,
+        event_id: str | None = None,
+        ref_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._dismiss(
+            channel,
+            force=force,
+            reason=reason,
+            event_id=event_id,
+            ref_id=ref_id,
+        )
+
+    def delay(self, channel: str, seconds: int) -> dict[str, Any]:
+        return self._delay(channel, seconds)
+
+    def add_hook(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return self._add(manifest)
+
+    def drop_hook(self, name: str) -> dict[str, Any]:
+        return self._drop(name)
+
+    def edit_hook(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
+        return self._edit(name, fields)
+
+    def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
+        return self._list()
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        self._log(event_type, **fields)
+
+
 def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     """Build the full grantable port table for *plugin_name* on *agent*.
 
@@ -83,10 +153,47 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     :data:`~lingtai.kernel.tool_plugin.GRANTABLE_HOST_PORTS`; the registrar
     grants each declaration only the subset it named in ``requires``.
     """
+    # Import Core lazily at the Composition Root boundary.  The kernel owns the
+    # notification policy; this adapter binds that policy to the current Agent
+    # without making either the Core package or the plugin depend on tools.
+    from lingtai.kernel.notifications import (
+        add_hook,
+        delay_notification_channel,
+        dismiss_channel,
+        drop_hook,
+        edit_hook,
+        list_hooks,
+    )
+
+    def _read_workdir() -> Path:
+        # Production Agents expose ``working_dir``; the private fallback keeps
+        # this same generic seam usable by the narrow state-only test doubles.
+        candidate = getattr(agent, "working_dir", None)
+        if isinstance(candidate, (str, Path)):
+            return Path(candidate)
+        return Path(agent._working_dir)
+
+    update_system_prompt = getattr(agent, "update_system_prompt", None)
+    if not callable(update_system_prompt):
+        # Narrow direct tests may provide only the ports a declaration needs;
+        # the registrar grants from this complete table but never exposes an
+        # unrequested port.  Keep the unused prompt adapter inert rather than
+        # making a Notification state-port test double impersonate an Agent.
+        update_system_prompt = lambda *_args, **_kwargs: None
+
     return {
-        "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
+        "workdir": AgentWorkdirAdapter(_read_workdir),
         "prompt_section": AgentPromptSectionAdapter(
-            plugin_name, agent.update_system_prompt
+            plugin_name, update_system_prompt
+        ),
+        "notification_state": AgentNotificationStateAdapter(
+            dismiss=partial(dismiss_channel, agent, invoked_by="notification"),
+            delay=partial(delay_notification_channel, agent),
+            add_hook=partial(add_hook, agent),
+            drop_hook=partial(drop_hook, agent),
+            edit_hook=partial(edit_hook, agent),
+            list_hooks=partial(list_hooks, agent),
+            log=agent._log,
         ),
     }
 

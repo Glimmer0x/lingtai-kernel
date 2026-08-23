@@ -281,7 +281,8 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
         notification_store_for,
         publish_test_payload,
     )
-    from lingtai.tools import notification as notif_intrinsic
+    from tests._tool_plugin_helpers import dispatch_declared_tool
+    from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 
     @dataclass
     class _StubAgent:
@@ -324,7 +325,7 @@ def test_stale_large_result_event_can_be_dismissed(tmp_path):
     agent._notification_fp = fp
     agent._notification_raw_fp = fp
 
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_ref",
