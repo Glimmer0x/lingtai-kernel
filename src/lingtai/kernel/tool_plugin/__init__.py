@@ -45,6 +45,8 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "SystemRuntimePort",
+    "IdentityPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -64,15 +66,18 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by the one real vertical
-#: slice this component ships with (``mcp``). Root ``CONTRACT.md`` rules 10-11
-#: forbid a speculative port taxonomy, so a later family adds the port it
+#: Earned, not enumerated: each name below is consumed by one shipped real
+#: vertical slice (``mcp`` uses ``workdir`` / ``prompt_section``; ``system`` uses
+#: ``workdir`` / ``system_runtime`` / ``identity``). Root ``CONTRACT.md`` rules
+#: 10-11 forbid a speculative port taxonomy, so a later family adds the port it
 #: actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = (
+    "workdir", "prompt_section", "system_runtime", "identity",
+)
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +88,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "system")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +173,52 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class SystemRuntimePort(Protocol):
+    """The System family's bounded runtime/lifecycle vocabulary.
+
+    This is intentionally not an Agent-shaped object.  It supplies exactly the
+    existing lifecycle, preset, audit, authority, and self-sleep operations
+    System already needs; the adapter composes each operation from a narrow
+    Agent callback.  Agent identity is deliberately absent and lives on
+    :class:`IdentityPort` instead.
+    """
+
+    @property
+    def admin(self) -> Mapping[str, Any]: ...
+
+    @property
+    def language(self) -> str: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def token_usage(self) -> Mapping[str, Any]: ...
+
+    def load_preset(self, name: str) -> dict: ...
+
+    def activate_preset(self, name: str) -> None: ...
+
+    def activate_default_preset(self) -> None: ...
+
+    def retry_failed_mcps(self) -> Mapping[str, Any]: ...
+
+    def perform_refresh(self) -> None: ...
+
+    def resuscitate(self, address: str) -> Any: ...
+
+    def sleep(self, reason: str, *, force: bool) -> dict: ...
+
+
+class IdentityPort(Protocol):
+    """The System family's live, durable naming operations only."""
+
+    @property
+    def name(self) -> str | None: ...
+
+    def set_name(self, name: str) -> None: ...
+
+    def set_nickname(self, nickname: str) -> None: ...
 
 
 class ToolMountPort(Protocol):

@@ -4,6 +4,10 @@ tool: system
 contract_version: 3
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/agent.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
@@ -15,6 +19,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_system_declared_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -62,6 +67,27 @@ are unchanged, and the children consume no additional model tool slots.
 `system` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
 (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
 it advertises is actually honored.
+
+## Declared host plugin and manual
+
+`DECLARATION` is a static official declaration constructed at import. The
+kernel reserves `system`, validates its unchanged operational action inventory,
+appends the reserved `manual` action, then binds and mounts it through the
+controlled registrar. The production binder receives only `workdir`,
+`system_runtime`, and `identity`: the first addresses the installed manual and
+agent-local documents; the second exposes the existing refresh/preset,
+self-sleep, authorization, CPR, token, and audit operations; the third exposes
+only durable naming. No plugin handler receives a whole Agent.
+
+The family-owned `manual` child derives its installed location from
+`DECLARATION.manual == "system-manual"`. The shipped router bundle remains
+`src/lingtai/intrinsic_skills/system-manual/SKILL.md` and the installed path
+remains `.library/intrinsic/capabilities/system-manual/SKILL.md`; no fallback
+or public manual result shape changed. `handle(agent, args)` remains a direct
+in-process compatibility adapter, while normal `lingtai.Agent` dispatch uses
+the registrar-mounted bound handler. `tests/test_system_declared_plugin.py`
+pins the static declaration, single official mount, identity port behavior, and
+manual path.
 
 ## Routing Card
 

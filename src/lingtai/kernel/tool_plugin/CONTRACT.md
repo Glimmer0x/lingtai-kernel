@@ -13,6 +13,10 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - tests/test_system_declared_plugin.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
 maintenance: |
@@ -22,7 +26,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), the declared slices and their manuals, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -51,7 +55,8 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
+2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `SystemRuntimePort`,
+   `IdentityPort`, `ToolMountPort`) through
    which a plugin controls the live Agent body, and the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
@@ -98,8 +103,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today `mcp` and `system` are
+  declared, each with its own focused proof.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -124,15 +129,19 @@ capability.
 
 | Port | Operation | Promise |
 |---|---|---|
-| `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
-| `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `WorkdirPort` | `path -> Path` | Read-only identity of the agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
+| `PromptSectionPort` | `write_protected_section(body) -> None` | The one mutable prompt capability: replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, and `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`, and `sleep()` | System's bounded runtime/lifecycle vocabulary. Its read/query calls and explicit effectful calls are the complete surface; it is not an Agent-shaped mutable object. Identity is deliberately absent. |
+| `IdentityPort` | Read `name`; durably write `set_name()` and `set_nickname()` | System's separate naming vocabulary. The current name is read-only through the port; its two explicit writes may update durable identity, but cannot mutate address, workdir, or general runtime state. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
-`GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+The two shipped slices therefore use deliberately different port vocabularies:
+`mcp` declares `workdir` and `prompt_section`; `system` declares `workdir`,
+`system_runtime`, and `identity`. `GRANTABLE_HOST_PORTS` is the closed set a
+declaration may name and contains exactly those four grantable ports because
+these two real slices consume them. A later family earns any additional port
+only with its own real vertical slice; it does not inherit a general Agent
+facade.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -145,10 +154,13 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
 (`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
-`AgentPromptSectionAdapter` translate the live
-`BaseAgent` into the grantable ports, each constructed from a bound method rather
-than from the agent object. `agent_host_ports` builds one declaration's grantable
-table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
+`AgentPromptSectionAdapter` compose the workdir read and one protected prompt
+writer; `AgentSystemRuntimeAdapter` composes System's specific lifecycle,
+preset, audit, authority, and self-sleep callbacks; and `AgentIdentityAdapter`
+composes the name read/write callbacks. These adapters receive individual bound
+methods or read closures rather than a whole-`Agent` constructor argument.
+`agent_host_ports` builds one declaration's grantable table;
+`register_agent_tool_plugins` is the composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
 `_add_tool` at the common model-facing boundary

@@ -12,6 +12,11 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/system/ANATOMY.md
+  - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - tests/test_system_declared_plugin.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -34,8 +39,8 @@ maintenance: |
 ---
 # Declared Host Tool Plugin Anatomy
 
-Where the kernel-owned declared host-plugin primitive lives, and how the one
-declared family reaches the live Agent body through it. Promises and normative
+Where the kernel-owned declared host-plugin primitive lives, and how declared
+families reach the live Agent body through narrow ports. Promises and normative
 rules are in the paired [`CONTRACT.md`](CONTRACT.md); the agent-executable proof
 is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
@@ -49,8 +54,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the five host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `SystemRuntimePort`, `IdentityPort`, and `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -68,13 +73,23 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - `register_official_tool_plugins`, the fail-fast registrar whose two-phase
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
+- `src/lingtai/tools/system/__init__.py` / `plugin.py` — the second vertical
+  slice: a static `system` declaration deriving its action/schema/manual
+  identity in one package. Its binder builds a private handler bridge from only
+  `workdir`, `system_runtime`, and `identity`; normal model-facing dispatch uses
+  that registrar-mounted handler, while direct `handle(agent, args)` is only
+  compatibility. `system-manual` remains the packaged intrinsic router bundle.
+  `tests/test_system_declared_plugin.py` pins declaration, single mount,
+  identity behavior, mounted runtime sleep, and installed manual path.
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
-  outside the kernel package. `AgentWorkdirAdapter`,
-  `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), plus `agent_host_ports` and
-  `register_agent_tool_plugins`. The registrar constructs its mount seam
-  locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
+  outside the kernel package. `AgentWorkdirAdapter` reads the current workdir;
+  `AgentPromptSectionAdapter` is bound to one plugin's section name and to
+  `protected=True`; `AgentSystemRuntimeAdapter` holds only System's specific
+  runtime/lifecycle callbacks; and `AgentIdentityAdapter` holds only naming
+  callbacks. `agent_host_ports` composes that complete table per declaration;
+  `register_agent_tool_plugins` constructs the registrar's mount seam locally.
+  No public mount adapter or factory exists.
+- `src/lingtai/tools/mcp/__init__.py` — the first declaring family.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
@@ -82,17 +97,20 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Connections
 
-- `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
-  on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
-  swept by `tests/test_tool_plugin_declaration.py`.
+- `lingtai.tools.mcp` and `lingtai.tools.system` import
+  `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
+  imports nothing from `lingtai.tools`; that edge is swept by
+  `tests/test_tool_plugin_declaration.py`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
-  (`Adapter -> Port <- Core`) and reaches the Agent only through the public
-  `working_dir`, `update_system_prompt`, and the read-only
-  `official_tool_plugins` surface. The last is the live claim view on
-  `BaseAgent`; a persistent declaration anchor and canonical bound-result map
-  remain separate from that view. Composition changes claims only through the
-  registrar-issued mounted transaction callback; clearing the live backing map
-  cannot authorize a different declaration.
+  (`Adapter -> Port <- Core`). Its adapters are composed from narrow callbacks:
+  the workdir read, the protected prompt writer, System's individual runtime
+  callbacks (authority, language, audit, preset/lifecycle, CPR, and self-sleep),
+  and identity's name read/write callbacks. The adapter set also reads the
+  public `official_tool_plugins` claim view on `BaseAgent`; a persistent
+  declaration anchor and canonical bound-result map remain separate from that
+  view. Composition changes claims only through the registrar-issued mounted
+  transaction callback; clearing the live backing map cannot authorize a
+  different declaration.
 - The registrar-local transaction mount calls `BaseAgent._mount_official_tool`
   (`src/lingtai/kernel/base_agent/__init__.py`), which verifies the issuer,
   anchored declaration, and exact bound-result identity before delegating to
@@ -104,6 +122,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, reached
   through the ordinary capability boot loop in `src/lingtai/agent.py`
   (`_setup_capability` → `lingtai.tools.registry.setup_capability`).
+- `lingtai.tools.system.setup()` calls the same registrar helper, reached by
+  `Agent._setup_declared_intrinsic_tool_plugins()` after intrinsic wiring. Its
+  mounted handler reaches retained System actions through the private
+  `workdir` / `system_runtime` / `identity` bridge, never a direct Agent argument.
 - `_build_family(host)` passes only `host.workdir` to
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
@@ -112,22 +134,30 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 
 ## Composition
 
-`import lingtai.tools.mcp` → `ToolPluginDeclaration.__post_init__` validates the
-declared shape, with no Agent in existence.
+`import lingtai.tools.mcp` or `import lingtai.tools.system` → the respective
+`ToolPluginDeclaration.__post_init__` validates the declared shape, with no
+Agent in existence.
 
-Boot: `Agent.__init__` / `Agent._setup_from_init` → `_setup_capability("mcp")`
-→ `lingtai.tools.mcp.setup(agent)` → `register_agent_tool_plugins(agent,
-[DECLARATION])` → `register_official_tool_plugins`, which then runs, in order:
+The two slices reach the same registrar by their appropriate composition routes:
+MCP's ordinary capability boot is `Agent.__init__` / `Agent._setup_from_init`
+→ `_setup_capability("mcp")` → `lingtai.tools.mcp.setup(agent)`; System's
+injected-intrinsic boot is `Agent.__init__` / refresh →
+`_setup_declared_intrinsic_tool_plugins()` → `lingtai.tools.system.setup(agent)`.
+Each setup calls `register_agent_tool_plugins(agent, [DECLARATION])`, which calls
+`register_official_tool_plugins` and then runs, in order:
 
 1. check every declared name against `OFFICIAL_TOOL_PLUGIN_NAMES`, the batch,
    and the live claim map;
-2. `ToolPluginHost.grant(declaration, agent_host_ports(agent, name))`;
-3. `declaration.bind(host)` → `_bind` composes the family and `handle_mcp`,
-   deriving the tool name, the per-action `input` schemas, and the installed
-   manual's destination from `DECLARATION` itself; `bind()` then refuses a
+2. `ToolPluginHost.grant(declaration, agent_host_ports(agent, name))`. MCP is
+   granted `workdir` / `prompt_section`; System is granted `workdir` /
+   `system_runtime` / `identity`;
+3. `declaration.bind(host)`. MCP's `_bind` composes its family and `handle_mcp`;
+   System's `_bind` composes its family around a private bridge whose only state
+   is those three ports. Each derives its tool name, per-action `input` schemas,
+   and installed manual destination from `DECLARATION`; `bind()` then refuses a
    bound plugin whose advertised action enum is not `public_actions`;
-4. `bound.activate()` → `_reconcile(host)` writes the protected `mcp` prompt
-   section;
+4. run `bound.activate()` when supplied. MCP's `_reconcile(host)` writes the
+   protected `mcp` prompt section; System supplies no activation step;
 5. record the exact bound result, issue a registrar-only one-use transaction,
    and call `agent._mount_official_tool(transaction)`; the Agent verifies the
    persistent declaration anchor and canonical bound identity before `_add_tool`

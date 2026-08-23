@@ -90,6 +90,13 @@ def _sleep(agent, args: dict) -> dict:
         is_channel_allowed,
     )
 
+    runtime_sleep = getattr(agent, "_system_sleep", None)
+    if callable(runtime_sleep):
+        # Official declared-host binding reaches the live state machine only
+        # through SystemRuntimePort. Direct legacy callers retain the fallback
+        # below for source compatibility.
+        return runtime_sleep(args)
+
     reason = args.get("reason", "")
     force = bool(args.get("force", False))
 

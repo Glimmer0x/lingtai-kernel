@@ -21,7 +21,8 @@ only builds the ports.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from types import MappingProxyType
+from typing import Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
@@ -32,6 +33,8 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentSystemRuntimeAdapter",
+    "AgentIdentityAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
 ]
@@ -76,6 +79,133 @@ class AgentPromptSectionAdapter:
         self._write(self._section, body, protected=True)
 
 
+class AgentSystemRuntimeAdapter:
+    """SystemRuntimePort composed from narrow Agent callbacks, never an Agent."""
+
+    __slots__ = (
+        "_admin", "_language", "_log", "_token_usage", "_load_preset",
+        "_activate_preset", "_activate_default_preset", "_retry_failed_mcps",
+        "_perform_refresh", "_resuscitate", "_sleep",
+    )
+
+    def __init__(
+        self,
+        *,
+        admin: Callable[[], Mapping[str, Any]],
+        language: Callable[[], str],
+        log: Callable[..., None],
+        token_usage: Callable[[], Mapping[str, Any]],
+        load_preset: Callable[[str], dict],
+        activate_preset: Callable[[str], None],
+        activate_default_preset: Callable[[], None],
+        retry_failed_mcps: Callable[[], Mapping[str, Any]],
+        perform_refresh: Callable[[], None],
+        resuscitate: Callable[[str], Any],
+        sleep: Callable[[str, bool], dict],
+    ) -> None:
+        self._admin = admin
+        self._language = language
+        self._log = log
+        self._token_usage = token_usage
+        self._load_preset = load_preset
+        self._activate_preset = activate_preset
+        self._activate_default_preset = activate_default_preset
+        self._retry_failed_mcps = retry_failed_mcps
+        self._perform_refresh = perform_refresh
+        self._resuscitate = resuscitate
+        self._sleep = sleep
+
+    @property
+    def admin(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(self._admin() or {}))
+
+    @property
+    def language(self) -> str:
+        return self._language()
+
+    def log(self, event: str, **fields: Any) -> None:
+        self._log(event, **fields)
+
+    def token_usage(self) -> Mapping[str, Any]:
+        return self._token_usage()
+
+    def load_preset(self, name: str) -> dict:
+        return self._load_preset(name)
+
+    def activate_preset(self, name: str) -> None:
+        self._activate_preset(name)
+
+    def activate_default_preset(self) -> None:
+        self._activate_default_preset()
+
+    def retry_failed_mcps(self) -> Mapping[str, Any]:
+        return self._retry_failed_mcps()
+
+    def perform_refresh(self) -> None:
+        self._perform_refresh()
+
+    def resuscitate(self, address: str) -> Any:
+        return self._resuscitate(address)
+
+    def sleep(self, reason: str, *, force: bool) -> dict:
+        return self._sleep(reason, force)
+
+
+class AgentIdentityAdapter:
+    """IdentityPort over exactly the System naming surface."""
+
+    __slots__ = ("_name", "_set_name", "_set_nickname")
+
+    def __init__(
+        self,
+        name: Callable[[], str | None],
+        set_name: Callable[[str], None],
+        set_nickname: Callable[[str], None],
+    ) -> None:
+        self._name = name
+        self._set_name = set_name
+        self._set_nickname = set_nickname
+
+    @property
+    def name(self) -> str | None:
+        return self._name()
+
+    def set_name(self, name: str) -> None:
+        self._set_name(name)
+
+    def set_nickname(self, nickname: str) -> None:
+        self._set_nickname(nickname)
+
+
+def _sleep_agent(agent: Any, reason: str, force: bool) -> dict:
+    """Adapt System's self-sleep to the live Agent without exposing it."""
+    from lingtai.kernel.i18n import t
+    from lingtai.kernel.notifications import _workdir_key, attention_fingerprint, is_channel_allowed
+    from lingtai.kernel.state import AgentState
+
+    pending_fp = attention_fingerprint(
+        agent._notification_store,
+        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent)),
+        _workdir_key(agent),
+    )
+    has_pending = pending_fp != agent._notification_fp
+    if has_pending and not force:
+        agent._log(
+            "sleep_refused_pending_notifications", reason=reason,
+            pending_fp=list(pending_fp), committed_fp=list(agent._notification_fp or ()),
+        )
+        return {"status": "ok", "message": t(
+            agent._config.language, "system_tool.sleep_refused_pending_notifications",
+        )}
+    if has_pending:
+        agent._log("sleep_forced_with_pending_notifications", reason=reason, pending_fp=list(pending_fp))
+    agent._log("self_sleep", reason=reason)
+    agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+    agent._asleep.set()
+    agent._cancel_event.set()
+    return {"status": "ok", "message": t(agent._config.language, "system_tool.sleep_message")}
+
+
 def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     """Build the full grantable port table for *plugin_name* on *agent*.
 
@@ -87,6 +217,22 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
+        ),
+        "system_runtime": AgentSystemRuntimeAdapter(
+            admin=lambda: agent._admin,
+            language=lambda: agent._config.language,
+            log=agent._log,
+            token_usage=agent.get_token_usage,
+            load_preset=agent.load_preset,
+            activate_preset=agent._activate_preset,
+            activate_default_preset=agent._activate_default_preset,
+            retry_failed_mcps=lambda: getattr(agent, "_retry_failed_mcps", lambda: {})(),
+            perform_refresh=agent._perform_refresh,
+            resuscitate=agent._cpr_agent,
+            sleep=lambda reason, force: _sleep_agent(agent, reason, force),
+        ),
+        "identity": AgentIdentityAdapter(
+            lambda: agent.agent_name, agent.set_name, agent.set_nickname
         ),
     }
 

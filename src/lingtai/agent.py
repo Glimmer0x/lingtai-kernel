@@ -310,6 +310,7 @@ class Agent(BaseAgent):
             # presets through the wrapper implementation instead of importing
             # Core load_preset or constructing a migration workspace adapter.
             self._preset_loader = load_preset
+            self._setup_declared_intrinsic_tool_plugins()
         except Exception:
             if owned_event_journal is not None:
                 with contextlib.suppress(Exception):
@@ -408,6 +409,21 @@ class Agent(BaseAgent):
         # Re-write manifest now that capabilities are registered
         if self._capabilities:
             self._workdir.write_manifest(self._build_manifest())
+
+    def _setup_declared_intrinsic_tool_plugins(self) -> None:
+        """Mount injected intrinsic declarations through their official host path.
+
+        Intrinsic membership remains owned by ``tools.registry``. A module that
+        exports a static declaration and setup hook earns the controlled
+        declared-host mount; ordinary intrinsics are unchanged. Its legacy
+        intrinsic closure remains for direct in-process compatibility, while
+        the common dispatcher and schema builder prefer the official mount.
+        """
+        for module in self._intrinsic_modules.values():
+            declaration = getattr(module, "DECLARATION", None)
+            setup = getattr(module, "setup", None)
+            if declaration is not None and callable(setup):
+                setup(self)
 
     def _persist_llm_config(self) -> None:
         """Persist LLM config to llm.json for agent revive.
@@ -2018,6 +2034,7 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._intrinsic_modules.clear()
         self._wire_intrinsics()
+        self._setup_declared_intrinsic_tool_plugins()
 
         # Reset capability-owned flags (email.boot below resets to "email box"/"email")
         self._mailbox_name = "email box"

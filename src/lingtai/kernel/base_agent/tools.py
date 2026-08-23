@@ -26,6 +26,11 @@ def _dispatch_tool(agent, tc) -> dict:
 
     Raises UnknownToolError if the tool name is not found.
     """
+    from ..tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
+    if tc.name in OFFICIAL_TOOL_PLUGIN_NAMES and tc.name in agent._tool_handlers:
+        # A declared official mount supersedes an injected legacy intrinsic
+        # shim of the same name. The shim remains only for direct compatibility.
+        return agent._tool_handlers[tc.name](tc.args or {})
     if tc.name in agent._intrinsics:
         # Inject the wire tool_use_id so intrinsics that need to locate
         # their own ToolCallBlock in the live interface (notably
@@ -75,7 +80,10 @@ def _refresh_tool_inventory_section(agent) -> None:
         return
     lang = agent._config.language
     lines = []
+    from ..tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
     for name in agent._intrinsics:
+        if name in OFFICIAL_TOOL_PLUGIN_NAMES and name in agent._tool_handlers:
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             base = module.get_description()
@@ -111,7 +119,10 @@ def _build_tool_schemas(agent) -> list[FunctionSchema]:
     schemas = []
 
     # Intrinsic schemas — canonical English, language-independent.
+    from ..tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
     for name in agent._intrinsics:
+        if name in OFFICIAL_TOOL_PLUGIN_NAMES and name in agent._tool_handlers:
+            continue
         module = agent._intrinsic_modules.get(name)
         if module:
             params = dict(module.get_schema())
