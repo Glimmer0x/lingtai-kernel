@@ -103,3 +103,56 @@ def test_official_daemon_mount_uses_runtime_port_and_preserves_dispatch(daemon_a
         "capabilities/daemon/SKILL.md"
     )
     assert manual["content"][0]["text"]
+
+
+def test_official_daemon_manager_reads_replaced_notification_route_for_retryable_terminal_state(
+    daemon_agent, monkeypatch,
+):
+    """The official Daemon binding must not retain a stale notification callback.
+
+    A terminal publish runs through the manager produced by the declared-host
+    registration. Replacing its host notification route after binding with a
+    failure must make publication fail; once the durable claim is cleared by the
+    terminal caller, the run can claim the same terminal notification again.
+    """
+    from lingtai.tools.daemon import DaemonManager
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    manager = daemon_agent._capability_managers["daemon"]
+    assert isinstance(manager, DaemonManager)
+    assert daemon_agent.official_tool_plugins["daemon"].name == "daemon"
+
+    run_dir = DaemonRunDir(
+        parent_working_dir=daemon_agent.working_dir,
+        handle="em-live-route",
+        run_id="em-live-route",
+        task="exercise live daemon notification route",
+        tools=[],
+        model="test-model",
+        max_turns=1,
+        timeout_s=1.0,
+        parent_addr="daemon-plugin-declaration",
+        parent_pid=0,
+        system_prompt="",
+    )
+    run_dir.mark_done("terminal result")
+    idempotency_key = run_dir.claim_terminal_notification("done")
+    assert idempotency_key is not None
+
+    def replaced_route(**_kwargs):
+        raise OSError("replacement notification route failed")
+
+    monkeypatch.setattr(daemon_agent, "_enqueue_system_notification", replaced_route)
+    assert manager._publish_daemon_notification(
+        "em-live-route",
+        status="done",
+        text="terminal result",
+        run_dir=run_dir,
+        idempotency_key=idempotency_key,
+    ) is False
+
+    run_dir.clear_terminal_notification_claim()
+    state = run_dir.state_snapshot()
+    assert state["terminal_notified"] is False
+    assert state["terminal_notification_claim"] is None
+    assert run_dir.claim_terminal_notification("done") == idempotency_key

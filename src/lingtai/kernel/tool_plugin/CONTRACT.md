@@ -13,10 +13,17 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/daemon/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -24,7 +31,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the declared slices and their manuals, the
+  (src/lingtai/tools/CONTRACT.md), declared slices and their manuals, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -42,8 +49,8 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
+This component is the kernel's boundary for **one declared official**
+model-facing tool plugin. Every official tool family in this distribution
 follows one declared plugin contract: a static declaration of its identity and
 public actions, a bind step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
@@ -53,9 +60,11 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `DaemonRuntimePort`,
-   `ToolMountPort`) through
-   which a plugin controls the live Agent body, and the `ToolPluginHost` facade
+2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `AvatarParentPort`,
+   `ContextRuntimePort`, `DaemonRuntimePort`, `ToolMountPort`) through which a
+   plugin controls the
+   live Agent body, and the
+   `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -101,8 +110,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today two families are declared:
-  `mcp` and `daemon`.
+  vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
+  and `daemon` are declared; every remaining target stays outside this contract.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -129,14 +138,22 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
-| `DaemonRuntimePort` | model/tool/preset/notification/log operations | Daemon's named parent-runtime operations: inherited service, regular tool snapshots, preset sandbox/load, notification, time, Task Card, logging, and resolved manager options. It never exposes an Agent or a mount operation. |
+| `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
+| `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
+| `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`, and
+`daemon_runtime`: `mcp` consumes the first two as the shared-C base reference,
+Avatar consumes `workdir` plus the narrow parent facts necessary for existing
+spawn/rules behavior, Context consumes `workdir` plus its three-operation
+lifecycle boundary, and Daemon consumes `workdir` plus the named runtime
+operations its established manager already needs. The
+family-generic shared-C register remains a target register, not permission to
+pre-enumerate ports for remaining candidates: any later slice adds one named,
+capability-native port only with its implementation, adapter wiring, declaration,
+and vertical evidence.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -149,10 +166,16 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set,
 placed outside the kernel package so the dependency points inward
 (`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
-`AgentPromptSectionAdapter` translate the live `BaseAgent` into the MCP ports;
-`AgentDaemonRuntimeAdapter` composes Daemon's named runtime operations from
-narrow closures and never gives the declaration an Agent. `agent_host_ports`
-builds one declaration's grantable table; `register_agent_tool_plugins` is the
+`AgentPromptSectionAdapter` translate the live
+`BaseAgent` into the grantable ports, each constructed from a bound method or
+one narrow read closure rather than from the agent object.
+`AgentAvatarParentAdapter` supplies Avatar's identity/runtime/authorization
+facts without passing the Agent through. `AgentDaemonRuntimeAdapter` supplies
+Daemon's named runtime operations; its notification operation looks up the
+current host route when publishing, so a replaced failing route keeps terminal
+state retryable rather than reporting a stale callback as published.
+`agent_host_ports` builds one declaration's grantable table;
+`register_agent_tool_plugins` is the
 composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
@@ -249,11 +272,16 @@ component never selects.
 
 ## Contract tests
 
-`tests/test_tool_plugin_declaration.py` is the shared contract suite:
+`tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
+`tests/test_tool_family_avatar_migration.py` supplies Avatar's focused declared
+vertical proof; `tests/test_context_declared_tool_plugin.py` supplies Context's
+focused static-declaration, restricted-runtime-port, canonical-manual, and
+installer-collision proof; and `tests/test_daemon.py` preserves Daemon manager
+lifecycle coverage, including terminal-notification retry behavior:
 
-- declaration staticness and `mcp`/`daemon` declared-versus-composed surface
-  agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,
-  `test_mcp_is_reserved_and_declares_only_the_ports_it_consumes`);
+- declaration staticness and the `mcp`/`avatar`/`context`/`daemon`
+  declared-versus-composed surfaces, including the official Daemon binding
+  manager's live notification-route retry regression;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;
@@ -289,13 +317,14 @@ component never selects.
   only this plugin's protected section;
 - kernel isolation — no file under `src/lingtai/kernel/` imports
   `lingtai.tools`, with relative imports resolved so the kernel's own
-  `base_agent.tools` module is not mistaken for it.
+  `base_agent.tools` module is not mistaken for it;
+- Avatar's static declaration, local packaged-manual result, restricted port
+  grant, preserved spawn/rules facts, and one live registrar mount.
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,
-`tests/test_mcp_identity_discovery.py` (MCP's unchanged public behavior),
-`tests/test_tool_family_daemon_migration.py` (Daemon's unchanged public behavior),
-and `tests/test_curated_mcp_plugin_package.py` (the external transport route is
+`tests/test_mcp_identity_discovery.py` (the slice's unchanged public behavior),
+`tests/test_curated_mcp_plugin_package.py` (the external transport route is
 undisturbed), and `tests/test_architecture_documents.py`.
 
 ## Maintenance

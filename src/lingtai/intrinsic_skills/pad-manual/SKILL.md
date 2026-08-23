@@ -10,7 +10,7 @@ related_files:
 - src/lingtai/tools/pad/CONTRACT.md
 - src/lingtai/tools/psyche/CONTRACT.md
 - src/lingtai/intrinsic_skills/psyche-manual/SKILL.md
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 maintenance: |
   Keep the manual-only public route through psyche, generic file ownership of both durable sources, the no-hot-load rule, delayed activation, and the context-manual route synchronized with code. Pad exposes no mutating action.
 ---

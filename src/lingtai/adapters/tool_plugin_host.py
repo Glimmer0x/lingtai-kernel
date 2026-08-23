@@ -1,11 +1,21 @@
 """Production adapters translating the live Agent body into host plugin ports.
 
-``lingtai.kernel.tool_plugin`` owns the Ports; this module is the production
-Adapter set that satisfies them for a running ``BaseAgent``.  Each adapter
-holds only the capability operation it serves (a bound method or read closure),
-never a public whole-Agent escape hatch.  The Composition Root still selects
-which declarations register and when; these adapters only make the declared
-ports available to the registrar.
+`lingtai.kernel.tool_plugin` owns the Ports; this module is the one production
+Adapter set that satisfies them for a running ``BaseAgent``, and it lives
+outside the kernel package so the dependency still points inward
+(``Adapter -> Port <- Core``, root ``CONTRACT.md`` rules 2-3).
+
+Each adapter is constructed from one narrow callable — a bound method of the
+agent, or a single-expression read closure — never from the agent object. That
+is a real constraint on this file rather than a security boundary: an adapter
+here cannot reach a second Agent API by accident, because it never holds the
+Agent. Deep reachability through a bound method's ``__self__`` or a closure
+cell is not prevented and is not claimed to be — the promise the contract makes
+is about the declared argument surface handed to a plugin.
+
+Which declarations get registered, and when, stays in the Composition Root
+(``src/lingtai/agent.py`` and the capability ``setup()`` it drives). This module
+only builds the ports.
 """
 
 from __future__ import annotations
@@ -15,6 +25,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
+
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
     ToolPluginDeclaration,
@@ -24,6 +35,8 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentContextRuntimeAdapter",
+    "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
@@ -32,7 +45,11 @@ __all__ = [
 
 
 class AgentWorkdirAdapter:
-    """``WorkdirPort`` over a live Agent's working-directory read closure."""
+    """:class:`~lingtai.kernel.tool_plugin.WorkdirPort` over ``Agent.working_dir``.
+
+    Reads through on every access rather than snapshotting, so a plugin holding
+    this port across a refresh never renders a stale directory.
+    """
 
     __slots__ = ("_read",)
 
@@ -45,16 +62,91 @@ class AgentWorkdirAdapter:
 
 
 class AgentPromptSectionAdapter:
-    """``PromptSectionPort`` for one protected plugin-owned section."""
+    """:class:`~lingtai.kernel.tool_plugin.PromptSectionPort` for one section.
+
+    Bound at construction to the declaring plugin's own section name and to
+    ``protected=True``. The plugin passes only a body, so it can neither
+    address another plugin's section nor downgrade its own to unprotected.
+    """
 
     __slots__ = ("_section", "_write")
 
-    def __init__(self, section: str, write: Callable[..., None]) -> None:
+    def __init__(
+        self,
+        section: str,
+        write: Callable[..., None],
+    ) -> None:
         self._section = section
         self._write = write
 
     def write_protected_section(self, body: str) -> None:
         self._write(self._section, body, protected=True)
+
+
+class AgentContextRuntimeAdapter:
+    """``ContextRuntimePort`` over three bound Context operations.
+
+    It stores only its narrow callbacks, never the Agent. The Context
+    composition root supplies callbacks that retain the established live molt,
+    summary, and reconstruction engines; the declared family receives only these
+    three capability-native methods.
+    """
+
+    __slots__ = ("_molt", "_summarize", "_rebuild")
+
+    def __init__(
+        self,
+        *,
+        molt: Callable[[dict], dict],
+        summarize: Callable[[dict], dict],
+        rebuild: Callable[[dict], dict],
+    ) -> None:
+        self._molt = molt
+        self._summarize = summarize
+        self._rebuild = rebuild
+
+    def molt(self, args: dict) -> dict:
+        return self._molt(args)
+
+    def summarize(self, args: dict) -> dict:
+        return self._summarize(args)
+
+    def rebuild(self, args: dict) -> dict:
+        return self._rebuild(args)
+
+
+class AgentAvatarParentAdapter:
+    """Avatar's narrow parent-context port over the live Agent.
+
+    The adapter exposes only the three current-Agent facts Avatar already uses:
+    parent identity for the first prompt, an optional venv inheritance value,
+    and the existing any-admin-value rule gate.  It owns no Agent object; each
+    value is read through its one narrow closure when Avatar asks for it.
+    """
+
+    __slots__ = ("_parent_name", "_venv_path", "_has_rule_privilege")
+
+    def __init__(
+        self,
+        parent_name: Callable[[], str],
+        venv_path: Callable[[], str | None],
+        has_rule_privilege: Callable[[], bool],
+    ) -> None:
+        self._parent_name = parent_name
+        self._venv_path = venv_path
+        self._has_rule_privilege = has_rule_privilege
+
+    @property
+    def parent_name(self) -> str:
+        return self._parent_name()
+
+    @property
+    def venv_path(self) -> str | None:
+        return self._venv_path()
+
+    def has_rule_privilege(self) -> bool:
+        return self._has_rule_privilege()
+
 
 
 class _DaemonPresetToolCollector:
@@ -294,6 +386,19 @@ def daemon_runtime_for_agent(
     def _missing_notification(**_kwargs: Any) -> None:
         raise RuntimeError("daemon notifications are unavailable on this daemon host")
 
+    def _enqueue_notification_live(**kwargs: Any) -> None:
+        """Invoke the host's current notification route at publish time.
+
+        Refresh/reconstruction may replace the route after this Daemon runtime
+        port is bound. Looking it up here makes a replaced failing route report
+        publication failure, so terminal receipt state remains retryable rather
+        than acknowledging a stale callback's earlier success.
+        """
+        notify = getattr(agent, "_enqueue_system_notification", None)
+        if not callable(notify):
+            _missing_notification(**kwargs)
+        notify(**kwargs)
+
     return AgentDaemonRuntimeAdapter(
         read_service=lambda: agent.service,
         read_schemas=lambda: tuple(getattr(agent, "_tool_schemas", ())),
@@ -308,7 +413,7 @@ def daemon_runtime_for_agent(
         setup_preset_capability=_setup_preset_capability,
         read_preset=_read_preset,
         load_preset=getattr(agent, "load_preset", _missing_load_preset),
-        enqueue_notification=getattr(agent, "_enqueue_system_notification", _missing_notification),
+        enqueue_notification=_enqueue_notification_live,
         read_task_card_watch=_read_task_card_watch,
         now_iso=lambda: render_now_iso(agent),
         log=_log,
@@ -320,30 +425,57 @@ def agent_host_ports(
     plugin_name: str,
     extra_ports: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the complete grantable table for one declaration on *agent*."""
+    """Build the complete grantable table for one declaration on *agent*.
+
+    The standard table preserves the landed MCP, Avatar, and Context wiring;
+    a family-specific factory adds only the earned port required by that
+    declaration. The registrar grants just ``requires``, never this whole map.
+    """
     ports = {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
+        ),
+        "avatar_parent": AgentAvatarParentAdapter(
+            lambda: agent.agent_name or agent.working_dir.name,
+            lambda: getattr(agent, "_venv_path", None),
+            lambda: any((getattr(agent, "_admin", {}) or {}).values()),
         ),
     }
     if extra_ports:
         ports.update(extra_ports)
     return ports
 
-
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
     *,
+    extra_ports: Mapping[str, Any] | None = None,
     extra_ports_for: Callable[[ToolPluginDeclaration], Mapping[str, Any]] | None = None,
 ) -> tuple[BoundToolPlugin, ...]:
-    """Wire declarations onto *agent* through the kernel registrar.
+    """Wire *declarations* onto *agent* through the kernel registrar.
 
-    ``extra_ports_for`` is intentionally a per-declaration factory: a later
-    vertical slice earns a capability-native port with its real adapter instead
-    of expanding every plugin's grant.  The registrar still grants only the
-    subset each declaration names in ``requires``.
+    One declaration per call is the shipped shape today (one family recuts at a
+    time). The registrar's name check is batch-wide and runs before the first
+    bind, so a **name conflict** is refused as a unit: nothing in the batch
+    binds, activates, or mounts. That is the exact scope of the promise — a
+    failure raised later, by a binder or by a missing host port on member *N*,
+    leaves members 1..*N*-1 mounted and claimed and propagates, because
+    unmounting is not a capability this component owns.
+
+    ``extra_ports`` remains the current Context compatibility seam. New
+    family-specific ports use ``extra_ports_for`` so Daemon can earn its runtime
+    port without granting it to every declaration. Both are merged per
+    declaration; conflicting keys from the factory intentionally win only for
+    that declaration.
+
+    The port table is built per declaration, on demand, because
+    :class:`AgentPromptSectionAdapter` is bound to the declaring plugin's own
+    section name. The mount seam is deliberately constructed inside this
+    registrar call: it accepts only the kernel's one-use declaration/bound
+    transaction, never a caller-supplied plugin or token. Claims are observed
+    through the public read-only view and changed through BaseAgent's narrow
+    internal claim hook.
     """
 
     class _InternalMount:
@@ -355,7 +487,14 @@ def register_agent_tool_plugins(
         ports_for=lambda declaration: agent_host_ports(
             agent,
             declaration.name,
-            extra_ports_for(declaration) if extra_ports_for is not None else None,
+            {
+                **dict(extra_ports or {}),
+                **(
+                    dict(extra_ports_for(declaration))
+                    if extra_ports_for is not None
+                    else {}
+                ),
+            },
         ),
         mount=_InternalMount(),
         claimed=agent.official_tool_plugins,
