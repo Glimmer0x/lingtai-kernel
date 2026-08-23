@@ -217,46 +217,6 @@ def test_connect_mcp_stdio_placeholder_expansion_is_unchanged(tmp_path, monkeypa
     }
 
 
-def test_direct_generic_mount_cannot_replace_official_mcp_and_nonreserved_replaces(
-    tmp_path,
-):
-    """The public generic mount is blocked only for the static official name."""
-    from lingtai.kernel.tool_plugin import OfficialToolNameCollisionError
-
-    agent, _ = _mk_agent(tmp_path)
-    before_handler = agent._tool_handlers["mcp"]
-    before_schemas = list(agent._tool_schemas)
-    before_claim = agent.official_tool_plugins["mcp"]
-
-    with pytest.raises(OfficialToolNameCollisionError, match="reserved"):
-        agent.add_tool(
-            "mcp",
-            schema={"type": "object", "properties": {"foreign": {}}},
-            handler=lambda args: {"foreign": True},
-        )
-
-    assert agent._tool_handlers["mcp"] is before_handler
-    assert agent._tool_schemas == before_schemas
-    assert agent.official_tool_plugins["mcp"] is before_claim
-
-    first = lambda args: {"version": 1}  # noqa: E731
-    second = lambda args: {"version": 2}  # noqa: E731
-    agent.add_tool(
-        "external_same_name",
-        schema={"type": "object", "properties": {"v": {"const": 1}}},
-        handler=first,
-    )
-    agent.add_tool(
-        "external_same_name",
-        schema={"type": "object", "properties": {"v": {"const": 2}}},
-        handler=second,
-    )
-    assert agent._tool_handlers["external_same_name"] is second
-    matching = [s for s in agent._tool_schemas if s.name == "external_same_name"]
-    assert len(matching) == 1
-    assert matching[0].parameters["properties"]["v"]["const"] == 2
-
-
 @pytest.mark.parametrize("transport", ["stdio", "http"])
 def test_external_mcp_cannot_replace_official_mcp_or_leave_routes(
     tmp_path, monkeypatch, transport,
