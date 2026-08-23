@@ -148,7 +148,7 @@ capability names and lazy adapters.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
-- `soul/` — the `soul` intrinsic family: six action-separated children
+- `soul/` — the official declared `soul` family (its injected module remains only for kernel hooks): six action-separated children
   (`inquiry`, `flow`, `config`, `voice`, `dismiss`, `manual`) behind one
   model-facing root (`src/lingtai/tools/soul/ANATOMY.md`).
 - `bash/` — public `shell` composition owner for run/poll/cancel/manual
@@ -234,16 +234,17 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract, and exactly one family in this
-package is wired onto it today. These are the roles it separates, and where
+kernel-owned declared host-plugin contract, and two families in this package
+are wired onto it today. These are the roles it separates, and where
 each one already lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
-the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is
-the one declared slice — `mcp` binds against two granted host ports instead of
-the whole `Agent`, with its public tool name, actions, inputs, and result
-shapes unchanged. Every other family here still boots through `setup(agent)`
-with the whole `Agent` and is a future migration unit.
+the fail-fast registrar. `src/lingtai/tools/mcp/__init__.py` and
+`src/lingtai/tools/soul/__init__.py` each own `DECLARATION`: MCP binds against
+two presentation ports, while Soul binds against `workdir` plus its explicit
+`SoulRuntimePort`; both retain their public names, actions, inputs, and result
+shapes. Every other family here still boots through `setup(agent)` with the
+whole `Agent` and is a future migration unit.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

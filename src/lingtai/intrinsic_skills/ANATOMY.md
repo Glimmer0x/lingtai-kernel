@@ -87,8 +87,10 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
 - `lingtai-doctor/` — read-only health diagnostics for agents and bots, with a
   bundled `scripts/doctor.py` for layered local checks that expose no secrets.
 - Single-file bundles — `file-manual/`, `lingtai-manual/`, `pad-manual/`,
-  `psyche-manual/`, `read-manual/`, and `soul-manual/`, each one `SKILL.md`
-  documenting its namesake surface.
+  `psyche-manual/` and `read-manual/`, each one `SKILL.md`
+  documenting its namesake surface. `soul-manual/` remains a compatibility source,
+but package-owned `tools/soul/manual/` wins and is mounted at the historical
+destination.
 
 ## Connections
 

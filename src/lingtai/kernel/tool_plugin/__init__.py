@@ -45,6 +45,7 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "SoulRuntimePort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -72,7 +73,7 @@ MANUAL_ACTION = "manual"
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
-GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
+GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section", "soul_runtime")
 
 
 #: The kernel-owned reserved list of official plugin names.
@@ -83,7 +84,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = ("workdir", "prompt_section")
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp",)
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "soul")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -168,6 +169,93 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class SoulRuntimePort(Protocol):
+    """Soul's bounded live-self and soul-flow runtime surface.
+
+    This port exists because Soul's public actions are real self-state
+    operations, not signposts: they inspect the current conversation, mutate
+    only ``manifest.soul``-backed cadence/voice state, use the existing
+    consultation lock/timer, and publish or dismiss Soul's own notification.
+    The explicit members below are the complete vocabulary the Soul package
+    consumes; it receives neither the live Agent nor a generic attribute
+    escape hatch. The production adapter owns translations to the Agent's
+    private storage and kernel notification helpers.
+    """
+
+    @property
+    def working_dir(self) -> Path: ...
+
+    @property
+    def config(self) -> Any: ...
+
+    @property
+    def service(self) -> Any: ...
+
+    @property
+    def chat(self) -> Any: ...
+
+    @property
+    def session(self) -> Any: ...
+
+    @property
+    def agent_name(self) -> str: ...
+
+    @property
+    def state(self) -> Any: ...
+
+    @property
+    def idle_event(self) -> Any: ...
+
+    @property
+    def shutdown(self) -> Any: ...
+
+    @property
+    def soul_delay(self) -> float: ...
+
+    @soul_delay.setter
+    def soul_delay(self, value: float) -> None: ...
+
+    @property
+    def soul_timer(self) -> Any: ...
+
+    @soul_timer.setter
+    def soul_timer(self, value: Any) -> None: ...
+
+    @property
+    def fire_lock(self) -> Any: ...
+
+    @property
+    def notification_store(self) -> Any: ...
+
+    @property
+    def notification_fingerprint(self) -> Any: ...
+
+    @property
+    def appendix_ids_by_source(self) -> dict[str, str]: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def restart_soul_timer(self) -> None: ...
+
+    def run_consultation_fire(self) -> None: ...
+
+    def sync_notifications(self) -> None: ...
+
+    def wake_nap(self, reason: str) -> None: ...
+
+    def persist_soul_entry(
+        self, result: dict, mode: str = "flow", source: str = "agent"
+    ) -> None: ...
+
+    def append_soul_flow_record(self, record: dict) -> None: ...
+
+    def publish_notification(self, channel: str, **kwargs: Any) -> None: ...
+
+    def clear_notification(self, channel: str) -> None: ...
+
+    def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict: ...
 
 
 class ToolMountPort(Protocol):

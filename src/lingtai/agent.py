@@ -316,6 +316,15 @@ class Agent(BaseAgent):
                     owned_event_journal.close()
             raise
 
+        # Soul remains an injected intrinsic for kernel lifecycle hooks, but its
+        # model-facing root is an official declared plugin. Remove only the
+        # temporary intrinsic dispatcher entry and mount the static declaration
+        # before capability setup; the module remains available to hook lookup.
+        if "soul" in self._intrinsics:
+            from lingtai.tools import soul as _soul
+            self.override_intrinsic("soul")
+            _soul.setup(self)
+
         # Persist LLM config for revive (self-sufficient agents contract)
         self._persist_llm_config()
 
@@ -595,6 +604,15 @@ class Agent(BaseAgent):
                         destination_name = "web"
                     else:
                         destination_name = entry.name
+                        # A declared intrinsic may preserve a historical manual
+                        # destination distinct from its package directory. Read
+                        # that destination from its static declaration rather
+                        # than duplicating a family-specific mount literal.
+                        from lingtai.tools.registry import INTRINSICS
+                        module = INTRINSICS.get(entry.name, {}).get("module")
+                        declaration = getattr(module, "DECLARATION", None)
+                        if declaration is not None:
+                            destination_name = declaration.manual
                     destination = intrinsic_dir / subdir / destination_name
                     if destination.exists():
                         continue
@@ -615,7 +633,13 @@ class Agent(BaseAgent):
             for entry in sorted(pkg_root.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("_"):
                     continue
-                shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
+                destination = intrinsic_dir / subdir / entry.name
+                # A package-owned manual may deliberately retain the same
+                # legacy mount name as a standalone compatibility bundle. The
+                # package copy wins; never install a second duplicate.
+                if destination.exists():
+                    continue
+                shutil.copytree(entry, destination)
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
@@ -2018,6 +2042,13 @@ class Agent(BaseAgent):
         self._intrinsics.clear()
         self._intrinsic_modules.clear()
         self._wire_intrinsics()
+        # Refresh rebuilds the official surface from scratch. Soul's injected
+        # module remains for lifecycle hooks, while its public root is again
+        # mounted only through the static declaration/registrar route.
+        if "soul" in self._intrinsics:
+            from lingtai.tools import soul as _soul
+            self.override_intrinsic("soul")
+            _soul.setup(self)
 
         # Reset capability-owned flags (email.boot below resets to "email box"/"email")
         self._mailbox_name = "email box"

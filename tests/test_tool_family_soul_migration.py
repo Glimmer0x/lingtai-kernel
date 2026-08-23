@@ -628,9 +628,8 @@ def test_synthesized_involuntary_flow_pair_uses_the_current_envelope(agent, monk
     tool_use block — a model-visible example of how to call ``soul``. If it
     carried the pre-migration flat ``{"action": "flow"}``, a model imitating
     its own history would send a shape the closed schema now rejects."""
-    from lingtai.tools.soul.consultation import (
-        INVOLUNTARY_FLOW_REASONING, build_consultation_pair,
-    )
+    from lingtai.tools.soul import build_consultation_pair
+    from lingtai.tools.soul.consultation import INVOLUNTARY_FLOW_REASONING
 
     agent._config.language = "en"
     call, result = build_consultation_pair(agent, [{"source": "x", "voice": "y"}])

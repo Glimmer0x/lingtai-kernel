@@ -10,6 +10,8 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/manual/SKILL.md
   - tests/test_tool_plugin_declaration.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
@@ -17,10 +19,9 @@ maintenance: |
   of the declared host-plugin contract changes — the static-declaration rule,
   the least-privilege grant, the reserved official name list, or the
   check-before-bind ordering — update the guarding LABT here in the same change.
-  Keep every command copy-paste executable from the repository root. When a
-  second family recuts onto the contract, or when authoring-time line numbers
+  Keep every command copy-paste executable from the repository root. When a new family recuts onto the contract, or when authoring-time line numbers
   drift, replace the affected evidence with that family's own proof rather than
-  leaving a stale pass.
+  leaving a stale pass. Soul is the second proof alongside MCP.
 ---
 # Declared Host Tool Plugin Behavior Tests
 

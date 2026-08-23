@@ -6,6 +6,11 @@ root_contract: CONTRACT.md
 related_files:
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/soul/config.py
+  - src/lingtai/tools/soul/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/agent.py
+  - tests/test_tool_plugin_declaration.py
   - src/lingtai/tools/soul/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -14,9 +19,9 @@ related_files:
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits. soul's
-  schema composition and envelope dispatch build on the generic tool_family
-  package; keep that link current when either side's boundary changes.
+  same change and bump contract_version on breaking contract edits. Soul is an
+  official declared host plugin: keep its declaration, `SoulRuntimePort`,
+  adapter, packaged manual, and compact live proof together with this contract.
 ---
 
 # Soul capability contract
@@ -74,6 +79,25 @@ claims; log/notification paths -> §State & storage.
 - `flow` is opt-in via an environment variable and disabled by default; the
   agent-invoked call only *triggers* a fire — voices arrive asynchronously.
 - Non-goals: general notification verbs, molt/summarize, mailbox actions.
+
+## Declared host plugin
+
+`DECLARATION` is static at import and owns Soul's operational actions
+`inquiry | flow | config | voice | dismiss`; the reserved `manual` is appended
+from package-owned `manual/SKILL.md` as `soul-manual`. `_bind(host)` derives
+its name, input schemas, and manual destination from that declaration and gets
+only `workdir` plus `soul_runtime`. `AgentSoulRuntimeAdapter` implements the
+latter as the explicit self-state/flow vocabulary Soul consumes — current
+chat/session/config/service, cadence/lock state, logging, and Soul notification
+operations — never a whole Agent or generic mount capability.
+
+The injected Soul module remains available only for kernel lifecycle hooks.
+`Agent` removes its temporary intrinsic dispatcher entry and mounts the public
+root through `register_agent_tool_plugins`; refresh repeats the controlled mount.
+The public name, six ordered actions, strict inputs, flow gate, persistence,
+results/errors, and historical `.library/intrinsic/capabilities/soul-manual/`
+manual path are unchanged. The retained standalone source bundle is skipped when
+the package-owned manual has already claimed that destination.
 
 ## Tool surface
 

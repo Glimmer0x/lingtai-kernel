@@ -12,6 +12,9 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/soul/ANATOMY.md
+  - src/lingtai/tools/soul/__init__.py
+  - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -49,8 +52,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the four host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `SoulRuntimePort`, and host-only `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -74,17 +77,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `protected=True`), plus `agent_host_ports` and
   `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
-  `DECLARATION` is built at module import; `_bind(host)` composes the
-  per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
-  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+- `src/lingtai/tools/mcp/__init__.py` and `src/lingtai/tools/soul/__init__.py`
+  — the declaring families. Both build `DECLARATION` at module import and bind
+  a declaration-derived `ToolFamily`; MCP activates its prompt reconcile, while
+  Soul receives `workdir` plus `SoulRuntimePort` for real self-state, cadence,
+  consultation, and notification operations.
 
 ## Connections
 
-- `lingtai.tools.mcp` imports `lingtai.kernel.tool_plugin` (declarations depend
-  on the shape). The kernel imports nothing from `lingtai.tools`; that edge is
-  swept by `tests/test_tool_plugin_declaration.py`.
+- `lingtai.tools.mcp` and `lingtai.tools.soul` import
+  `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
+  imports nothing from `lingtai.tools`; that edge is swept by
+  `tests/test_tool_plugin_declaration.py`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only
