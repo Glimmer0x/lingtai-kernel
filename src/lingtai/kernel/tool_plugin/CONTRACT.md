@@ -40,8 +40,8 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
+This component is the kernel's boundary for **one declared official**
+model-facing tool plugin. Every official tool family in this distribution
 follows one declared plugin contract: a static declaration of its identity and
 public actions, a bind step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
@@ -130,9 +130,9 @@ capability.
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
 `workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
-molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
-earn their ports one real slice at a time.
+actually consumes. A later vertical slice may add one named, capability-native
+port only together with the implementation, adapter wiring, declaration, and
+evidence for the family that consumes it; do not enumerate prospective ports.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference

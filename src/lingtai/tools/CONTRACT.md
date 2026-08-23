@@ -403,8 +403,9 @@ section, and they are cited below only as the precedent for
 this section introduces no generic manifest compiler, no
 plugin-admission engine, and no multi-form compatibility layer.
 
-**One family, one declaration, retained form.** The unit of migration is one
-current model-facing family gaining one declaration that *wraps* it.
+**One family slice, one declaration, retained form.** The unit of migration is one
+current model-facing family gaining one declaration that *wraps* it. The shared
+register is family-generic rather than MCP-only.
 
 - The declaration MUST preserve that family's public tool name, action
   inventory and spelling, per-action strict `input` schemas, the closed root
@@ -416,8 +417,10 @@ current model-facing family gaining one declaration that *wraps* it.
   already uses to keep `ShellManager`'s flat call shape and `daemon` to keep
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
-  are prohibited: a family is declared only once its own vertical PR lands.
-  `mcp` is the only one today.
+  are prohibited: a family is declared only once its own vertical slice lands.
+  The base checkout proves `mcp`; the C register targets `email`, `file`,
+  `context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
+  `task_card` without claiming those candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -433,8 +436,10 @@ current model-facing family gaining one declaration that *wraps* it.
   live-looking route behind after close. It cannot: the mount port is host-only
   and is never granted to a declaration.
 
-**The family owns the manual and its submanuals.** Per root Design principles
-3 and 4, the manual travels with the capability:
+**The package owns the canonical manual and its submanuals.** Per root Design
+principles 3 and 4, a package-owned manual travels with the capability; a
+retained intrinsic manual tree is migration-compatible legacy/redirect material,
+not a competing authority:
 
 - One declaration names its own manual alongside its public action inventory,
   and the family ships that manual with every submanual, reference, or asset
@@ -578,12 +583,18 @@ non-goal for third-party-versus-third-party mounts.
 
 **Current evidence versus migration target.**
 
-- The selected form ships for exactly one family:
+- The selected form is generic and the current base proves one reference slice:
+  `mcp`. The C integration target additionally reserves `email`, `file`,
+  `context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
+  `task_card`; this list is not a claim that their candidate worktrees have
+  merged. The shared test seam is `tests/_tool_plugin_helpers.py`; each family
+  still needs its own vertical evidence:
   `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
   host ports, the reserved official-name list, and the fail-fast registrar;
   `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
   `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the reference slice; and
-  `tests/test_tool_plugin_declaration.py` is the shared contract suite. `mcp`'s
+  `tests/test_tool_plugin_declaration.py` plus the generic helper are shared
+  contract evidence. `mcp`'s
   public surface is unchanged by that recut
   (`tests/test_tool_family_mcp_migration_parity.py`,
   `tests/test_mcp_capability.py`).

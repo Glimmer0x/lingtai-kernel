@@ -20,7 +20,10 @@ maintenance: |
   Keep every command copy-paste executable from the repository root. When a
   second family recuts onto the contract, or when authoring-time line numbers
   drift, replace the affected evidence with that family's own proof rather than
-  leaving a stale pass.
+  leaving a stale pass. The shared C register is family-generic and distinguishes
+  target reserved names from candidate merge evidence; ports remain least-
+  privilege and tool-specific, while registrar mounts are runtime-bound rather
+  than per-call Agent dispatch.
 ---
 # Declared Host Tool Plugin Behavior Tests
 
