@@ -1,7 +1,11 @@
 ---
 related_files:
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/context-manual/assets/session-journal-entry-template.md
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/context/manual/assets/molt-template.md
+  - src/lingtai/tools/context/manual/assets/session-journal-entry-template.md
+  - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/context/BEHAVIORS.md
@@ -12,6 +16,7 @@ related_files:
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/context/__init__.py
+  - tests/test_context_declared_tool_plugin.py
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/_snapshots.py
@@ -37,6 +42,11 @@ passive lifecycle scenarios.
 ## Components
 
 - `__init__.py`
+  - module-level `DECLARATION` owns Context identity, ordered operational
+    actions, strict schemas, and the packaged `context-manual`;
+  - `_bind(host)` composes the public family from only `host.workdir` and
+    `host.context_runtime`; `setup`/`boot` supply the registrar wiring while
+    `handle` is direct-caller compatibility only;
   - strict per-action schemas, including genuinely optional `rebuild.items` so
     bare `{}` is schema-valid;
   - `_summarize_action` pins record-only engine mode;
@@ -72,7 +82,8 @@ passive lifecycle scenarios.
 Active rebuild flow:
 
 ```text
-context.handle
+context official mount handler
+  -> ContextRuntimePort.rebuild
   -> _rebuild_action
   -> Agent._reconstruct_context
      -> Agent._reload_prompt_sections

@@ -1,7 +1,7 @@
 ---
 name: context-contract
 tool: context
-contract_version: 5
+contract_version: 6
 related_files:
   - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
@@ -17,16 +17,19 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/pad/CONTRACT.md
   - src/lingtai/tools/lingtai/CONTRACT.md
-  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_context_ownership_redesign.py
   - tests/test_tool_family_context_migration.py
   - tests/test_deep_refresh.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   Keep related paths real and the paired Anatomy reciprocal. Update schemas,
   model prose, manuals, results, lifecycle wiring, private summary engine, and
-  focused evidence together. Version 5 is the breaking full-context ownership
-  redesign: rebuild now recomposes all canonical prompt sources first; Pad and
-  LingTai public mutation/load actions are retired.
+  focused evidence together. Version 6 packages the established context-manual with its owner and recuts the
+  unchanged public surface through the declared host-plugin contract;
+  `context_runtime` is the only new host port and delegates existing engines.
 ---
 
 # Context capability contract
@@ -42,7 +45,11 @@ Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 - `rebuild` — the **one active full context reconstruction operation**;
 - `manual` — return `context-manual` without a lifecycle operation.
 
-No OLD `psyche` action is reachable anywhere, and none is aliased here. A public
+The implementation is an official declared host plugin: its static
+`DECLARATION` owns the identity, actions, schemas, and `context-manual`; its
+binder receives only `workdir` and `context_runtime`, whose three narrow
+operations delegate the existing live molt/summarize/rebuild engines. No OLD
+`psyche` action is reachable anywhere, and none is aliased here. A public
 root named `psyche` does exist again — it is the manual-only family for the four
 durable domains (`pad + lingtai + knowledge + skills = psyche`,
 `src/lingtai/tools/psyche/CONTRACT.md`) — but it carries only five strict-empty
@@ -138,7 +145,7 @@ Focused verification:
 ```bash
 python -m pytest -q tests/test_context_ownership_redesign.py \
   tests/test_tool_family_context_migration.py tests/test_deep_refresh.py \
-  tests/test_pad_lingtai_split.py
+  tests/test_pad_lingtai_split.py tests/test_context_declared_tool_plugin.py
 ```
 
 Evidence pins public action sets and strict retirement; file and append no-hot-

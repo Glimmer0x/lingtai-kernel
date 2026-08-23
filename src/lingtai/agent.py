@@ -593,6 +593,10 @@ class Agent(BaseAgent):
                         destination_name = "shell"
                     elif entry.name == "web_search":
                         destination_name = "web"
+                    elif entry.name == "context":
+                        # Context owns the longstanding context-manual name;
+                        # packaging changes its source, not its installed identity.
+                        destination_name = "context-manual"
                     else:
                         destination_name = entry.name
                     destination = intrinsic_dir / subdir / destination_name
@@ -615,7 +619,13 @@ class Agent(BaseAgent):
             for entry in sorted(pkg_root.iterdir()):
                 if not entry.is_dir() or entry.name.startswith("_"):
                     continue
-                shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
+                destination = intrinsic_dir / subdir / entry.name
+                # Tool-owned bundles install first. A retained standalone source
+                # may share that historical skill name during a no-delete recut;
+                # do not let it overwrite or collide with the package owner.
+                if destination.exists():
+                    continue
+                shutil.copytree(entry, destination)
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
@@ -2189,6 +2199,10 @@ class Agent(BaseAgent):
                     self._setup_capability(name, **cap_kwargs)
                 except (ValueError, ImportError, TypeError) as e:
                     self._log("capability_skipped", capability=name, reason=str(e))
+
+        # Mandatory declared intrinsics are mounted through their own official
+        # registrar wiring on refresh as well as on first construction.
+        self._boot_official_intrinsics()
 
         # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
         # from the bundles shipped with each enabled capability.

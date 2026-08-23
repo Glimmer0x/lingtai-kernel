@@ -1129,7 +1129,7 @@ def test_skills_manual_documents_external_skill_intake_default():
 def test_context_manual_routes_skill_sharing_through_custom_by_default():
     manual = (
         Path(__file__).resolve().parents[1]
-        / "src/lingtai/intrinsic_skills/context-manual/SKILL.md"
+        / "src/lingtai/tools/context/manual/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "peers install it into their own `.library/custom/<name>/`" in manual
     assert "explicit opt-in local-network shared root" in manual

@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin-behavior-tests
-behavior_version: 1
+behavior_version: 2
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
@@ -10,17 +10,18 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/context/__init__.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
   of the declared host-plugin contract changes — the static-declaration rule,
   the least-privilege grant, the reserved official name list, or the
   check-before-bind ordering — update the guarding LABT here in the same change.
-  Keep every command copy-paste executable from the repository root. When a
-  second family recuts onto the contract, or when authoring-time line numbers
-  drift, replace the affected evidence with that family's own proof rather than
-  leaving a stale pass.
+  Keep every command copy-paste executable from the repository root. When another family recuts onto the contract, or when authoring-time line
+  numbers drift, include that family's own proof rather than leaving stale
+  one-slice evidence.
 ---
 # Declared Host Tool Plugin Behavior Tests
 

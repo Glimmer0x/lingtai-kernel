@@ -290,7 +290,7 @@ def test_task_boundary_molt_guidance_is_cost_thresholded():
         Path("src/lingtai/prompts/substrate/substrate.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/procedures-manual/SKILL.md"),
         Path("src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md"),
-        Path("src/lingtai/intrinsic_skills/context-manual/reference/summarize-manual/SKILL.md"),
+        Path("src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md"),
     ]
     parts = [strip_frontmatter(path.read_text()) for path in md_paths]
     # Guidance is now a skill-style Markdown catalog; fold each section body in.

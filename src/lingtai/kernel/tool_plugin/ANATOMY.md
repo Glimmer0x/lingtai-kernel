@@ -12,10 +12,13 @@ related_files:
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
@@ -49,8 +52,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the three host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `ToolMountPort`;
+  - the four host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `ContextRuntimePort`, `ToolMountPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -74,11 +77,15 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `protected=True`), plus `agent_host_ports` and
   `register_agent_tool_plugins`. The registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
-- `src/lingtai/tools/mcp/__init__.py` — the one declaring family.
+- `src/lingtai/tools/mcp/__init__.py` — the first declaring family.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  now only composition wiring.
+  only composition wiring.
+- `src/lingtai/tools/context/__init__.py` — the Context declaring slice. Its
+  declaration owns `molt | summarize | rebuild | manual`; `_bind(host)` gets
+  only `workdir` and `context_runtime`, while the production adapter delegates
+  the unchanged live molt and reconstruction engines through three callbacks.
 
 ## Connections
 
@@ -104,6 +111,10 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins`, reached
   through the ordinary capability boot loop in `src/lingtai/agent.py`
   (`_setup_capability` → `lingtai.tools.registry.setup_capability`).
+- Context is a mandatory official-intrinsic shim: the injected registry keeps
+  its kernel-facing `context_forget` hook and `_tc_id` transport path, while
+  `BaseAgent._boot_official_intrinsics()` invokes its `boot` composition wiring;
+  only the registrar mount publishes its schema and handler.
 - `_build_family(host)` passes only `host.workdir` to
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
@@ -176,7 +187,8 @@ component does not own.
 
 - A new host port: add the Protocol, extend `GRANTABLE_HOST_PORTS`, add the
   adapter in `src/lingtai/adapters/tool_plugin_host.py`, and land it together
-  with the one real family that consumes it.
+  with the one real family that consumes it (as Context did for
+  `context_runtime`).
 - A new official family: add its name to `OFFICIAL_TOOL_PLUGIN_NAMES` (a
   reviewed contract change), build its module-level `DECLARATION`, and route
   its `setup()` through `register_agent_tool_plugins`.

@@ -1,6 +1,6 @@
 ---
 name: declared-host-tool-plugin
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
@@ -13,8 +13,11 @@ related_files:
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
   - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -22,7 +25,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), declared slices and their manuals, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -51,7 +54,8 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
+2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ContextRuntimePort`,
+   `ToolMountPort`) through
    which a plugin controls the live Agent body, and the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
@@ -98,8 +102,8 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today exactly one family is
-  declared: `mcp`.
+  vertical slice lands with its own evidence. Today `mcp` and `context` are declared, each only with its own vertical
+  slice evidence.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -126,11 +130,12 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | The live Context lifecycle operation boundary. It preserves existing chat/snapshot/replay and reconstruction semantics without granting the Context declaration the Agent or its private state. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` today because those are the two the `mcp` slice
-actually consumes. Families that later need to drive the live Agent body —
+`workdir` and `prompt_section` for the `mcp` slice, plus `context_runtime` for
+the Context lifecycle slice; no other family is implicitly granted any of them. Families that later need to drive the live Agent body —
 molt/summarize/rebuild, the involuntary tool-call inbox, intrinsic override —
 earn their ports one real slice at a time.
 
@@ -246,9 +251,9 @@ component never selects.
 
 `tests/test_tool_plugin_declaration.py` is the shared contract suite:
 
-- declaration staticness and the `mcp` declared-versus-composed surface
-  agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,
-  `test_mcp_is_reserved_and_declares_only_the_ports_it_consumes`);
+- declaration staticness and declared-versus-composed surfaces, including the
+  `mcp` reference slice and Context's `context_runtime` boundary
+  (`tests/test_context_declared_tool_plugin.py`);
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;
@@ -277,7 +282,9 @@ component never selects.
 - ordering — `bind` alone activates and mounts nothing;
   `activate` runs before `mount`;
 - idempotent re-registration (the refresh path);
-- the live slice — boot claims `mcp` and mounts exactly one `mcp` tool, a
+- the live slices — boot claims `mcp` and Context, mounting exactly one of
+  each; `tests/test_context_declared_tool_plugin.py` also proves Context's
+  package-owned manual and one-surface mount. A
   post-seal mount raises, a foreign declaration cannot take the live name, and
   neither a foreign `BoundToolPlugin` nor a directly constructed transaction
   can replace the official handler/schema/claim; the prompt-section port writes
