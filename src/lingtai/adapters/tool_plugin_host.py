@@ -33,6 +33,7 @@ __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
     "AgentContextRuntimeAdapter",
+    "AgentAvatarParentAdapter",
     "agent_host_ports",
     "register_agent_tool_plugins",
 ]
@@ -109,6 +110,39 @@ class AgentContextRuntimeAdapter:
         return self._rebuild(args)
 
 
+class AgentAvatarParentAdapter:
+    """Avatar's narrow parent-context port over the live Agent.
+
+    The adapter exposes only the three current-Agent facts Avatar already uses:
+    parent identity for the first prompt, an optional venv inheritance value,
+    and the existing any-admin-value rule gate.  It owns no Agent object; each
+    value is read through its one narrow closure when Avatar asks for it.
+    """
+
+    __slots__ = ("_parent_name", "_venv_path", "_has_rule_privilege")
+
+    def __init__(
+        self,
+        parent_name: Callable[[], str],
+        venv_path: Callable[[], str | None],
+        has_rule_privilege: Callable[[], bool],
+    ) -> None:
+        self._parent_name = parent_name
+        self._venv_path = venv_path
+        self._has_rule_privilege = has_rule_privilege
+
+    @property
+    def parent_name(self) -> str:
+        return self._parent_name()
+
+    @property
+    def venv_path(self) -> str | None:
+        return self._venv_path()
+
+    def has_rule_privilege(self) -> bool:
+        return self._has_rule_privilege()
+
+
 def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
     """Build the full grantable port table for *plugin_name* on *agent*.
 
@@ -120,6 +154,11 @@ def agent_host_ports(agent: Any, plugin_name: str) -> dict[str, Any]:
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
         "prompt_section": AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
+        ),
+        "avatar_parent": AgentAvatarParentAdapter(
+            lambda: agent.agent_name or agent.working_dir.name,
+            lambda: getattr(agent, "_venv_path", None),
+            lambda: any((getattr(agent, "_admin", {}) or {}).values()),
         ),
     }
 

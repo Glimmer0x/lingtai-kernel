@@ -1,6 +1,7 @@
 ---
 related_files:
   - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/intrinsic_skills/context-manual/SKILL.md
   - src/lingtai/tools/context/manual/assets/molt-template.md
   - src/lingtai/tools/context/manual/assets/session-journal-entry-template.md
   - src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md

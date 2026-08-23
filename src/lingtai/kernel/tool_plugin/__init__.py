@@ -46,6 +46,7 @@ __all__ = [
     "WorkdirPort",
     "PromptSectionPort",
     "ContextRuntimePort",
+    "AvatarParentPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -66,9 +67,9 @@ MANUAL_ACTION = "manual"
 #: Every host port an official declaration may name in ``requires``.
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
-#: slice this component ships with (``mcp`` or ``context``). Root ``CONTRACT.md``
-#: rules 10-11 forbid a speculative port taxonomy, so a later family adds the
-#: port it actually needs together with its own slice.
+#: slice this component ships with (``mcp``, ``avatar``, or ``context``).
+#: Root ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a
+#: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
@@ -76,6 +77,7 @@ MANUAL_ACTION = "manual"
 GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "workdir",
     "prompt_section",
+    "avatar_parent",
     "context_runtime",
 )
 
@@ -88,7 +90,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "context")
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "avatar", "context")
 
 
 # Opaque capability used only by the production host adapter's private
@@ -194,6 +196,28 @@ class ContextRuntimePort(Protocol):
 
     def rebuild(self, args: dict) -> dict:
         """Reconstruct prompt/context, then apply summaries and provider replay."""
+
+
+class AvatarParentPort(Protocol):
+    """The parent facts Avatar needs to spawn and control its own subtree.
+
+    This is deliberately Avatar-specific rather than a second whole-Agent
+    facade: spawning needs the parent identity and inherited runtime location,
+    while rules control needs only the already-decided authorization bit.  It
+    grants no mutable administration surface, no generic configuration, and no
+    tool mounting capability.
+    """
+
+    @property
+    def parent_name(self) -> str:
+        """The parent identity to put in the newborn's first prompt."""
+
+    @property
+    def venv_path(self) -> str | None:
+        """Optional parent runtime location inherited by a newborn avatar."""
+
+    def has_rule_privilege(self) -> bool:
+        """Whether this parent may distribute rules through its avatar subtree."""
 
 
 class ToolMountPort(Protocol):
