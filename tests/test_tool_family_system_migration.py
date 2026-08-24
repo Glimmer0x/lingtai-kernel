@@ -137,7 +137,7 @@ def test_children_consume_no_model_tool_slots() -> None:
         # ``force`` was live and tested pre-migration (kernel#112 escape hatch)
         # but never advertised in the flat schema. A strict child input must
         # declare it or dispatch would reject the call that today succeeds.
-        ("sleep", {"reason", "force"}),
+        ("sleep", {"reason", "force", "delay"}),
         ("lull", {"address", "reason"}),
         ("interrupt", {"address", "reason"}),
         ("suspend", {"address", "reason"}),
@@ -808,6 +808,9 @@ def test_sleep_refuses_with_pending_notifications_and_force_overrides(
         def fingerprint(self, _allowed):
             return ("email",)
 
+        def snapshot(self, _allowed):
+            return {"email": {"header": "pending"}}
+
     class _Agent(_StubAgent):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -827,14 +830,14 @@ def test_sleep_refuses_with_pending_notifications_and_force_overrides(
 
     refused = _Agent(tmp_path)
     result = system_tool.handle(
-        refused, {"action": "sleep", "input": {"reason": "tired", "force": None}}
+        refused, {"action": "sleep", "input": {"reason": "tired", "force": None, "delay": None}}
     )
     assert result["status"] == "ok"
     assert refused.state is None, "must not transition with mail waiting"
 
     forced = _Agent(tmp_path)
     result = system_tool.handle(
-        forced, {"action": "sleep", "input": {"reason": "tired", "force": True}}
+        forced, {"action": "sleep", "input": {"reason": "tired", "force": True, "delay": None}}
     )
     assert result["status"] == "ok"
     assert forced.state == AgentState.ASLEEP
