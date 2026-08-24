@@ -388,11 +388,12 @@ class Agent(BaseAgent):
         # second capability/manual/MCP surface first. The bookkeeping remains
         # available to the normal setup pass after CLI clears the private flag.
         if _from_init_boot:
-            self._capabilities: list[tuple[str, dict]] = []
-            self._capability_managers: dict[str, Any] = {}
-            self._mcp_tool_names: set[str] = set()
-            self._plugin_skill_paths: list[str] = []
-            self._plugin_registration: dict = {}
+            self._capabilities = []
+            self._capability_managers = {}
+            self._mcp_tool_names = set()
+            self._plugin_skill_paths = []
+            self._plugin_registration = {}
+            self._from_init_boot = False
             return
 
         # Normalize to dict

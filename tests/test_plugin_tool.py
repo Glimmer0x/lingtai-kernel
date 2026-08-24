@@ -1156,10 +1156,11 @@ def _plugin_record_line(workdir: Path) -> None:
 def test_minimal_construction_does_not_wipe_plugin_records(tmp_path):
     """F3: a caller who declared nothing has made no uninstall decision.
 
-    The CLI constructs the ``Agent`` with neither ``capabilities=`` nor
-    ``plugins=`` and lets ``_setup_from_init`` do everything. Treating that
-    silence as "no plugins are declared" pruned every plugin-owned record on the
-    way to re-registering it, one boot at a time.
+    This direct ``Agent`` construction supplies neither ``capabilities=`` nor
+    ``plugins=``. The CLI instead creates a private shell before its configured
+    ``_setup_from_init`` pass. Treating this direct caller's silence as "no
+    plugins are declared" pruned every plugin-owned record on the way to
+    re-registering it, one boot at a time.
     """
     workdir = tmp_path / "agent"
     workdir.mkdir(parents=True)
@@ -1236,7 +1237,8 @@ def test_cli_shaped_boot_registers_once_and_is_idempotent(tmp_path):
         json.dumps(_cli_shaped_init([str(plugin_dir)])), encoding="utf-8",
     )
 
-    # Exactly what cli.run does: minimal construction, then _setup_from_init.
+    # Direct-Agent analogue: minimal construction, then _setup_from_init; the
+    # CLI reaches that configured pass through its private shell.
     agent = Agent(service=make_mock_service(), agent_name="test", working_dir=workdir)
     assert agent._plugin_registration == {}, "construction defers to _setup_from_init"
     agent._setup_from_init()

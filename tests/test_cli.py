@@ -88,6 +88,23 @@ def test_load_init_validation_error(tmp_path):
         load_init(tmp_path)
 
 
+def test_build_agent_fails_when_second_init_read_is_corrupt(tmp_path, capsys):
+    from lingtai.cli import build_agent, load_init
+
+    _write_init(tmp_path)
+    data = load_init(tmp_path)
+    capsys.readouterr()
+    (tmp_path / "init.json").write_text("{corrupt json")
+
+    with pytest.raises(SystemExit) as raised:
+        build_agent(data, tmp_path)
+
+    assert raised.value.code == 1
+    error = capsys.readouterr().err
+    assert error.startswith("error: ")
+    assert json.loads(error.removeprefix("error: "))["read_result"] == "READ_FAILED"
+
+
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.PosixFilesystemMailAdapter")

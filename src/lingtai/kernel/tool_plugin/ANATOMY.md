@@ -276,6 +276,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `ToolPluginDeclaration.__post_init__` validates
 its declared shape, with no Agent in existence.
 
+Direct `Agent.__init__` composes constructor-time official boot normally. The
+wrapper-only `cli.build_agent` passes private `_from_init_boot=True` to make an
+internal shell, so `Agent._boot_official_intrinsics()` defers that initial boot;
+the constructor self-disarms the shell and CLI clears the sentinel again before
+the one configured `Agent._setup_from_init()` pass performs final boot.
+
 Dynamic-family boot remains `Agent.__init__` / `Agent._setup_from_init` →
 `_setup_capability(name)` → that family's `setup(agent)` →
 `register_agent_tool_plugins(agent, [DECLARATION])`. Email's mandatory official
