@@ -4,15 +4,18 @@ related_files:
   - src/lingtai/ANATOMY.md
   - src/lingtai/tools/mcp/BEHAVIORS.md
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/plugin.json
+  - src/lingtai/agent.py
   - src/lingtai/services/mcp_inbox.py
   - src/lingtai/services/mcp_licc.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
   - src/lingtai/tools/mcp/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_mcp_builtin_plugin_package.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/mcp_servers/ANATOMY.md
@@ -23,9 +26,10 @@ related_files:
   - src/lingtai/tools/mcp/glossary-zh.md
   - src/lingtai/tools/mcp/glossary-wen.md
   - ENVIRONMENT_VARIABLES.md
-  - src/lingtai/tools/mcp/manual/reference/curated-addons.md
-  - src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md
-  - src/lingtai/tools/mcp/manual/reference/troubleshooting.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py
   - src/lingtai/tools/mcp/manual/scripts/find_readme.py
   - src/lingtai/tools/ANATOMY.md
 maintenance: |
@@ -86,7 +90,7 @@ surface is touched. The recut changed no public behavior: same tool name, same
 `["info", "manual"]` enum, same strict-empty inputs, same result shapes including
 the tool-specific `mcp_manual` body key (`tests/test_tool_family_mcp_migration_parity.py`,
 `tests/test_mcp_capability.py`, `tests/test_tool_plugin_declaration.py`).
-- `mcp/manual/` — skill documentation (`SKILL.md`) plus reference docs (`curated-addons.md`, `third-party-and-legacy.md`, `troubleshooting.md`) and scripts (`find_readme.py`).
+- `mcp/plugin.json` + `mcp/skills/mcp-manual/` — the built-in Agent Plugins v1.0.0 documentation package. `Agent._install_intrinsic_manuals` validates this one-skill package through `services.plugin_registry.read_plugin` and mounts the skill as `intrinsic/capabilities/mcp/`; it does not register a plugin or an MCP server. The retained `mcp/manual/` tree is a source-layout compatibility copy, never the installed manual source.
 
 ## Public API
 
@@ -231,6 +235,6 @@ src/lingtai/services/mcp_licc.py  (client-side producer; mirrors src/lingtai/ser
 
 - **Parent:** `src/lingtai/tools/` (tool slice); infra siblings live in `src/lingtai/services/`.
 - **Siblings:** `daemon/`, `avatar/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Manual:** `mcp/manual/SKILL.md` — registration contract and usage guide.
+- **Manual:** `mcp/skills/mcp-manual/SKILL.md` — registration contract and usage guide.
 - **Declared contract:** `src/lingtai/kernel/tool_plugin/` owns the declaration shape, the host ports, the reserved official-name list, and the fail-fast registrar; `src/lingtai/adapters/tool_plugin_host.py` is the production adapter over the live Agent body.
 - **Kernel hooks:** `setup()` is called during capability initialization; `decompress_addons()` is called by the Agent initializer before `setup`. `MCPInboxPoller.start()/stop()` are called by the agent lifecycle.

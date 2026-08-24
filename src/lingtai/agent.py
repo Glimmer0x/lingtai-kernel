@@ -595,6 +595,60 @@ class Agent(BaseAgent):
         # one reviewed canonical-to-legacy redirect relation declared above.
         canonical_manual_owners: dict[tuple[str, str], str] = {}
 
+        def install_tool_plugin(entry: Path, subdir: str) -> None:
+            """Install one built-in tool package's sole owned manual skill.
+
+            The Agent Plugins reader remains the only manifest and containment
+            validator. Built-in model-facing packages are documentation sources,
+            not declared external plugins: a bundled ``mcp.json`` is rejected
+            here so this installer cannot become a second route into the
+            per-agent MCP registry.
+            """
+            from .services.plugin_registry import read_plugin
+
+            record, problems = read_plugin(entry)
+            for problem in problems:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=entry.name,
+                    reason=str(problem.get("error", "")),
+                )
+            if record is None:
+                return
+            if record["mcp_servers"]:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugins must not carry mcp.json; "
+                        "their servers are not registered"
+                    ),
+                )
+                return
+            skill_paths = record["skill_paths"]
+            if len(skill_paths) != 1:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugin must provide exactly one owned "
+                        "manual skill"
+                    ),
+                )
+                return
+            destination_name = record["name"]
+            destination = intrinsic_dir / subdir / destination_name
+            owner_key = (subdir, destination_name)
+            if destination.exists():
+                prior_owner = canonical_manual_owners.get(owner_key, "unknown")
+                raise RuntimeError(
+                    "intrinsic manual destination collision: built-in tool plugin "
+                    f"{entry.name!r} and {prior_owner!r} both target "
+                    f"{destination}"
+                )
+            shutil.copytree(skill_paths[0], destination)
+            canonical_manual_owners[owner_key] = entry.name
+
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
@@ -606,6 +660,9 @@ class Agent(BaseAgent):
                 # Browser is an internal browse subcomponent. Its former manual
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
+                    continue
+                if (entry / "plugin.json").is_file():
+                    install_tool_plugin(entry, subdir)
                     continue
                 src = entry / "manual"
                 if not src.is_dir():

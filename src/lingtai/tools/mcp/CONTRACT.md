@@ -4,11 +4,14 @@ tool: mcp
 contract_version: 1
 related_files:
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/mcp/plugin.json
+  - src/lingtai/agent.py
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_tool_plugin_declaration.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - tests/test_mcp_builtin_plugin_package.py
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
   - src/lingtai/services/mcp_registry.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -23,6 +26,12 @@ maintenance: |
   their candidates merged. Keep §Declared host plugin below and that contract in
   step, and if this family's required host ports change, move the declaration,
   the narrow port set, the adapter, and both contracts together.
+  The source package is additionally a built-in Agent Plugins v1.0.0
+  documentation package: keep `plugin.json`, its sole owned
+  `skills/mcp-manual/` source, `Agent._install_intrinsic_manuals`, and the
+  compact packaging test in step. That source layout is not an external
+  declaration, transport, or registry route; use `plugin_registry.read_plugin`
+  as the only manifest/containment reader and never add a tools-local helper.
 ---
 
 # MCP capability contract
@@ -165,6 +174,14 @@ normative rules stay there.
   publishes a catalog record. The curated MCP server packages and
   `src/lingtai/mcp_catalog.json` remain a separate external-transport concern
   that this family does not use.
+- **Packaged manual, not plugin admission.** `plugin.json` and its one owned
+  `skills/mcp-manual/` Agent Skill are read by the existing
+  `plugin_registry.read_plugin` inside `Agent._install_intrinsic_manuals`, then
+  copied under the manifest/declaration name `mcp`. This is only the source of
+  the reserved child’s installed manual. It neither calls `register_plugins`
+  nor writes `mcp_registry.jsonl`; `mcp.json` is forbidden for this package, so
+  packaging cannot add or activate an MCP server. The static `DECLARATION`
+  remains the only model-facing mount route.
 
 ## State & storage
 
