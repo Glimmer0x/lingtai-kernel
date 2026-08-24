@@ -29,7 +29,7 @@ def test_kernel_canonical_init_jsonc_is_parseable_and_has_current_shape():
 
 def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_path):
     raw = json.dumps({**_REQUIRED, "substrate": "old resident text", "manifest": {
-        **_REQUIRED["manifest"], "stamina": 1,
+        **_REQUIRED["manifest"], "stamina": 1, "cache_miss_budget": 123,
     }}, indent=2)
     _write_init(tmp_path, raw)
 
@@ -38,6 +38,7 @@ def test_real_reader_reports_ignored_legacy_paths_without_mutating_input(tmp_pat
     assert outcome.status is InitReadStatus.READ_OK_WITH_IGNORED_FIELDS
     assert "substrate" in outcome.ignored_paths
     assert "manifest.stamina" in outcome.ignored_paths
+    assert "manifest.cache_miss_budget" in outcome.ignored_paths
     assert outcome.shape_decision is InitShapeDecision.PASS
     assert outcome.finding_decision is InitShapeDecision.NUDGE
     assert (tmp_path / "init.json").read_text(encoding="utf-8") == raw

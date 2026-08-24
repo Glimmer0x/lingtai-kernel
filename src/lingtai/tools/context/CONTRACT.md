@@ -1,7 +1,7 @@
 ---
 name: context-contract
 tool: context
-contract_version: 6
+contract_version: 7
 related_files:
   - src/lingtai/tools/context/BEHAVIORS.md
   - src/lingtai/tools/context/__init__.py
@@ -12,6 +12,10 @@ related_files:
   - src/lingtai/kernel/base_agent/prompt.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/system/settings.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/kernel/meta_block.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/psyche/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
@@ -28,7 +32,9 @@ related_files:
 maintenance: |
   Keep related paths real and the paired Anatomy reciprocal. Update schemas,
   model prose, manuals, results, lifecycle wiring, private summary engine, and
-  focused evidence together. Version 6 packages the established context-manual with its owner and recuts the
+  focused evidence together. Version 7 records System ownership and the
+  2,000,000 default for the soft cache-miss reminder without changing Context's
+  molt/counter semantics. Version 6 packages the established context-manual with its owner and recuts the
   unchanged public surface through the declared host-plugin contract;
   `context_runtime` is the only new host port and delegates existing engines.
 ---
@@ -45,6 +51,14 @@ Guarded by: [K003](../../kernel/BEHAVIORS.md#behavior-k003)
 - `summarize` — record compact replacements in local runtime history only;
 - `rebuild` — the **one active full context reconstruction operation**;
 - `manual` — return `context-manual` without a lifecycle operation.
+
+The cache-miss budget reminder routes to Context's `molt` action, but System owns
+all source resolution and projects one effective positive integer through the
+outer Agent hook. Context/kernel metadata consumes that scalar only for telemetry
+and the soft reminder; it never blocks. Changing the threshold or
+refreshing/restarting does not reset cumulative since-last-molt usage, while molt
+does (guarded by [B009](../system/BEHAVIORS.md#behavior-b009)); the exact System
+file/key/source contract lives in the System manual rather than this consumer.
 
 The implementation is an official declared host plugin: its static
 `DECLARATION` owns the identity, actions, schemas, and `context-manual`; its

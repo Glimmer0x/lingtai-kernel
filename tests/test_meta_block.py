@@ -10,7 +10,6 @@ import pytest
 import lingtai.kernel.meta_block as meta_block
 
 from lingtai.kernel.meta_block import (
-    CACHE_MISS_BUDGET_ENV,
     GUIDANCE_KEY,
     TOOL_META_TOKEN_USAGE_PENDING_KEY,
     GuidanceSchemaError,
@@ -910,9 +909,11 @@ def test_build_tool_meta_token_usage_merges_session_aggregate_into_one_block():
             "input_tokens": 22_000,
             "cached_tokens": 5_500,
             "avg_input_tokens_per_api_call": 5_500,
-            # always-on cache-miss telemetry (no _config -> no budget-derived
-            # fields, but cache_miss_tokens is always present: 22_000 - 5_500)
+            # Always-on cache-miss telemetry uses the fixed default when neither
+            # deployment source is present: 22_000 - 5_500 cache miss.
             "cache_miss_tokens": 16_500,
+            "cache_miss_budget": 2_000_000,
+            "cache_miss_remaining_tokens": 1_983_500,
             # context state is omitted here — get_token_usage() carried no
             # ctx_total_tokens, so context_tokens/context_usage are unresolvable.
         },
@@ -946,7 +947,9 @@ def test_build_tool_meta_token_usage_session_only_when_no_snapshot():
 
     assert set(compact) == {_TOKEN_USAGE_SESSION_KEY, "ref"}
     assert _TOKEN_USAGE_CURRENT_CALL_KEY not in compact
-    assert set(compact[_TOKEN_USAGE_SESSION_KEY]) == _SESSION_TOKEN_USAGE_KEYS
+    assert set(compact[_TOKEN_USAGE_SESSION_KEY]) == (
+        _SESSION_TOKEN_USAGE_KEYS | _SESSION_CACHE_MISS_BUDGET_KEYS
+    )
     assert compact[_TOKEN_USAGE_SESSION_KEY]["session_cache_rate"] == 1.0
     assert compact[_TOKEN_USAGE_SESSION_KEY]["avg_input_tokens_per_api_call"] == 500
 
@@ -1076,7 +1079,6 @@ def test_injected_session_survives_refresh_baseline_reset():
         _config=SimpleNamespace(
             time_awareness=False,
             timezone_awareness=True,
-            cache_miss_budget=1_000_000,
         ),
         _session=session,
         _intrinsics=set(),
@@ -1094,9 +1096,9 @@ def test_injected_session_survives_refresh_baseline_reset():
     # session_cache_rate = cached/input over the surviving cumulative totals.
     assert injected["session_cache_rate"] == round(2_400_000 / 3_000_000, 5)  # 0.8
     # cache-miss telemetry is also on the surviving cumulative basis, so the
-    # remaining budget did NOT reset to the full 1M on refresh.
+    # remaining budget did NOT reset to the full 2M on refresh.
     assert injected["cache_miss_tokens"] == 600_000  # 3.0M - 2.4M
-    assert injected["cache_miss_remaining_tokens"] == 400_000  # 1M - 600k
+    assert injected["cache_miss_remaining_tokens"] == 1_400_000  # 2M - 600k
 
 
 def test_build_meta_session_cache_rate_clamps_to_fraction():
@@ -1353,16 +1355,9 @@ def test_token_usage_block_carries_short_guidance_ref():
 
 
 def _session_agent_with_budget(
-    *, input_tokens, cached_tokens, api_calls=1, budget=1_000_000, with_config=True
+    *, input_tokens, cached_tokens, api_calls=1, budget=None
 ):
-    """SimpleNamespace agent exposing the cumulative token getter and a budget.
-
-    The session half (and its always-on cache-miss telemetry) now reads the
-    cumulative/since-molt ``get_token_usage()`` totals, so this helper exposes
-    that getter. ``with_config=False`` drops ``_config`` entirely so the
-    config-less-stub path (cache_miss_tokens present; budget-derived fields
-    omitted) is exercised.
-    """
+    """Kernel stub exposing cumulative tokens and an optional outer budget hook."""
     kwargs = dict(
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
@@ -1371,123 +1366,63 @@ def _session_agent_with_budget(
             "cached_tokens": cached_tokens,
         },
     )
-    if with_config:
-        kwargs["_config"] = SimpleNamespace(cache_miss_budget=budget)
+    if budget is not None:
+        kwargs["resolve_cache_miss_budget"] = lambda: budget
     return SimpleNamespace(**kwargs)
 
 
-def test_session_half_always_carries_cache_miss_tokens_and_budget_fields():
-    # With a configured budget, all three always-on fields appear even though the
-    # cache-miss total is far below budget (contrast the context guard, which
-    # would stay silent here).
-    agent = _session_agent_with_budget(
-        input_tokens=300_000, cached_tokens=100_000, budget=1_000_000
-    )
+def test_session_half_always_carries_cache_miss_tokens_and_default_budget_fields():
+    agent = _session_agent_with_budget(input_tokens=300_000, cached_tokens=100_000)
 
-    compact = build_tool_meta_token_usage(agent)
+    session = _session_half(build_tool_meta_token_usage(agent))
 
-    session = _session_half(compact)
-    assert session["cache_miss_tokens"] == 200_000  # 300k - 100k
-    assert session["cache_miss_budget"] == 1_000_000
-    assert session["cache_miss_remaining_tokens"] == 800_000  # 1M - 200k
-    # The full session half plus the two budget-derived fields are all present.
+    assert session["cache_miss_tokens"] == 200_000
+    assert session["cache_miss_budget"] == 2_000_000
+    assert session["cache_miss_remaining_tokens"] == 1_800_000
     assert (_SESSION_TOKEN_USAGE_KEYS | _SESSION_CACHE_MISS_BUDGET_KEYS) <= set(session)
 
 
 def test_session_half_cache_miss_tokens_clamps_to_zero():
-    # cached > input (odd provider accounting) -> cache_miss clamps to 0, and
-    # remaining is the full budget.
-    agent = _session_agent_with_budget(
-        input_tokens=100, cached_tokens=500, budget=1_000_000
-    )
+    agent = _session_agent_with_budget(input_tokens=100, cached_tokens=500)
 
-    compact = build_tool_meta_token_usage(agent)
+    session = _session_half(build_tool_meta_token_usage(agent))
 
-    session = _session_half(compact)
     assert session["cache_miss_tokens"] == 0
-    assert session["cache_miss_remaining_tokens"] == 1_000_000
+    assert session["cache_miss_remaining_tokens"] == 2_000_000
 
 
 def test_session_half_remaining_clamps_to_zero_above_budget():
-    # cache_miss above budget -> remaining floors at 0, never negative.  The
-    # always-on fields keep reporting even past the guard trip point.
     agent = _session_agent_with_budget(
-        input_tokens=1_500_000, cached_tokens=200_000, budget=1_000_000
+        input_tokens=2_500_000, cached_tokens=200_000
     )
 
-    compact = build_tool_meta_token_usage(agent)
+    session = _session_half(build_tool_meta_token_usage(agent))
 
-    session = _session_half(compact)
-    assert session["cache_miss_tokens"] == 1_300_000
+    assert session["cache_miss_tokens"] == 2_300_000
     assert session["cache_miss_remaining_tokens"] == 0
 
 
-def test_session_half_omits_budget_fields_without_config():
-    # A config-less stub still gets cache_miss_tokens (session-derivable) but the
-    # budget-derived fields are omitted, never invented.
+def test_session_half_honors_outer_budget_hook():
     agent = _session_agent_with_budget(
-        input_tokens=300_000, cached_tokens=100_000, with_config=False
+        input_tokens=300_000,
+        cached_tokens=100_000,
+        budget=250_000,
     )
 
-    compact = build_tool_meta_token_usage(agent)
+    session = _session_half(build_tool_meta_token_usage(agent))
 
-    session = _session_half(compact)
-    assert session["cache_miss_tokens"] == 200_000
-    assert "cache_miss_budget" not in session
-    assert "cache_miss_remaining_tokens" not in session
-
-
-def test_session_half_omits_budget_fields_for_nonpositive_budget():
-    # A non-positive / non-int / bool budget disables the budget-derived fields,
-    # matching build_cache_miss_budget_context semantics; cache_miss_tokens stays.
-    for bad in (0, -5, None, True, "1000000"):
-        agent = _session_agent_with_budget(
-            input_tokens=300_000, cached_tokens=100_000, budget=bad
-        )
-        compact = build_tool_meta_token_usage(agent)
-        session = _session_half(compact)
-        assert session["cache_miss_tokens"] == 200_000
-        assert "cache_miss_budget" not in session
-        assert "cache_miss_remaining_tokens" not in session
-
-
-def test_session_half_honors_custom_budget():
-    agent = _session_agent_with_budget(
-        input_tokens=300_000, cached_tokens=100_000, budget=250_000
-    )
-
-    compact = build_tool_meta_token_usage(agent)
-
-    session = _session_half(compact)
     assert session["cache_miss_budget"] == 250_000
-    assert session["cache_miss_remaining_tokens"] == 50_000  # 250k - 200k
+    assert session["cache_miss_remaining_tokens"] == 50_000
 
 
-def test_session_half_honors_env_budget_override(monkeypatch):
-    # The session half shares _resolve_cache_miss_budget with the context guard,
-    # so a positive-int LINGTAI_CACHE_MISS_BUDGET wins over config here too — and
-    # cache_miss_remaining_tokens is recomputed against the env budget.
-    monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, "500000")
-    agent = _session_agent_with_budget(
-        input_tokens=300_000, cached_tokens=100_000, budget=250_000
-    )
-
-    compact = build_tool_meta_token_usage(agent)
-
-    session = _session_half(compact)
-    assert session["cache_miss_tokens"] == 200_000
-    assert session["cache_miss_budget"] == 500_000  # env, not the 250k config
-    assert session["cache_miss_remaining_tokens"] == 300_000  # 500k - 200k
-
-
-def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
+def test_session_half_cache_miss_uses_cumulative_totals_across_threshold_change():
     # Jason FINAL: the always-on cache-miss telemetry is SINCE LAST MOLT — it
     # derives from the cumulative/restored get_token_usage() totals so a refresh
     # does not reset cache_miss_remaining_tokens. It must NOT use the
     # since-refresh runtime deltas (which would drop cache_miss back near zero on
     # every restart).
+    budget = [2_000_000]
     agent = SimpleNamespace(
-        _config=SimpleNamespace(cache_miss_budget=1_000_000),
         _session=SimpleNamespace(latest_token_usage_snapshot=lambda: None),
         get_token_usage=lambda: {
             "api_calls": 30,
@@ -1499,6 +1434,7 @@ def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
             "input_tokens": 200,
             "cached_tokens": 40,
         },
+        resolve_cache_miss_budget=lambda: budget[0],
     )
 
     compact = build_tool_meta_token_usage(agent)
@@ -1507,13 +1443,19 @@ def test_session_half_cache_miss_uses_cumulative_totals_surviving_refresh():
     # cache_miss from cumulative totals: 900k - 100k = 800k (not the tiny
     # since-refresh 200-40 delta).
     assert session["cache_miss_tokens"] == 800_000
-    assert session["cache_miss_remaining_tokens"] == 200_000  # 1M - 800k
+    assert session["cache_miss_remaining_tokens"] == 1_200_000
+
+    budget[0] = 1_000_000
+    changed = _session_half(build_tool_meta_token_usage(agent))
+    assert changed["cache_miss_budget"] == 1_000_000
+    assert changed["cache_miss_tokens"] == 800_000
+    assert changed["cache_miss_remaining_tokens"] == 200_000
 
 
 def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
     # Through build_meta: below the budget there is NO context guard, but the
     # always-on session-half telemetry still reports current cache miss + budget.
-    agent = _budget_agent(budget=1_000_000, input_tokens=300_000, cached_tokens=100_000)
+    agent = _budget_agent(input_tokens=300_000, cached_tokens=100_000)
 
     meta = build_meta(agent)
 
@@ -1521,8 +1463,8 @@ def test_build_meta_token_usage_carries_always_on_cache_miss_below_budget():
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
     session = meta[TOOL_META_TOKEN_USAGE_PENDING_KEY]["session"]
     assert session["cache_miss_tokens"] == 200_000
-    assert session["cache_miss_budget"] == 1_000_000
-    assert session["cache_miss_remaining_tokens"] == 800_000
+    assert session["cache_miss_budget"] == 2_000_000
+    assert session["cache_miss_remaining_tokens"] == 1_800_000
 
 
 def test_build_meta_omits_context_before_decomp_runs():
@@ -4274,31 +4216,24 @@ def test_build_meta_current_molt_carries_reminder_and_event_payload():
 # cache-miss total is derived from the cumulative/restored
 # agent.get_token_usage() totals as max(input_tokens - cached_tokens, 0), so a
 # refresh does NOT reset it (Jason FINAL). Once it reaches/exceeds
-# agent._config.cache_miss_budget, build_meta restamps a "cache miss budget
+# the live effective resolver's budget, build_meta restamps a "cache miss budget
 # {budget} reached, molt now" reminder into the _tool_meta_context transit
-# sub-object (promoted to agent_meta.agent_state.context.molt) and surfaces
-# cache_miss_budget / cache_miss_tokens under agent_meta.agent_state.context. It
-# is a soft signal, not a new event route.
+# sub-object and surfaces cache_miss_budget / cache_miss_tokens. The resolver is
+# validated outer Agent hook > fixed fallback; the signal remains soft.
 # ---------------------------------------------------------------------------
 
 
 def _budget_agent(
     *,
-    budget=1_000_000,
     input_tokens=0,
     cached_tokens=0,
     context_intrinsic=True,
     warning_active=False,
     streak=0,
     has_getter=True,
+    budget=None,
 ):
-    """Minimal agent stand-in for build_cache_miss_budget_context / build_meta.
-
-    Carries a get_token_usage() returning the given cumulative input/cached
-    token totals (the since-last-molt basis the guard now reads), plus the
-    streak fields build_molt_context reads (so the "both warnings active" case
-    can be exercised through build_meta).
-    """
+    """Minimal guard/meta stub with an optional outer budget hook."""
     session = SimpleNamespace(
         _token_decomp_dirty=True,
         context_pressure_warning_active=warning_active,
@@ -4307,13 +4242,14 @@ def _budget_agent(
     agent = SimpleNamespace(
         _intrinsics={"context": object()} if context_intrinsic else {},
         _config=SimpleNamespace(
-            cache_miss_budget=budget,
             context_limit=None,
             time_awareness=True,
             timezone_awareness=True,
         ),
         _session=session,
     )
+    if budget is not None:
+        agent.resolve_cache_miss_budget = lambda: budget
     if has_getter:
         agent.get_token_usage = lambda: {
             "input_tokens": input_tokens,
@@ -4323,108 +4259,117 @@ def _budget_agent(
     return agent
 
 
-def test_cache_miss_budget_context_none_below_budget():
-    # cache_miss = 900k - 100k = 800k < 1M -> no context.
-    agent = _budget_agent(budget=1_000_000, input_tokens=900_000, cached_tokens=100_000)
+def test_cache_miss_budget_context_none_below_default():
+    agent = _budget_agent(input_tokens=1_900_000, cached_tokens=100_000)
     assert build_cache_miss_budget_context(agent) is None
 
 
-def test_cache_miss_budget_context_present_at_budget():
-    # cache_miss = 1.0M - 0 = 1.0M == budget -> reminder (inclusive >=).
-    agent = _budget_agent(budget=1_000_000, input_tokens=1_000_000, cached_tokens=0)
+def test_cache_miss_budget_context_present_at_default():
+    agent = _budget_agent(input_tokens=2_000_000)
     ctx = build_cache_miss_budget_context(agent)
-    assert isinstance(ctx, dict)
-    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
-    assert ctx["cache_miss_budget"] == 1_000_000
-    assert ctx["cache_miss_tokens"] == 1_000_000
+    assert ctx == {
+        "molt": "cache miss budget 2000000 reached, molt now",
+        "cache_miss_budget": 2_000_000,
+        "cache_miss_tokens": 2_000_000,
+    }
 
 
-def test_cache_miss_budget_context_present_above_budget_with_cache():
-    # cache_miss = 1.5M - 200k = 1.3M >= 1M budget.
-    agent = _budget_agent(budget=1_000_000, input_tokens=1_500_000, cached_tokens=200_000)
+def test_cache_miss_budget_context_present_above_default_with_cache():
+    agent = _budget_agent(input_tokens=2_500_000, cached_tokens=200_000)
     ctx = build_cache_miss_budget_context(agent)
-    assert ctx["cache_miss_tokens"] == 1_300_000
-    assert ctx["cache_miss_budget"] == 1_000_000
-    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
+    assert ctx["cache_miss_tokens"] == 2_300_000
+    assert ctx["cache_miss_budget"] == 2_000_000
 
 
 def test_cache_miss_budget_context_clamps_negative_cache_miss_to_zero():
-    # cached > input (odd provider accounting) -> cache_miss clamps to 0, no warn.
-    agent = _budget_agent(budget=1, input_tokens=100, cached_tokens=500)
+    agent = _budget_agent(input_tokens=100, cached_tokens=500)
     assert build_cache_miss_budget_context(agent) is None
 
 
-def test_cache_miss_budget_context_honors_custom_budget():
-    agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
+def test_cache_miss_budget_context_honors_outer_agent_hook():
+    agent = _budget_agent(budget=250_000, input_tokens=250_000)
     ctx = build_cache_miss_budget_context(agent)
     assert ctx["molt"] == "cache miss budget 250000 reached, molt now"
     assert ctx["cache_miss_budget"] == 250_000
 
 
+def test_cache_miss_budget_hook_value_matches_through_standalone_helpers():
+    agent = _budget_agent(budget=250_000, input_tokens=300_000)
 
-def test_cache_miss_budget_env_overrides_config(monkeypatch):
-    # A positive-int LINGTAI_CACHE_MISS_BUDGET env value wins over config.
-    monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, "777000")
-    agent = _budget_agent(budget=1_000_000, input_tokens=777_000, cached_tokens=0)
-    ctx = build_cache_miss_budget_context(agent)
-    assert ctx is not None
-    assert ctx["molt"] == "cache miss budget 777000 reached, molt now"
-    assert ctx["cache_miss_budget"] == 777_000
+    context = build_cache_miss_budget_context(agent)
+    session = _session_half(build_tool_meta_token_usage(agent))
 
-
-def test_cache_miss_budget_env_invalid_falls_back_to_config(monkeypatch):
-    # Non-int / bool / zero / negative env values fall back to config, matching
-    # the positive-int validation shared by _resolve_cache_miss_budget.
-    for bad in ("abc", "True", "0", "-5", ""):
-        monkeypatch.setenv(CACHE_MISS_BUDGET_ENV, bad)
-        agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
-        ctx = build_cache_miss_budget_context(agent)
-        assert ctx is not None
-        assert ctx["cache_miss_budget"] == 250_000
-        assert ctx["molt"] == "cache miss budget 250000 reached, molt now"
+    assert context["cache_miss_budget"] == 250_000
+    assert session["cache_miss_budget"] == 250_000
+    assert context["cache_miss_tokens"] == session["cache_miss_tokens"] == 300_000
 
 
-def test_cache_miss_budget_env_absent_uses_config_default(monkeypatch):
-    monkeypatch.delenv(CACHE_MISS_BUDGET_ENV, raising=False)
-    agent = _budget_agent(budget=250_000, input_tokens=250_000, cached_tokens=0)
-    ctx = build_cache_miss_budget_context(agent)
-    assert ctx is not None
-    assert ctx["cache_miss_budget"] == 250_000
+def test_build_meta_resolves_one_coherent_cache_miss_budget_snapshot():
+    calls = []
+    budgets = iter((1, 3_000_000))
+
+    def alternating_budget_hook():
+        budget = next(budgets)
+        calls.append(budget)
+        return budget
+
+    agent = _budget_agent(input_tokens=2)
+    agent.resolve_cache_miss_budget = alternating_budget_hook
+
+    meta = build_meta(agent)
+    context = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
+    session = _session_half(meta[TOOL_META_TOKEN_USAGE_PENDING_KEY])
+
+    assert calls == [1]
+    assert context["cache_miss_budget"] == session["cache_miss_budget"] == 1
+    assert context["cache_miss_tokens"] == session["cache_miss_tokens"] == 2
+
+
+@pytest.mark.parametrize("returned", [None, True, False, 0, -5, 1.5, "3000000"])
+def test_cache_miss_budget_invalid_hook_return_uses_fixed_fallback(returned):
+    agent = SimpleNamespace(resolve_cache_miss_budget=lambda: returned)
+    assert meta_block._resolve_cache_miss_budget(agent) == 2_000_000
+
+
+def test_cache_miss_budget_missing_or_raising_hook_uses_fixed_fallback():
+    assert meta_block._resolve_cache_miss_budget(SimpleNamespace()) == 2_000_000
+
+    def fail():
+        raise RuntimeError("hook failed")
+
+    assert (
+        meta_block._resolve_cache_miss_budget(
+            SimpleNamespace(resolve_cache_miss_budget=fail)
+        )
+        == 2_000_000
+    )
 
 
 def test_cache_miss_budget_context_absent_without_context():
-    # Consistent with build_molt_context: no context intrinsic -> no reminder.
-    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, context_intrinsic=False)
+    agent = _budget_agent(input_tokens=2_000_000, context_intrinsic=False)
     assert build_cache_miss_budget_context(agent) is None
 
 
 def test_cache_miss_budget_context_graceful_without_getter():
-    agent = _budget_agent(input_tokens=2_000_000, cached_tokens=0, has_getter=False)
+    agent = _budget_agent(input_tokens=2_000_000, has_getter=False)
     assert build_cache_miss_budget_context(agent) is None
-
-
-def test_cache_miss_budget_context_absent_for_nonpositive_budget():
-    # Defensive: a non-positive / non-int budget disables the guard, never warns.
-    for bad in (0, -1, None, "1000000"):
-        agent = _budget_agent(budget=bad, input_tokens=5_000_000, cached_tokens=0)
-        assert build_cache_miss_budget_context(agent) is None
 
 
 def test_build_meta_attaches_budget_context_at_budget():
     """build_meta integrates the budget guard: at/above budget the transit
     sub-object carries the molt warning plus the budget fields."""
-    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    agent = _budget_agent(input_tokens=2_200_000)
     meta = build_meta(agent)
     ctx = meta[meta_block.TOOL_META_CONTEXT_PENDING_KEY]
-    assert ctx["molt"] == "cache miss budget 1000000 reached, molt now"
-    assert ctx["cache_miss_budget"] == 1_000_000
-    assert ctx["cache_miss_tokens"] == 1_200_000
+    assert ctx["molt"] == "cache miss budget 2000000 reached, molt now"
+    assert ctx["cache_miss_budget"] == 2_000_000
+    assert ctx["cache_miss_tokens"] == 2_200_000
     # Budget guard is not a new event route: no emission-event payload.
     assert meta_block.TOOL_META_CONTEXT_EVENT_PENDING_KEY not in meta
 
 
 def test_build_meta_no_budget_context_below_budget():
-    agent = _budget_agent(budget=1_000_000, input_tokens=500_000, cached_tokens=0)
+    agent = _budget_agent(input_tokens=500_000)
     meta = build_meta(agent)
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in meta
 
@@ -4442,7 +4387,7 @@ def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
     reminder = ContextPressureReminder()
     reminder.streak = 3  # >= warn_after_rounds (3) -> active
     reminder.last_round_id = 7
-    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    agent = _budget_agent(input_tokens=2_200_000)
     agent._session._token_decomp_dirty = False
     agent._session._system_prompt_tokens = 10
     agent._session._tools_tokens = 0
@@ -4459,11 +4404,11 @@ def test_build_meta_preserves_both_warnings_when_context_pressure_also_active():
     assert "Context has stayed high" in molt
     assert "3 consecutive fresh model calls" in molt
     # Budget warning also present, appended on its own line.
-    assert "cache miss budget 1000000 reached, molt now" in molt
-    assert molt.endswith("cache miss budget 1000000 reached, molt now")
+    assert "cache miss budget 2000000 reached, molt now" in molt
+    assert molt.endswith("cache miss budget 2000000 reached, molt now")
     # Budget fields present alongside.
-    assert ctx["cache_miss_budget"] == 1_000_000
-    assert ctx["cache_miss_tokens"] == 1_200_000
+    assert ctx["cache_miss_budget"] == 2_000_000
+    assert ctx["cache_miss_tokens"] == 2_200_000
     # The context-pressure emission event still hashes ONLY the pressure message,
     # not the combined text (channel-B dedup/logging semantics are unchanged).
     from lingtai.kernel.reminders.context_pressure import reminder_message_hash
@@ -4479,7 +4424,7 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     from lingtai.kernel.loop_guard import LoopGuard
     from lingtai.kernel.tool_executor import _DEFAULT_MAX_RESULT_CHARS, ToolExecutor
 
-    agent = _budget_agent(budget=1_000_000, input_tokens=1_200_000, cached_tokens=0)
+    agent = _budget_agent(input_tokens=2_200_000)
     meta = build_meta(agent)
     executor = ToolExecutor(
         dispatch_fn=lambda name, args: {},
@@ -4498,9 +4443,9 @@ def test_attach_tool_block_promotes_budget_context_and_pops_transit_key():
     )
     context = tool_meta["_agent_pending"]["agent_state"]["context"]
 
-    assert context["molt"] == "cache miss budget 1000000 reached, molt now"
-    assert context["cache_miss_budget"] == 1_000_000
-    assert context["cache_miss_tokens"] == 1_200_000
+    assert context["molt"] == "cache miss budget 2000000 reached, molt now"
+    assert context["cache_miss_budget"] == 2_000_000
+    assert context["cache_miss_tokens"] == 2_200_000
     assert meta_block.TOOL_META_CONTEXT_PENDING_KEY not in tool_meta
 
 
@@ -4748,9 +4693,9 @@ def test_build_meta_preserves_sustained_overflow_and_budget_molt_lines():
             timezone_awareness=False,
             language="en",
             context_limit=1000,
-            cache_miss_budget=1000,
         ),
         get_token_usage=lambda: {"input_tokens": 5000, "cached_tokens": 0},
+        resolve_cache_miss_budget=lambda: 1000,
         _session=SimpleNamespace(
             _system_prompt_tokens=100,
             _tools_tokens=0,

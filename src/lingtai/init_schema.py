@@ -117,12 +117,6 @@ MANIFEST_OPTIONAL: dict[str, type | tuple[type, ...]] = {
     # AgentConfig.aed_timeout by agent.build_agent_config (default 360.0);
     # accepts integer or float seconds.
     "aed_timeout": (int, float),
-    # Soft per-molt/session cache-miss token budget. Positive int; default
-    # 1_000_000 lives in AgentConfig.cache_miss_budget. The range check
-    # (<= 0) is enforced explicitly in validate_init below; the (int) type
-    # here rejects non-int types like str/float/None (bool is rejected by
-    # _check_type's general rule, since bool subclasses int).
-    "cache_miss_budget": int,
     "admin": dict,
     "streaming": bool,
     "time_awareness": bool,
@@ -389,13 +383,6 @@ def validate_init(data: dict) -> list[str]:
         if summarize_threshold < 0:
             raise ValueError(
                 "manifest.summarize_notification_threshold: expected non-negative int"
-            )
-
-    if "cache_miss_budget" in manifest:
-        cache_miss_budget = manifest["cache_miss_budget"]
-        if cache_miss_budget <= 0:
-            raise ValueError(
-                "manifest.cache_miss_budget: expected positive int (> 0)"
             )
 
     if "aed_timeout" in manifest:

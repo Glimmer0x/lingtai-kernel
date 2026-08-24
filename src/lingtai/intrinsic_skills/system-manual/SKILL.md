@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.15.0
-last_changed_at: "2026-08-24T12:00:00Z"
+version: 1.16.0
+last_changed_at: "2026-08-24T21:00:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -15,7 +15,13 @@ related_files:
 - src/lingtai/tools/system/schema.py
 - src/lingtai/tools/system/CONTRACT.md
 - src/lingtai/tools/system/ANATOMY.md
+- src/lingtai/tools/system/settings.py
+- src/lingtai/agent.py
+- src/lingtai/kernel/meta_block.py
+- src/lingtai/tools/context/manual/SKILL.md
+- ENVIRONMENT_VARIABLES.md
 - tests/test_system_declared_plugin.py
+- tests/test_meta_block.py
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
@@ -178,11 +184,57 @@ short receipts; leave `summarize=false` and read them exactly. The `manual`
 action itself must always use `summarize=false`, otherwise the operating
 procedure you requested may be summarized away before you can follow it.
 
-System has no `settings/system.json` and no per-action settings file. Runtime
-configuration comes from the agent's `init.json`/manifest and the corresponding
-provider or capability owners; live identity is maintained by the identity
-operations. Do not invent or edit a System settings path. Use `presets` and the
-refresh pre-check route before any authorized preset swap or refresh.
+### Cache-miss budget settings
+
+System owns one family settings file, `<agent-workdir>/settings/system.json`;
+there is no `settings/system.<action>.json`. Its complete closed v1 JSON document
+is exactly these two required keys and no others, shown with the default budget:
+
+```json
+{"schema_version": 1, "cache_miss_budget": 2000000}
+```
+
+`schema_version` must be the JSON integer `1` (not a boolean, float, string, or
+another integer version), and `cache_miss_budget` must be a positive JSON integer.
+Missing, unknown, or duplicate keys; boolean/zero/negative/string/float/null
+budgets; non-object, malformed, or non-UTF-8 JSON; non-regular or over-64-KiB
+files; and a file that changes or is replaced during its bounded stable read are
+invalid. The other source is the process environment, for example
+`LINGTAI_CACHE_MISS_BUDGET=3000000`; it must parse as a positive integer string.
+Resolution is exactly: valid `LINGTAI_CACHE_MISS_BUDGET` first, then a valid
+`settings/system.json` value, then the fixed default `2,000,000`. An invalid env
+value is treated as unset. When a valid env value wins, the lower-priority file is
+not read or diagnosed. Only when no valid env wins is the file consulted: a
+missing file uses the default without a diagnostic, while a present invalid file
+uses the default and records the bounded, redaction-safe event
+`cache_miss_budget_settings_invalid` once per unchanged problem/snapshot. The
+stable read and diagnostic transition share one per-agent lock; a later valid or
+missing file clears the prior signature so the same problem can be reported if it
+returns after repair. No invalid value disables the positive default, and no read
+creates, heals, migrates, normalizes, or rewrites the file.
+
+The process environment is read live at every cache-miss budget resolution (each
+metadata snapshot). When no valid env value wins, `settings/system.json` is then
+read live in that same resolution. A running-process environment change therefore
+applies on the next snapshot; an edit to the file does too when a valid env is not
+shadowing it. Changing an `env_file` still needs refresh to load that file into
+`os.environ`; consult the canonical environment-variable registry for that
+process-environment caveat.
+Changing either threshold, or refreshing/restarting, does **not** reset
+`token_usage.session.cache_miss_tokens`: it is cumulative since the last molt.
+Only a successful molt starts the next since-last-molt counter cycle.
+
+At/above the effective threshold, System's setting drives the Context-owned soft
+`cache miss budget {N} reached, molt now` reminder and budget telemetry. It is
+advice only: it never blocks a request and does not alter context-pressure,
+reconstruction, token accounting, or authorization policy. This file is not
+`<agent-workdir>/.notification/system.json`, which is unrelated notification
+state. Legacy `init.json` `manifest.cache_miss_budget` is schema-unknown ignored
+data and has no runtime effect; the read-only init reader reports it without
+rewriting the file.
+
+Use `presets` and the refresh pre-check route before any authorized preset swap
+or refresh; neither operation owns this live-read System setting.
 
 ## How to choose between resident prompt, this router, and references
 

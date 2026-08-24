@@ -105,8 +105,8 @@ and no concrete next action remains, consider molt as a costed optimization
 rather than automatic cleanup: molt only when context pressure (≥85%), explicit human request,
 or conversation confusion makes the fresh briefing worth the cost.
 Go idle instead of molting merely because the task ended. A
-separate soft cache-miss budget (default 1,000,000 uncached-input tokens for the
-current session) also nudges a molt: when `_meta.agent_meta.agent_state.context.molt`
+separate soft cache-miss budget (default 2,000,000 uncached-input tokens since
+the last molt) also nudges a molt: when `_meta.agent_meta.agent_state.context.molt`
 says the cache-miss budget is reached, molt to shed the carried context and
 restore cache efficiency.
 
