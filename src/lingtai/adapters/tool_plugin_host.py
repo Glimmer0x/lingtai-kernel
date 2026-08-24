@@ -45,6 +45,7 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentActiveProviderAdapter",
+    "AgentProviderIdentityAdapter",
     "AgentPromptSectionAdapter",
     "AgentFileIOAdapter",
     "AgentContextRuntimeAdapter",
@@ -104,6 +105,27 @@ class AgentActiveProviderAdapter:
     @property
     def service(self) -> Any:
         return self._read()
+
+
+class AgentProviderIdentityAdapter:
+    """``ProviderIdentityPort`` over the Agent's current provider *label*.
+
+    Narrower than :class:`AgentActiveProviderAdapter`: it holds one read
+    closure and exposes only a string (or ``None``). Web consumes exactly this
+    label for its explicit Anthropic/Gemini eligibility gate; it never sees the
+    provider service, credentials, model configuration, or the Agent. A
+    non-string read is reported as ``None`` rather than coerced.
+    """
+
+    __slots__ = ("_read",)
+
+    def __init__(self, read: Callable[[], Any]) -> None:
+        self._read = read
+
+    @property
+    def provider(self) -> str | None:
+        value = self._read()
+        return value if isinstance(value, str) else None
 
 
 class AgentPromptSectionAdapter:
@@ -1503,8 +1525,10 @@ def agent_host_ports(
     ``task_card_notifications`` operations from ``agent_task_card_ports``.
     Vision receives its read-through ``active_provider`` identity here; its
     setup-selected ``configuration`` snapshot arrives through ``extra_ports``
-    exactly as Shell's does. The registrar grants just ``requires``, never this
-    whole map.
+    exactly as Shell's does. Web receives its narrow read-only
+    ``provider_identity`` label here; its Web-owned typed ``web_runtime``
+    composition value arrives through ``extra_ports`` from ``web.setup`` alone.
+    The registrar grants just ``requires``, never this whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
     # Construct only the declaration's earned standard adapter. Lightweight Core
@@ -1569,6 +1593,12 @@ def agent_host_ports(
         ports["active_provider"] = AgentActiveProviderAdapter(
             lambda: getattr(agent, "service", None)
         )
+    elif plugin_name == "web":
+        # One read-through label only: the canonical provider name of the
+        # current service, never the service, its credentials, or the Agent.
+        ports["provider_identity"] = AgentProviderIdentityAdapter(
+            lambda: getattr(getattr(agent, "service", None), "provider", None)
+        )
     if extra_ports:
         ports.update(extra_ports)
     return ports
@@ -1592,9 +1622,9 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, File, Shell, and Vision use ``extra_ports_for`` so each can earn its
-    runtime or setup-selected port; Notification, Shell, and Vision receive
-    their dedicated Agent-derived ports in ``agent_host_ports``,
+    Email, File, Shell, Vision, and Web use ``extra_ports_for`` so each can earn
+    its runtime or setup-selected port; Notification, Shell, Vision, and Web
+    receive their dedicated Agent-derived ports in ``agent_host_ports``,
     without granting them to every declaration. Both maps are merged per
     declaration; conflicting keys from the factory intentionally win only for
     that declaration.

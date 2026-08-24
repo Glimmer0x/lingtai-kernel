@@ -7,6 +7,7 @@ Covers the generic ``lingtai.tools.tool_family.manual`` builder in isolation
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
@@ -17,6 +18,81 @@ from lingtai.tools.tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_c
 class _FakeAgent:
     def __init__(self, working_dir: Path) -> None:
         self._working_dir = working_dir
+
+
+class _OfficialWebHost:
+    """The smallest controlled host that satisfies the strict official registrar.
+
+    ``web`` is a declared official family: ``setup`` composes its typed
+    ``WebComposition`` and mounts only through ``register_agent_tool_plugins``,
+    whose kernel registrar anchors, records, mounts, and claims through
+    BaseAgent's narrow hooks. This stub reuses the real BaseAgent hook
+    implementations over its own private maps and repeats the canonical
+    declaration/bind identity checks in its one-use mount, so no registrar
+    check is weakened. It adds no Agent surface beyond ``working_dir``, a
+    ``service`` read (``None``: no provider label), and a stub ``add_tool``.
+    """
+
+    def __init__(self, working_dir: Path) -> None:
+        self._working_dir = working_dir
+        self.service = None
+        self.handlers: dict[str, object] = {}
+        self._official_tool_plugins: dict[str, object] = {}
+        self._official_tool_declarations: dict[str, object] = {}
+        self._official_tool_bindings: dict[str, object] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._authorize_official_tool_declaration(self, declaration)
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._record_official_tool_binding(self, declaration, plugin)
+
+    def _claim_official_tool(self, transaction) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._claim_official_tool(self, transaction)
+
+    def _mount_official_tool(self, transaction) -> None:
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OfficialMountTransaction,
+        )
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError("official tool mounting requires a registrar transaction")
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        self.add_tool(name, handler=plugin.handler, schema=plugin.schema)
+        transaction.mark_mounted(self)
+
+    def add_tool(self, name: str, *, handler=None, **_kwargs) -> None:
+        self.handlers[name] = handler
 
 
 def _install_manual(working_dir: Path, skill_name: str, body: str) -> Path:
@@ -121,14 +197,7 @@ def test_web_family_handle_returns_canonical_manual_result_verbatim_before_host_
     pre-migration public flat shape with no canonical fields. This is the
     no-double-wrap/Host-owns-presentation contract: dispatch produces the
     canonical result; Web's own Host layer adapts it strictly afterward."""
-    from lingtai.tools.web_search import setup
-
-    class _Agent:
-        def __init__(self, working_dir):
-            self._working_dir = working_dir
-
-        def add_tool(self, *args, **kwargs):
-            pass
+    from lingtai.tools.web_search import DECLARATION, setup
 
     class _Port:
         def handle(self, args):
@@ -138,7 +207,10 @@ def test_web_family_handle_returns_canonical_manual_result_verbatim_before_host_
     manual_dir.mkdir(parents=True)
     (manual_dir / "SKILL.md").write_text("web manual body", encoding="utf-8")
 
-    manager = setup(_Agent(tmp_path), browser_port=_Port())
+    host = _OfficialWebHost(tmp_path)
+    manager = setup(host, browser_port=_Port())
+    assert host.official_tool_plugins["web"] is DECLARATION
+    assert host.handlers["web"] == manager.handle
     envelope = {"action": "manual", "input": {}, "reasoning": "load web guidance"}
 
     canonical = manager._family.handle(envelope)
@@ -167,18 +239,11 @@ def test_web_manual_missing_manual_keeps_exact_public_degraded_shape(tmp_path):
     missing-manual case specifically (the success case is covered above)."""
     from lingtai.tools.web_search import setup
 
-    class _Agent:
-        def __init__(self, working_dir):
-            self._working_dir = working_dir
-
-        def add_tool(self, *args, **kwargs):
-            pass
-
     class _Port:
         def handle(self, args):
             return {"status": "ok"}
 
-    manager = setup(_Agent(tmp_path), browser_port=_Port())  # no manual installed
+    manager = setup(_OfficialWebHost(tmp_path), browser_port=_Port())  # no manual installed
     result = manager.handle({"action": "manual", "input": {}, "reasoning": "load web guidance"})
     assert result["status"] == "degraded"
     assert result["manual"] == ""
@@ -193,18 +258,11 @@ def test_web_manual_missing_manual_keeps_exact_public_degraded_shape(tmp_path):
 def test_web_manual_rejects_nonempty_input(tmp_path):
     from lingtai.tools.web_search import setup
 
-    class _Agent:
-        def __init__(self, working_dir):
-            self._working_dir = working_dir
-
-        def add_tool(self, *args, **kwargs):
-            pass
-
     class _Port:
         def handle(self, args):
             return {"status": "ok"}
 
-    manager = setup(_Agent(tmp_path), browser_port=_Port())
+    manager = setup(_OfficialWebHost(tmp_path), browser_port=_Port())
     result = manager.handle({"action": "manual", "input": {"topic": "search"}, "reasoning": "x"})
     assert result["status"] == "failed"
     assert result["error_code"] == "INVALID_ARGUMENT"

@@ -52,6 +52,9 @@ related_files:
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/manual/SKILL.md
+  - src/lingtai/tools/web_search/ANATOMY.md
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
@@ -71,13 +74,15 @@ related_files:
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
   - tests/test_tool_family_vision_migration.py
+  - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - tests/test_intrinsic_manual_actions.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
   upward; src/lingtai/tools/ANATOMY.md and the MCP, Avatar, Context, Daemon,
-  Email, File, Plugin, Task Card, and Vision owner Anatomies across to the declaring side). Code is the
+  Email, File, Plugin, Task Card, Vision, and Web owner Anatomies across to the declaring side). Code is the
   structural source of truth: update
   upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
   src/lingtai/tools/daemon/ANATOMY.md, src/lingtai/tools/email/ANATOMY.md, and
@@ -109,7 +114,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the eighteen kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+  - the nineteen kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
     `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
     read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
@@ -122,10 +127,14 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     with no generic enqueue, `**kwargs`, source, channel, or extra argument),
     Vision's read-through `ActiveProviderPort` (one `service` read of the
     current active provider; Vision also consumes Shell's `ConfigurationPort`
-    for its setup snapshot),
+    for its setup snapshot), Web's narrower read-only `ProviderIdentityPort`
+    (one `provider` string-or-`None` read of the current canonical provider
+    label, never the service),
     and host-only `ToolMountPort`, plus File's
     structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
-    `email_runtime` is also grantable but its Protocol remains Email-owned;
+    `email_runtime` and `web_runtime` are also grantable (twenty grant names
+    in `GRANTABLE_HOST_PORTS`) but their Protocols remain family-owned —
+    Email's `EmailRuntimePort` and Web's `WebCompositionPort`;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -165,14 +174,19 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `AgentActiveProviderAdapter` for Vision's one read-through `service` view of
   `Agent.service`, built in the standard table only for the `vision`
   declaration (Vision's `configuration` snapshot reuses
-  `StaticConfigurationAdapter` through `extra_ports_for`).
+  `StaticConfigurationAdapter` through `extra_ports_for`), and
+  `AgentProviderIdentityAdapter` for Web's one read-through `provider` label
+  over `Agent.service.provider`, built in the standard table only for the
+  `web` declaration (Web's typed `web_runtime` composition needs no host
+  adapter class: `web.setup` grants its own `WebComposition` value through
+  `extra_ports_for`).
   No adapter exposes an Agent or generic dispatcher; `agent_host_ports` and
   `register_agent_tool_plugins` construct the private registrar mount seam.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   Its static declaration binds the per-host family and protected prompt
-  section; Avatar, Context, Daemon, Email, File, Plugin, and Notification
-  are separately accepted vertical slices. The later-family target register
-  remains limited to `web`; it is
+  section; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
+  Soul, System, Task Card, Vision, and Web are separately accepted vertical
+  slices. The later-family target register is now empty; the reserved list is
   not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
@@ -293,6 +307,24 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   call — never switching the active preset, borrowing active secrets, or
   falling back to another provider/MCP. The package manual installs at
   `capabilities/vision/SKILL.md`.
+- `src/lingtai/tools/web_search/__init__.py` is the fourteenth accepted
+  vertical slice, the unified `web` search/browse family. Its static
+  `DECLARATION` owns the public `search | browse | manual` family (one strict
+  input schema per action, derived from the family's one `_CHILD_SPECS`
+  source) and binds `WebManager` to exactly `workdir`, the Web-owned typed
+  `web_runtime` composition value, and the narrow read-only
+  `provider_identity` label. `setup(agent, ...)` keeps the existing lazy
+  engine/browser composition, folds the `BrowserPort` plus immutable
+  `_EngineSpec` set and default provenance into one `WebComposition`, grants
+  it to the `web` declaration alone through `extra_ports_for`, and returns the
+  manager the bind published back through `WebComposition.publish_manager`
+  (exactly once). `_bind` fails closed with `HostPortError` unless
+  `host.web_runtime` is granted and is a typed `WebComposition` — there is no
+  fallback carrier, default transport, or default engine set at bind. The
+  manager retains only the granted workdir and provider-identity ports;
+  `_same_provider_identity` compares the port's label exactly for the explicit
+  Anthropic/Gemini opt-in. The package manual installs at
+  `capabilities/web/SKILL.md`.
 
 ## Connections
 
@@ -332,6 +364,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   closure reads `Agent.service` on every access, so a refreshed provider is
   seen without a stale identity; the `configuration` port is the same
   `StaticConfigurationAdapter` seam Shell uses, granted only to `vision`.
+- `lingtai.tools.web_search` imports `lingtai.kernel.tool_plugin`; its `_bind`
+  sees a `ToolPluginHost`, never an Agent. The `provider_identity` adapter's
+  one closure reads `Agent.service.provider` on every access; the
+  `web_runtime` port is the family's own `WebComposition`, granted only to
+  `web` through `extra_ports_for` from `web.setup`, and the bound manager is
+  published back through that same value so `setup` still returns it.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only
@@ -350,11 +388,13 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 - `lingtai.tools.mcp.setup()`, `lingtai.tools.avatar.setup()`,
   `lingtai.tools.context.setup()`, `lingtai.tools.daemon.setup()`,
   `lingtai.tools.file.setup()`, `lingtai.tools.plugin.setup()`,
-  `lingtai.tools.task_card.setup()`, and `lingtai.tools.vision.setup()` call
+  `lingtai.tools.task_card.setup()`, `lingtai.tools.vision.setup()`, and
+  `lingtai.tools.web_search.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins` through the
   ordinary capability boot loop. Daemon and File add their capability-native
-  ports through `extra_ports_for`, and Vision adds its setup-selected
-  `configuration` snapshot the same way; Plugin needs no factory because its
+  ports through `extra_ports_for`, Vision adds its setup-selected
+  `configuration` snapshot the same way, and Web adds its typed
+  `web_runtime` composition the same way; Plugin needs no factory because its
   read-only `plugin_catalog` projection is built in the standard table and is
   still granted only to a declaration that names it; Task Card's three ports
   are likewise built in the standard table (`agent_task_card_ports`) only for
@@ -384,8 +424,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `import lingtai.tools.mcp`, `import lingtai.tools.avatar`,
 `import lingtai.tools.context`, `import lingtai.tools.daemon`,
 `import lingtai.tools.email`, `import lingtai.tools.file`,
-`import lingtai.tools.plugin`, `import lingtai.tools.task_card`, or
-`import lingtai.tools.vision` →
+`import lingtai.tools.plugin`, `import lingtai.tools.task_card`,
+`import lingtai.tools.vision`, or `import lingtai.tools.web_search` →
 `import lingtai.tools.email`, or `import lingtai.tools.notification` →
 `ToolPluginDeclaration.__post_init__` validates
 its declared shape, with no Agent in existence.
@@ -478,13 +518,16 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
-  The thirteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
-  `file`, `plugin`, `notification`, `shell`, `soul`, `system`, `task_card`, and
-  `vision`;
+  The fourteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `file`, `plugin`, `notification`, `shell`, `soul`, `system`, `task_card`,
+  `vision`, and `web`;
   Notification demonstrates an always-on injected family rather than a
   later-family target or normal opt-in capability, Task Card demonstrates a
   manager-owning dynamic family whose one manager is retained on the Agent
-  through a family-specific lifecycle port and rebound on every refresh, and
+  through a family-specific lifecycle port and rebound on every refresh,
   Vision demonstrates a dynamic family that reads the live active provider
   through one read-through port and receives its setup input as a
-  configuration snapshot rather than an Agent.
+  configuration snapshot rather than an Agent, and Web demonstrates a dynamic
+  family whose setup composes a typed family-owned value (transport plus
+  immutable engine specs) that is granted to its own declaration alone and
+  publishes the bound manager back, beside one narrow read-only label port.

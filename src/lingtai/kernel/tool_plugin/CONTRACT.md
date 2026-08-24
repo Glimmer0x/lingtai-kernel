@@ -50,6 +50,9 @@ related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/CONTRACT.md
   - src/lingtai/tools/vision/manual/SKILL.md
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/CONTRACT.md
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -64,6 +67,8 @@ related_files:
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
   - tests/test_tool_family_vision_migration.py
+  - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - tests/test_intrinsic_manual_actions.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
@@ -106,11 +111,13 @@ It owns exactly four things:
    read-only `PluginCatalogPort`, Shell's `NotificationPort` and
    `ConfigurationPort`, Task Card's `ShutdownPort`, `TaskCardLifecyclePort`,
    and closed operation-native `TaskCardNotificationsPort`, Vision's
-   read-through `ActiveProviderPort`, `ToolMountPort`),
-   File's structural match/traversal result Protocols, and Email's family-owned
-   `EmailRuntimePort`, through which a plugin receives only its
-   capability-native view of the live Agent body, plus the `ToolPluginHost`
-   facade that grants a declaration exactly the ports it named.
+   read-through `ActiveProviderPort`, Web's narrow read-only
+   `ProviderIdentityPort`, `ToolMountPort`),
+   File's structural match/traversal result Protocols, and the two
+   family-owned grant names Email's `EmailRuntimePort` (`email_runtime`) and
+   Web's `WebCompositionPort` (`web_runtime`), through which a plugin receives
+   only its capability-native view of the live Agent body, plus the
+   `ToolPluginHost` facade that grants a declaration exactly the ports it named.
    `NotificationStatePort`, `ToolMountPort`) and Email's family-owned
    `EmailRuntimePort`, through which a plugin controls the live Agent body, and
    the `ToolPluginHost` facade
@@ -161,8 +168,8 @@ Coding agents and LingTai agents MUST observe the following.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
   `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, `soul`,
-  `system`, `task_card`, and `vision` are declared, in that official order;
-  every remaining target stays outside this contract. Task Card is a
+  `system`, `task_card`, `vision`, and `web` are declared, in that official
+  order; the former later-family target register is now empty. Task Card is a
   channel-neutral intrinsic dynamic capability: its one `TaskCardManager` is
   retained on the current Agent through `TaskCardLifecyclePort` and rebound on
   every refresh, and its persisted watch resumes only after a successful bind.
@@ -173,6 +180,16 @@ Coding agents and LingTai agents MUST observe the following.
   only that preset's own route/credential for the one requested `check`/
   `analyze` call, and no provider/credential/MCP fallback is ever automatic
   (see `src/lingtai/tools/vision/CONTRACT.md`).
+  Web is the unified search/browse capability whose public surface is exactly
+  `search | browse | manual`: it binds `workdir`, its Web-owned typed
+  `web_runtime` composition value (browser transport, immutable engine specs,
+  and default provenance, composed by its own `setup` and granted to the `web`
+  declaration alone through `extra_ports_for`), and the narrow read-only
+  `provider_identity` label that gates its explicit Anthropic/Gemini opt-in;
+  its bind fails closed on a missing or mistyped `web_runtime`, and no
+  provider/browser fallback is ever automatic beyond the family's one
+  documented OpenAI→DuckDuckGo runtime fallback (see
+  `src/lingtai/tools/web_search/CONTRACT.md`).
   `daemon`, `email`, and `notification` are declared; every remaining target
   stays outside this contract. Notification is a mandatory injected official
   family: its declaration remains mounted once through the existing official
@@ -220,6 +237,8 @@ capability.
 | `TaskCardLifecyclePort` | `current_manager()`, `retain_manager(manager)`, `report_resume_failure(error)` | The one current-Agent Task Card manager slot and its bounded resume diagnostic. It preserves the existing agent-stop, completed-work reminder, and Daemon `has_active_task_card_watch` hooks over the same retained manager without becoming a generic state bag. |
 | `TaskCardNotificationsPort` | `publish_error(watch_id, body, code, retryable, idempotency_key, last_valid_body_at=None)`, `publish_recovered(watch_id, body, idempotency_key)`, `publish_limit(watch_id, body, idempotency_key, used, max_refreshes, last_valid_body_at=None)`, `submit_reminder(turns)`, `clear_reminder()` | Exactly the Task Card producer's established error/recovered/limit and absent-or-stale reminder operations, as five closed scalar-signature methods. There is no generic enqueue, `**kwargs`, `source`, `channel`, `priority`, or `extra` argument: the production adapter pins the `task_card.error`/`task_card.limit` sources, the `system` channel, priority, idempotency skip, and the bounded `extra` projection internally, and holds the Agent's generic publisher privately. A holder cannot publish a foreign source or address another channel (guarded by Task Card's [TK002](../../tools/task_card/BEHAVIORS.md#behavior-tk002)). |
 | `ActiveProviderPort` | `service -> Any` | Read only the current active provider service, read through on every access so a refresh never leaves a stale provider identity. The consuming family (Vision today) may inspect that one service's provider/model/credential route but receives neither the Agent, its capability map, nor a generic provider/capability lookup (guarded by Vision's [VN006](../../tools/vision/BEHAVIORS.md#behavior-vn006)). |
+| `ProviderIdentityPort` | `provider -> str \| None` | Read only the current canonical provider *label*, read through on every access. Narrower than `ActiveProviderPort` by design: Web consumes this one string for its explicit Anthropic/Gemini eligibility gate and receives neither the provider service, credentials, model configuration, the Agent, nor any provider registry; a non-string read is reported as `None`, never coerced. |
+| `WebCompositionPort` (Web-owned) | `browser_port`, `specs`, `default_engine`, `default_source`, `legacy_fallback_from`, `publish_manager(manager)` | Web-only setup boundary behind the grant name `web_runtime`. The typed `WebComposition` value is composed by `web.setup` from the `BrowserPort` plus immutable engine specs and default provenance, granted to the `web` declaration alone through `extra_ports_for`, and never built in the standard table; the bind publishes its `WebManager` back through it exactly once. It exposes no Agent, LLM service, or credential. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
@@ -227,7 +246,8 @@ capability.
 `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
 `notification_state`, `notifications`, `configuration`, `soul_runtime`,
 `system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
-`task_card_notifications`, and `active_provider`: `mcp`
+`task_card_notifications`, `active_provider`, `web_runtime`, and
+`provider_identity`: `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
 Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
@@ -243,7 +263,11 @@ table only for the `task_card` declaration; and Vision consumes `workdir` plus
 its read-through `active_provider` (built in the standard table only for the
 `vision` declaration) and the same setup-selected `configuration` port Shell
 earned, carrying one `VisionConfiguration` snapshot through `extra_ports_for`
-— never the Agent, and never a generic provider lookup. Family-specific runtime ports are
+— never the Agent, and never a generic provider lookup; and Web consumes
+`workdir` plus its Web-owned typed `web_runtime` composition value (granted
+only by `web.setup` through `extra_ports_for`, never built in the standard
+table) and the narrow read-only `provider_identity` label (built in the
+standard table only for the `web` declaration). Family-specific runtime ports are
 composed only for their declaration through `extra_ports` or `extra_ports_for`,
 so they do not expand another declaration's grant; a port built in the standard
 table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only
@@ -310,6 +334,12 @@ values, or Vision's `VisionConfiguration.port_values()` snapshot.
 `vision` declaration: it holds one read closure over `Agent.service` and
 exposes nothing else — no capability map, tool surface, provider registry, or
 mount authority.
+`AgentProviderIdentityAdapter` is built in the standard table only for the
+`web` declaration: it holds one read closure over `Agent.service.provider`
+and exposes a single `provider` string-or-`None` property — no service,
+credential, model, Agent, or registry. Web's `web_runtime` needs no host
+adapter class: the family-owned `WebComposition` value composed by `web.setup`
+*is* the port, granted to that declaration alone through `extra_ports_for`.
 Daemon's host runtime continues to omit the parent `email` official surface, so
 its separately accepted explicit task-scoped daemon-email MCP route is not
 silently widened by Email's parent declaration.
@@ -483,8 +513,8 @@ preserve Notification Core delay/timer and Store behavior:
 - ordering — `bind` alone activates and mounts nothing;
   `activate` runs before `mount`;
 - idempotent re-registration (the refresh path);
-- the live slices — boot claims and mounts exactly one `mcp` and one `vision`
-  tool; a post-seal mount raises, a foreign declaration cannot take either live
+- the live slices — boot claims and mounts exactly one `mcp`, one `vision`,
+  and one `web` tool; a post-seal mount raises, a foreign declaration cannot take a live
   name, and
   neither a foreign `BoundToolPlugin` nor a directly constructed transaction
   can replace the official handler/schema/claim; the prompt-section port writes
@@ -527,6 +557,23 @@ preserve Notification Core delay/timer and Store behavior:
   provider/preset/credential boundaries (VN001–VN006:
   `tests/test_tool_family_vision_migration.py`,
   `tests/test_vision_capability.py`, `tests/test_inherit_fallback.py`).
+- Web's static `DECLARATION`, exact
+  `workdir`/`web_runtime`/`provider_identity` grant and exact
+  `search | browse | manual` surface, one mount on a real Agent with the
+  `provider_identity` port reading the live `Agent.service.provider` label
+  (and exposing only that), the typed `web_runtime` composition absent from
+  the standard table (a bare standard grant fails with `HostPortError`, and a
+  bind with a missing, legacy-carrier, or mistyped `web_runtime` fails closed
+  with `HostPortError`), one manager published back through the composition
+  exactly once, idempotent refresh re-claim, the package-owned
+  `capabilities/web/SKILL.md` manual with strict zero-input behavior, the
+  strict controlled-host manual proof in
+  `tests/test_intrinsic_manual_actions.py`, and the family-local provider
+  gate/spill/isolation suites (`tests/test_web_official_plugin.py`,
+  `tests/test_web_composition_port.py`,
+  `tests/test_web_canonical_provider_routing.py`,
+  `tests/test_web_output_spill.py`, `tests/test_web_search_capability.py`,
+  `tests/test_unified_web_capability.py`).
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,

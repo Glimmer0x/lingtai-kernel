@@ -298,8 +298,8 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 host, identifier, and migration vocabulary that every official model-facing tool
 family shares. The accepted declared evidence is exactly `mcp`, `avatar`,
 `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-`soul`, `system`, `task_card`, and `vision`, in that
-order. `mcp` is the base reference; the remaining twelve are accepted vertical
+`soul`, `system`, `task_card`, `vision`, and `web`, in that
+order. `mcp` is the base reference; the remaining thirteen are accepted vertical
 slices with their narrow earned ports. Email retains its call-time manager port,
 File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
@@ -314,11 +314,16 @@ generic publisher), keeping one manager across refresh and its channel-neutral
 read-through `active_provider` and one setup-selected `configuration`
 snapshot, keeping its `analyze | check | list | manual` surface, active-provider
 default routing, allowed-preset own-credential borrowing, and no automatic
-provider/credential/MCP fallback. The remaining target
-register is only `web`; it is not
-proof that its candidate slice merged and is never a generic dispatch or
-admission path. Every other registry family remains an explicit future migration
-unit and none ships as an MCP plugin package today.
+provider/credential/MCP fallback, and Web retains `workdir` plus its Web-owned
+typed `web_runtime` composition (browser transport, immutable engine specs,
+and default provenance, granted by its own `setup` through `extra_ports_for`)
+and the narrow read-only `provider_identity` label, keeping its
+`search | browse | manual` surface, `settings/web.search.json` ownership,
+spill/settings behavior, canonical provider gates, and search-vs-browse
+isolation, with a fail-closed bind on a missing or mistyped `web_runtime`. The
+former later-family target register is now empty; the reserved list is never a
+generic dispatch or admission path. Every other registry family remains an
+explicit future migration unit and none ships as an MCP plugin package today.
 
 The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
 the *external stdio transport* form described below — evidence about
@@ -637,7 +642,20 @@ non-goal for third-party-versus-third-party mounts.
   prove the four-action schema/dispatch surface, active-provider default
   routing, allowed-preset own-credential borrowing with no automatic
   provider/MCP fallback, `check`/`list`/`manual` no-request boundaries, and the
-  package-owned manual. The remaining target register names only `web`.
+  package-owned manual. Web's declaration binds only
+  `workdir`/`web_runtime`/`provider_identity`; its focused suites
+  (`tests/test_web_official_plugin.py`, `tests/test_web_composition_port.py`,
+  the Web case in `tests/test_tool_plugin_declaration.py`, the strict
+  controlled-host manual proof in `tests/test_intrinsic_manual_actions.py`,
+  and the family-local `tests/test_web_canonical_provider_routing.py`,
+  `tests/test_web_output_spill.py`, `tests/test_web_search_capability.py`,
+  `tests/test_unified_web_capability.py`) prove the exact three-port grant,
+  the fail-closed typed `web_runtime` bind, the standard-table
+  `provider_identity` label, one mount with the manager published back
+  exactly once, idempotent refresh re-claim, the package-owned manual with
+  strict zero-input behavior, exact-match canonical provider gating, spill
+  delivery, and search-vs-browse isolation. The former later-family target
+  register is now empty.
   Avatar, Context, and Daemon retain
   their independently accepted declarations and focused coverage. The shared
   test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
@@ -760,6 +778,19 @@ only through `extra_ports_for`. The package manual is the one operational body,
 installed at `capabilities/file-manual`, with the standalone redirect marker
 excluded and no second `capabilities/file` destination (see
 `src/lingtai/tools/file/CONTRACT.md`).
+
+`web` is the fourteenth declared vertical slice. Its declaration binds exactly
+`workdir`, its Web-owned typed `web_runtime` composition (`WebComposition`:
+browser transport plus immutable engine specs and default provenance, composed
+by `setup` and granted to the `web` declaration alone through
+`extra_ports_for`, with the bound `WebManager` published back through it
+exactly once so `setup` still returns the manager), and the narrow read-only
+`provider_identity` label built in the standard table only for `web`.
+`_bind` MUST fail closed with the kernel's `HostPortError` on a missing,
+legacy-carrier, or mistyped `web_runtime`; there is no generic runtime port, no
+global runtime table, and no automatic provider/browser fallback beyond the
+family's one documented OpenAI→DuckDuckGo runtime fallback (see
+`src/lingtai/tools/web_search/CONTRACT.md`).
 
 Separately, `file` (`read | write | edit | glob | grep | manual`) is the fourth family
 migrated to the LTP envelope contract, and the first aggregation of several former public

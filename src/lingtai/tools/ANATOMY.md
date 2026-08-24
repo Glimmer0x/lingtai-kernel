@@ -112,7 +112,9 @@ capability names and lazy adapters.
   defaults, normalization, setup, and check-caps metadata
   (`src/lingtai/tools/registry.py:39-344`).
 - `web_search/` — public `web` composition owner for search, browse, settings,
-  and manual (`src/lingtai/tools/web_search/ANATOMY.md`).
+  and manual, declared as the fourteenth official host-plugin slice against
+  `workdir`/`web_runtime`/`provider_identity`
+  (`src/lingtai/tools/web_search/ANATOMY.md`).
 - `task_card/` — intrinsic channel-neutral declarative Task Card producer: one
   public `task_card` family, one agent-local artifact under `taskcard/`, and
   no transport ownership (`src/lingtai/tools/task_card/ANATOMY.md`).
@@ -257,15 +259,15 @@ polling, and projection stay outside this package.
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
 Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System,
-Task Card, and Vision are accepted vertical
+Task Card, Vision, and Web are accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
 `context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
 `prompt_section`/`plugin_catalog`, `notification_state`,
 `notifications`/`configuration`, `soul_runtime`,
 `system_runtime`/`identity`,
-`shutdown`/`task_card_lifecycle`/`task_card_notifications`, and
-`active_provider`/`configuration` (all also retain
-`workdir`). The remaining candidate target is only `web`; the
+`shutdown`/`task_card_lifecycle`/`task_card_notifications`,
+`active_provider`/`configuration`, and `web_runtime`/`provider_identity` (all
+also retain `workdir`). The former candidate target register is now empty; the
 list is not a generic dispatch or admission mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
@@ -325,10 +327,23 @@ to `vision` alone through `extra_ports_for`); default routing uses only the
 active provider, an explicitly allowed `preset` resolves only that preset's own
 credential for the one requested call, `check`/`list`/`manual` make no
 image/provider request, and no provider/credential/MCP fallback is automatic.
+`src/lingtai/tools/web_search/__init__.py` is the fourteenth slice: its
+`DECLARATION` owns the public `search | browse | manual` family and binds
+`WebManager` against `workdir`, the Web-owned typed `web_runtime` composition
+(`WebComposition` — browser transport plus immutable engine specs and default
+provenance, composed by `setup` and granted to `web` alone through
+`extra_ports_for`, with the bound manager published back through it exactly
+once), and the narrow read-only `provider_identity` label
+(`AgentProviderIdentityAdapter`, built in the standard table only for `web`);
+`_bind` fails closed with `HostPortError` on a missing or mistyped
+`web_runtime`, the explicit Anthropic/Gemini opt-in is gated by exact match on
+that label, and no automatic provider/browser fallback exists beyond the
+family's one documented OpenAI→DuckDuckGo runtime fallback.
 Every landed
-family retains its public name, actions, inputs, and result shapes. Candidate-local families may still boot through legacy
-`setup(agent)` paths until their own vertical slice lands; that compatibility
-fact is not a generic registrar/bridge dispatch model.
+family retains its public name, actions, inputs, and result shapes. The
+legacy whole-`Agent` `setup(agent)` boot path is no longer used by any
+official family; that compatibility fact was never a generic
+registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

@@ -10,6 +10,10 @@ related_files:
   - src/lingtai/tools/web_search/settings.py
   - src/lingtai/tools/web_search/_spill.py
   - src/lingtai/tools/web_search/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
@@ -67,14 +71,24 @@ action implementations, settings, and diagnostics.
 
 ## Components
 
-- `WebManager`, `setup()`, and the single `web` schema — builds a per-instance
-  `ToolFamily` (`lingtai.tools.tool_family`) with `search`/`browse` handlers
-  bound to instance state and a `manual` child from
-  `tool_family.manual.build_manual_child`; `handle()` delegates envelope
-  validation and dispatch to that `ToolFamily` and stamps
-  `current_setting`/`action` onto envelope-level failures; lazy engine
-  composition, settings diagnostics, and registration
-  (`src/lingtai/tools/web_search/__init__.py:1-426`).
+- `DECLARATION`, `WebCompositionPort`, `WebComposition`, `_bind()`, `WebManager`, and `setup()` — static
+  official `web` identity (the fourteenth declared family,
+  `requires=("workdir", "web_runtime", "provider_identity")`) plus explicit
+  per-bind search/browser composition. `setup()` retains lazy engine/browser
+  composition, folds the `BrowserPort` plus immutable engine specs and default
+  provenance into one `WebComposition`, grants that value to the `web`
+  declaration alone as the Web-owned `web_runtime` port through
+  `register_agent_tool_plugins(..., extra_ports_for=...)`, and returns the
+  manager the bind published back through `WebComposition.publish_manager`
+  (exactly once). `_bind()` fails closed with `HostPortError` unless
+  `host.web_runtime` is granted and is a typed `WebComposition` — no fallback
+  carrier, default transport, or default engine set — then constructs a
+  per-instance `ToolFamily` (`lingtai.tools.tool_family`) with
+  `search`/`browse` handlers and a `manual` child from
+  `tool_family.manual.build_manual_child`, and returns the bound handler.
+  `handle()` delegates envelope validation/dispatch and stamps
+  `current_setting`/`action` onto envelope-level failures; no Web object retains
+  the whole Agent (`src/lingtai/tools/web_search/__init__.py`).
 - `_EngineSpec`, `_specs_from_kwargs`, `_canonical_default_specs()` —
   immutable operator engine wiring. `_specs_from_kwargs` rejects a retired
   provider name (`minimax`, `zhipu` — `_RETIRED_PROVIDERS`) supplied via the
@@ -102,10 +116,10 @@ action implementations, settings, and diagnostics.
   `provider` was explicitly chosen (`_default_source == "built_in_default"`)
   (`src/lingtai/tools/web_search/__init__.py`).
 - `_same_provider_identity()` — the truthful, exact-match canonical-provider
-  identity check gating explicit Anthropic/Gemini opt-in against the current
-  Agent's own live `agent.service.provider`; module-private to `web_search`
-  (`src/lingtai/tools/web_search/__init__.py`) — only this capability's
-  policy needs it, so it is not a cross-tool API.
+  identity check gating explicit Anthropic/Gemini opt-in against the granted
+  `ProviderIdentityPort.provider`; module-private to `web_search`
+  (`src/lingtai/tools/web_search/__init__.py`) — only this capability's policy
+  needs it, so it is not a cross-tool API.
 - `WebManager._openai_duckduckgo_fallback()`/`_duckduckgo_fallback()` — the
   one automatic runtime fallback, triggered only by the exact
   `OpenAISearchError` subclass (never a bare `SearchProviderError` or
@@ -150,9 +164,16 @@ action implementations, settings, and diagnostics.
 ## Connections
 
 `src/lingtai/tools/registry.py` maps public `web` to this package and maps legacy input
-`web_search` one-way to `web`. `WebManager` calls only `SearchService` for
-search and only `BrowserEngine` for browse; neither path crosses into the other
-transport. Agent manual installation maps this retained package's `manual/` to
+`web_search` one-way to `web`. `setup()` sends static `DECLARATION` plus its
+explicit `WebComposition` (as the declaration-scoped `web_runtime` port,
+through `extra_ports_for`) through `lingtai.adapters.tool_plugin_host` and the
+kernel registrar; the host builds only the narrow read-through
+`provider_identity` label (`AgentProviderIdentityAdapter`, one closure over
+`Agent.service.provider`) in its standard table for `web`, and the manager
+retains only the granted workdir and provider-identity ports.
+`WebManager` calls only `SearchService` for search and
+only `BrowserEngine` for browse; neither path crosses into the other transport.
+Agent manual installation maps this retained package's `manual/` to
 `capabilities/web/` and skips the retained browser manual.
 
 ## Composition
@@ -173,7 +194,7 @@ that promise for web's actions, behavior, and evidence.
 
 Each manager owns immutable engine specs, a lazy per-engine service cache, one
 browser engine, and its bounded ref/snapshot/cursor stores. Settings are read
-from the Agent workdir on every call and never written by the capability,
+from the granted workdir port on every call and never written by the capability,
 except for the artifact files `spill_if_over_threshold()` writes under the
 canonical `<agent-workdir>/tmp/tool-results/` directory when a call's
 complete content exceeds the shared threshold — the same directory the

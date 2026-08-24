@@ -9,8 +9,14 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
+
+from lingtai.kernel.tool_plugin import (
+    BoundToolPlugin,
+    HostPortError,
+    ToolPluginDeclaration,
+    ToolPluginDeclarationError,
+)
 
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
@@ -28,6 +34,11 @@ from .settings import (
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import (
+        ProviderIdentityPort,
+        ToolPluginHost,
+        WorkdirPort,
+    )
     from ..browser.port import BrowserPort
 
 # MiniMax and Zhipu are no longer built-in `web` providers (see
@@ -96,11 +107,11 @@ _CANONICAL_API_KEY_ENV = {
 }
 
 
-def _same_provider_identity(agent: "BaseAgent", name: str) -> bool:
-    """Return whether *agent*'s live LLM backend truthfully IS canonical *name*.
+def _same_provider_identity(provider_identity: "ProviderIdentityPort", name: str) -> bool:
+    """Return whether the narrow provider port truthfully IS canonical *name*.
 
-    Exact equality against ``agent.service.provider`` — the one registered
-    name bound to a provider's own dedicated adapter factory
+    Exact equality against the host-provided canonical provider label — the one
+    registered name bound to a provider's own dedicated adapter factory
     (``LLMService.register_adapter`` in ``lingtai.llm._register``). Aliased,
     CLI-login, or wire-compatible names (``claude-code``/``claude_code``,
     ``custom``, ``openrouter``, ``deepseek``, ``glm``/``zhipu``, ``grok``,
@@ -113,8 +124,7 @@ def _same_provider_identity(agent: "BaseAgent", name: str) -> bool:
     """
     if name not in _BACKEND_GATED_ENGINES:
         return False
-    service = getattr(agent, "service", None)
-    provider = getattr(service, "provider", None)
+    provider = provider_identity.provider
     return isinstance(provider, str) and provider.lower() == name
 
 
@@ -181,15 +191,12 @@ def _schema_only_family() -> ToolFamily:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
     return ToolFamily(
-        "web",
+        DECLARATION.name,
         [
             *(ChildTool(name, schema, _unused, title=title) for name, schema, title in _CHILD_SPECS),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input"),
         ],
     )
-
-
-_FAMILY = _schema_only_family()
 
 
 def get_description(lang: str = "en") -> str:
@@ -200,6 +207,37 @@ def get_description(lang: str = "en") -> str:
         "selected source') for a known result. Use web(action='manual', input={}, "
         "reasoning='load web guidance') for the procedure and settings guidance."
     )
+
+
+def _deferred_bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Resolve the static declaration's binder after this module defines it."""
+    return _bind(host)
+
+
+#: Static declaration of the official public ``web`` tool.  The deferred binder
+#: keeps this import-time declaration independent of the per-Agent
+#: :class:`WebComposition` that ``setup`` grants to this declaration alone as
+#: the Web-owned ``web_runtime`` host port (through ``extra_ports_for``, the
+#: same declaration-scoped seam Email, File, Shell, and Vision use).
+#: ``provider_identity`` is the narrow read-only canonical provider label that
+#: gates the explicit Anthropic/Gemini opt-in; ``workdir`` roots settings,
+#: artifacts, and the installed manual.
+DECLARATION = ToolPluginDeclaration(
+    name="web",
+    actions=tuple(name for name, _schema, _title in _CHILD_SPECS),
+    input_schemas={name: schema for name, schema, _title in _CHILD_SPECS},
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="web",
+    description=get_description(),
+    binder=_deferred_bind,
+    requires=("workdir", "web_runtime", "provider_identity"),
+    glossary_package=__package__,
+)
+
+
+#: Schema-only construction proves the declaration's fixed family inventory at
+#: import; it never dispatches and has no per-Agent runtime.
+_FAMILY = _schema_only_family()
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -228,7 +266,8 @@ class WebManager:
 
     def __init__(
         self,
-        agent: "BaseAgent",
+        workdir: "WorkdirPort",
+        provider_identity: "ProviderIdentityPort",
         browser_port: "BrowserPort | None" = None,
         *,
         specs: Mapping[str, _EngineSpec] | None = None,
@@ -237,7 +276,8 @@ class WebManager:
         search_service: Any | None = None,
         legacy_fallback_from: str | None = None,
     ) -> None:
-        self._agent = agent
+        self._workdir = workdir
+        self._provider_identity = provider_identity
         if browser_port is None:
             from lingtai.adapters.browser_transport import VettedHttpTransport
             browser_port = VettedHttpTransport()
@@ -252,7 +292,7 @@ class WebManager:
         self._service_errors: dict[str, str] = {}
         handlers = {"search": self._dispatch_search, "browse": self._dispatch_browse}
         self._family = ToolFamily(
-            "web",
+            DECLARATION.name,
             [
                 *(
                     ChildTool(name, schema, handlers[name], title=title)
@@ -265,7 +305,7 @@ class WebManager:
                 # result strictly *after* ``self._family.handle(...)``
                 # returns, in ``handle()`` below — never inside a registered
                 # child.
-                build_manual_child(agent, "web"),
+                build_manual_child(workdir, DECLARATION.manual),
             ],
         )
 
@@ -337,11 +377,11 @@ class WebManager:
         # Shared by search and browse: both actions consume the same
         # family-owned settings/web.json snapshot for the same call. Manual
         # must never call this — it stays zero-settings-I/O.
-        return read_output_settings(self._agent)
+        return read_output_settings(self._workdir)
 
     def _resolve(self) -> tuple[str | None, SettingsSnapshot, OutputSettingsSnapshot, dict[str, Any]]:
         snapshot = read_settings(
-            self._agent, self._specs, self._default_engine_now(), self._default_source
+            self._workdir, self._specs, self._default_engine_now(), self._default_source
         )
         output_snapshot = self._resolve_output_settings()
         return snapshot.engine, snapshot, output_snapshot, self._diagnostics(snapshot, output_snapshot)
@@ -495,7 +535,7 @@ class WebManager:
                     "search", snapshot, diagnostic, "PROVIDER_BACKEND_INELIGIBLE",
                     f"engine {name!r} is explicit opt-in only, through settings/web.search.json",
                 )
-            if not _same_provider_identity(self._agent, name):
+            if not _same_provider_identity(self._provider_identity, name):
                 # Explicit Anthropic/Gemini opt-in fails explicitly when the
                 # current Agent's own LLM backend is not truthfully that same
                 # canonical provider — no provider construction, no search
@@ -557,7 +597,7 @@ class WebManager:
         assert output_snapshot.max_chars is not None  # guarded by the caller's output_snapshot.error check
         results = payload["results"]
         serialized = json.dumps(results, ensure_ascii=False, indent=2)
-        working_dir = Path(self._agent._working_dir)
+        working_dir = self._workdir.path
         artifact = spill_if_over_threshold(
             content=serialized,
             output_setting=output_snapshot,
@@ -602,7 +642,7 @@ class WebManager:
         # This path never reads settings/web.search.json and performs no
         # provider construction or search operation, even when settings are
         # malformed: manual does not own that file.
-        loaded = load_installed_manual(self._agent, "web")
+        loaded = load_installed_manual(self._workdir, DECLARATION.manual)
         loaded.update({"action": "manual", "current_setting": diagnostic})
         return loaded
 
@@ -712,7 +752,7 @@ class WebManager:
         # can be many times larger than the plain joined text even though the
         # file (written below, if spilled) stays the smaller plain-text form.
         structured_chars = len(json.dumps(structured_blocks, ensure_ascii=False))
-        working_dir = Path(self._agent._working_dir)
+        working_dir = self._workdir.path
         artifact = spill_if_over_threshold(
             content=complete_text,
             decision_chars=structured_chars,
@@ -930,13 +970,117 @@ def _specs_from_kwargs(
     return specs, chosen, source, legacy_fallback_from
 
 
+@runtime_checkable
+class WebCompositionPort(Protocol):
+    """The narrow, Web-owned setup boundary for one official bind.
+
+    This is the Protocol behind the ``web_runtime`` grant name: like Email's
+    ``email_runtime``, the kernel reserves only the name, and the family owns
+    the vocabulary. ``setup`` grants one :class:`WebComposition` value to the
+    ``web`` declaration alone through ``extra_ports_for``; it names only the
+    browser transport and immutable engine composition Web consumes, plus the
+    one publication operation needed to retain setup -> WebManager
+    compatibility. It never exposes an Agent, an LLM service, or provider
+    credentials, and it is never built in the standard host table.
+    """
+
+    @property
+    def browser_port(self) -> "BrowserPort": ...
+
+    @property
+    def specs(self) -> Mapping[str, _EngineSpec]: ...
+
+    @property
+    def default_engine(self) -> str | None: ...
+
+    @property
+    def default_source(self) -> str: ...
+
+    @property
+    def legacy_fallback_from(self) -> str | None: ...
+
+    def publish_manager(self, manager: WebManager) -> None: ...
+
+
+@dataclass(slots=True)
+class WebComposition:
+    """Explicit per-bind Web dependencies, supplied by capability setup only."""
+
+    browser_port: "BrowserPort"
+    specs: Mapping[str, _EngineSpec]
+    default_engine: str | None
+    default_source: str
+    legacy_fallback_from: str | None
+    manager: WebManager | None = None
+
+    def publish_manager(self, manager: WebManager) -> None:
+        if self.manager is not None and self.manager is not manager:
+            raise ToolPluginDeclarationError(
+                "web composition manager was published twice"
+            )
+        self.manager = manager
+
+
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose Web against only its granted host ports; mount nothing.
+
+    Fail closed: the bind refuses to proceed unless the host granted
+    ``web_runtime`` *and* that grant is the typed :class:`WebComposition`
+    value ``setup`` composed. There is no fallback to any other carrier, no
+    default browser transport, and no default engine set constructed here —
+    a missing or mistyped grant is a wiring defect, raised as a
+    ``ToolPluginError`` so the Composition Root's capability loop cannot
+    absorb it as ``capability_skipped``.
+    """
+    try:
+        composition = host.web_runtime
+    except AttributeError as exc:
+        raise HostPortError(
+            "web plugin requires the granted 'web_runtime' host port carrying "
+            "its typed WebComposition; none was granted"
+        ) from exc
+    if not isinstance(composition, WebComposition):
+        raise HostPortError(
+            "web plugin requires host port 'web_runtime' to carry a typed "
+            f"WebComposition, not {type(composition).__name__}"
+        )
+    manager = WebManager(
+        host.workdir,
+        host.provider_identity,
+        composition.browser_port,
+        specs=composition.specs,
+        default_engine=composition.default_engine,
+        default_source=composition.default_source,
+        legacy_fallback_from=composition.legacy_fallback_from,
+    )
+    composition.publish_manager(manager)
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=manager.handle,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+    )
+
+
 def setup(
     agent: "BaseAgent", search_service: Any | None = None, provider: str | None = None,
     api_key: str | None = None, api_key_env: str | None = None, model: str | None = None,
     default_engine: str | None = None, engines: Mapping[str, Any] | None = None,
     browser_port: "BrowserPort | None" = None, **kwargs: Any,
 ) -> WebManager:
-    """Compose one unified ``web`` manager; provider construction is lazy."""
+    """Compose Web's explicit composition, then mount its static declaration.
+
+    This is capability composition only: provider/browser wiring remains the
+    exact existing lazy setup semantics (the ``BrowserPort`` plus immutable
+    engine specs and default provenance become one :class:`WebComposition`),
+    while the host owns registration, activation (none for Web), and mounting
+    through the official namespace. The composition value is granted as the
+    ``web_runtime`` port to this declaration alone through ``extra_ports_for``
+    — never added to the standard table for every family — and the bound
+    ``WebManager`` is published back through it exactly once, so callers keep
+    receiving the manager as before.
+    """
     if browser_port is None:
         from lingtai.adapters.browser_transport import VettedHttpTransport
         browser_port = VettedHttpTransport()
@@ -945,12 +1089,22 @@ def setup(
         api_key_env=api_key_env, model=model, default_engine=default_engine,
         engines=engines, kwargs=kwargs,
     )
-    manager = WebManager(
-        agent, browser_port, specs=specs, default_engine=chosen,
-        default_source=source, legacy_fallback_from=legacy_fallback_from,
+    composition = WebComposition(
+        browser_port=browser_port,
+        specs=specs,
+        default_engine=chosen,
+        default_source=source,
+        legacy_fallback_from=legacy_fallback_from,
     )
-    agent.add_tool(
-        "web", schema=get_schema(), handler=manager.handle,
-        description=get_description(), glossary_package=__package__,
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        extra_ports_for=lambda declaration: (
+            {"web_runtime": composition} if declaration is DECLARATION else {}
+        ),
     )
-    return manager
+    if composition.manager is None:  # pragma: no cover - declaration invariant
+        raise ToolPluginDeclarationError("web official plugin did not publish a manager")
+    return composition.manager

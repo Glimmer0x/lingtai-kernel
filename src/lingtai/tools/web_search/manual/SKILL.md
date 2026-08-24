@@ -3,8 +3,8 @@ name: web-manual
 description: >
   One web workflow: search first, browse a known result next, and use one
   explicit legacy fallback only when static browsing cannot serve the need.
-version: 8.2.0
-last_changed_at: "2026-08-24T08:27:11Z"
+version: 8.2.2
+last_changed_at: "2026-08-24T18:00:00Z"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
@@ -256,6 +256,20 @@ Every result includes bounded `current_setting`. Search reports the selected
 source, available engine statuses, revision/hash, and the hint: `Edit
 settings/web.search.json; changes apply on the next web call; use
 web(action='manual', input={}, reasoning='load web guidance') for schema.`
+
+### Manual child contract
+
+The manual child is a strict zero-input action: use `input={}` exactly. It
+reads the installed `capabilities/web/SKILL.md` body and performs no provider
+construction, browser request, or settings read. Host composition supplies only
+the workdir needed to locate this file; it does not make manual availability
+depend on search or browser runtime state.
+
+A present manual returns the complete body and its host-local path. If the
+installed file is absent, the action stays honest with `status: degraded`,
+an empty body, a diagnostic error, and the expected path. Non-empty input
+fails with `INVALID_ARGUMENT`; do not add topic, provider, or summary fields to
+this child.
 
 ## 4. One explicit legacy fallback
 

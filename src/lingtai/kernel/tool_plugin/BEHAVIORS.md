@@ -26,6 +26,8 @@ related_files:
   - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/manual/SKILL.md
+  - src/lingtai/tools/web_search/__init__.py
+  - src/lingtai/tools/web_search/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -42,6 +44,8 @@ related_files:
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
   - tests/test_tool_family_vision_migration.py
+  - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - tests/test_intrinsic_manual_actions.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
@@ -55,7 +59,7 @@ maintenance: |
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
   reference; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
-  Soul, System, Task Card, and Vision are current
+  Soul, System, Task Card, Vision, and Web are current
   vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
   than per-call Agent dispatch.
@@ -115,6 +119,18 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    constructed; the static declaration appends rather than declares the
    reserved action.
 
+   Then prove the fourteenth slice's declaration the same way:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.web_search import DECLARATION as w; print(w.name, w.actions, w.public_actions, w.requires)"
+   ```
+
+   Expect `web ('search', 'browse') ('search', 'browse', 'manual') ('workdir',
+   'web_runtime', 'provider_identity')`. No `Agent` was constructed; the
+   static declaration appends rather than declares the reserved action, and
+   its typed `web_runtime` composition is not in existence yet — only
+   `setup` composes and grants it.
+
 2. Prove the public model-facing surface is unchanged by the recut:
 
    ```bash
@@ -134,7 +150,8 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog',
    'notification_state', 'notifications', 'configuration', 'soul_runtime',
    'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
-   'task_card_notifications', 'active_provider') ('workdir', 'file_io')` printed,
+   'task_card_notifications', 'active_provider', 'web_runtime',
+   'provider_identity') ('workdir', 'file_io')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
    port* `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort` plus `FileIOPort`,
@@ -164,6 +181,20 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. No `enqueue`, `source`, `channel`, or `**kwargs` name
    appears on the port.
+
+   Web's typed composition is never in the standard table, and its bind fails
+   closed without it:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_web_composition_port.py tests/test_web_official_plugin.py
+   ```
+
+   Expect all passed: a bare standard grant for `web` raises `HostPortError`
+   because `web_runtime` is absent, `_bind` refuses a missing, legacy-carrier,
+   or mistyped `web_runtime` with `HostPortError`, the standard table's
+   `provider_identity` exposes only a `provider` label, and one mount serves
+   the installed `capabilities/web/SKILL.md` manual.
 
 4. Prove the family reaches the live Agent body only through granted ports:
 
@@ -223,7 +254,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
      tests/test_file_tool_family.py tests/test_plugin_tool.py \
      tests/test_notification_delay_alarm.py tests/test_notification_store.py \
      tests/test_task_card_controller.py tests/test_task_card_notifications.py \
-     tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py
+     tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py \
+     tests/test_web_official_plugin.py tests/test_web_composition_port.py \
+     tests/test_web_canonical_provider_routing.py tests/test_unified_web_capability.py
    ```
 
    Task Card's focused pair proves one retained manager bound only to its four
@@ -237,6 +270,14 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    `tests/test_intrinsic_manual_actions.py` — that its `manual` returns the
    installed `capabilities/vision/SKILL.md` body and path after a real
    registrar claim/mount.
+   Web's focused suites prove its exact three-port grant, the
+   `search | browse | manual` surface, the fail-closed typed `web_runtime`
+   bind, the standard-table `provider_identity` label, exact-match canonical
+   provider gating for the explicit Anthropic/Gemini opt-in, and — through the
+   same strict controlled official host in
+   `tests/test_intrinsic_manual_actions.py` — that its `manual` returns the
+   installed `capabilities/web/SKILL.md` body and path after a real registrar
+   claim/mount.
 
 ### Expected evidence
 
@@ -283,6 +324,13 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
       the standard table only for `vision` and reads the live `Agent.service`;
       the `configuration` snapshot reaches only the `vision` declaration
       through `extra_ports_for`; and its manual/preset/no-fallback suites pass.
+- [ ] Web: its static `DECLARATION` requires exactly `workdir`,
+      `web_runtime`, and `provider_identity`; `provider_identity` is built in
+      the standard table only for `web` and exposes only the live
+      `Agent.service.provider` label; the typed `WebComposition` reaches only
+      the `web` declaration through `extra_ports_for` from `setup`, and
+      `_bind` fails closed with `HostPortError` on a missing, legacy-carrier,
+      or mistyped grant; and its manual/provider-gate/spill suites pass.
 
 ### Pass / Fail
 
@@ -319,8 +367,8 @@ writes.
    Expect the module docstring, `__all__`, module-level tuple, and registrar check/error as the relevant matches.
    Confirm the literal is exactly `('mcp', 'avatar', 'context', 'daemon',
    'email', 'file', 'plugin', 'notification', 'shell', 'soul', 'system',
-   'task_card', 'vision')` in that order and contains bare names only — no
-   module path, import, or family behavior.
+   'task_card', 'vision', 'web')` in that order and contains bare names only —
+   no module path, import, or family behavior.
 
 2. Prove a conflicting declaration is refused with nothing bound and nothing
    mounted:
@@ -362,7 +410,7 @@ writes.
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_all_thirteen_official_families_mount_exactly_once_together
+     tests/test_tool_plugin_declaration.py::test_all_fourteen_official_families_mount_exactly_once_together
    ```
 
    Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by
@@ -418,7 +466,7 @@ writes.
 
 - [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is the exact ordered static tuple
       `mcp, avatar, context, daemon, email, file, plugin, notification, shell,
-      soul, system, task_card, vision` of bare names.
+      soul, system, task_card, vision, web` of bare names.
 - [ ] Step 2: `5 passed` — an unreserved name, an in-batch duplicate, and a
       second declaration against a live claim are each refused with zero binds,
       zero mounts, and an unchanged claim map; the same declaration re-registers
@@ -428,7 +476,7 @@ writes.
       public adapter/factory bypass and a forged transaction are unavailable,
       backing-map tampering cannot admit a foreign declaration, and the public
       claim view cannot unlock one.
-- [ ] Step 4: `1 passed` — all thirteen reserved names mount exactly once in
+- [ ] Step 4: `1 passed` — all fourteen reserved names mount exactly once in
       one live composition.
 - [ ] Step 5: the batch-wide check loop precedes the bind/mount loop in source
       order.

@@ -57,6 +57,7 @@ __all__ = [
     "NotificationPort",
     "ConfigurationPort",
     "ActiveProviderPort",
+    "ProviderIdentityPort",
     "SoulRuntimePort",
     "SystemRuntimePort",
     "IdentityPort",
@@ -85,7 +86,7 @@ MANUAL_ACTION = "manual"
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
 #: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
-#: ``system``, ``task_card``, or ``vision``). Plugin
+#: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
@@ -94,8 +95,12 @@ MANUAL_ACTION = "manual"
 #: current-Agent ``task_card_lifecycle`` manager slot, and the closed
 #: operation-native ``task_card_notifications`` port; Vision consumes
 #: ``workdir`` plus its read-through ``active_provider`` identity and the same
-#: setup-selected ``configuration`` port Shell earned. Root ``CONTRACT.md``
-#: rules 10-11
+#: setup-selected ``configuration`` port Shell earned; Web consumes ``workdir``
+#: plus its Web-owned typed ``web_runtime`` composition value (browser
+#: transport, immutable engine specs, default provenance — granted by its own
+#: setup, like Email's ``email_runtime``) and the narrow read-only
+#: ``provider_identity`` label that gates its explicit Anthropic/Gemini opt-in.
+#: Root ``CONTRACT.md`` rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
 #:
@@ -121,6 +126,8 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "task_card_lifecycle",
     "task_card_notifications",
     "active_provider",
+    "web_runtime",
+    "provider_identity",
 )
 
 
@@ -134,7 +141,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
-    "shell", "soul", "system", "task_card", "vision",
+    "shell", "soul", "system", "task_card", "vision", "web",
 )
 
 
@@ -535,6 +542,22 @@ class ActiveProviderPort(Protocol):
     @property
     def service(self) -> Any:
         """The current active provider service, or ``None`` when absent."""
+
+
+class ProviderIdentityPort(Protocol):
+    """Read only the current canonical LLM provider *label*, if one exists.
+
+    Deliberately narrower than :class:`ActiveProviderPort`: Web needs one
+    truthful string to decide whether an explicit Anthropic/Gemini opt-in is
+    eligible, and nothing else. The port grants neither the provider service,
+    its credentials or model configuration, the Agent, nor any provider
+    registry; the adapter reads the label through on every access so a refresh
+    never leaves a stale identity. Web is the one consumer today.
+    """
+
+    @property
+    def provider(self) -> str | None:
+        """The current canonical provider name, or ``None`` when unavailable."""
 
 
 class SoulRuntimePort(Protocol):

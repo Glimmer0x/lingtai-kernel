@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from lingtai.tools.browser.port import TransportResponse
 from lingtai.tools.web_search import setup
@@ -25,14 +26,41 @@ def _snapshot(max_chars: int) -> OutputSettingsSnapshot:
     return OutputSettingsSnapshot(max_chars, "default", "default", "test-digest")
 
 
-class _Agent:
+class _OfficialHost:
+    """Minimal registrar host used by Web's direct behavior tests."""
+
     def __init__(self, root: Path) -> None:
         self._working_dir = root
+        self.service = SimpleNamespace(provider=None)
+        self._official_tool_plugins = {}
+        self._bound_plugins = {}
 
-    def add_tool(self, *args, **kwargs) -> None:
-        self.tool_name = args[0]
-        self.schema = kwargs["schema"]
-        self.handler = kwargs["handler"]
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return self._official_tool_plugins
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        pass
+
+    def _authorize_official_tool_declaration(self, _declaration) -> None:
+        pass
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        self._bound_plugins[declaration.name] = plugin
+
+    def _mount_official_tool(self, transaction) -> None:
+        transaction.consume()
+        self.tool_name = transaction.plugin.name
+        self.schema = transaction.plugin.schema
+        self.handler = transaction.plugin.handler
+        transaction.mark_mounted(self)
+
+    def _claim_official_tool(self, transaction) -> None:
+        self._official_tool_plugins[transaction.declaration.name] = transaction.declaration
 
 
 class _LargeSearch:
@@ -79,7 +107,7 @@ def _read_web_json(agent) -> dict:
 
 
 def test_output_settings_missing_file_uses_default(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     snapshot = read_output_settings(agent)
     assert snapshot.max_chars == DEFAULT_OUTPUT_MAX_CHARS == 50_000
     assert snapshot.source == "default"
@@ -87,7 +115,7 @@ def test_output_settings_missing_file_uses_default(tmp_path):
 
 
 def test_output_settings_valid_override_is_respected(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "web.json").write_text(json.dumps({"schema_version": 1, "max_chars": 100}))
     snapshot = read_output_settings(agent)
@@ -97,7 +125,7 @@ def test_output_settings_valid_override_is_respected(tmp_path):
 
 
 def test_output_settings_boundary_values_are_valid(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     (tmp_path / "settings").mkdir()
     settings_path = tmp_path / "settings" / "web.json"
     for boundary in (1, 100_000):
@@ -108,7 +136,7 @@ def test_output_settings_boundary_values_are_valid(tmp_path):
 
 
 def test_output_settings_out_of_range_fails_loud_not_clamped(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     (tmp_path / "settings").mkdir()
     settings_path = tmp_path / "settings" / "web.json"
     for bad in (0, -1, 100_001, 10**9):
@@ -119,7 +147,7 @@ def test_output_settings_out_of_range_fails_loud_not_clamped(tmp_path):
 
 
 def test_output_settings_wrong_type_and_bool_are_rejected(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     (tmp_path / "settings").mkdir()
     settings_path = tmp_path / "settings" / "web.json"
     for bad in (True, False, "50000", 50000.0, None, [50000]):
@@ -129,7 +157,7 @@ def test_output_settings_wrong_type_and_bool_are_rejected(tmp_path):
 
 
 def test_output_settings_unknown_and_missing_fields_are_rejected(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     (tmp_path / "settings").mkdir()
     settings_path = tmp_path / "settings" / "web.json"
     for payload in (
@@ -143,7 +171,7 @@ def test_output_settings_unknown_and_missing_fields_are_rejected(tmp_path):
 
 
 def test_output_settings_search_and_browse_share_one_setting(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=_Port(b"<p>x</p>"))
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "web.json").write_text(json.dumps({"schema_version": 1, "max_chars": 7}))
@@ -158,7 +186,7 @@ def test_output_settings_search_and_browse_share_one_setting(tmp_path):
 
 def test_invalid_output_settings_fails_search_and_browse_before_side_effects(tmp_path):
     port = _Port(b"<p>x</p>")
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "web.json").write_text("{not-json")
@@ -178,7 +206,7 @@ def test_invalid_output_settings_fails_search_and_browse_before_side_effects(tmp
 
 
 def test_manual_performs_zero_settings_io_including_web_json(tmp_path, monkeypatch):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=_Port(b"<p>x</p>"))
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "web.json").write_text("{not-json")
@@ -198,7 +226,7 @@ def test_manual_performs_zero_settings_io_including_web_json(tmp_path, monkeypat
 
 
 def test_search_small_result_set_delivered_inline(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(3), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["status"] == "ok"
@@ -208,7 +236,7 @@ def test_search_small_result_set_delivered_inline(tmp_path):
 
 
 def test_search_large_result_set_spills_to_json_artifact_with_no_preview(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     # Each result is ~350+ chars; 400 results guarantees > 50_000 total chars.
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
@@ -232,7 +260,7 @@ def test_search_large_result_set_spills_to_json_artifact_with_no_preview(tmp_pat
 
 
 def test_search_preserves_synthesized_non_url_results_and_long_fields(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(
         agent,
         search_service=_LargeSearch(2, include_synthesized=True),
@@ -256,7 +284,7 @@ def test_search_unicode_character_count_is_code_points_not_utf8_bytes(tmp_path):
         def search(self, query, max_results=None):
             return [{"title": "中文标题" * 5000, "url": "https://example.test/z", "snippet": "s"}]
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=UnicodeSearch(), browser_port=_Port(b"<p>x</p>"))
     (tmp_path / "settings").mkdir()
     (tmp_path / "settings" / "web.json").write_text(json.dumps({"schema_version": 1, "max_chars": 100}))
@@ -276,7 +304,7 @@ def test_search_threshold_boundary_off_by_one(tmp_path):
 
     # Compute the exact serialized length for a 1-result payload, then probe
     # max_chars at that exact boundary from both sides.
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=FixedSearch(), browser_port=_Port(b"<p>x</p>"))
     probe_result = manager.handle({"action": "search", "input": {"query": "q"}})
     exact_chars = probe_result["content_chars"]
@@ -299,7 +327,7 @@ def test_search_per_engine_adapters_receive_no_count_cap(tmp_path):
             calls.append(max_results)
             return [{"title": "t", "url": "https://example.test/a", "snippet": "s"}]
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=RecordingSearch(), browser_port=_Port(b"<p>x</p>"))
     manager.handle({"action": "search", "input": {"query": "q"}})
     assert calls == [None]
@@ -317,7 +345,7 @@ def test_search_spilled_openai_fallback_preserves_comment_and_failure_class(tmp_
     from lingtai.services.websearch import SearchResult, SearchService
     from lingtai.services.websearch.openai import OpenAISearchError
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     failing_service = MagicMock(spec=SearchService)
     failing_service.search.side_effect = OpenAISearchError("Timeout")
     manager = setup(agent, engines={"openai": {"search_service": failing_service}}, browser_port=_Port(b"<p>x</p>"))
@@ -366,7 +394,7 @@ def test_search_spilled_openai_fallback_preserves_comment_and_failure_class(tmp_
 def test_search_non_fallback_spill_carries_no_fallback_fields(tmp_path):
     """A plain (non-fallback) spilled search must not grow the fallback-only
     ``comment``/``openai_failure_class`` fields."""
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["delivery"] == "artifact"
@@ -378,7 +406,7 @@ def test_search_non_fallback_spill_carries_no_fallback_fields(tmp_path):
 
 
 def test_browse_small_page_delivered_inline_complete(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(b"<html><body><p>short page text</p></body></html>")
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -395,7 +423,7 @@ def test_browse_small_page_delivered_inline_complete(tmp_path):
 def test_browse_large_page_spills_to_text_artifact_with_no_preview(tmp_path):
     paragraphs = "".join(f"<p>{'word ' * 50} paragraph {i}</p>" for i in range(400))
     body = f"<html><body>{paragraphs}</body></html>".encode()
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(body)
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -421,7 +449,7 @@ def test_browse_large_page_spills_to_text_artifact_with_no_preview(tmp_path):
 
 
 def test_browse_per_call_max_chars_overrides_delivery_threshold(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(b"<html><body><p>twenty-five characters!!</p></body></html>")
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -435,7 +463,7 @@ def test_browse_per_call_max_chars_overrides_delivery_threshold(tmp_path):
 
 
 def test_browse_null_max_chars_uses_shared_setting(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(b"<html><body><p>content</p></body></html>")
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     (tmp_path / "settings").mkdir()
@@ -469,7 +497,7 @@ def test_browse_production_4500_small_blocks_spills_webs_own_complete_artifact(t
     270_000 chars — over both the 50_000 web threshold and the unrelated
     200_000 generic preventive-spill ceiling. Web's own no-preview artifact
     must win: no generic lossy preview may ever be substituted."""
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(_many_small_blocks_page(4500))
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -511,7 +539,7 @@ def test_browse_production_4500_small_blocks_never_substitutes_generic_preview(t
     explicitly marked before the generic mechanism ever sees it."""
     from lingtai.kernel.tool_result_artifacts import spill_oversized_result
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(_many_small_blocks_page(4500))
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -532,7 +560,7 @@ def test_browse_small_page_control_stays_inline_when_structured_form_also_fits(t
     """Control: a genuinely small page (few blocks) stays inline under both
     the joined-text and structured-blocks measurements — proves the fix
     does not over-trigger spilling for ordinary small pages."""
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(_many_small_blocks_page(5))
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
     result = manager.handle({
@@ -552,7 +580,7 @@ def test_browse_structured_decision_chars_exact_boundary(tmp_path):
     """Exact boundary on the structured-blocks decision length: at the
     threshold stays inline; one character over spills — proving the decision
     is made against the structured serialization, not the joined text."""
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
 
     # 60 blocks: structured JSON is comfortably below 50_000 (joined text is
     # tiny too) — establish a working count near the boundary by binary
@@ -577,7 +605,7 @@ def test_browse_structured_decision_chars_exact_boundary(tmp_path):
     (tmp_path / "settings" / "web.json").write_text(json.dumps({"schema_version": 1, "max_chars": exact_over_chars}))
 
     at_boundary_port = _Port(_many_small_blocks_page(over_count))
-    at_boundary_manager = setup(_Agent(tmp_path), search_service=_LargeSearch(1), browser_port=at_boundary_port)
+    at_boundary_manager = setup(_OfficialHost(tmp_path), search_service=_LargeSearch(1), browser_port=at_boundary_port)
     at_boundary = at_boundary_manager.handle({
         "action": "browse",
         "input": {"url": "https://public.example/at-boundary", "link_ref": None, "cursor": None, "extract": None, "max_chars": None},
@@ -603,7 +631,7 @@ def test_browse_snapshot_eviction_before_delivery_fails_loud_not_partial(tmp_pat
     its fetch success and WebManager's delivery decision, and proves the
     result is a typed, loud failure — never a partial body, never a
     next_cursor, never a degraded "best effort" success."""
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     port = _Port(b"<html><body><p>content that would otherwise deliver fine</p></body></html>")
     manager = setup(agent, search_service=_LargeSearch(1), browser_port=port)
 
@@ -699,7 +727,7 @@ def test_spill_helper_envelope_carries_output_setting_source_revision_hash(tmp_p
 
 
 def test_output_settings_default_case_has_deterministic_revision_and_hash(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     first = read_output_settings(agent)
     second = read_output_settings(agent)
     assert first.source == "default"
@@ -715,7 +743,7 @@ def test_search_artifact_write_failure_surfaces_as_typed_failure(tmp_path, monke
         return {"status": "failed", "message": "boom"}
 
     monkeypatch.setattr(ws_mod, "spill_if_over_threshold", fail_spill)
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["status"] == "failed"
@@ -733,7 +761,7 @@ def test_search_artifact_write_failure_surfaces_as_typed_failure(tmp_path, monke
 
 
 def test_web_artifact_envelope_is_recognized_by_is_spill_manifest(tmp_path):
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["delivery"] == "artifact"
@@ -746,7 +774,7 @@ def test_generic_preventive_spill_never_rewrites_an_already_marked_web_artifact(
     — not smallness — is what prevents double-spill."""
     from lingtai.kernel.tool_result_artifacts import spill_oversized_result
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert result["delivery"] == "artifact"
@@ -770,7 +798,7 @@ def test_tool_executor_does_not_double_spill_a_large_web_artifact_result(tmp_pat
     from lingtai.kernel.llm.base import ToolCall
     from lingtai.kernel.loop_guard import LoopGuard
 
-    agent = _Agent(tmp_path)
+    agent = _OfficialHost(tmp_path)
     manager = setup(agent, search_service=_LargeSearch(400), browser_port=_Port(b"<p>x</p>"))
     web_result = manager.handle({"action": "search", "input": {"query": "q"}})
     assert web_result["delivery"] == "artifact"

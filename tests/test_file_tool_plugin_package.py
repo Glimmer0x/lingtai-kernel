@@ -36,7 +36,7 @@ def test_file_declaration_is_static_and_derives_the_public_surface():
     """The kernel-reserved declaration exists before an Agent and owns identity."""
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
         "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
-        "notification", "shell", "soul", "system", "task_card", "vision",
+        "notification", "shell", "soul", "system", "task_card", "vision", "web",
     )
     assert GRANTABLE_HOST_PORTS == (
         "workdir",
@@ -57,6 +57,8 @@ def test_file_declaration_is_static_and_derives_the_public_surface():
         "task_card_lifecycle",
         "task_card_notifications",
         "active_provider",
+        "web_runtime",
+        "provider_identity",
     )
     assert "tool_mount" not in GRANTABLE_HOST_PORTS
     assert DECLARATION.name == "file"

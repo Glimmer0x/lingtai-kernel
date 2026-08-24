@@ -5,10 +5,13 @@ small presentation-only slice, ``notification`` demonstrates a Core-backed
 state slice bound only to a narrow port, ``daemon`` demonstrates a manager-owning
 slice that consumes its current-agent model/tool/preset/notification semantics
 through the capability-native runtime port, ``plugin`` demonstrates a slice
-whose only earned port is a detached read-only projection, and ``vision``
+whose only earned port is a detached read-only projection, ``vision``
 demonstrates a slice that reads the live active provider through one
-read-through port plus a setup-selected configuration snapshot. All are mounted
-only through the registrar's controlled host path.
+read-through port plus a setup-selected configuration snapshot, and ``web``
+demonstrates a slice whose setup-composed typed value is granted to its own
+declaration alone through ``extra_ports_for`` beside one narrow read-only
+provider label. All are mounted only through the registrar's controlled host
+path.
 """
 from __future__ import annotations
 
@@ -79,17 +82,17 @@ def task_card_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
+def test_all_fourteen_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
         "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
-        "notification", "shell", "soul", "system", "task_card", "vision",
+        "notification", "shell", "soul", "system", "task_card", "vision", "web",
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-thirteen-official-plugins",
+        agent_name="all-fourteen-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -102,6 +105,7 @@ def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
             "shell": {"yolo": True},
             "task_card": {},
             "vision": {"vision_service": MagicMock(spec=VisionService)},
+            "web": {},
         },
     )
     try:
@@ -174,6 +178,55 @@ def test_official_vision_mount_keeps_active_provider_and_packaged_manual(tmp_pat
         with pytest.raises(HostPortError):
             ToolPluginHost.grant(DECLARATION, table)
         assert "active_provider" not in agent_host_ports(agent, "mcp")
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_official_web_mount_keeps_provider_identity_and_packaged_manual(tmp_path):
+    """The fourteenth declared slice binds only its narrow ports and stays a real tool."""
+    from lingtai.adapters.tool_plugin_host import (
+        AgentProviderIdentityAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.tool_plugin import HostPortError, ToolPluginHost
+    from lingtai.tools.web_search import DECLARATION, WebManager
+
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="web-tool-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"web": {}},
+    )
+    try:
+        assert DECLARATION.requires == ("workdir", "web_runtime", "provider_identity")
+        assert DECLARATION.public_actions == ("search", "browse", "manual")
+        assert agent.official_tool_plugins["web"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("web") == 1
+
+        handler = agent._tool_handlers["web"]
+        manager = handler.__self__
+        assert isinstance(manager, WebManager)
+        assert not hasattr(manager, "_agent")
+        manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+        assert manual["status"] == "ok"
+        assert manual["action"] == "manual"
+        assert manual["manual"]
+        assert manual["manual_path"].endswith("capabilities/web/SKILL.md")
+
+        # The standard table builds only Web's narrow read-through provider
+        # label. The typed composition is granted through ``extra_ports_for``
+        # by ``setup`` alone, so a bare standard grant fails loudly rather than
+        # binding a half-composed Web; MCP and Vision never see the label.
+        table = agent_host_ports(agent, "web")
+        assert isinstance(table["provider_identity"], AgentProviderIdentityAdapter)
+        assert table["provider_identity"].provider == agent.service.provider
+        assert not hasattr(table["provider_identity"], "service")
+        assert "web_runtime" not in table
+        assert "active_provider" not in table
+        with pytest.raises(HostPortError):
+            ToolPluginHost.grant(DECLARATION, table)
+        assert "provider_identity" not in agent_host_ports(agent, "mcp")
+        assert "provider_identity" not in agent_host_ports(agent, "vision")
     finally:
         agent.stop(timeout=1.0)
 

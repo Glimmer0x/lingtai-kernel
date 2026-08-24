@@ -174,7 +174,13 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     shell_manager._agent = agent
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
     daemon_manager._workdir = SimpleNamespace(path=tmp_path)
-    web_manager = web_tool.setup(agent)
+    # ``web`` is a declared official family too: its ``setup`` composes the
+    # typed WebComposition, grants it through the strict kernel registrar, and
+    # returns the manager that registrar bound and mounted.
+    web_host = _OfficialHostStub(tmp_path)
+    web_manager = web_tool.setup(web_host)
+    assert web_host.official_tool_plugins["web"] is web_tool.DECLARATION
+    assert web_host.handlers["web"] == web_manager.handle
     # ``vision`` is a declared official family: ``setup`` runs through the
     # strict kernel registrar, so it takes the controlled official host rather
     # than the bare stub. The registrar must have claimed and mounted the one

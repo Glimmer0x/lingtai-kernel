@@ -54,9 +54,17 @@ class SettingsSnapshot:
     error: str | None = None
 
 
-def settings_path(agent: Any) -> Path:
+def _working_dir_path(source: Any) -> Path:
+    """Resolve a Web workdir port, retaining legacy test-source compatibility."""
+    path = getattr(source, "path", None)
+    if isinstance(path, Path):
+        return path
+    return Path(source._working_dir)
+
+
+def settings_path(source: Any) -> Path:
     """Return the one fixed, action-owned settings path for ``search``."""
-    return Path(agent._working_dir) / "settings" / "web.search.json"
+    return _working_dir_path(source) / "settings" / "web.search.json"
 
 
 DEFAULT_OUTPUT_MAX_CHARS = 50_000
@@ -64,9 +72,9 @@ MIN_OUTPUT_MAX_CHARS = 1
 MAX_OUTPUT_MAX_CHARS = 100_000
 
 
-def output_settings_path(agent: Any) -> Path:
+def output_settings_path(source: Any) -> Path:
     """Return the one fixed, family-owned output-delivery settings path."""
-    return Path(agent._working_dir) / "settings" / "web.json"
+    return _working_dir_path(source) / "settings" / "web.json"
 
 
 @dataclass(frozen=True, slots=True)
