@@ -85,6 +85,10 @@ _NOTIFICATION_MANUAL_FILES = (
     "lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md",
     "lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md",
 )
+_SYSTEM_MANUAL_EXTERNAL_ATTACH_FILES = (
+    "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md",
+    "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py",
+)
 
 # The three per-tool glossary languages that each package must ship.
 _WEB_SEARCH_MANUAL_FILES = (
@@ -158,12 +162,14 @@ def _build_wheel(dest: Path) -> Path:
 
 
 def _logical(path: str) -> str:
-    """Return an archive entry rooted at the canonical ``lingtai/tools`` path.
+    """Return an archive entry rooted at the canonical ``lingtai/`` package.
 
-    Wheel entries already start with ``lingtai/tools``. Sdist entries add the
+    Wheel entries already start with ``lingtai/``. Sdist entries add the
     distribution root plus ``src/``; those prefixes are stripped only after the
-    exact ``lingtai`` / ``tools`` pair is found. A ``*.data/{purelib,platlib}/``
-    prefix is *not* normalized away — it is the auditwheel-rejected layout the
+    exact package-root segment is found. This also lets this test cover bundled
+    standalone intrinsic-skill assets, not just ``lingtai/tools`` resources. A
+    ``*.data/{purelib,platlib}/`` prefix is *not* normalized away — it is the
+    auditwheel-rejected layout the
     packaging fix eliminated. If one ever reappears it must surface as a broken
     path, not be silently accepted; ``test_wheel_platlib_layout.py`` asserts the
     native wheel never produces one.
@@ -177,8 +183,8 @@ def _logical(path: str) -> str:
                 "wheel entry under *.data/%s is the auditwheel-rejected layout: %r"
                 % (parts[i + 1], path)
             )
-    for i in range(len(parts) - 1):
-        if parts[i : i + 2] == ["lingtai", "tools"]:
+    for i, segment in enumerate(parts):
+        if segment == "lingtai":
             return "/".join(parts[i:])
     return path
 
@@ -243,6 +249,13 @@ def test_wheel_keeps_daemon_backend_manuals(wheel_entries: set[str]):
 def test_wheel_ships_first_level_notification_manual(wheel_entries: set[str]):
     missing = [path for path in _NOTIFICATION_MANUAL_FILES if path not in wheel_entries]
     assert not missing, "notification manual files missing from wheel: %r" % missing
+
+
+@pytest.mark.parametrize("entries_fixture", ("wheel_entries", "sdist_entries"), ids=("wheel", "sdist"))
+def test_archives_ship_system_manual_external_attach_diagnostic(request, entries_fixture: str):
+    entries = request.getfixturevalue(entries_fixture)
+    missing = [path for path in _SYSTEM_MANUAL_EXTERNAL_ATTACH_FILES if path not in entries]
+    assert not missing, "system-manual external attach files missing from %s: %r" % (entries_fixture, missing)
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +371,8 @@ def sdist_entries(tmp_path_factory) -> set[str]:
 def test_sdist_ships_browser_manual(sdist_entries: set[str]):
     missing = [path for path in _BROWSER_MANUAL_FILES if path not in sdist_entries]
     assert not missing, "browser manual files missing from sdist: %r" % missing
+
+
 
 
 def test_sdist_ships_every_glossary_resource(sdist_entries: set[str]):

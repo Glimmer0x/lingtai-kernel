@@ -335,8 +335,14 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: runtime-update-checks" in system_manual_body
         assert "name: refresh-precheck" in system_manual_body
         assert "name: trajectory-mining" in system_manual_body
+        assert "name: external-attach-diagnostic" in system_manual_body
+        assert "reference/external-attach-diagnostic/SKILL.md" in system_manual_body
         assert "Nested reference catalog" in system_manual_body
         assert "location: reference/notification-manual/SKILL.md" not in system_manual_body
+        external_attach = workdir / ".library" / "intrinsic" / "capabilities" / "system-manual"
+        external_attach = external_attach / "reference" / "external-attach-diagnostic"
+        assert (external_attach / "SKILL.md").is_file()
+        assert (external_attach / "scripts" / "external_attach_diagnostic.py").is_file()
 
         notification_manual_md = (
             workdir

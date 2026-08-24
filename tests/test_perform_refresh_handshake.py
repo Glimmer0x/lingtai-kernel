@@ -1218,10 +1218,10 @@ def test_refresh_watcher_cleanup_then_success_does_not_write_failure_alert(tmp_p
 # Cross-process system.json merge serialization (issue #742)
 #
 # The watcher publishes its terminal alert by merging into the same
-# .notification/system.json that the in-agent Notification Store mutates
-# under an advisory flock on .notification/.store.lock. The generated
-# `_append_system_notification` must take that same lock so a concurrent
-# agent merge is not silently overwritten (lost update) — and vice versa.
+# .notification/system.json that the in-agent Notification Store mutates under
+# canonical `channel:system` scope. The generated publisher independently takes
+# that scoped lock and the shared one-release `.store.lock` bridge, so an old
+# global holder or concurrent system merge cannot silently lose an update.
 # ---------------------------------------------------------------------------
 
 
@@ -1298,10 +1298,25 @@ def _seed_system_event(wd: Path) -> None:
     )
 
 
+def test_refresh_watcher_system_lock_filename_is_pinned_to_store_mapping(tmp_path):
+    from lingtai.kernel.notification_store._mutation_lock import (
+        channel_mutation_scope,
+        notification_mutation_lock_path,
+    )
+
+    agent = _make_agent_with_launch_cmd(tmp_path)
+    script = _capture_watcher_script(agent)
+    expected = notification_mutation_lock_path(
+        agent._working_dir / ".notification",
+        channel_mutation_scope("system"),
+    ).name
+
+    assert f"scoped_name = {expected!r}" in script
+
+
 def test_refresh_watcher_system_notification_append_serializes_with_store_lock(tmp_path):
-    """#742 regression: the generated `_append_system_notification` must block
-    on the same `.notification/.store.lock` flock the Notification Store holds,
-    so a concurrent in-agent merge is not overwritten (lost update)."""
+    """Legacy bridge regression: an old exclusive `.store.lock` holder blocks
+    the generated publisher, preventing a mixed-version lost system update."""
     import fcntl as _fcntl
     import time as _time
 

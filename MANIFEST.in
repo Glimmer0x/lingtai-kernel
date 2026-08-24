@@ -26,6 +26,10 @@ include NOTICE
 include README.md
 include src/lingtai/init.jsonc
 
+# Standalone intrinsic skill bundles are runtime package data (including nested
+# system-manual scripts/references); source releases must carry the same tree.
+graft src/lingtai/intrinsic_skills
+
 # Include packaged prompt resources and the runtime guidance Markdown catalog in
 # sdists. pyproject.toml owns wheel package-data globs; keep this connected so
 # source releases carry the same prompt corpus. The `*.yaml` line carries the
