@@ -37,12 +37,19 @@ tool is now request/response only.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
 from lingtai.kernel.notifications import register_generic_dismiss_guard
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+
 from .._manual import load_installed_manual  # noqa: F401  (public re-export)
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+
+if TYPE_CHECKING:
+    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 register_generic_dismiss_guard(
     "email",
@@ -51,6 +58,30 @@ register_generic_dismiss_guard(
         "or email(action='read', input={'email_id': [...]}, reasoning='refresh')"
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Email-owned runtime boundary
+# ---------------------------------------------------------------------------
+
+EmailInput = Mapping[str, object]
+EmailResult = dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class EmailRuntimeRequest:
+    """One validated Email action request crossing the manager boundary."""
+
+    action: str
+    input: EmailInput
+
+
+class EmailRuntimePort(Protocol):
+    """Capability-native port for the already-wired Email manager runtime."""
+
+    def handle_email(self, request: EmailRuntimeRequest) -> EmailResult:
+        """Execute one Email action without exposing an Agent or generic lookup."""
+
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
@@ -101,10 +132,6 @@ from .manager import EmailManager  # noqa: F401
 # LTP v2 family composition — one model-facing root, one child per action
 # ---------------------------------------------------------------------------
 
-# The installed intrinsic-skill directory ``manual`` reads. Unchanged from the
-# pre-migration ``load_installed_manual(agent, "email")`` call.
-_MANUAL_SKILL_NAME = "email"
-
 # The exact pre-migration reserved-action rejection for ``unread``. It is a
 # kernel-synthesized digest action, NOT a public child: it is absent from
 # ``ACTION_ORDER`` and therefore from the ``action`` enum, so the generic
@@ -141,16 +168,14 @@ def _schema_only_family() -> ToolFamily:
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
+    schemas = DECLARATION.public_input_schemas()
     return ToolFamily(
-        "email",
+        DECLARATION.name,
         [
-            ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
-            for action in ACTION_ORDER
+            ChildTool(action, schemas[action], _unused, title=f"{action} input")
+            for action in DECLARATION.public_actions
         ],
     )
-
-
-_FAMILY = _schema_only_family()
 
 
 def get_schema(lang: str = "en") -> dict[str, Any]:
@@ -241,6 +266,102 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
     return flat
 
 
+# The operational action inventory is derived from the same canonical order that
+# builds the legacy intrinsic family. `manual` remains the declaration-owned
+# reserved action and is appended exactly once by ToolPluginDeclaration.
+_EMAIL_DECLARED_ACTIONS = ACTION_ORDER[:-1]
+
+
+def _build_bound_family(host: "ToolPluginHost") -> ToolFamily:
+    """Compose Email's official surface against only its granted host ports.
+
+    Email's filesystem manager remains Agent-bound because mailbox arrival
+    hooks and delivery/identity semantics share that live runtime. The declared
+    family receives no Agent; each operational child consumes the Email-owned
+    ``EmailRuntimePort`` granted by the host. Its production adapter reads the
+    current manager at call time, while the package-owned `manual` child reads
+    only the separate read-only workdir port.
+    """
+
+    runtime: EmailRuntimePort = host.email_runtime
+
+    def _dispatch(action: str):
+        def call(action_input: Mapping[str, Any]) -> dict:
+            return runtime.handle_email(
+                EmailRuntimeRequest(action=action, input=_strip_nulls(action_input))
+            )
+
+        return call
+
+    return ToolFamily(
+        DECLARATION.name,
+        [
+            *[
+                ChildTool(
+                    action,
+                    DECLARATION.input_schemas[action],
+                    _dispatch(action),
+                    title=f"{action} input",
+                )
+                for action in DECLARATION.actions
+            ],
+            build_manual_child(host.workdir, DECLARATION.manual),
+        ],
+    )
+
+
+def _bound_handler(family: ToolFamily, args: dict) -> dict:
+    """Preserve Email's host-owned reserved/legacy result adaptations."""
+    raw = dict(args or {})
+    raw.pop("_tc_id", None)
+    action = raw.get("action")
+    if action == "unread":
+        return dict(_UNREAD_RESERVED_RESULT)
+    result = family.handle(raw)
+    if action == "manual" and "content" in result:
+        return _adapt_manual_result(result)
+    if result.get("error_code") == "ACTION_REQUIRED":
+        if not action:
+            return {"error": "action is required"}
+        return {"error": f"Unknown email action: {action}"}
+    return result
+
+
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Bind Email without mounting it or exposing the Agent."""
+    family = _build_bound_family(host)
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=lambda args: _bound_handler(family, args),
+        description=get_description(),
+        glossary_package=__package__,
+    )
+
+
+#: Static declaration of the official Email family.  It is created at import,
+#: before an Agent exists; the kernel validates the action/manual/schema shape
+#: then and validates the composed action inventory again at every bind.
+DECLARATION = ToolPluginDeclaration(
+    name="email",
+    actions=_EMAIL_DECLARED_ACTIONS,
+    input_schemas={action: INPUT_SCHEMAS[action] for action in _EMAIL_DECLARED_ACTIONS},
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="email",
+    description=get_description(),
+    binder=_bind,
+    # The Email-owned runtime port carries operational calls; workdir is used
+    # only by the package-owned manual child.
+    requires=("workdir", "email_runtime"),
+    glossary_package=__package__,
+)
+
+
+# Built only after the static declaration exists, so the advertised public
+# inventory has no independently restated name, action list, or manual schema.
+_FAMILY = _schema_only_family()
+
+
 def _build_family(agent) -> ToolFamily:
     """Build the per-call dispatching family with handlers bound to *agent*.
 
@@ -273,20 +394,17 @@ def _build_family(agent) -> ToolFamily:
 
         return _dispatch
 
-    children = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
-            )
-    return ToolFamily("email", children)
+    children = [
+        ChildTool(
+            action,
+            DECLARATION.input_schemas[action],
+            _bind(action),
+            title=f"{action} input",
+        )
+        for action in DECLARATION.actions
+    ]
+    children.append(build_manual_child(agent, DECLARATION.manual))
+    return ToolFamily(DECLARATION.name, children)
 
 
 # ---------------------------------------------------------------------------
@@ -345,18 +463,39 @@ def handle(agent, args: dict) -> dict:
 
 
 def boot(agent) -> None:
-    """Boot-time hook: instantiate manager and wire it onto the agent.
+    """Create Email's live manager, then mount its declared official surface.
 
-    The intrinsic registration (add_tool with schema/handler/description) is
-    done by _wire_intrinsics + ALL_INTRINSICS — this hook does the runtime
-    setup that the registry can't: create the manager and wire it into the
-    agent so module-level handle() can find it.
-
-    Idempotent on re-boot (the molt / refresh / cpr path goes through
-    ``_setup_from_init`` which re-runs ``boot``): simply rebinds a fresh
-    manager.
+    Re-boot during refresh deliberately replaces the manager before the host
+    binds the declaration.  The granted production adapter reads
+    ``agent._email_manager`` at invocation time, so a later replacement is
+    observed by already-bound handlers as well.
     """
-    mgr = EmailManager(agent)
-    agent._email_manager = mgr
+    agent._email_manager = EmailManager(agent)
     agent._mailbox_name = "email box"
     agent._mailbox_tool = "email"
+
+    # The daemon_email MCP server uses a deliberately minimal mailbox shim,
+    # not a live BaseAgent. It needs the established manager/hook runtime but
+    # has no official-tool surface to mount; only a real official Agent follows
+    # the registrar path below.
+    if not hasattr(agent, "official_tool_plugins"):
+        return
+
+    from lingtai.adapters.tool_plugin_host import (
+        AgentEmailRuntimeAdapter,
+        register_agent_tool_plugins,
+    )
+
+    register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        extra_ports_for=lambda declaration: (
+            {
+                "email_runtime": AgentEmailRuntimeAdapter(
+                    lambda: getattr(agent, "_email_manager", None)
+                )
+            }
+            if declaration is DECLARATION
+            else {}
+        ),
+    )

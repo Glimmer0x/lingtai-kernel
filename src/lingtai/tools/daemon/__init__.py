@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple
 
 
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
 from lingtai.kernel._fsutil import atomic_write_json, read_json
 from lingtai.kernel.i18n import t as _t
 from lingtai.kernel.llm.base import FunctionSchema, is_all_empty_response
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 from lingtai.kernel.loop_guard import LoopGuard
 from lingtai.kernel.message import MSG_REQUEST, _make_message
 from lingtai.kernel.notifications import (
@@ -49,7 +51,6 @@ from lingtai.kernel.meta_block import (
     attach_daemon_agent_meta,
     render_system_prompt_pressure_context,
 )
-from lingtai.kernel.time_veil import now_iso
 from lingtai.kernel.token_counter import count_tokens
 from lingtai.kernel.trace_redaction import redact_text
 from .._manual import load_installed_manual
@@ -57,14 +58,18 @@ from ._tool_family import (
     CHECK_LAST_MAX as _FAMILY_CHECK_LAST_MAX,
     DEFAULT_MAX_TURNS as _FAMILY_DEFAULT_MAX_TURNS,
     LIST_DEFAULT_LAST as _FAMILY_LIST_DEFAULT_LAST,
+    DAEMON_DECLARED_ACTIONS,
     DaemonFamilyDispatcher,
     build_schema as _family_build_schema,
+    declared_input_schemas,
 )
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from lingtai.adapters.posix.process_identity import (
     process_identity,
     process_identity_matches,
 )
 from .run_dir import DaemonRunDir
+from . import dispatch_ledger
 from .system_prompt import (
     DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
     build_daemon_system_prompt,
@@ -1374,20 +1379,85 @@ def _validate_claude_backend_argv(backend: str, argv: list[str]) -> None:
 
 
 class _ToolCollector:
-    """Captures add_tool calls during preset-driven capability setup.
+    """Legacy sandbox collector retained for detached and CLI host facades.
 
-    A capability's setup() expects something with add_tool plus the rest of
-    the parent's interface (_log, _config, _working_dir, inbox, ...). The
-    collector intercepts add_tool into local dicts and forwards every other
-    attribute read to the real parent agent, so the parent's tool registry
-    stays untouched while we still get the schema + handler the capability
-    wanted to register.
+    Official Agent boot uses ``DaemonRuntimePort.setup_preset_capability``;
+    detached and read-only host facades still compose established capability
+    setup against this private forwarding collector without mounting tools on a
+    live Agent.
     """
 
     def __init__(self, parent):
         self._parent = parent
         self.schemas: dict = {}
         self.handlers: dict = {}
+        # The collector owns the surface it builds, so official claims and bound
+        # results stay local too: preset/detached composition must never mutate
+        # the parent Agent's live namespace.
+        self._official_tool_plugins: dict[str, Any] = {}
+        self._official_tool_declarations: dict[str, Any] = {}
+        self._official_tool_bindings: dict[str, Any] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return Path(self._parent._working_dir)
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        raise RuntimeError("detached tool collector has no system-prompt sections")
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._authorize_official_tool_declaration(self, declaration)
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._record_official_tool_binding(self, declaration, plugin)
+
+    def _claim_official_tool(self, transaction) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._claim_official_tool(self, transaction)
+
+    def _mount_official_tool(self, transaction) -> None:
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OfficialMountTransaction,
+        )
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError(
+                "official tool mounting requires a registrar transaction"
+            )
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        self.add_tool(
+            name,
+            schema=dict(plugin.schema),
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(self)
 
     def add_tool(self, name, *, schema=None, handler=None,
                  description: str = "", system_prompt: str = "",
@@ -1401,23 +1471,69 @@ class _ToolCollector:
                 glossary_package=glossary_package,
             )
 
-    def __getattr__(self, n):
-        return getattr(self._parent, n)
+    def __getattr__(self, name):
+        return getattr(self._parent, name)
+
+
+_DESCRIPTION = 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
 
 
 def get_description(lang: str = "en") -> str:
-    return 'Daemon (神識) — delegate work to ephemeral subagents for context isolation. Each is a disposable LLM session sharing your working directory, retaining no memory after completion. Use for noisy work where you only need the conclusion. Results truncated to ~2000 chars — instruct the emanation to write detailed output to a file. Every call takes exactly action, input, and reasoning; each action owns its own strict input object. Actions: daemon(action=\'emanate\', input={"tasks": [...], "backend": null, "max_turns": null, "timeout": null}) dispatches; daemon(action=\'list\', input={"contains": null, "status": null, "include_done": null, "last": null}) shows the newest 1000 entries by default (pass a positive last explicitly for another count); daemon(action=\'ask\', input={"id": "em-1", "message": "..."}) sends a follow-up; daemon(action=\'check\', input={"id": "em-1", "last": null, "truncate": null}) inspects recent events; daemon(action=\'reclaim\', input={}) kills all; daemon(action=\'manual\', input={}) returns the installed daemon-manual skill. Every terminal outcome is push-notified exactly once — done, failed, cancelled, or timed out — so after you dispatch you can safely go idle and wait for the notification; do not poll for "is it done". The notification carries the daemon id, terminal status, task summary, and the result/error path; act on it with daemon(action="check", input={"id": ...}). LingTai daemons also receive compact; compact(action="manual") is read-only procedures, while explicit compact(action="run", _reason="...") is the repeatable sole-call context reset; action is required. POSIX daemon batches route through the central daemon manager by default: daemon.json `manager_pool_size` (env LINGTAI_DAEMON_MANAGER_POOL_SIZE, default 100) caps true parallel execution children for every batch size. Before using this tool, read the `daemon-manual` skill — it covers inspection patterns, polling cadence, preset/capability inheritance, and compact procedures; no exceptions. Programmatic callers outside a live agent turn (shell, Python, CI) should use the `lingtai-agent daemon` subcommand (emanate/list/check) instead of scripting this tool directly — see the daemon-manual "Programmatic use / CLI" section.'
+    return _DESCRIPTION
+
+
+def _bind_daemon(host) -> BoundToolPlugin:
+    """Compose Daemon against its granted ports without mounting or starting work."""
+    options = host.daemon_runtime.manager_options
+    manager = DaemonManager(
+        host.daemon_runtime,
+        max_turns=options["max_turns"],
+        timeout=options["timeout"],
+        notify_threshold=options["notify_threshold"],
+        manager_pool_size=options["manager_pool_size"],
+        system_prompt_budget_chars=options["system_prompt_budget_chars"],
+        workdir=host.workdir,
+        process_port=options.get("process_port"),
+        interactive_terminal_port=options.get("interactive_terminal_port"),
+    )
+    host.daemon_runtime.attach_daemon_manager(manager)
+    dispatcher = DaemonFamilyDispatcher(
+        manager,
+        host.workdir,
+        list(_BACKEND_SCHEMA_ENUM),
+        declaration=DECLARATION,
+    )
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=dispatcher.handle,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+    )
+
+
+#: Static official identity of the Daemon tool.  Its five operational actions
+#: and their strict schemas are declared before an Agent exists; the kernel
+#: appends the reserved installed-manual action and checks the bound schema on
+#: every registration.
+DECLARATION = ToolPluginDeclaration(
+    name="daemon",
+    actions=DAEMON_DECLARED_ACTIONS,
+    input_schemas=declared_input_schemas(list(_BACKEND_SCHEMA_ENUM)),
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="daemon",
+    description=_DESCRIPTION,
+    binder=_bind_daemon,
+    requires=("workdir", "daemon_runtime"),
+    glossary_package=__package__,
+)
 
 
 def get_schema(lang: str = "en") -> dict:
-    """Compose the LTP v2 model-facing schema for the single public ``daemon`` tool.
-
-    The composition itself lives in ``_tool_family.py`` (the package's one
-    canonical child registry); this stays the package's public entry point.
-    ``_BACKEND_SCHEMA_ENUM`` is passed in rather than imported there so the
-    child schema and the engine's own backend routing cannot drift apart.
-    """
-    return _family_build_schema(list(_BACKEND_SCHEMA_ENUM), lang)
+    """Compose the declaration-derived LTP v2 public Daemon schema."""
+    return _family_build_schema(
+        list(_BACKEND_SCHEMA_ENUM), lang, declaration=DECLARATION,
+    )
 
 
 # Sentinel strings a cooperatively-exited run returns through the future.
@@ -1542,14 +1658,36 @@ class DaemonManager:
     # callers/configs.
     _NOTIFY_MIN_LEN = 20
 
-    def __init__(self, agent: "Agent",
+    def __init__(self, runtime: Any,
                  max_turns: int = DEFAULT_MAX_TURNS, timeout: float = 3600.0,
                  notify_threshold: int = 20,
                  manager_pool_size: int = 100,
                  system_prompt_budget_chars: int = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
-                 *, process_port: DaemonProcessPort | None = None,
+                 *, workdir: Any | None = None,
+                 process_port: DaemonProcessPort | None = None,
                  interactive_terminal_port: InteractiveTerminalPort | None = None):
-        self._agent = agent
+        """Construct against Daemon's narrow runtime/workdir ports.
+
+        The no-``workdir`` form remains a direct-construction compatibility
+        seam for existing in-process callers and tests.  It is immediately
+        adapted in the production adapter module, so the manager itself still
+        consumes only the same named runtime/workdir operations used by the
+        declared-plugin binder; normal Agent boot always supplies both ports.
+        """
+        if workdir is None:
+            from lingtai.adapters.tool_plugin_host import (
+                AgentWorkdirAdapter,
+                daemon_runtime_for_agent,
+            )
+
+            agent = runtime
+            runtime = daemon_runtime_for_agent(agent, {})
+            workdir = AgentWorkdirAdapter(
+                lambda: getattr(agent, "_working_dir")
+                if hasattr(agent, "_working_dir") else agent.working_dir
+            )
+        self._runtime = runtime
+        self._workdir = workdir
         self._max_turns = max_turns
         self._timeout = timeout
         self._manager_pool_size = self._env_nonnegative_int(
@@ -1561,7 +1699,7 @@ class DaemonManager:
                 system_prompt_budget_chars, DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
             ),
         )
-        self._default_model = agent.service.model
+        self._default_model = self._runtime.service.model
         self._notify_threshold = notify_threshold
         # Direct construction is a supported test/in-process composition path
         # as well as setup(). POSIX and Windows each have one production
@@ -1625,8 +1763,9 @@ class DaemonManager:
             max_workers=max(1, self._manager_pool_size),
             thread_name_prefix="daemon-cli-ask",
         )
-        self._reap_dead_parent_daemon_records()
-        self._reconcile_terminal_notifications()
+        # New dispatches maintain only unresolved marker files.  Construction
+        # inspects that bounded set and never enumerates lifetime run folders.
+        self._recover_unresolved_markers()
 
     @staticmethod
     def _env_nonnegative_int(name: str, default: int) -> int:
@@ -1650,99 +1789,65 @@ class DaemonManager:
             return default
         return value if value > 0 else default
 
-    def _reap_dead_parent_daemon_records(self) -> None:
-        """Mark stale running daemon.json records failed after a restart.
-
-        A record's ``owner`` field decides which process identity is
-        authoritative for liveness:
-
-        - ``"parent"`` (default / every legacy in-process run): reaped when
-          the recorded ``parent_pid`` is dead — a fresh manager after
-          refresh/restart cannot resume an in-process worker thread that
-          belonged to the old interpreter.
-        - ``"supervisor"``: a detached run is, by design, still alive and
-          still executing after the launching agent process is gone — its
-          ``parent_pid`` being dead is expected and must NOT be treated as
-          orphaning. Liveness is instead checked against the run's own
-          recorded ``supervisor_pid``: only a dead supervisor with no
-          terminal state is a genuinely lost run (crashed without committing
-          terminal truth — see the parent contract's "exact supervisor
-          identity plus durable state" classification requirement).
-        - ``"manager"``: high-concurrency queued/active work is owned by the
-          resident central manager, not by the launching parent interpreter.
-          A refreshed parent must recognize a live manager pidfile or per-run
-          manager identity and leave the record alone.
-        """
-        daemons_dir = self._agent._working_dir / "daemons"
-        if not daemons_dir.is_dir():
-            return
-
-        current_pid = os.getpid()
-        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+    def _recover_unresolved_markers(self) -> None:
+        """Recover only new-format unresolved marker files, never legacy history."""
+        for kind, run_id, _marker in dispatch_ledger.recovery_markers(self._workdir.path):
+            daemon_json_path = self._workdir.path / "daemons" / run_id / "daemon.json"
             try:
                 state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
             if not isinstance(state, dict):
                 continue
+            if kind == "running":
+                if state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+                    dispatch_ledger.clear_marker(self._workdir.path, "running", run_id)
+                    if state.get("terminal_notified") is False:
+                        dispatch_ledger.mark_pending_terminal_notification(self._workdir.path, run_id)
+                    continue
+                self._reap_daemon_state_path(daemon_json_path, state)
+            elif kind == "pending-terminal":
+                self._reconcile_terminal_notification_path(daemon_json_path, state)
 
-            daemon_state = state.get("state")
-            if not isinstance(daemon_state, str):
-                continue
-            if daemon_state.lower() not in {"running", "active"}:
-                continue
-            if state.get("finished_at") not in (None, ""):
-                continue
+    def _reap_dead_parent_daemon_records(self) -> None:
+        """Compatibility entry point: recover bounded markers only."""
+        self._recover_unresolved_markers()
 
-            owner = state.get("owner", "parent")
-            if owner == "supervisor":
-                supervisor_pid = state.get("supervisor_pid")
-                if not isinstance(supervisor_pid, int) or isinstance(supervisor_pid, bool):
-                    # No pid recorded yet — the supervisor is still in its
-                    # startup handshake window; do not reap.
-                    continue
-                supervisor_identity = state.get("supervisor_start_identity")
-                if self._pid_identity_matches(supervisor_pid, supervisor_identity):
-                    continue
-                reap_reason = (
-                    "Reaped running daemon record because recorded "
-                    f"supervisor_pid {supervisor_pid} is no longer alive with "
-                    "no terminal state committed (crashed without committing "
-                    "terminal truth)."
-                )
-            elif owner == "manager":
-                if self._manager_owner_alive(state):
-                    continue
-                manager_pid = state.get("manager_pid")
-                if isinstance(manager_pid, int) and not isinstance(manager_pid, bool):
-                    subject = f"manager_pid {manager_pid}"
-                else:
-                    subject = "central daemon manager"
-                reap_reason = (
-                    "Reaped running daemon record because recorded "
-                    f"{subject} is no longer alive with no terminal state "
-                    "committed."
-                )
-            else:
-                parent_pid = state.get("parent_pid")
-                if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
-                    continue
-                if parent_pid == current_pid:
-                    continue
-                if self._pid_alive(parent_pid):
-                    continue
-                reap_reason = (
-                    "Reaped running daemon record because recorded parent_pid "
-                    f"{parent_pid} is no longer alive after daemon manager startup."
-                )
-
-            try:
-                orphaned = type("DaemonOrphaned", (RuntimeError,), {})
-                DaemonRunDir.attach(daemon_json_path.parent).mark_failed(
-                    orphaned(reap_reason)
-                )
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+    def _reap_daemon_state_path(self, daemon_json_path: Path, state: dict) -> None:
+        """Apply the established stale-owner classification to one marker run."""
+        daemon_state = state.get("state")
+        if not isinstance(daemon_state, str) or daemon_state.lower() not in {"running", "active"}:
+            return
+        if state.get("finished_at") not in (None, ""):
+            return
+        current_pid = os.getpid()
+        owner = state.get("owner", "parent")
+        if owner == "supervisor":
+            supervisor_pid = state.get("supervisor_pid")
+            if not isinstance(supervisor_pid, int) or isinstance(supervisor_pid, bool):
+                return
+            if self._pid_identity_matches(supervisor_pid, state.get("supervisor_start_identity")):
+                return
+            reap_reason = (
+                "Reaped running daemon record because recorded "
+                f"supervisor_pid {supervisor_pid} is no longer alive with no terminal state committed."
+            )
+        elif owner == "manager":
+            if self._manager_owner_alive(state):
+                return
+            manager_pid = state.get("manager_pid")
+            subject = f"manager_pid {manager_pid}" if isinstance(manager_pid, int) and not isinstance(manager_pid, bool) else "central daemon manager"
+            reap_reason = f"Reaped running daemon record because recorded {subject} is no longer alive with no terminal state committed."
+        else:
+            parent_pid = state.get("parent_pid")
+            if not isinstance(parent_pid, int) or isinstance(parent_pid, bool) or parent_pid == current_pid or self._pid_alive(parent_pid):
+                return
+            reap_reason = f"Reaped running daemon record because recorded parent_pid {parent_pid} is no longer alive after daemon manager startup."
+        try:
+            orphaned = type("DaemonOrphaned", (RuntimeError,), {})
+            DaemonRunDir.attach(daemon_json_path.parent).mark_failed(orphaned(reap_reason))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -1772,7 +1877,7 @@ class DaemonManager:
         try:
             from lingtai.adapters.posix.daemon_manager import MANAGER_DIR
 
-            pid_path = self._agent._working_dir / MANAGER_DIR / "manager.pid"
+            pid_path = self._workdir.path / MANAGER_DIR / "manager.pid"
             info = json.loads(pid_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return False
@@ -1801,41 +1906,36 @@ class DaemonManager:
         return process_identity_matches(pid, expected)
 
     def _reconcile_terminal_notifications(self) -> None:
-        """Retry terminal daemon notifications that lack a published receipt."""
-        daemons_dir = self._agent._working_dir / "daemons"
-        if not daemons_dir.is_dir():
-            return
-        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+        """Compatibility entry point: retry only bounded pending markers."""
+        for kind, run_id, _marker in dispatch_ledger.recovery_markers(self._workdir.path):
+            if kind != "pending-terminal":
+                continue
+            path = self._workdir.path / "daemons" / run_id / "daemon.json"
             try:
-                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if not isinstance(state, dict):
-                continue
-            status = state.get("state")
-            if status not in {"done", "failed", "cancelled", "timeout"}:
-                continue
-            # Only explicit new-schema receipts are replay candidates. Older
-            # terminal daemon.json records had no terminal_notified key; treating
-            # them as retryable would replay historical completions on upgrade.
-            if state.get("terminal_notified") is not False:
-                continue
-            run_id = str(state.get("run_id") or daemon_json_path.parent.name)
-            key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
-            text = self._terminal_notification_text_from_state(
-                state, daemon_json_path.parent,
+            if isinstance(state, dict):
+                self._reconcile_terminal_notification_path(path, state)
+
+    def _reconcile_terminal_notification_path(self, daemon_json_path: Path, state: dict) -> None:
+        """Retry one explicitly pending new-format terminal receipt."""
+        status = state.get("state")
+        if status not in {"done", "failed", "cancelled", "timeout"}:
+            return
+        if state.get("terminal_notified") is not False:
+            dispatch_ledger.clear_marker(self._workdir.path, "pending-terminal", str(state.get("run_id") or daemon_json_path.parent.name))
+            return
+        run_id = str(state.get("run_id") or daemon_json_path.parent.name)
+        key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
+        text = self._terminal_notification_text_from_state(state, daemon_json_path.parent)
+        if self._publish_daemon_notification(
+            run_id, status=status, text=text, run_state=state,
+            run_path=daemon_json_path.parent, idempotency_key=key,
+        ):
+            DaemonRunDir.mark_terminal_notification_published_on_disk(
+                daemon_json_path, idempotency_key=key,
             )
-            if self._publish_daemon_notification(
-                run_id,
-                status=status,
-                text=text,
-                run_state=state,
-                run_path=daemon_json_path.parent,
-                idempotency_key=key,
-            ):
-                DaemonRunDir.mark_terminal_notification_published_on_disk(
-                    daemon_json_path, idempotency_key=key,
-                )
 
     def _terminal_notification_text_from_state(
         self, state: dict, run_path: Path
@@ -1864,7 +1964,7 @@ class DaemonManager:
     def handle(self, args: dict) -> dict:
         action = args.get("action")
         if action == "manual":
-            return load_installed_manual(self._agent, "daemon")
+            return load_installed_manual(self._workdir, "daemon")
         backend = _normalize_backend(args.get("backend", "lingtai"))
         if action == "emanate":
             return self._handle_emanate(
@@ -2105,7 +2205,7 @@ class DaemonManager:
             return None, [], []
         if not isinstance(raw, list):
             raise ValueError("plugin must be an array of plugin directory paths")
-        working_dir = self._agent._working_dir
+        working_dir = self._workdir.path
         resolved_paths: list[Path] = []
         for idx, item in enumerate(raw):
             if not isinstance(item, str) or not item.strip():
@@ -2564,7 +2664,7 @@ class DaemonManager:
         handlers: dict = {}
         clients: list[object] = []
         metadata: dict[str, dict] = {}
-        licc_env = {"LINGTAI_AGENT_DIR": str(self._agent._working_dir)}
+        licc_env = {"LINGTAI_AGENT_DIR": str(self._workdir.path)}
         try:
             for cfg in registrations:
                 name = cfg["name"]
@@ -2667,7 +2767,7 @@ class DaemonManager:
         for idx, item in enumerate(raw):
             if not isinstance(item, str) or not item.strip():
                 raise ValueError(f"skills[{idx}] must be a non-empty string path")
-            skill_file = self._resolve_task_skill_path(item.strip(), self._agent._working_dir)
+            skill_file = self._resolve_task_skill_path(item.strip(), self._workdir.path)
             if skill_file in seen:
                 continue
             seen.add(skill_file)
@@ -2720,7 +2820,7 @@ class DaemonManager:
 
     def _task_files_store_dir(self) -> Path:
         """The internal content-addressed task input store for this agent."""
-        return self._agent._working_dir / "daemons" / _TASK_FILES_STORE_DIR_NAME
+        return self._workdir.path / "daemons" / _TASK_FILES_STORE_DIR_NAME
 
     def _snapshot_task_files(self, spec: dict) -> list[dict] | None:
         """Validate ``spec['task_files']`` and plan its snapshot rows.
@@ -2774,7 +2874,7 @@ class DaemonManager:
                     f"{_TASK_FILES_ANNOTATION_MAX_CHARS} characters"
                 )
             resolved = self._resolve_task_file_path(
-                path.strip(), self._agent._working_dir
+                path.strip(), self._workdir.path
             )
             try:
                 data = resolved.read_bytes()
@@ -3016,7 +3116,7 @@ class DaemonManager:
         construction path in ``_run_emanation`` can mirror the parent service.
         The api_key is never logged or persisted.
         """
-        parent_service = self._agent.service
+        parent_service = self._runtime.service
         provider = str(getattr(parent_service, "provider", "")).lower()
         parent_defaults = getattr(parent_service, "_provider_defaults", {}) or {}
         if not isinstance(parent_defaults, dict):
@@ -3089,7 +3189,7 @@ class DaemonManager:
         intrinsic_schemas, intrinsic_handlers = self._daemon_intrinsic_surface()
         mcp_schemas, mcp_handlers = mcp_surface or ({}, {})
         parent_mcp_names = self._parent_mcp_tool_names()
-        reserved_names = ({s.name for s in self._agent._tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
+        reserved_names = ({s.name for s in self._runtime.tool_schemas} - parent_mcp_names) | set(intrinsic_schemas)
         mcp_collisions = set(mcp_schemas) & reserved_names
         if mcp_collisions:
             raise ValueError(
@@ -3119,7 +3219,7 @@ class DaemonManager:
             # NOT auto-inherit (they must come through task `mcp` registrations);
             # that exclusion is enforced by the ``parent_mcp_requested`` guard
             # above and by the floor's exclusion of `mcp`.
-            parent_schema_map = {s.name: s for s in self._agent._tool_schemas}
+            parent_schema_map = {s.name: s for s in self._runtime.tool_schemas}
             parent_host_names = (set(parent_schema_map)
                                  & _parent_host_tool_floor()) - parent_mcp_names
             # Available surface = preset capabilities ∪ parent host-floor tools
@@ -3162,8 +3262,8 @@ class DaemonManager:
                         dispatch[n] = mcp_handlers[n]
                 elif n in parent_schema_map:
                     schemas.append(parent_schema_map[n])
-                    if n in self._agent._tool_handlers:
-                        dispatch[n] = self._agent._tool_handlers[n]
+                    if n in self._runtime.tool_handlers:
+                        dispatch[n] = self._runtime.tool_handlers[n]
             return schemas, dispatch
 
         # Default path: emanation runs on the parent's capability surface plus
@@ -3171,7 +3271,7 @@ class DaemonManager:
         tool_names |= set(mcp_schemas)
 
         # Validate requested tools exist
-        available = ({s.name for s in self._agent._tool_schemas}
+        available = ({s.name for s in self._runtime.tool_schemas}
                      | set(intrinsic_schemas) | set(mcp_schemas)
                      | _DAEMON_AUTO_MCP_TOOL_NAMES)
         missing = tool_names - available
@@ -3179,7 +3279,7 @@ class DaemonManager:
             raise ValueError(f"Unknown tools for emanation: {missing}")
 
         # Build schemas and dispatch
-        schema_map = {s.name: s for s in self._agent._tool_schemas}
+        schema_map = {s.name: s for s in self._runtime.tool_schemas}
         schemas = []
         for n in sorted(tool_names):
             if n in intrinsic_schemas:
@@ -3188,8 +3288,8 @@ class DaemonManager:
                 schemas.append(mcp_schemas[n])
             elif n in schema_map:
                 schemas.append(schema_map[n])
-        dispatch = {n: self._agent._tool_handlers[n]
-                    for n in tool_names if n in self._agent._tool_handlers}
+        dispatch = {n: self._runtime.tool_handlers[n]
+                    for n in tool_names if n in self._runtime.tool_handlers}
         for n in tool_names:
             if n in mcp_handlers:
                 dispatch[n] = mcp_handlers[n]
@@ -3199,11 +3299,8 @@ class DaemonManager:
 
 
     def _parent_mcp_tool_names(self) -> set[str]:
-        """Return parent MCP tool names tracked by the parent agent."""
-        names = getattr(self._agent, "_mcp_tool_names", set())
-        if not isinstance(names, set):
-            return set()
-        return {n for n in names if isinstance(n, str)}
+        """Return parent MCP tool names through Daemon's narrow runtime port."""
+        return set(self._runtime.mcp_tool_names)
 
     def _expand_requested_tools(self, requested: list[str]) -> set[str]:
         """Expand requested daemon tools after group aliases and blacklist."""
@@ -3240,7 +3337,6 @@ class DaemonManager:
         from lingtai.tools.registry import (
             BUILTIN_TOOLS,
             canonical_capability_name,
-            setup_capability,
         )
         from lingtai.presets import expand_inherit
 
@@ -3255,7 +3351,8 @@ class DaemonManager:
         # capability or an unknown one that ``setup_capability`` rejects.
         expanded: dict = dict(resolved)
 
-        collector = _ToolCollector(self._agent)
+        collected_schemas: dict = {}
+        collected_handlers: dict = {}
         required = required_tools
         for name, kwargs in expanded.items():
             name = canonical_capability_name(name)
@@ -3277,7 +3374,9 @@ class DaemonManager:
             if not isinstance(kwargs, dict):
                 kwargs = {}
             try:
-                setup_capability(collector, name, **kwargs)
+                schemas, handlers = self._runtime.setup_preset_capability(name, kwargs)
+                collected_schemas.update(schemas)
+                collected_handlers.update(handlers)
             except Exception as e:
                 if required is not None and name not in required:
                     self._log(
@@ -3290,7 +3389,7 @@ class DaemonManager:
                     f"preset capability {name!r} failed to set up: {e}"
                 ) from e
 
-        return collector.schemas, collector.handlers
+        return collected_schemas, collected_handlers
 
     def _build_emanation_prompt(
         self,
@@ -3300,7 +3399,7 @@ class DaemonManager:
     ) -> str:
         """Build the system prompt for an emanation."""
         return _build_emanation_prompt_standalone(
-            self._agent._config.language,
+            self._runtime.language,
             task,
             schemas,
             system_prompt=system_prompt,
@@ -3395,7 +3494,7 @@ class DaemonManager:
         manifest = build_manifest(
             run_id=run_dir.run_id,
             backend="lingtai",
-            parent_working_dir=str(self._agent._working_dir),
+            parent_working_dir=str(self._workdir.path),
             run_dir=str(run_dir.path),
             task=task,
             prompt=prompt,
@@ -3406,7 +3505,7 @@ class DaemonManager:
             context_token_limit=context_token_limit,
             llm=resolved_llm,
             mcp=mcp,
-            language=getattr(self._agent._config, "language", "en"),
+            language=self._runtime.language,
             preset_name=preset_name,
             preset_llm=preset_llm,
             preset_capabilities=preset_capabilities,
@@ -3519,7 +3618,7 @@ class DaemonManager:
         from lingtai.adapters.posix.daemon_manager import enqueue_manager_run
 
         enqueue_manager_run(
-            agent_working_dir=self._agent._working_dir,
+            agent_working_dir=self._workdir.path,
             request=request,
             capsule=capsule,
             pool_size=pool_size,
@@ -3550,7 +3649,7 @@ class DaemonManager:
         existing LLM configuration is used as an implicit/effective preset (see
         ``_implicit_parent_preset_llm``). Either way a dedicated daemon-scoped
         LLMService is built from the effective preset — the daemon never reuses
-        ``self._agent.service`` directly and never runs provider-name env-var
+        ``self._runtime.service`` directly and never runs provider-name env-var
         fallback resolution for its primary key.
 
         context_token_limit: the task's optional ``context_token_limit``
@@ -3750,11 +3849,11 @@ class DaemonManager:
             # per-execution tool_meta. Parent agent/session and communication state
             # are intentionally not shared across this boundary.
             meta_fn=lambda: {"agent_state": daemon_meta_state.snapshot(session)},
-            working_dir=self._agent._working_dir,
-            tool_call_guard=getattr(self._agent, "_tool_call_guard", None),
+            working_dir=self._workdir.path,
+            tool_call_guard=self._runtime.tool_call_guard,
             summarizer_fn=daemon_summarizer_fn,
             raw_log_path=run_dir.events_path.relative_to(
-                self._agent._working_dir
+                self._workdir.path
             ).as_posix(),
             raw_event_type="daemon_tool_result",
         )
@@ -3849,7 +3948,7 @@ class DaemonManager:
             try:
                 stats = compact_oversized_history(
                     interface,
-                    working_dir=self._agent._working_dir,
+                    working_dir=self._workdir.path,
                     logger_fn=lambda event, **fields: run_dir.append_event(
                         event, em_id=em_id, run_id=run_dir.run_id, **fields
                     ),
@@ -3889,14 +3988,14 @@ class DaemonManager:
 
         def _daemon_aed_retry_message(err_desc: str) -> str:
             """Build the daemon-local localized ``MSG_REQUEST`` recovery message."""
-            language = getattr(getattr(self._agent, "_config", None), "language", "en")
+            language = getattr(self._runtime, "language", "en")
             return _make_message(
                 MSG_REQUEST,
                 "system",
                 _t(
                     language,
                     "system.stuck_revive",
-                    ts=now_iso(self._agent),
+                    ts=self._runtime.now_iso(),
                     err_desc=err_desc,
                 ),
             ).content
@@ -3913,7 +4012,7 @@ class DaemonManager:
             # location of the post-tool send that triggered recovery.
             error = _daemon_empty_response_error(in_tool_loop=in_tool_loop)
             max_aed_attempts = getattr(
-                getattr(self._agent, "_config", None), "max_aed_attempts", 3
+                self._runtime, "max_aed_attempts", 3
             )
             if (
                 not isinstance(max_aed_attempts, int)
@@ -4317,7 +4416,7 @@ class DaemonManager:
             spawn_env.update(backend_env)
 
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir, tuple(spawn_env.items()),
+            tuple(cmd), self._workdir.path, tuple(spawn_env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -4595,7 +4694,7 @@ class DaemonManager:
             result = run_claude_interactive(
                 em_id=em_id,
                 run_dir=run_dir,
-                working_dir=self._agent._working_dir,
+                working_dir=self._workdir.path,
                 task=task,
                 cancel_event=cancel_event,
                 timeout_event=timeout_event,
@@ -4681,12 +4780,12 @@ class DaemonManager:
         # Codex normally inherits the parent environment untouched; an explicit
         # env is materialized only when the caller supplied a
         # ``backend_options.env`` overlay.
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         if backend_env:
             env = os.environ.copy()
             env.update(backend_env)
             command = DaemonProcessCommand(
-                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                tuple(cmd), self._workdir.path, tuple(env.items()),
             )
         try:
             handle = self._process_port.spawn(
@@ -4909,7 +5008,7 @@ class DaemonManager:
             parts.append(f"Preview:\n{preview}")
         body = "\n".join(parts)
         try:
-            self._agent._enqueue_system_notification(
+            self._runtime.enqueue_daemon_notification(
                 source="daemon",
                 ref_id=em_id,
                 body=body,
@@ -5169,14 +5268,7 @@ class DaemonManager:
         if any(spec.get("preset") for spec in tasks):
             from lingtai.kernel.presets import _preset_ref_in
 
-            read_raw_preset = getattr(self._agent, "_read_preset_from_init", None)
-            if callable(read_raw_preset):
-                try:
-                    raw_preset_block = read_raw_preset()
-                except Exception:
-                    raw_preset_block = {}
-            else:
-                raw_preset_block = {}
+            raw_preset_block = self._runtime.read_preset_from_init()
             allowed = (
                 raw_preset_block.get("allowed")
                 if isinstance(raw_preset_block, dict) else None
@@ -5186,7 +5278,7 @@ class DaemonManager:
                 requested = spec.get("preset")
                 if not requested:
                     continue
-                if not _preset_ref_in(requested, allowed, working_dir=self._agent._working_dir):
+                if not _preset_ref_in(requested, allowed, working_dir=self._workdir.path):
                     self._log("daemon_preset_refused_unauthorized", requested=requested)
                     return {
                         "status": "error",
@@ -5211,7 +5303,7 @@ class DaemonManager:
             # composed preset-loader hook so the daemon never constructs a
             # migration workspace adapter itself.
             try:
-                preset = self._agent.load_preset(preset_name)
+                preset = self._runtime.load_preset(preset_name)
             except (KeyError, ValueError) as e:
                 return {"status": "error",
                         "message": f"preset {preset_name!r} unloadable: {e}"}
@@ -5251,7 +5343,7 @@ class DaemonManager:
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
-        parent_addr = self._agent._working_dir.name
+        parent_addr = self._workdir.path.name
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
@@ -5313,7 +5405,7 @@ class DaemonManager:
             # propagate as a tool-level error and skip scheduling for this spec.
             try:
                 run_dir = DaemonRunDir(
-                    parent_working_dir=self._agent._working_dir,
+                    parent_working_dir=self._workdir.path,
                     handle=em_id,
                     run_id=em_id,
                     task=spec["task"],
@@ -5354,7 +5446,7 @@ class DaemonManager:
                 task_mcp_regs = self._with_daemon_common_mcp(task_mcp_regs, run_dir)
                 if "email" in (spec.get("tools") or []):
                     task_mcp_regs = self._with_daemon_email_mcp(
-                        task_mcp_regs, run_dir, self._agent._working_dir,
+                        task_mcp_regs, run_dir, self._workdir.path,
                     )
                 task_mcp_catalog = self._render_task_mcp_catalog(task_mcp_regs)
                 task_context = self._combine_oneshot_context(
@@ -5389,6 +5481,7 @@ class DaemonManager:
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
+                self._commit_dispatch(run_dir)
                 self._spawn_detached_lingtai_run(
                     run_dir,
                     task=spec["task"],
@@ -5424,6 +5517,19 @@ class DaemonManager:
                 "group_id": group_id,
                 "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
 
+    def _commit_dispatch(self, run_dir: DaemonRunDir) -> None:
+        """Commit a newly accepted run before any detached execution starts."""
+        state = run_dir.state_snapshot()
+        created_at = state.get("started_at")
+        if not isinstance(created_at, str) or not created_at:
+            raise dispatch_ledger.DispatchLedgerError("initial daemon state lacks started_at")
+        record = dispatch_ledger.append_dispatch(
+            self._workdir.path, run_id=run_dir.run_id, created_at=created_at
+        )
+        # The recovery marker follows the durable ledger commit and precedes
+        # launch.  Its failure is loud, so no accepted run starts untracked.
+        run_dir.enable_dispatch_tracking(record.sequence)
+
     def _emanate_handoff(self, count: int, requested_timeout_s: float | None) -> str:
         """Async handoff line, plus a Task Card nudge for fleet-scale dispatch.
 
@@ -5449,15 +5555,7 @@ class DaemonManager:
             or requested_timeout_s < DAEMON_CARD_NUDGE_MIN_TIMEOUT_S
         ):
             return False
-        has_active = getattr(
-            getattr(self._agent, "_task_card_manager", None), "has_active_watch", None
-        )
-        if not callable(has_active):
-            return False
-        try:
-            return not has_active()
-        except Exception:
-            return False
+        return not self._runtime.has_active_task_card_watch()
 
     def _handle_emanate_cli(
         self,
@@ -5539,7 +5637,7 @@ class DaemonManager:
 
         ids = []
         group_id = DaemonRunDir.new_group_id()
-        parent_addr = self._agent._working_dir.name
+        parent_addr = self._workdir.path.name
         parent_pid = os.getpid()
         use_central_manager = self._should_use_central_daemon_manager(len(tasks))
 
@@ -5584,7 +5682,7 @@ class DaemonManager:
                 )
             try:
                 run_dir = DaemonRunDir(
-                    parent_working_dir=self._agent._working_dir,
+                    parent_working_dir=self._workdir.path,
                     handle=em_id,
                     run_id=em_id,
                     task=spec["task"],
@@ -5624,7 +5722,7 @@ class DaemonManager:
                 )
                 if _cli_backend_loads_common_mcp(backend) and "email" in (spec.get("tools") or []):
                     mcp_regs = self._with_daemon_email_mcp(
-                        mcp_regs, run_dir, self._agent._working_dir,
+                        mcp_regs, run_dir, self._workdir.path,
                     )
                 mcp_catalog = self._render_task_mcp_catalog(mcp_regs)
                 task_context = self._combine_oneshot_context(
@@ -5705,6 +5803,7 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
+                self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
                 from .supervisor_runtime import select_daemon_supervisor_adapter
@@ -5712,7 +5811,7 @@ class DaemonManager:
                 manifest = build_manifest(
                     run_id=run_dir.run_id,
                     backend=backend,
-                    parent_working_dir=str(self._agent._working_dir),
+                    parent_working_dir=str(self._workdir.path),
                     run_dir=str(run_dir.path),
                     task=cli_task,
                     tools=spec.get("tools", []),
@@ -5721,7 +5820,7 @@ class DaemonManager:
                     group_id=group_id,
                     mcp=mcp_regs,
                     backend_argv=backend_argv,
-                    language=getattr(self._agent._config, "language", "en"),
+                    language=self._runtime.language,
                 )
                 write_manifest(run_dir.path, manifest)
                 request = DaemonSupervisorRequest(
@@ -5960,168 +6059,81 @@ class DaemonManager:
         preview = text[:200]
         return preview, str(result_path)
 
-    def _build_reconstructed_daemon_state(
+    def _handle_list_from_ledger(
         self,
-        run_path: Path,
-        existing_state: dict | None,
         *,
-        reason: str,
+        query: str,
+        wanted_status: str,
+        include_done: bool,
+        limit_int: int,
     ) -> dict:
-        old = dict(existing_state or {})
-        run_id = str(old.get("run_id") or run_path.name)
-        handle = str(old.get("handle") or self._handle_from_run_id(run_id) or run_id)
-        events = self._read_daemon_events_tail(run_path)
-        inferred_state, inferred_finished_at, inferred_error = self._infer_terminal_state_from_events(events)
-        result_preview, result_path = self._result_preview_from_file(run_path)
-        task = old.get("task")
-        call_params = old.get("call_parameters") if isinstance(old.get("call_parameters"), dict) else {}
-        if not isinstance(task, str) or not task:
-            task = call_params.get("task") if isinstance(call_params.get("task"), str) else None
-        if not task:
-            task = self._infer_task_from_prompt(run_path) or ""
-        tools = old.get("tools")
-        if not isinstance(tools, list):
-            tools = call_params.get("tools") if isinstance(call_params.get("tools"), list) else []
-        daemon_state = old.get("state") if isinstance(old.get("state"), str) else None
-        if inferred_state and daemon_state in (None, "", "running", "active", "unknown"):
-            daemon_state = inferred_state
-        if result_path and daemon_state in (None, "", "running", "active", "unknown"):
-            daemon_state = "done"
-        if not daemon_state:
-            daemon_state = "unknown"
-        started_at = old.get("started_at") if isinstance(old.get("started_at"), str) else None
-        if not started_at:
-            started_at = self._started_at_from_run_id(run_id)
-        if not started_at:
-            try:
-                started_at = self._utc_iso_from_timestamp(run_path.stat().st_mtime)
-            except OSError:
-                started_at = DaemonRunDir._now_iso()
-        finished_at = old.get("finished_at") if isinstance(old.get("finished_at"), str) else None
-        if not finished_at and daemon_state in {"done", "failed", "cancelled", "timeout"}:
-            finished_at = inferred_finished_at
-            if not finished_at:
-                terminal_path = Path(result_path) if result_path else (run_path / "logs" / "events.jsonl")
-                try:
-                    finished_at = self._utc_iso_from_timestamp(terminal_path.stat().st_mtime)
-                except OSError:
-                    finished_at = DaemonRunDir._now_iso()
-        if not isinstance(call_params, dict):
-            call_params = {}
-        if task and not call_params.get("task"):
-            call_params["task"] = task
-        if tools and not call_params.get("tools"):
-            call_params["tools"] = tools
-        state = {
-            "data_version": DaemonRunDir.DATA_VERSION,
-            "handle": handle,
-            "run_id": run_id,
-            "group_id": old.get("group_id"),
-            "parent_addr": old.get("parent_addr"),
-            "parent_pid": old.get("parent_pid"),
-            "task": task,
-            "tools": tools,
-            "call_parameters": call_params,
-            "model": old.get("model") or old.get("preset_model") or "unknown",
-            "max_turns": old.get("max_turns"),
-            "timeout_s": old.get("timeout_s"),
-            "state": daemon_state,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "elapsed_s": old.get("elapsed_s") if old.get("elapsed_s") is not None else 0.0,
-            "turn": old.get("turn") if old.get("turn") is not None else 0,
-            "current_tool": old.get("current_tool"),
-            "tool_call_count": old.get("tool_call_count") if old.get("tool_call_count") is not None else 0,
-            "tokens": old.get("tokens") if isinstance(old.get("tokens"), dict) else {"input": 0, "output": 0, "thinking": 0, "cached": 0},
-            "result_preview": old.get("result_preview") or result_preview,
-            "result_path": old.get("result_path") or result_path,
-            "last_output": old.get("last_output"),
-            "last_output_at": old.get("last_output_at"),
-            "error": old.get("error") or inferred_error,
-            "preset_name": old.get("preset_name"),
-            "preset_provider": old.get("preset_provider"),
-            "preset_model": old.get("preset_model"),
-            "backend": old.get("backend") or "unknown",
-            "claude_session_id": old.get("claude_session_id"),
-            "codex_session_id": old.get("codex_session_id"),
-            "opencode_session_id": old.get("opencode_session_id"),
-            "mimocode_session_id": old.get("mimocode_session_id"),
-            "oh_my_pi_session_id": old.get("oh_my_pi_session_id"),
-            "kimicode_session_id": old.get("kimicode_session_id"),
-            "cursor_session_id": old.get("cursor_session_id"),
-            "migration": {
-                "reason": reason,
-                "rebuilt_at": DaemonRunDir._now_iso(),
-                "source": "daemon_list_best_effort",
-            },
-        }
-        # Preserve fields added by specific backends or future versions (for
-        # example backend_options/backend_argv/session ids) while still
-        # normalizing the fields list relies on above.  data_version itself is
-        # deliberately overwritten to the current version.
-        for key, value in old.items():
-            if key != "data_version" and key not in state:
-                state[key] = value
-        return state
-
-    @staticmethod
-    def _has_current_daemon_data_version(state: dict) -> bool:
-        version = state.get("data_version")
-        return (
-            isinstance(version, int)
-            and not isinstance(version, bool)
-            and version == DaemonRunDir.DATA_VERSION
+        """Build list from append-order ledger, never historical directories."""
+        # Filters/search are explicit queries and may stream the ledger.  The
+        # ordinary list reads an EOF tail only; created_at is never re-sorted.
+        full_history = bool(query or (wanted_status and wanted_status != "all") or not include_done)
+        _ledger, rows, warnings = dispatch_ledger.read_recent_daemon_states(
+            self._workdir.path,
+            limit=limit_int,
+            full_history=full_history,
         )
+        entries: list[dict] = []
+        known_run_ids: set[str] = set()
+        for record, run_path, state in reversed(rows):
+            known_run_ids.add(record.run_id)
+            info = self._daemon_list_entry_from_state(state, run_path)
+            entries.append(info)
 
-    def _load_or_rebuild_daemon_state(self, run_path: Path) -> dict | None:
-        daemon_json_path = run_path / "daemon.json"
-        # A fresh manager may see a detached live run as history.  Re-check and
-        # repair under the same fixed lock as every RunDir writer so a terminal
-        # owner cannot commit between this read and the recovery replacement.
-        try:
-            with DaemonRunDir.state_file_lock(run_path):
-                existing: dict | None = None
-                reason: str | None = None
-                try:
-                    loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        existing = loaded
-                    else:
-                        reason = "daemon_json_not_object"
-                except FileNotFoundError:
-                    reason = "daemon_json_missing"
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    reason = "daemon_json_invalid"
-                if reason is None and existing is not None:
-                    if self._has_current_daemon_data_version(existing):
-                        return existing
-                    reason = "daemon_json_data_version_mismatch"
-                rebuilt = self._build_reconstructed_daemon_state(
-                    run_path, existing, reason=reason or "daemon_json_rebuild"
-                )
-                self._atomic_write_daemon_json(daemon_json_path, rebuilt)
-                return rebuilt
-        except OSError:
-            return None
+        # Overlay current in-memory ownership without reconstructing old disk
+        # history. This preserves active facade truth during supervisor startup.
+        for em_id, entry in self._emanations.items():
+            run_dir = entry.get("run_dir")
+            if run_dir is None:
+                # A live legacy in-memory worker has no durable run directory
+                # to add to the ledger yet. It is still current registry truth,
+                # not history reconstruction, and remains visible until its
+                # normal run-dir path takes over.
+                future = entry.get("future")
+                done = bool(future is not None and future.done())
+                failed = bool(done and future is not None and future.exception() is not None)
+                entries.insert(0, {
+                    "id": em_id,
+                    "run_id": em_id,
+                    "status": "failed" if failed else ("done" if done else "running"),
+                    "task": entry.get("task", ""),
+                    "elapsed_s": max(0.0, time.time() - float(entry.get("start_time", time.time()))),
+                    "turn": 0,
+                    "current_tool": None,
+                })
+                continue
+            if run_dir.run_id in known_run_ids:
+                continue
+            try:
+                state = self._read_run_dir_state_from_disk(run_dir) if entry.get("detached", False) else run_dir.state_snapshot()
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            state.setdefault("handle", em_id)
+            entries.insert(0, self._daemon_list_entry_from_state(state, run_dir.path))
 
-    def _iter_daemon_history_states(self, skip_run_ids: set[str] | None = None) -> list[tuple[Path, dict]]:
-        daemons_dir = self._agent._working_dir / "daemons"
-        if not daemons_dir.is_dir():
-            return []
-        skip_run_ids = skip_run_ids or set()
-        rows: list[tuple[Path, dict]] = []
-        for run_path in daemons_dir.iterdir():
-            # Active runs are represented by their live DaemonRunDir object above.
-            # Do not lazy-rebuild their daemon.json here: an active writer thread
-            # may be updating it concurrently, and the live state is fresher.
-            if run_path.name in skip_run_ids:
-                continue
-            if not self._looks_like_daemon_run_dir(run_path):
-                continue
-            state = self._load_or_rebuild_daemon_state(run_path)
-            if isinstance(state, dict):
-                rows.append((run_path, state))
-        return rows
+        total_before_filter = len(entries)
+        if wanted_status and wanted_status != "all":
+            entries = [item for item in entries if str(item.get("status", "")).lower() == wanted_status]
+        if not include_done:
+            entries = [item for item in entries if str(item.get("status", "")).lower() not in {"done", "failed", "cancelled", "timeout"}]
+        if query:
+            entries = [item for item in entries if query in self._list_search_blob(item)]
+        total_matches = len(entries)
+        selected = entries[:limit_int]
+        return {
+            "emanations": selected,
+            "running": sum(1 for item in entries if item.get("status") in {"running", "active"}),
+            "manager_pool_size": self._manager_pool_size,
+            "history_included": include_done,
+            "index": "dispatch_ledger",
+            "total_before_filter": total_before_filter,
+            "total_matches": total_matches,
+            "showing": len(selected),
+            "warnings": warnings,
+        }
 
     def _handle_list_without_query(
         self,
@@ -6130,115 +6142,9 @@ class DaemonManager:
         include_done: bool,
         limit_int: int,
     ) -> dict:
-        """List without a text query while bounding entry reads.
-
-        Historical ``daemon.json`` records still have to be inspected to learn
-        their timestamps because the current persistence layout has no separate
-        chronological index.  We nevertheless keep only record/state rows until
-        the existing status sort has selected the newest ``limit_int`` rows; for
-        current-version records, expensive list-entry materialization (notably
-        ``.prompt`` preview reads) happens only for rows that can be returned.
-        Missing, corrupt, or stale records still take the documented candidate-
-        wide migration/rebuild path so their index can be repaired.
-        """
-        rows: list[tuple[str, str, object]] = []
-        running = 0
-        total_before_filter = 0
-        active_run_ids: set[str] = set()
-
-        def add_row(sort_key: str, status: object, kind: str, payload: object) -> None:
-            nonlocal total_before_filter
-            total_before_filter += 1
-            if wanted_status and wanted_status != "all":
-                if str(status or "").lower() != wanted_status:
-                    return
-            rows.append((sort_key, kind, payload))
-
-        for em_id, entry in self._emanations.items():
-            elapsed = time.time() - entry["start_time"]
-            future = entry.get("future")
-            exc = None
-            detached = future is None
-            if detached:
-                active_status = None
-            elif future.done():
-                exc = future.exception()
-                active_status = "failed" if exc else "done"
-            else:
-                active_status = "running"
-                running += 1
-
-            run_dir = entry.get("run_dir")
-            if run_dir is not None:
-                state = (
-                    self._read_run_dir_state_from_disk(run_dir)
-                    if detached else run_dir.state_snapshot()
-                )
-                state.setdefault("handle", em_id)
-                active_run_ids.add(run_dir.run_id)
-                status = active_status or state.get("state") or "unknown"
-                if detached and status == "running":
-                    running += 1
-                add_row(
-                    str(state.get("started_at") or state.get("run_id") or ""),
-                    status,
-                    "state",
-                    (state, run_dir.path, active_status,
-                     round(elapsed) if not detached else None, exc),
-                )
-            else:
-                info = {
-                    "id": em_id,
-                    "task": self._truncate_list_string(entry.get("task", ""), 120),
-                    "status": active_status,
-                    "elapsed_s": round(elapsed),
-                }
-                if exc:
-                    info["error"] = str(exc)
-                add_row("", active_status, "info", info)
-
-        if include_done:
-            for run_path, state in self._iter_daemon_history_states(
-                skip_run_ids=active_run_ids,
-            ):
-                status = state.get("state") or "unknown"
-                if status == "running":
-                    running += 1
-                add_row(
-                    str(state.get("started_at") or state.get("run_id") or ""),
-                    status,
-                    "state",
-                    (state, run_path, None, None, None),
-                )
-
-        rows.sort(key=lambda row: row[0], reverse=True)
-        selected = rows[:limit_int]
-        emanations: list[dict] = []
-        for _, kind, payload in selected:
-            if kind == "info":
-                emanations.append(payload)  # type: ignore[arg-type]
-                continue
-            state, run_path, active_status, active_elapsed, active_error = payload  # type: ignore[misc]
-            emanations.append(
-                self._daemon_list_entry_from_state(
-                    state,
-                    run_path,
-                    active_status=active_status,
-                    active_elapsed=active_elapsed,
-                    active_error=active_error,
-                )
-            )
-
-        return {
-            "emanations": emanations,
-            "running": running,
-            "manager_pool_size": self._manager_pool_size,
-            "history_included": include_done,
-            "index": "daemon_run_dirs",
-            "total_before_filter": total_before_filter,
-            "total_matches": len(rows),
-            "showing": len(emanations),
-        }
+        return self._handle_list_from_ledger(
+            query="", wanted_status=wanted_status, include_done=include_done, limit_int=limit_int
+        )
 
     def _handle_list(
         self,
@@ -6252,102 +6158,13 @@ class DaemonManager:
         except (TypeError, ValueError):
             return {"status": "error", "message": f"last must be a positive integer (got {limit!r})"}
         if limit_int < 1:
-            return {"status": "error", "message": f"last must be ≥ 1 (got {limit_int})"}
-
-        query = (contains or "").strip().lower()
-        wanted_status = (status_filter or "all").strip().lower()
-        include_done = include_done is not False
-
-        if not query:
-            return self._handle_list_without_query(
-                wanted_status=wanted_status,
-                include_done=include_done,
-                limit_int=limit_int,
-            )
-
-        emanations: list[dict] = []
-        running = 0
-        active_run_ids: set[str] = set()
-
-        for em_id, entry in self._emanations.items():
-            elapsed = time.time() - entry["start_time"]
-            future = entry.get("future")
-            exc = None
-            detached = future is None
-            if detached:
-                # No in-process future to poll — the run's own daemon.json
-                # ``state`` (read below via run_dir.state_snapshot()) is the
-                # ONLY source of truth for a detached run's status; do not
-                # pass an active_status override that would shadow it (a
-                # detached run may already be terminal even though this
-                # facade entry is still registered).
-                status = None
-            elif future.done():
-                exc = future.exception()
-                status = "failed" if exc else "done"
-            else:
-                status = "running"
-                running += 1
-            run_dir = entry.get("run_dir")
-            if run_dir is not None:
-                # A detached run's daemon.json is written by a DIFFERENT
-                # process (the supervisor); this facade's run_dir object
-                # never observes those writes in its own memory, so it must
-                # re-read from disk. In-process entries keep the cheap
-                # in-memory snapshot (the run loop's own thread wrote it).
-                state = (
-                    self._read_run_dir_state_from_disk(run_dir)
-                    if detached else run_dir.state_snapshot()
-                )
-                state.setdefault("handle", em_id)
-                active_run_ids.add(run_dir.run_id)
-                info = self._daemon_list_entry_from_state(
-                    state, run_dir.path, active_status=status,
-                    active_elapsed=round(elapsed) if not detached else None,
-                    active_error=exc,
-                )
-                if detached and info.get("status") == "running":
-                    running += 1
-            else:
-                info = {
-                    "id": em_id,
-                    "task": self._truncate_list_string(entry.get("task", ""), 120),
-                    "status": status,
-                    "elapsed_s": round(elapsed),
-                }
-                if exc:
-                    info["error"] = str(exc)
-            emanations.append(info)
-
-        if include_done:
-            for run_path, state in self._iter_daemon_history_states(skip_run_ids=active_run_ids):
-                info = self._daemon_list_entry_from_state(state, run_path)
-                if info.get("status") == "running":
-                    running += 1
-                emanations.append(info)
-
-        total_before_filter = len(emanations)
-        if wanted_status and wanted_status != "all":
-            emanations = [e for e in emanations if str(e.get("status", "")).lower() == wanted_status]
-        if query:
-            emanations = [e for e in emanations if query in self._list_search_blob(e)]
-
-        def _sort_key(item: dict) -> str:
-            return str(item.get("started_at") or item.get("run_id") or "")
-        emanations.sort(key=_sort_key, reverse=True)
-        total_matches = len(emanations)
-        if limit_int is not None:
-            emanations = emanations[:limit_int]
-        return {
-            "emanations": emanations,
-            "running": running,
-            "manager_pool_size": self._manager_pool_size,
-            "history_included": include_done,
-            "index": "daemon_run_dirs",
-            "total_before_filter": total_before_filter,
-            "total_matches": total_matches,
-            "showing": len(emanations),
-        }
+            return {"status": "error", "message": f"last must be >= 1 (got {limit_int})"}
+        return self._handle_list_from_ledger(
+            query=(contains or "").strip().lower(),
+            wanted_status=(status_filter or "all").strip().lower(),
+            include_done=include_done is not False,
+            limit_int=limit_int,
+        )
 
     def _durable_detached_entry(self, em_id: str) -> dict | None:
         """Hydrate a control facade from exact durable run identity.
@@ -6648,7 +6465,7 @@ class DaemonManager:
                 result = run_claude_interactive(
                     em_id=em_id,
                     run_dir=run_dir,
-                    working_dir=self._agent._working_dir,
+                    working_dir=self._workdir.path,
                     task=message,
                     cancel_event=ask_cancel,
                     timeout_event=ask_timeout,
@@ -6729,7 +6546,7 @@ class DaemonManager:
                   session_id=session_id, message_length=len(message))
 
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir,
+            tuple(cmd), self._workdir.path,
             tuple(_claude_code_env().items()),
         )
         try:
@@ -6951,7 +6768,7 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(tuple(cmd), self._workdir.path),
                 group_id=None,
             )
         except FileNotFoundError:
@@ -7429,7 +7246,7 @@ class DaemonManager:
         if backend_env:
             env.update(backend_env)
         command = DaemonProcessCommand(
-            tuple(cmd), self._agent._working_dir, tuple(env.items()),
+            tuple(cmd), self._workdir.path, tuple(env.items()),
         )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -7700,7 +7517,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -7877,7 +7694,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -8044,7 +7861,7 @@ class DaemonManager:
                 env.update(backend_env)
             handle = self._process_port.spawn(
                 DaemonProcessCommand(
-                    tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                    tuple(cmd), self._workdir.path, tuple(env.items()),
                 ),
                 group_id=run_dir.group_id,
             )
@@ -8205,7 +8022,7 @@ class DaemonManager:
         self._log(f"daemon_{backend_name}_ask", em_id=em_id,
                   session_id=session_id, message_length=len(message))
 
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         try:
             handle = self._process_port.spawn(command, group_id=None)
         except FileNotFoundError:
@@ -8550,12 +8367,12 @@ class DaemonManager:
 
         # Cursor normally inherits the parent environment untouched; an explicit
         # env is materialized only for a ``backend_options.env`` overlay.
-        command = DaemonProcessCommand(tuple(cmd), self._agent._working_dir)
+        command = DaemonProcessCommand(tuple(cmd), self._workdir.path)
         if backend_env:
             env = os.environ.copy()
             env.update(backend_env)
             command = DaemonProcessCommand(
-                tuple(cmd), self._agent._working_dir, tuple(env.items()),
+                tuple(cmd), self._workdir.path, tuple(env.items()),
             )
         try:
             handle = self._process_port.spawn(command, group_id=run_dir.group_id)
@@ -8732,7 +8549,7 @@ class DaemonManager:
 
         try:
             handle = self._process_port.spawn(
-                DaemonProcessCommand(tuple(cmd), self._agent._working_dir),
+                DaemonProcessCommand(tuple(cmd), self._workdir.path),
                 group_id=None,
             )
         except FileNotFoundError:
@@ -9120,7 +8937,7 @@ class DaemonManager:
         em_id = (em_id or "").strip()
         if not em_id:
             return None
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if not daemons_dir.is_dir():
             return None
 
@@ -9311,7 +9128,7 @@ class DaemonManager:
         # facades (`_durable_detached_entry`/`_handle_ask_detached`); this is
         # a control facade, not an execution-owner adoption path.
         skipped_dead_manager = 0
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         if daemons_dir.is_dir():
             for run_path in daemons_dir.iterdir():
                 if not self._looks_like_daemon_run_dir(run_path):
@@ -9620,7 +9437,7 @@ class DaemonManager:
         the user-facing id, daemon.json handle, and run directory name.
         """
         reserved_ids = reserved_ids or set()
-        daemons_dir = self._agent._working_dir / "daemons"
+        daemons_dir = self._workdir.path / "daemons"
         now_ns = time.time_ns()
         digest = ((now_ns >> 16) ^ now_ns) & 0xFFFF
         base = f"em-{digest:04x}"
@@ -9636,9 +9453,8 @@ class DaemonManager:
         return candidate
 
     def _log(self, event_type: str, **fields) -> None:
-        """Log through the parent agent's logging system."""
-        if hasattr(self._agent, '_log'):
-            self._agent._log(event_type, **fields)
+        """Log through Daemon's narrow parent-runtime port."""
+        self._runtime.log(event_type, **fields)
 
 
 # Pair of the ``DEFAULT_MAX_TURNS`` assertion above: ``_tool_family``'s
@@ -9655,27 +9471,20 @@ def setup(agent: "Agent",
           system_prompt_budget_chars: int | None = None,
           process_port: DaemonProcessPort | None = None,
           interactive_terminal_port: InteractiveTerminalPort | None = None) -> DaemonManager:
-    """Set up the daemon capability on an agent.
+    """Set up Daemon through its official declared-host plugin route.
 
-    ``max_turns`` is the parent ceiling (and therefore the per-emanation
-    default when ``emanate`` omits it). When the caller omits it here, it
-    resolves from the agent's per-agent config file
-    (``<workdir>/daemon/daemon.json``, ``max_turns`` field) and falls back to
-    ``DEFAULT_MAX_TURNS`` (5000) when the file is missing or the value is
-    invalid. ``manager_pool_size`` and ``system_prompt_budget_chars`` follow
-    the same valid-explicit-argument, config-file, built-in fallback order.
-    Malformed or non-positive explicit system-prompt budgets retain the file
-    result; a valid environment value remains the final manager override.
+    The per-agent daemon configuration and explicit capability kwargs resolve
+    exactly as before.  A live ``BaseAgent`` receives only the static
+    :data:`DECLARATION`; the production adapter supplies Daemon's narrow runtime
+    port and the kernel registrar owns activation/mounting.  The lightweight
+    non-Agent fallback retains the historical direct setup seam used by isolated
+    engine tests and does not participate in an official Agent tool surface.
     """
     config = _load_config(agent._working_dir)
     if max_turns is None:
         max_turns = config.max_turns
     if manager_pool_size is None:
         manager_pool_size = config.manager_pool_size
-    # Validity-based, not None-based: a malformed or non-positive explicit
-    # budget (e.g. manifest capability kwargs) must retain the daemon.json/
-    # default resolution instead of displacing it or raising during
-    # capability setup, which would drop the whole daemon capability.
     system_prompt_budget_chars = _config_positive_int(
         system_prompt_budget_chars, config.system_prompt_budget_chars
     )
@@ -9689,25 +9498,64 @@ def setup(agent: "Agent",
             raise NotImplementedError(
                 f"daemon process supervision is unsupported on {os.name!r}"
             )
-    # Interactive terminal stays POSIX-only (no ConPTY adapter exists); on
-    # Windows the manager receives None and the claude-interactive backend
-    # fails loudly instead of pretending PTY support.
     if interactive_terminal_port is None and os.name == "posix":
         from lingtai.adapters.posix.interactive_terminal import (
             PosixInteractiveTerminalAdapter,
         )
         interactive_terminal_port = PosixInteractiveTerminalAdapter()
-    mgr = DaemonManager(agent, max_turns=max_turns, timeout=timeout,
-                        notify_threshold=notify_threshold,
-                        manager_pool_size=manager_pool_size,
-                        system_prompt_budget_chars=system_prompt_budget_chars,
-                        process_port=process_port,
-                        interactive_terminal_port=interactive_terminal_port)
-    schema = get_schema()
-    # The model-facing handler is the LTP v2 envelope dispatcher, not the
-    # engine's legacy flat ``handle``. Still exactly one registered public
-    # tool named ``daemon`` — the six children consume no extra tool slot.
-    dispatcher = DaemonFamilyDispatcher(mgr, agent, list(_BACKEND_SCHEMA_ENUM))
-    agent.add_tool("daemon", schema=schema, handler=dispatcher.handle,
-                   description=get_description(), glossary_package=__package__)
-    return mgr
+
+    options = {
+        "max_turns": max_turns,
+        "timeout": timeout,
+        "notify_threshold": notify_threshold,
+        "manager_pool_size": manager_pool_size,
+        "system_prompt_budget_chars": system_prompt_budget_chars,
+        "process_port": process_port,
+        "interactive_terminal_port": interactive_terminal_port,
+    }
+
+    from lingtai.kernel.base_agent import BaseAgent
+    if isinstance(agent, BaseAgent):
+        from lingtai.adapters.tool_plugin_host import (
+            daemon_runtime_for_agent,
+            register_agent_tool_plugins,
+        )
+
+        runtime = daemon_runtime_for_agent(agent, options)
+        register_agent_tool_plugins(
+            agent,
+            [DECLARATION],
+            extra_ports_for=lambda declaration: (
+                {"daemon_runtime": runtime}
+                if declaration is DECLARATION else {}
+            ),
+        )
+        manager = runtime.daemon_manager
+        if not isinstance(manager, DaemonManager):
+            raise RuntimeError("daemon official plugin binding did not retain its manager")
+        return manager
+
+    # Compatibility for pre-existing direct test/in-process facades.  Real
+    # Agent boot always takes the declared path above, where generic add_tool
+    # cannot claim the kernel-reserved ``daemon`` name.
+    manager = DaemonManager(
+        agent,
+        max_turns=max_turns,
+        timeout=timeout,
+        notify_threshold=notify_threshold,
+        manager_pool_size=manager_pool_size,
+        system_prompt_budget_chars=system_prompt_budget_chars,
+        process_port=process_port,
+        interactive_terminal_port=interactive_terminal_port,
+    )
+    dispatcher = DaemonFamilyDispatcher(
+        manager, agent, list(_BACKEND_SCHEMA_ENUM), declaration=DECLARATION,
+    )
+    agent.add_tool(
+        DECLARATION.name,
+        schema=get_schema(),
+        handler=dispatcher.handle,
+        description=get_description(),
+        glossary_package=__package__,
+    )
+    return manager

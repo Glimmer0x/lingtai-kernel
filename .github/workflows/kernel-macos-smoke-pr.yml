@@ -1,26 +1,8 @@
-name: Kernel macOS smoke PR contract
+name: Kernel macOS smoke release contract
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/kernel-macos-smoke-pr.yml"
-      - "src/lingtai/adapters/**"
-      - "src/lingtai/kernel/**"
-      - "src/lingtai/tools/daemon/**"
-      - "src/lingtai/tools/bash/**"
-      - "src/lingtai/cli.py"
-      - "src/lingtai/agent.py"
-      - "tests/test_shell_pr1_contract.py"
-      - "tests/test_bash_shell_dialect.py"
-      - "tests/test_shell_kind_classifier.py"
-      - "tests/test_shell_kind_spawn_args.py"
-      - "tests/test_process_identity.py"
-      - "tests/test_daemon_process_port.py"
-      - "tests/test_daemon_detached_supervisor.py"
-      - "tests/test_token_ledger.py"
-      - "tests/test_workdir_lease_posix_only.py"
-      - "tests/test_portable_adapter_encoding.py"
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read

@@ -2102,16 +2102,22 @@ def setup(
     values, delegates mounting to the kernel registrar, and preserves the
     historical manager return for programmatic direct callers.
     """
-    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        register_agent_tool_plugins,
+    )
 
+    configuration = StaticConfigurationAdapter({
+        "policy_file": policy_file,
+        "yolo": yolo,
+        "shell_kind": shell_kind,
+    })
     (bound,) = register_agent_tool_plugins(
         agent,
         [DECLARATION],
-        configuration={
-            "policy_file": policy_file,
-            "yolo": yolo,
-            "shell_kind": shell_kind,
-        },
+        extra_ports_for=lambda declaration: (
+            {"configuration": configuration} if declaration is DECLARATION else {}
+        ),
     )
     dispatcher = getattr(bound.handler, "__self__", None)
     if not isinstance(dispatcher, ShellFamilyDispatcher):  # pragma: no cover - wiring invariant

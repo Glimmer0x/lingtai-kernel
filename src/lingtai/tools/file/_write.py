@@ -11,12 +11,12 @@ from typing import TYPE_CHECKING
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import FileIOPort, WorkdirPort
 
 __all__ = ["build_operation"]
 
 
-def build_operation(agent: "BaseAgent"):
+def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
     """Return the bound ``write`` operation for the ``file`` family.
 
     The returned callable takes only this action's own validated ``input``
@@ -32,9 +32,9 @@ def build_operation(agent: "BaseAgent"):
         if "content" not in args:
             return {"status": "error", "message": "content is required"}
         content = args["content"]
-        path = resolve_workdir_path(agent, path)
+        path = resolve_workdir_path(workdir.path, path)
         try:
-            agent._file_io.write(path, content)
+            file_io.write(path, content)
             return {"status": "ok", "path": path, "bytes": len(content.encode("utf-8"))}
         except Exception as e:
             return {"status": "error", "message": f"Cannot write {path}: {e}"}

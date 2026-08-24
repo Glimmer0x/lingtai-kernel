@@ -61,7 +61,10 @@ def test_shell_declaration_is_static_and_derives_its_shipped_surface():
 
 
 def test_shell_bind_uses_only_its_narrow_ports_and_defers_rehydration(shell_agent, monkeypatch):
-    from lingtai.adapters.tool_plugin_host import agent_host_ports
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        agent_host_ports,
+    )
     from lingtai.kernel.tool_plugin import ToolPluginHost
     from lingtai.tools.bash import ShellManager
     from lingtai.tools.bash._tool_family import DECLARATION
@@ -72,7 +75,11 @@ def test_shell_bind_uses_only_its_narrow_ports_and_defers_rehydration(shell_agen
     )
     host = ToolPluginHost.grant(
         DECLARATION,
-        agent_host_ports(shell_agent, "shell", configuration={"yolo": True}),
+        agent_host_ports(
+            shell_agent,
+            "shell",
+            {"configuration": StaticConfigurationAdapter({"yolo": True})},
+        ),
     )
     assert host.granted == ("workdir", "notifications", "configuration")
     with pytest.raises(AttributeError, match="prompt_section"):

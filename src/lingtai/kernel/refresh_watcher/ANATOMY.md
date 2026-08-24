@@ -6,6 +6,9 @@ related_files:
   - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - src/lingtai/kernel/refresh_watcher/MANUAL.md
   - src/lingtai/kernel/process_match.py
+  - src/lingtai/kernel/notification_store/CONTRACT.md
+  - src/lingtai/kernel/notification_store/_mutation_lock.py
+  - src/lingtai/adapters/notification_store_lock.py
   - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/refresh_watcher.py
   - src/lingtai/adapters/posix/ANATOMY.md
@@ -54,11 +57,13 @@ walkthrough.
 - `render_watcher_script(request)` renders the ACK/lock, heartbeat, retry,
   matcher, redaction, and alert policy and calls only an injected
   `PROCESS_MECHANISM` global for process operations
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:69-571`). Its
-  wall-clock policy lives in module-top constants — `MAX_ATTEMPTS`,
+  (`src/lingtai/kernel/refresh_watcher/watcher_program.py`). Its terminal
+  system publisher independently derives the Store's canonical
+  `channel:system` scoped-lock filename, takes the POSIX shared legacy bridge
+  plus exclusive scoped lock, and never removes lock files. Its wall-clock
+  policy lives in module-top constants — `MAX_ATTEMPTS`,
   `HEALTH_CHECK_WAIT`, `HEALTH_CHECK_BUDGET`, `WATCHER_POLL_INTERVAL`,
-  `DUPLICATE_EXIT_WAIT` — that the renderer embeds as plain assignments
-  (`src/lingtai/kernel/refresh_watcher/watcher_program.py:24-40`).
+  `DUPLICATE_EXIT_WAIT` — that the renderer embeds as plain assignments.
 - `select_refresh_watcher` is the fail-loud outer selector
   (`src/lingtai/adapters/refresh_watcher.py:14-35`).
 
@@ -101,8 +106,10 @@ The Core Port and value objects own no runtime process state. The generated
 policy owns only transient retry/failure metadata and the existing filesystem
 artifacts/events. The platform process adapters own no long-lived supervisor; each
 creates observations/handles for one policy run and writes replacement stderr
-through the requested log path. The outer adapter owns only its detached
-entrypoint handoff.
+through the requested log path. The terminal publisher creates only the existing
+`.notification/.store.lock` compatibility file and the canonical scoped
+`.notification/.locks/channel-system-<sha20>.lock` as lock metadata; it deletes
+neither. The outer adapter owns only its detached entrypoint handoff.
 
 ## Notes
 

@@ -33,6 +33,24 @@ from lingtai.llm.service import (
 from lingtai.kernel.prompt import build_system_prompt
 
 
+# Runtime manual destinations remain stable even when a capability packages its
+# manual beside code. This map is deliberately small and explicit: it is not a
+# discovery or normalization rule for future manual collisions.
+_TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
+    "bash": "shell",
+    "web_search": "web",
+    "context": "context-manual",
+    "file": "file-manual",
+}
+
+# No-delete Context recut only: the retained standalone context-manual source is
+# a documented redirect to the canonical tools/context/manual package. It may
+# yield to that exact canonical source, and no other same-name collision may.
+_CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS: dict[str, str] = {
+    "context": "context-manual",
+}
+
+
 def _detached_spawn_kwargs() -> dict[str, Any]:
     """Platform kwargs for launching a detached agent-run child.
 
@@ -213,8 +231,10 @@ class Agent(BaseAgent):
         # Inject the built-in intrinsic tool registry. The kernel owns the tool
         # machinery, not the concrete tools: it accepts intrinsics as injection
         # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
-        # it supplies the six mandatory intrinsics here. ``setdefault`` lets a
-        # host override (e.g. a test injecting a subset).
+        # it supplies the five mandatory intrinsics here. Notification is an
+        # always-on declared official family and mounts through the official
+        # plugin registrar. ``setdefault`` lets a host override (e.g. a test
+        # injecting a subset).
         from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)
 
@@ -573,6 +593,65 @@ class Agent(BaseAgent):
             shutil.rmtree(intrinsic_dir)
         (intrinsic_dir / "capabilities").mkdir(parents=True, exist_ok=True)
 
+        # The first installer records which canonical package owns every installed
+        # destination. The standalone installer below may yield only through the
+        # one reviewed canonical-to-legacy redirect relation declared above.
+        canonical_manual_owners: dict[tuple[str, str], str] = {}
+
+        def install_tool_plugin(entry: Path, subdir: str) -> None:
+            """Install one built-in tool package's sole owned manual skill.
+
+            The Agent Plugins reader remains the only manifest and containment
+            validator. Built-in model-facing packages are documentation sources,
+            not declared external plugins: a bundled ``mcp.json`` is rejected
+            here so this installer cannot become a second route into the
+            per-agent MCP registry.
+            """
+            from .services.plugin_registry import read_plugin
+
+            record, problems = read_plugin(entry)
+            for problem in problems:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=entry.name,
+                    reason=str(problem.get("error", "")),
+                )
+            if record is None:
+                return
+            if record["mcp_servers"]:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugins must not carry mcp.json; "
+                        "their servers are not registered"
+                    ),
+                )
+                return
+            skill_paths = record["skill_paths"]
+            if len(skill_paths) != 1:
+                self._log(
+                    "tool_plugin_problem",
+                    plugin=record["name"],
+                    reason=(
+                        "built-in tool plugin must provide exactly one owned "
+                        "manual skill"
+                    ),
+                )
+                return
+            destination_name = record["name"]
+            destination = intrinsic_dir / subdir / destination_name
+            owner_key = (subdir, destination_name)
+            if destination.exists():
+                prior_owner = canonical_manual_owners.get(owner_key, "unknown")
+                raise RuntimeError(
+                    "intrinsic manual destination collision: built-in tool plugin "
+                    f"{entry.name!r} and {prior_owner!r} both target "
+                    f"{destination}"
+                )
+            shutil.copytree(skill_paths[0], destination)
+            canonical_manual_owners[owner_key] = entry.name
+
         def install_from(pkg, subdir: str) -> None:
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
@@ -585,46 +664,89 @@ class Agent(BaseAgent):
                 # is retained on disk but must not become a second public model.
                 if entry.name == "browser":
                     continue
+                if (entry / "plugin.json").is_file():
+                    install_tool_plugin(entry, subdir)
+                    continue
                 src = entry / "manual"
-                if src.is_dir():
-                    # Retained implementation directories map to canonical
-                    # model-facing names exactly once.
-                    if entry.name == "bash":
-                        destination_name = "shell"
-                    elif entry.name == "web_search":
-                        destination_name = "web"
-                    else:
-                        destination_name = entry.name
-                    destination = intrinsic_dir / subdir / destination_name
-                    if destination.exists():
-                        continue
-                    shutil.copytree(src, destination)
+                if not src.is_dir():
+                    continue
+                destination_name = _TOOL_MANUAL_DESTINATION_NAMES.get(
+                    entry.name, entry.name
+                )
+                destination = intrinsic_dir / subdir / destination_name
+                owner_key = (subdir, destination_name)
+                if destination.exists():
+                    prior_owner = canonical_manual_owners.get(owner_key, "unknown")
+                    raise RuntimeError(
+                        "intrinsic manual destination collision: canonical tool "
+                        f"{entry.name!r} and {prior_owner!r} both target "
+                        f"{destination}"
+                    )
+                shutil.copytree(src, destination)
+                canonical_manual_owners[owner_key] = entry.name
 
-        def install_skills_from(pkg, subdir: str) -> None:
+        def install_skills_from(
+            pkg, subdir: str, *, exclude: frozenset[str] = frozenset()
+        ) -> None:
             """Install standalone skill bundles (no companion code, no manual/ wrapper).
 
             Each ``<pkg>/<entry>/`` directory IS the skill — copied verbatim into
             ``intrinsic/<subdir>/<entry>/`` (manuals plus any sidecar scripts/assets,
-            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). Used for
-            skills that don't belong to any single tool.
+            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). ``exclude``
+            retains a legacy source bundle that is now packaged by its owning tool,
+            so the installed library has one canonical family-manual destination.
             """
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
                 return
             pkg_root = Path(pkg_file).parent
             for entry in sorted(pkg_root.iterdir()):
-                if not entry.is_dir() or entry.name.startswith("_"):
+                if (
+                    not entry.is_dir()
+                    or entry.name.startswith("_")
+                    or entry.name in exclude
+                ):
                     continue
-                shutil.copytree(entry, intrinsic_dir / subdir / entry.name)
+                # Notification's retained intrinsic-skill source is migration
+                # history only. Its declared tool package owns the one canonical
+                # installed capabilities/notification/SKILL.md manual.
+                if entry.name == "notification-manual":
+                    continue
+                destination = intrinsic_dir / subdir / entry.name
+                owner = canonical_manual_owners.get((subdir, entry.name))
+                if destination.exists():
+                    # Context's old intrinsic tree remains in the source package
+                    # solely as a documented redirect. The exact allowlist and the
+                    # redirect marker make this exception auditable; a new,
+                    # unrelated same-name collision fails rather than silently
+                    # choosing installer order.
+                    redirect_name = _CANONICAL_TOOL_MANUAL_LEGACY_REDIRECTS.get(owner)
+                    marker = f"legacy_redirect: src/lingtai/tools/{owner}/manual"
+                    redirect_skill = entry / "SKILL.md"
+                    is_documented_redirect = (
+                        redirect_name == entry.name
+                        and redirect_skill.is_file()
+                        and marker in redirect_skill.read_text(encoding="utf-8")
+                    )
+                    if is_documented_redirect:
+                        continue
+                    raise RuntimeError(
+                        "intrinsic manual destination collision: standalone skill "
+                        f"{entry.name!r} conflicts with canonical owner {owner!r} at "
+                        f"{destination}; no canonical-to-legacy redirect allowlist applies"
+                    )
+                shutil.copytree(entry, destination)
 
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
         # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan; tools without a manual/ (the
-        # file tools, the non-email intrinsics whose manuals ship as
-        # intrinsic_skills bundles below) are simply skipped.
+        # former core/ + capabilities/ dual scan. File now ships its own
+        # package manual; its retained intrinsic source is excluded below so it
+        # cannot become a second public manual destination.
         install_from(tools_pkg, "capabilities")
-        install_skills_from(skills_pkg, "capabilities")
+        install_skills_from(
+            skills_pkg, "capabilities", exclude=frozenset({"file-manual"})
+        )
 
         # If the skills capability is loaded, re-run its reconcile now that
         # the manuals are on disk — so the injected catalog reflects them on
@@ -2189,6 +2311,10 @@ class Agent(BaseAgent):
                     self._setup_capability(name, **cap_kwargs)
                 except (ValueError, ImportError, TypeError) as e:
                     self._log("capability_skipped", capability=name, reason=str(e))
+
+        # Mandatory declared intrinsics are mounted through their own official
+        # registrar wiring on refresh as well as on first construction.
+        self._boot_official_intrinsics()
 
         # Install intrinsic manuals (wipe-and-rewrite .library/intrinsic/)
         # from the bundles shipped with each enabled capability.

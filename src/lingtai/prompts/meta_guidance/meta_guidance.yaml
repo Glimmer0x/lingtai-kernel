@@ -52,13 +52,13 @@ related_files:
       Owns how the meta_guidance section body is built and spliced: build_meta_guidance()
       renders the loaded catalog alongside the `_meta` readme and adapter static rules.
       Crawl here for the concrete render/splice rules, not this contract.
-  - path: src/lingtai/intrinsic_skills/context-manual/reference/summarize-manual/SKILL.md
+  - path: src/lingtai/tools/context/manual/reference/summarize-manual/SKILL.md
     why: >
       Owns the expanded token/context-economy semantics the resident guidance only
       summarizes: the summarize/molt compression modes, when to summarize vs molt, and
       how to recover an original tool result. Crawl here for the deep rules behind the
       token/context-state guidance in this section.
-  - path: src/lingtai/intrinsic_skills/notification-manual/SKILL.md
+  - path: src/lingtai/tools/notification/manual/SKILL.md
     why: >
       Owns the expanded notification/read/dismiss semantics the resident guidance only
       summarizes. Crawl here for the deep rules behind this section's notification-handling

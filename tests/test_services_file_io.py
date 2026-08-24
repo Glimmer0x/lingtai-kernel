@@ -2,6 +2,7 @@
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -331,7 +332,10 @@ class TestGrepGlobFilter:
             _working_dir = tmp_path
             _file_io = svc
 
-        handle_grep = build_grep(_StubAgent())
+        handle_grep = build_grep(
+            SimpleNamespace(path=tmp_path),
+            SimpleNamespace(grep=svc.grep, last_traversal=None),
+        )
         result = handle_grep({"pattern": "needle", "glob": "*.py"})
 
         assert captured["glob_filter"] == "*.py"

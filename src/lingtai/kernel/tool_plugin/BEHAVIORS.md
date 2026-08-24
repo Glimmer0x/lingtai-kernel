@@ -10,8 +10,25 @@ related_files:
   - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/mcp/__init__.py
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
+  - tests/test_email_official_tool_plugin.py
+  - tests/test_file_tool_plugin_package.py
+  - tests/test_file_tool_family.py
+  - tests/test_plugin_tool.py
+  - tests/test_notification_delay_alarm.py
+  - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
@@ -20,9 +37,17 @@ maintenance: |
   the least-privilege grant, the reserved official name list, or the
   check-before-bind ordering — update the guarding LABT here in the same change.
   Keep every command copy-paste executable from the repository root. When a
-  second family recuts onto the contract, or when authoring-time line numbers
-  drift, replace the affected evidence with that family's own proof rather than
-  leaving a stale pass.
+  further family recuts onto the contract, or when authoring-time line numbers
+  drift, extend the affected evidence with that family's own focused proof rather
+  than leaving a stale pass. The shared C register is family-generic and distinguishes
+  target reserved names from candidate merge evidence. `mcp` is the shared-C base
+  reference; Avatar, Context, Daemon, Email, File, and Plugin are current
+  vertical evidence. Ports remain least-privilege and tool-specific, while registrar
+  mounts are runtime-bound rather
+  than per-call Agent dispatch.
+  reference; Avatar, Context, Daemon, Email, and Notification are current
+  vertical evidence. Ports remain least-privilege and tool-specific, while
+  registrar mounts are runtime-bound rather than per-call Agent dispatch.
 ---
 # Declared Host Tool Plugin Behavior Tests
 
@@ -48,12 +73,20 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 1. Prove the declaration exists and validates before any Agent does:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION; print(DECLARATION.name, DECLARATION.actions, DECLARATION.public_actions, DECLARATION.requires)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.file import DECLARATION as file; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(file.name, file.actions, file.public_actions, file.requires)"
    ```
 
-   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')`. No
-   `Agent` was constructed; the reserved `manual` action is appended, not
-   declared.
+   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')` and
+   `file ('read', 'write', 'edit', 'glob', 'grep') ('read', 'write', 'edit',
+   'glob', 'grep', 'manual') ('workdir', 'file_io')`. No `Agent` was constructed;
+   each reserved `manual` action is appended, not declared.
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.notification import DECLARATION as notification; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(notification.name, notification.requires, notification.public_actions)"
+   ```
+
+   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')` and
+   `notification ('workdir', 'notification_state')` followed by its declared
+   actions plus one reserved `manual`. No `Agent` was constructed; both static
+   declarations append rather than declare the reserved action.
 
 2. Prove the public model-facing surface is unchanged by the recut:
 
@@ -67,10 +100,28 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 3. Prove a declaration is granted exactly its `requires` and nothing more:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.mcp import DECLARATION; h = ToolPluginHost('mcp', {'workdir': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import GRANTABLE_HOST_PORTS, ToolPluginHost; from lingtai.tools.file import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'file_io': object(), 'prompt_section': object()}); print(GRANTABLE_HOST_PORTS, h.granted); h.prompt_section"
    ```
 
-   Expect `('workdir', 'prompt_section') ('workdir',)` printed, then an
+   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
+   'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog') ('workdir',
+   'file_io')` printed,
+   then an `AttributeError` whose message says the plugin *did not require host
+   port* `'prompt_section'`. Confirm `tool_mount` is absent from
+   `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort` plus `FileIOPort`,
+   even when the host table contains another grantable port. The same rule
+   covers the ports `agent_host_ports` always builds — `avatar_parent` and
+   `plugin_catalog` — so run:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py::test_standard_port_table_grants_each_declaration_only_its_requires
+   ```
+
+   Expect `1 passed`: Plugin reaches exactly
+   `('workdir', 'prompt_section', 'plugin_catalog')` while MCP reaches neither
+   `plugin_catalog` nor `avatar_parent`.
+   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime', 'daemon_runtime', 'email_runtime', 'notification_state') ('workdir',)` printed, then an
    `AttributeError` whose message says the plugin *did not require host port*
    `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`.
@@ -81,15 +132,17 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    grep -n "def _reconcile\|def _build_family\|def _bind" src/lingtai/tools/mcp/__init__.py
    grep -n "working_dir = host.workdir.path" src/lingtai/tools/mcp/__init__.py
    grep -n "host.prompt_section.write_protected_section(xml)" src/lingtai/tools/mcp/__init__.py
+   grep -n "host.workdir, host.file_io" src/lingtai/tools/file/__init__.py
+   grep -n "class AgentFileIOAdapter\|extra_ports_for" src/lingtai/adapters/tool_plugin_host.py src/lingtai/tools/file/__init__.py
    ```
 
-   Expect the three internals to take `host` (`_reconcile(host)`,
-   `_build_family(host)`, `_bind(host)`), then exactly one match each for the
-   two port calls — the lines that replaced the private `agent._working_dir`
-   read and the direct `agent.update_system_prompt("mcp", ..., protected=True)`
-   call. `setup(agent, **_ignored)` still takes the Agent because it *is* the
-   composition wiring; read it and confirm its whole body builds the adapters
-   and delegates, holding no plugin logic.
+   Expect MCP's three internals to take `host`, then exactly one match each for
+   its two port calls. Expect File's operations to receive only `host.workdir`
+   and `host.file_io`, and its setup to supply `AgentFileIOAdapter` only through
+   `extra_ports_for`. Read that adapter and confirm it has no `Any`-typed File
+   method/result, `__getattr__`, generic dispatch, Agent slot, or mount method.
+   Each `setup(agent, **_ignored)` still takes the Agent because it *is* the
+   composition wiring; no binder or bound family does.
 
 5. Prove the kernel still owns only the shape — no import of any tool package
    anywhere under `src/lingtai/kernel/`:
@@ -97,63 +150,86 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    ```bash
    grep -rnE "^[[:space:]]*(from|import)[[:space:]]+.*lingtai\.tools" src/lingtai/kernel/
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_the_kernel_still_imports_nothing_from_lingtai_tools
+     tests/test_kernel_isolation.py::test_kernel_has_no_lingtai_submodules
    ```
 
    Expect no grep output (exit status 1), then `1 passed` from the AST-based
-   sweep, which also resolves relative imports so the kernel's own
-   `base_agent.tools` module is not mistaken for the tools package.
+   kernel isolation sweep, which permits kernel-relative imports while refusing
+   imports of the outer `lingtai` or `tools` packages.
 
 6. Prove the declared surface and the shipped surface are the same surface,
    not two literals that happen to match:
 
    ```bash
-   grep -n "DECLARATION.manual\|DECLARATION.name\|DECLARATION.input_schemas\|DECLARATION.manual_input_schema" src/lingtai/tools/mcp/__init__.py
+   grep -n "DECLARATION.manual\|DECLARATION.name\|DECLARATION.input_schemas\|DECLARATION.manual_input_schema" src/lingtai/tools/mcp/__init__.py src/lingtai/tools/file/__init__.py
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_the_mcp_manual_route_is_derived_from_the_declaration \
-     tests/test_tool_plugin_declaration.py::test_the_mcp_input_schemas_are_derived_from_the_declaration \
-     tests/test_tool_plugin_declaration.py::test_the_shipped_mcp_family_agrees_with_its_own_declaration \
-     tests/test_tool_plugin_declaration.py::test_bind_refuses_a_plugin_advertising_actions_it_did_not_declare \
-     tests/test_tool_plugin_declaration.py::test_bind_refuses_a_plugin_that_advertises_no_actions_at_all
+     tests/test_tool_plugin_declaration.py::test_official_mcp_mount_uses_controlled_host_and_real_dispatch \
+     tests/test_file_tool_plugin_package.py::test_file_declaration_is_static_and_derives_the_public_surface \
+     tests/test_file_tool_plugin_package.py::test_file_bind_accepts_only_its_narrow_ports \
+     tests/test_file_tool_plugin_package.py::test_official_file_mount_preserves_real_operations_and_packaged_manual
    ```
 
-   Expect the grep to show `_build_family` and `_bind` reading the family's
-   name, its per-action `input` schemas, and its installed-manual destination
-   back out of `DECLARATION` — there is no second `"mcp"` manual literal — then
-   `5 passed`.
+   Expect both families' builders/binds to read name, per-action schemas, and
+   installed-manual destination back out of `DECLARATION`, then `4 passed`.
+   File's live proof also asserts the package body returns from
+   `capabilities/file-manual` and no `capabilities/file` destination exists.
 
 7. Run the contract suite:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_tool_plugin_declaration.py
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py \
+     tests/test_context_declared_tool_plugin.py tests/test_daemon.py \
+     tests/test_email_official_tool_plugin.py tests/test_file_tool_plugin_package.py \
+     tests/test_file_tool_family.py tests/test_plugin_tool.py
+     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py tests/test_context_declared_tool_plugin.py tests/test_daemon.py tests/test_email_official_tool_plugin.py tests/test_notification_delay_alarm.py tests/test_notification_store.py
    ```
 
 ### Expected evidence
 
-- [ ] Step 1: `DECLARATION` imports and validates with no Agent; `manual` is in
-      `public_actions` but not in `actions`.
+- [ ] Step 1: MCP and File `DECLARATION`s import and validate with no Agent;
+      `manual` is in each `public_actions` but not in either `actions`.
 - [ ] Step 2: the closed LTP root and the `["info", "manual"]` enum are
       unchanged.
 - [ ] Step 3: only `requires` ports are granted; an ungranted port raises
-      `AttributeError`; `tool_mount` is not grantable at all.
-- [ ] Step 4: `_reconcile`, `_build_family`, and `_bind` all take the granted
-      host; the workdir read and the protected prompt write each go through a
-      port; `setup` is wiring only.
+      `AttributeError`; `tool_mount` is not grantable at all; a standard-table
+      port such as `plugin_catalog` is unreachable for a declaration that did
+      not name it.
+- [ ] Step 4: MCP's workdir/prompt operations and File's workdir/file-I/O
+      operations go only through granted ports; `AgentFileIOAdapter` has no Any,
+      generic dispatch, whole Agent, or mount surface; each `setup` is wiring only.
 - [ ] Step 5: no file under `src/lingtai/kernel/` imports `lingtai.tools`, by
       grep and by the AST sweep.
+- [ ] Step 6: MCP and File derive name, `input` schemas, and manual destination
+      from their declarations; the four named live/static tests pass, including
+      File's established `file-manual` destination and absent `file` destination.
+- [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's,
+      File's, and Plugin's focused declared slices pass. Plugin's slice includes
+      the detached per-read catalog projection: mutating a returned registration
+      mapping leaves the next read unchanged.
 - [ ] Step 6: the family derives its name, `input` schemas, and manual
       destination from its declaration, and `bind()` refuses a plugin
       advertising anything other than `public_actions`.
-- [ ] Step 7: the suite passes.
+- [ ] Notification: its static `DECLARATION` requires exactly `workdir` and
+      `notification_state`; the granted host exposes neither Agent nor Store;
+      one official schema and handler remain on construction and refresh under
+      both null-capability and `disable` opt-outs; its package owns the canonical
+      installed manual; `check` retains its deliberate placeholder; and a real
+      Core-backed `dismiss_channel` returns the established success shape and
+      clears the live mirror.
+- [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's, and
+      Notification's focused declared/Core slices pass.
 
 ### Pass / Fail
 
 Pass when every box above is observed. **Fail loudly** if a declaration needs a
-live Agent to construct, if the public `mcp` surface changed, if an ungranted
-port is reachable, if `tool_mount` becomes grantable, if any code path hands a
-whole `Agent` to a plugin, if a family restates its name, its per-action input
-schemas, or its manual destination instead of deriving them from its own
-declaration, or if the kernel package imports `lingtai.tools`.
+live Agent to construct, if an official family's public surface changed, if an
+ungranted port is reachable, if `tool_mount` becomes grantable, if any code path hands a
+whole `Agent` to a plugin, if File's adapter uses `Any`, generic dispatch, or a
+mount operation, if a family restates its name, its per-action input schemas, or
+its manual destination instead of deriving them from its own declaration, if
+File installs anywhere except `file-manual`, or if the kernel package imports
+`lingtai.tools`.
 Record the exact command output in the task report. This task performs no
 writes.
 
@@ -177,8 +253,9 @@ writes.
    ```
 
    Expect the module docstring, `__all__`, module-level tuple, and registrar check/error as the relevant matches.
-   Confirm the literal contains bare names — no module path,
-   no import, no family behavior.
+   Confirm the literal is exactly `('mcp', 'avatar', 'context', 'daemon',
+   'email', 'file', 'plugin')` in that order and contains bare names only — no
+   module path, import, or family behavior.
 
 2. Prove a conflicting declaration is refused with nothing bound and nothing
    mounted:
@@ -216,7 +293,18 @@ writes.
    public/declared and extension paths; Python trusted internals are not an
    absolute security boundary.
 
-4. Confirm the registrar's ordering is structural, not incidental: read
+4. Prove the whole reserved namespace still mounts exactly once together:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py::test_all_eight_official_families_mount_exactly_once_together
+   ```
+
+   Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by
+   one declaration and appears exactly once in the live schema list, with no
+   family displacing another.
+
+5. Confirm the registrar's ordering is structural, not incidental: read
    `register_official_tool_plugins` in
    `src/lingtai/kernel/tool_plugin/__init__.py` and verify the name-checking
    loop over the whole batch completes before the second loop performs the
@@ -224,7 +312,7 @@ writes.
    issuance records the exact bind result and claims receive only the mounted
    transaction.
 
-5. Prove the refusal is *observable* — that it fails the boot instead of being
+6. Prove the refusal is *observable* — that it fails the boot instead of being
    absorbed as a skipped capability:
 
    ```bash
@@ -247,7 +335,7 @@ writes.
    `Agent(...)` boot), a mid-batch host-port failure is *not* rolled back, and
    the claim map tracks the live namespace across refresh.
 
-6. Confirm the non-official mount path is untouched:
+7. Confirm the non-official mount path is untouched:
 
    ```bash
    grep -n "Remove any existing schema with same name" src/lingtai/kernel/base_agent/tools.py
@@ -263,8 +351,8 @@ writes.
 
 ### Expected evidence
 
-- [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is a static kernel-owned tuple of
-      bare names.
+- [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is the exact ordered static tuple
+      `mcp, avatar, context, daemon, email, file, plugin, notification` of bare names.
 - [ ] Step 2: `5 passed` — an unreserved name, an in-batch duplicate, and a
       second declaration against a live claim are each refused with zero binds,
       zero mounts, and an unchanged claim map; the same declaration re-registers
@@ -274,12 +362,14 @@ writes.
       public adapter/factory bypass and a forged transaction are unavailable,
       backing-map tampering cannot admit a foreign declaration, and the public
       claim view cannot unlock one.
-- [ ] Step 4: the batch-wide check loop precedes the bind/mount loop in source
+- [ ] Step 4: `1 passed` — all eight reserved names mount exactly once in one
+      live composition.
+- [ ] Step 5: the batch-wide check loop precedes the bind/mount loop in source
       order.
-- [ ] Step 5: `6 passed` — official-plugin failures propagate past the
+- [ ] Step 6: `6 passed` — official-plugin failures propagate past the
       capability skip-guard, the all-or-nothing promise is scoped to names, and
       the claim map matches the live namespace across refresh and disable.
-- [ ] Step 6: `_add_tool`'s same-name replacement is still present and
+- [ ] Step 7: `_add_tool`'s same-name replacement is still present and
       unmodified.
 
 ### Pass / Fail

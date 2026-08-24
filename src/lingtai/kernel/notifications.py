@@ -264,19 +264,28 @@ def _delay_thread_lock(workdir: str) -> threading.RLock:
 
 @contextmanager
 def _delay_transaction(workdir: str):
-    """Serialize private delay state with the Store's native mutation lock.
+    """Serialize only delay state and its alarm mirror, never all notifications.
 
     This deliberately performs the tiny delay/alarm transaction directly rather
-    than adding a ninth Store Port family: the target and alarm files remain
-    ordinary Store-compatible channel mirrors, while the private dotfile stays
-    outside the Store's public channel surface.  We never call a Store mutation
-    while holding this lock, avoiding a reversed in-process lock order.
+    than adding a ninth Store Port family.  Callers must capture Store read facts
+    before entering: no snapshot/fingerprint may run under these native scopes.
     """
-    from lingtai.adapters.notification_store_lock import select_notification_store_lock
+    from lingtai.adapters.notification_store_lock import (
+        exclusive_notification_mutation,
+        select_notification_store_lock,
+    )
+    from lingtai.kernel.notification_store._mutation_lock import (
+        channel_mutation_scope,
+        resource_mutation_scope,
+    )
 
     notification_dir, _, _ = _delay_paths(workdir)
     with _delay_thread_lock(workdir):
-        with select_notification_store_lock().exclusive(notification_dir):
+        with exclusive_notification_mutation(
+            select_notification_store_lock(),
+            notification_dir,
+            [resource_mutation_scope("delay-state"), channel_mutation_scope(DELAY_ALARM_CHANNEL)],
+        ):
             yield
 
 
@@ -334,15 +343,14 @@ def _active_delay_state(state: object, *, now: float | None = None) -> dict[str,
     return state
 
 
-def _read_target_stats_locked(
+def _read_target_stats(
     workdir: str, channel: str, store: NotificationStorePort
 ) -> dict[str, Any]:
     """Read conservative target facts through the injected Store Port.
 
-    The delay transaction already holds the native Store lock.  Snapshot and
-    fingerprint therefore describe the same target without Core constructing a
-    concrete filesystem adapter; daemon stats use the aggregate projection and
-    its synthetic raw version exactly like ordinary delivery/CAS.
+    This intentionally runs before a delay transaction. The later transaction
+    revalidates delay identity/state; a racing producer only makes `changed`
+    fail visible and never puts a Store read below delay native scopes.
     """
     try:
         allow = lambda name: name == channel
@@ -442,6 +450,33 @@ def reconcile_notification_delay(
     key = _delay_workdir_key(workdir)
     if key is None:
         return False
+    # The heartbeat calls this path every tick. Read the private state first and
+    # acquire *zero* native locks when there is no due transaction to repair.
+    _, observed_state_path, _ = _delay_paths(key)
+    observed = _read_delay_state_locked(observed_state_path)
+    if not isinstance(observed, dict):
+        return False
+    observed_status = observed.get("status")
+    if observed_status in {"published", "cancelled"}:
+        return False
+    observed_request_id = observed.get("request_id")
+    if expected_request_id is not None and observed_request_id != expected_request_id:
+        return False
+    observed_current: dict[str, Any] | None = None
+    if observed_status == "active":
+        observed_target = observed.get("target")
+        observed_deadline = observed.get("deadline_epoch")
+        if (
+            not isinstance(observed_target, str)
+            or observed_target == DELAY_ALARM_CHANNEL
+            or isinstance(observed_deadline, bool)
+            or not isinstance(observed_deadline, (int, float))
+            or observed_deadline > time.time()
+        ):
+            return False
+        observed_current = _read_target_stats(key, observed_target, store)
+    elif observed_status != "expiring":
+        return False
     try:
         with _delay_transaction(key):
             _, state_path, alarm_path = _delay_paths(key)
@@ -475,7 +510,15 @@ def reconcile_notification_delay(
                     or deadline > now
                 ):
                     return False
-                current = _read_target_stats_locked(key, target, store)
+                # Reuse a pre-lock stat only for the exact state/request that
+                # produced it. A replacement delay may keep the same expiry
+                # window while changing target or request id; never describe
+                # that other delay's channel as this completion's current data.
+                current = (
+                    observed_current
+                    if target == observed_target and request_id == observed_request_id
+                    else {"present": None}
+                )
                 initial = state.get("initial")
                 completion = {
                     "request_id": request_id,
@@ -635,6 +678,9 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
     # first recovery call, and overwriting an overdue active record would lose
     # the alarm it owes.
     reconcile_notification_delay(workdir, store)
+    # Capture target facts before taking delay scopes. The transaction below
+    # validates the delay state again; this observation is informational only.
+    initial_target_stats = _read_target_stats(workdir, channel, store) if seconds else None
     for _ in range(2):
         overdue_request_id = None
         try:
@@ -689,7 +735,7 @@ def delay_notification_channel(agent, channel: str, seconds: int) -> dict[str, A
                             "started_at": _delay_iso(now),
                             "deadline_epoch": now + seconds,
                             "deadline_at": _delay_iso(now + seconds),
-                            "initial": _read_target_stats_locked(workdir, channel, store),
+                            "initial": initial_target_stats or {"present": None},
                         }
                         _write_delay_state_locked(state_path, state)
                         result = {
