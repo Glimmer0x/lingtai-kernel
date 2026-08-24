@@ -17,6 +17,7 @@ related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -28,6 +29,7 @@ related_files:
   - tests/test_plugin_tool.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause

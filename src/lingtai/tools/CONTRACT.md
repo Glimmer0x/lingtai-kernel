@@ -425,9 +425,10 @@ register is family-generic rather than MCP-only.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
-  `mcp` is the current base reference; Avatar, Context, Daemon, Email, File, and
-  Plugin are accepted vertical evidence here. The remaining target register names
-  only `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; those
+  `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
+  Plugin, and Shell are accepted vertical evidence here. The remaining target
+  register names only `notification`, `soul`, `vision`, `web`, `system`, and
+  `task_card`; those
   names are targets, not a claim that candidate slices have merged.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, and
   Notification are accepted vertical evidence here. The remaining target register

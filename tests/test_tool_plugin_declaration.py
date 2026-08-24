@@ -61,16 +61,17 @@ def plugin_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_eight_official_families_mount_exactly_once_together(tmp_path):
+def test_all_nine_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
-        "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification"
+        "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
+        "notification", "shell",
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-eight-official-plugins",
+        agent_name="all-nine-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -80,6 +81,7 @@ def test_all_eight_official_families_mount_exactly_once_together(tmp_path):
             "file": {},
             "plugin": {},
             "notification": {},
+            "shell": {"yolo": True},
         },
     )
     try:

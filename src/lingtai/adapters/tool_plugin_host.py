@@ -51,6 +51,8 @@ __all__ = [
     "AgentEmailRuntimeAdapter",
     "AgentPluginCatalogAdapter",
     "AgentNotificationStateAdapter",
+    "AgentNotificationAdapter",
+    "StaticConfigurationAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -94,6 +96,126 @@ class AgentPromptSectionAdapter:
 
     def write_protected_section(self, body: str) -> None:
         self._write(self._section, body, protected=True)
+
+
+class AgentNotificationAdapter:
+    """The narrow durable-notification port over one live Agent's store.
+
+    Constructed from the canonical system-event method plus a store reader,
+    rather than from an Agent object.  Its system-event fallback and latest
+    channel publication deliberately preserve the pre-plugin Shell manager's
+    compare-and-update semantics; the Shell family sees only these two typed
+    operations and cannot reach any other Agent API.
+    """
+
+    __slots__ = ("_enqueue", "_store")
+
+    def __init__(
+        self,
+        enqueue: Callable[..., Any],
+        store: Callable[[], Any],
+    ) -> None:
+        self._enqueue = enqueue
+        self._store = store
+
+    def publish_system(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        skip_if_ref_id_exists: bool = False,
+    ) -> bool:
+        try:
+            self._enqueue(
+                source=source,
+                ref_id=ref_id,
+                body=body,
+                skip_if_ref_id_exists=skip_if_ref_id_exists,
+            )
+            # The historical Shell path considers a duplicate-suppressed event
+            # a successful idempotent publication too.
+            return True
+        except Exception:
+            pass
+        try:
+            import secrets
+            import time
+            from datetime import datetime, timezone
+
+            from lingtai.kernel.notification_store import UNCONDITIONAL
+
+            store = self._store()
+            event_id = f"evt_{int(time.time()*1000):x}_{secrets.token_hex(8)}"
+            received_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            def mutate(current_payload: dict) -> tuple[dict | None, bool, str]:
+                current = current_payload if isinstance(current_payload, dict) else {}
+                events = list(current.get("data", {}).get("events", []))
+                if skip_if_ref_id_exists and any(
+                    isinstance(event, dict) and event.get("ref_id") == ref_id
+                    for event in events
+                ):
+                    return current_payload, False, ""
+                events.append({
+                    "event_id": event_id,
+                    "source": source,
+                    "ref_id": ref_id,
+                    "body": body,
+                    "at": received_at,
+                })
+                events = events[-20:]
+                return ({
+                    "header": f"{len(events)} system notification{'s' if len(events) != 1 else ''}",
+                    "icon": "🔔",
+                    "priority": "normal",
+                    "published_at": received_at,
+                    "data": {"events": events},
+                }, True, event_id)
+
+            store.compare_update_channel("system", UNCONDITIONAL, mutate)
+            return True
+        except Exception:
+            return False
+
+    def publish_channel(
+        self,
+        channel: str,
+        payload: Mapping[str, Any],
+        *,
+        ref_id: str,
+    ) -> bool:
+        try:
+            store = self._store()
+            if hasattr(store, "compare_update_channel"):
+                from lingtai.kernel.notification_store import UNCONDITIONAL
+
+                def mutate(current_payload: dict) -> tuple[dict | None, bool, bool]:
+                    current = current_payload if isinstance(current_payload, dict) else {}
+                    data = current.get("data")
+                    if isinstance(data, dict) and data.get("ref_id") == ref_id:
+                        return current_payload, False, True
+                    return dict(payload), True, True
+
+                result = store.compare_update_channel(channel, UNCONDITIONAL, mutate)
+                return bool(result.value)
+            store.publish(channel, dict(payload))
+            return True
+        except Exception:
+            return False
+
+
+class StaticConfigurationAdapter:
+    """Immutable, setup-selected values for one declared plugin binding."""
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Mapping[str, Any] | None = None) -> None:
+        self._values = MappingProxyType(dict(values or {}))
+
+    @property
+    def values(self) -> Mapping[str, Any]:
+        return self._values
 
 
 class _FileGlobOperation(Protocol):
@@ -753,7 +875,9 @@ def agent_host_ports(
 
     The table preserves the landed MCP, Avatar, Plugin, Context, Daemon, Email,
     and File wiring while constructing only each declaration's earned adapter.
-    Notification receives its narrow state port at this composition boundary.
+    Notification receives its narrow state port at this composition boundary, and
+    Shell receives its narrow durable-notification port here too; Shell's
+    setup-selected ``configuration`` port arrives through ``extra_ports``.
     The registrar grants just ``requires``, never this whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
@@ -797,9 +921,16 @@ def agent_host_ports(
             list_hooks=partial(list_hooks, agent),
             log=agent._log,
         )
+    elif plugin_name == "shell":
+        ports["notifications"] = AgentNotificationAdapter(
+            agent._enqueue_system_notification,
+            lambda: agent._notification_store,
+        )
     if extra_ports:
         ports.update(extra_ports)
     return ports
+
+
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
@@ -818,9 +949,10 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, and File use ``extra_ports_for`` so each can earn its runtime port;
-    Notification receives its dedicated state port in ``agent_host_ports``.
-    without granting it to every declaration. Both maps are merged per
+    Email, File, and Shell use ``extra_ports_for`` so each can earn its runtime
+    or setup-selected port; Notification and Shell receive their dedicated
+    Agent-derived ports in ``agent_host_ports``,
+    without granting them to every declaration. Both maps are merged per
     declaration; conflicting keys from the factory intentionally win only for
     that declaration.
 

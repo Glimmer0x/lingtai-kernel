@@ -31,6 +31,11 @@ related_files:
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
+  - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -40,6 +45,7 @@ related_files:
   - tests/test_file_tool_plugin_package.py
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -78,7 +84,8 @@ It owns exactly four things:
    construction-time validation.
 2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`, `FileIOPort`,
    `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
-   read-only `PluginCatalogPort`, `ToolMountPort`), File's structural
+   read-only `PluginCatalogPort`, Shell's `NotificationPort` and
+   `ConfigurationPort`, `ToolMountPort`), File's structural
    match/traversal result Protocols, and Email's family-owned
    `EmailRuntimePort`, through which a plugin receives only its
    capability-native view of the live Agent body, plus the `ToolPluginHost`
@@ -132,7 +139,8 @@ Coding agents and LingTai agents MUST observe the following.
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
-  `daemon`, `email`, `file`, and `plugin` are declared, in that official order;
+  `daemon`, `email`, `file`, `plugin`, and `shell` are declared, in that
+  official order;
   every remaining target stays outside this contract.
   `daemon`, `email`, and `notification` are declared; every remaining target
   stays outside this contract. Notification is a mandatory injected official
@@ -172,16 +180,21 @@ capability.
 | `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, bounded `log` | Notification-only Core delegation. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
+| `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
+| `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override today); no Agent configuration lookup or write operation. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
 `workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
-`daemon_runtime`, `email_runtime`, `file_io`, and `plugin_catalog`: `mcp`
+`daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
+`notifications`, and `configuration`: `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
 Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
 `file_io`; and Plugin consumes `workdir`, its own `prompt_section`, and the
-read-only `plugin_catalog` projection. Family-specific runtime ports are
+read-only `plugin_catalog` projection; and Shell consumes `workdir` plus
+`notifications` and `configuration` for its existing durable async execution
+semantics. Family-specific runtime ports are
 composed only for their declaration through `extra_ports` or `extra_ports_for`,
 so they do not expand another declaration's grant; a port built in the standard
 table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only
@@ -238,6 +251,11 @@ launch, config-write, or mount operation.
 `dismiss_channel(..., invoked_by="notification")` partial, delay, hook, and
 bounded logging operations. It does not pass the Notification declaration an
 Agent, Store, producer state, fingerprint, generic handler, or `ToolMountPort`.
+`AgentNotificationAdapter` translates only the canonical system-event method
+and a store reader into Shell's two durable publication operations, preserving
+the pre-plugin compare-and-update semantics, while `StaticConfigurationAdapter`
+carries only copied setup values and is granted to Shell alone through
+`extra_ports_for`.
 Daemon's host runtime continues to omit the parent `email` official surface, so
 its separately accepted explicit task-scoped daemon-email MCP route is not
 silently widened by Email's parent declaration. `agent_host_ports` builds one
