@@ -219,6 +219,12 @@ class Agent(BaseAgent):
         *args, **kwargs: Passed through to BaseAgent.
     """
 
+    def _boot_official_intrinsics(self) -> None:
+        """Defer only the CLI shell's initial declared-tool binding."""
+        if self._from_init_boot:
+            return
+        super()._boot_official_intrinsics()
+
     def __init__(
         self,
         *args: Any,
@@ -227,8 +233,13 @@ class Agent(BaseAgent):
         plugins: list[str] | None = None,
         combo_name: str | None = None,
         disable: list[str] | None = None,
+        _from_init_boot: bool = False,
         **kwargs: Any,
     ):
+        # Private CLI composition sentinel. It is set before BaseAgent invokes
+        # the overridable mandatory-official boot hook below.
+        self._from_init_boot = _from_init_boot
+
         # Default karma authority for the primary agent (本我)
         kwargs.setdefault("admin", {"karma": True})
 
@@ -370,6 +381,19 @@ class Agent(BaseAgent):
         if self._file_io is None:
             from .services.file_io_sidecar import default_file_io_service
             self._file_io = default_file_io_service(root=self._working_dir)
+
+        # The CLI has already validated init.json and immediately delegates the
+        # complete wrapper composition to `_setup_from_init`. Keep this initial
+        # Agent body an internal shell so it does not compose and tear down a
+        # second capability/manual/MCP surface first. The bookkeeping remains
+        # available to the normal setup pass after CLI clears the private flag.
+        if _from_init_boot:
+            self._capabilities: list[tuple[str, dict]] = []
+            self._capability_managers: dict[str, Any] = {}
+            self._mcp_tool_names: set[str] = set()
+            self._plugin_skill_paths: list[str] = []
+            self._plugin_registration: dict = {}
+            return
 
         # Normalize to dict
         if isinstance(capabilities, list):
