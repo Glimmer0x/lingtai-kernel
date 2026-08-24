@@ -2735,12 +2735,18 @@ class TelegramManager:
         return snapshot or None
 
     def _task_card_daemon_snapshot(self) -> dict | None:
-        """Read-only daemon lane snapshot over the strict terminal window."""
-        daemons_dir = self._working_dir / "daemons"
+        """Read a bounded daemon lane snapshot from dispatch-ledger membership.
+
+        Task Card rendering is automatic presentation work, never a reason to
+        enumerate a lifetime ``daemons/`` directory.  The ledger's newest tail
+        provides the only candidates; each selected ``daemon.json`` remains
+        authoritative for its current state and accounting.
+        """
+        from ...kernel.daemon_dispatch import read_recent_daemon_states
+
         try:
-            if daemons_dir.is_symlink() or not daemons_dir.is_dir():
-                return None
-        except OSError:
+            _, rows, _warnings = read_recent_daemon_states(self._working_dir, limit=1000)
+        except Exception:
             return None
         now = datetime.now(timezone.utc)
         counts = {key: 0 for key in _TASK_CARD_ASYNC_STATUS_KEYS}
@@ -2749,20 +2755,8 @@ class TelegramManager:
         backend_counts: dict[str, int] = {}
         model_counts: dict[str, int] = {}
         included = False
-        try:
-            children = list(daemons_dir.iterdir())
-        except OSError:
-            return None
-        for run_path in children:
+        for _, _, state in rows:
             try:
-                if run_path.is_symlink() or not run_path.is_dir():
-                    continue
-                state_path = run_path / "daemon.json"
-                if state_path.is_symlink() or not state_path.is_file():
-                    continue
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-                if not isinstance(state, dict):
-                    continue
                 raw_status = state.get("state")
                 if raw_status in ("running", "active"):
                     status = "running"
@@ -2819,7 +2813,7 @@ class TelegramManager:
                     # API calls come from the same selected ledger as the displayed
                     # token totals. daemon tool_call_count is deliberately not substituted.
                     cli_calls += _task_card_nonnegative_count(usage.get("calls"))
-            except (OSError, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            except (ValueError, TypeError):
                 continue
         if not included:
             return None

@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/cli.py
   - src/lingtai/mcp_servers/telegram/server.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - tests/test_notification_store.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
@@ -49,17 +50,23 @@ The Notification Store is the Core-owned persistence boundary for current
 - `CompareUpdateResult`, `UpdateAckRefsResult`, and `UpdateHookManifestsResult`
   carry typed operational and policy evidence
   (`src/lingtai/kernel/notification_store/__init__.py:66-90`).
-- `NotificationMutationLockPort` is the Store-private cross-process transaction
-  seam (`src/lingtai/kernel/notification_store/_mutation_lock.py:1-13`). Its
-  platform selector composes native POSIX and Windows implementations
-  (`src/lingtai/adapters/notification_store_lock.py:1-28`).
+- `NotificationMutationLockPort` is the Store-private resource transaction
+  seam (`src/lingtai/kernel/notification_store/_mutation_lock.py`). Its scope
+  helpers map channel, daemon-run, daemon-control, ack, hook, and delay
+  resources to bounded sanitized-plus-SHA-256 filenames under `.locks/`.
+  `exclusive_notification_mutation` adds a process-wide RLock by canonical path
+  before the selected native lock, closing `flock`'s same-process/open-file
+  gap (`src/lingtai/adapters/notification_store_lock.py`).
 - `PosixNotificationStoreAdapter` maps the Port onto the established
-  `.notification/` layout and owns both in-process and native cross-process
-  mutation serialization (`src/lingtai/adapters/posix/notification_store.py:69-314`).
-  Non-daemon channels remain root mirrors; daemon writes use locked
-  `.notification/daemon/<daemon-id>.json` mini-channels, while snapshot and
-  fingerprint compose a single aggregate view over those files. The sibling
-  `.notification/daemon.json` is a derived run/state report, not an event file.
+  `.notification/` layout and owns resource-scoped serialization
+  (`src/lingtai/adapters/posix/notification_store.py`). Non-daemon channels
+  remain root mirrors; daemon writes use locked
+  `.notification/daemon/<daemon-id>.json` mini-channels plus durable
+  `.notification/daemon/.tombstone` control state. Owner append holds its run
+  plus control scope but does not scan an aggregate or rebuild a report;
+  snapshot/fingerprint derive the aggregate only for their read. The sibling
+  `.notification/daemon.json` is a non-authoritative compatibility report, not
+  an event file.
 - Notification Core owns channel policy, atomic acknowledgement union/purge, and
   current-payload dismiss decisions (`src/lingtai/kernel/notifications.py:122-219`,
   `src/lingtai/kernel/notifications.py:704-788`,
@@ -87,30 +94,42 @@ and outer roots inject the Store Port.
 ## State
 
 Persistent protocol state is the existing `.notification/<channel>.json` for
-all non-daemon channels, the derived daemon report
-`.notification/daemon.json`, independent daemon mini-channels
-`.notification/daemon/<daemon-id>.json`, and the aggregate model-visible daemon
-projection, the acknowledgement registry `.notification/large_result_acks.json`,
-and the hook-manifest registry `.notification/hooks.json` (a single non-channel file,
-invisible to snapshot/fingerprint; its `(st_mtime_ns, st_size)` stat is the
-cheap staleness fingerprint Core consults for out-of-band re-seed). The
-Store-owned non-channel stems (`hooks`, `large_result_acks`) are never channels:
-adapters skip them in snapshot/fingerprint and Core validation rejects them as
-hook channels. The daemon aggregate fingerprint changes for mini-file additions,
-removals, and same-file appends; the root report never participates in that
-fingerprint. Channel/event/ref dismissals use the aggregate CAS before deleting
-mini-files. The adapter holds its workdir, an
-in-process mutex, and a platform-selected mutation lock. Native adapters lock
-`.notification/.store.lock` using `flock` on POSIX or byte 0 on Windows
-(`src/lingtai/adapters/posix/notification_store_lock.py:1-29`,
-`src/lingtai/adapters/windows/notification_store_lock.py:1-48`). The refresh
-watcher's generated terminal publisher takes the same sidecar flock before
-merging its `refresh_failed_permanent` event into `system.json`
-(`src/lingtai/kernel/refresh_watcher/watcher_program.py`), with a bounded
-fail-open timeout so the alert is never dropped by a wedged holder. Lock-file
-existence is not authority; OS lock ownership serializes complete mutation
-transactions and releases on process death. Core retains delivered fingerprints
-and policy state on the agent, not in the adapter.
+all non-daemon channels; independent daemon mini-channels
+`.notification/daemon/<daemon-id>.json`; durable daemon control/tombstones at
+`.notification/daemon/.tombstone`; the non-authoritative compatibility report
+`.notification/daemon.json`; the acknowledgement registry
+`.notification/large_result_acks.json`; and the hook-manifest registry
+`.notification/hooks.json` (a single non-channel file, invisible to
+snapshot/fingerprint; its `(st_mtime_ns, st_size)` stat is the cheap staleness
+fingerprint Core consults for out-of-band re-seed). The control record contains
+aggregate visibility cuts, batch/alarm state, and a process-crash-safe pending
+append receipt so a crash between receipt and mini-file/write compaction has a
+deterministic logical projection. Committed clear/dismiss cuts fsync before
+compaction. It is validated on every daemon aggregate read; corruption becomes
+a bounded high-priority daemon control-error projection rather than an empty
+channel or an outage of unrelated channels, while daemon mutation paths refuse.
+The Store-owned
+non-channel stems (`hooks`, `large_result_acks`) are never channels: adapters
+skip them in snapshot/fingerprint and Core validation rejects them as hook
+channels. The daemon aggregate fingerprint changes for logical mini-file
+additions, removals, and same-file appends; the root report never participates
+in that fingerprint. Channel/event/ref dismissals use aggregate CAS, tombstone
+only selected event keys, commit a visibility cut, and only then compact
+mini-files best effort.
+
+The adapter holds its workdir, a process-wide per-canonical-lock-path RLock,
+and a platform-selected native resource lock. POSIX takes shared
+`.notification/.store.lock` for one release with exclusive scoped
+`.notification/.locks/<bounded-label>-<sha20>.lock`; legacy writers remain
+exclusive on `.store.lock`. Windows uses only scoped byte-range locks and
+requires quiesced old-writer cutover. Neither live lock filename is deleted.
+The refresh watcher's generated terminal publisher computes the same `system`
+scope filename and uses POSIX shared legacy + scoped exclusive locking before
+merging `refresh_failed_permanent` into `system.json`, with bounded fail-open
+behavior so a wedged holder does not drop the alert. Lock-file existence is not
+authority; OS lock ownership serializes complete resource transactions and
+releases on process death. Core retains delivered fingerprints and policy state
+on the agent, not in the adapter.
 
 ## Notes
 

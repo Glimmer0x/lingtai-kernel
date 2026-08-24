@@ -35,7 +35,7 @@ Provider-specific web search — standalone services behind a common `SearchServ
 `minimax.py` and `zhipu.py` were deleted 2026-07-28 (Jason authorized the exact
 two-path deletion, issue 11114). Neither provider is a built-in `web` search
 engine anymore; wire either through a third-party MCP server instead — see
-`src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md`. MiniMax/Zhipu
+`src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md`. MiniMax/Zhipu
 web search is no longer implemented anywhere in this repository.
 
 ## Connections

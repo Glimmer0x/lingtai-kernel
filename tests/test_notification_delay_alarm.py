@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +17,9 @@ from lingtai.kernel.notifications import (
     reconcile_notification_delay,
 )
 from lingtai.kernel.meta_block import _collect_active_notifications
-from lingtai.tools.notification import get_schema, handle
+from lingtai.tools.notification import get_schema
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import notification_store_for, publish_test_payload, snapshot_notifications
 
 
@@ -34,7 +37,7 @@ class _DelayAgent:
 
 
 def _call(agent: _DelayAgent, channel: str, seconds: int) -> dict:
-    return handle(
+    return dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "delay",
@@ -57,6 +60,15 @@ def _expire_state(agent: _DelayAgent) -> None:
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["deadline_epoch"] = state["started_epoch"] - 1
     state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def _expired_delay(tmp_path: Path, channel="email", payload=None) -> _DelayAgent:
+    agent = _DelayAgent(tmp_path)
+    if payload is not None:
+        publish_test_payload(tmp_path, channel, payload)
+    assert _call(agent, channel, 30)["status"] == "ok"
+    _expire_state(agent)
+    return agent
 
 
 def test_delay_schema_and_allowlist_expose_alarm_but_forbid_target(tmp_path: Path, monkeypatch) -> None:
@@ -109,6 +121,27 @@ def test_invalid_delay_cap_falls_back_to_600_and_logs(tmp_path: Path, monkeypatc
     fallback_logs = [event for event in agent._logs if event[0] == "notification_delay_max_seconds_invalid"]
     assert fallback_logs
     assert fallback_logs[-1][1]["fallback_seconds"] == 600
+
+
+def test_no_state_and_future_delay_heartbeat_take_zero_native_locks(tmp_path: Path, monkeypatch) -> None:
+    import lingtai.kernel.notifications as notifications
+
+    agent = _DelayAgent(tmp_path)
+    calls = []
+
+    def no_native_lock(_workdir):
+        calls.append(_workdir)
+        raise AssertionError("heartbeat should not acquire native delay locks")
+
+    monkeypatch.setattr(notifications, "_delay_transaction", no_native_lock)
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is False
+    assert calls == []
+
+    monkeypatch.undo()
+    assert _call(agent, "email", 30)["status"] == "ok"
+    monkeypatch.setattr(notifications, "_delay_transaction", no_native_lock)
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is False
+    assert calls == []
 
 
 def test_delay_hides_only_target_from_coherent_and_voluntary_check_reads(tmp_path: Path) -> None:
@@ -190,14 +223,32 @@ def test_expiry_reexposes_unchanged_target_and_writes_one_conservative_alarm(tmp
     assert "not asserted total" in data["current"]["retained_event_count_scope"]
 
 
+def test_expiry_does_not_reuse_prelock_stats_after_delay_identity_replacement(tmp_path: Path, monkeypatch) -> None:
+    import lingtai.kernel.notifications as notifications
+
+    agent = _expired_delay(tmp_path, payload={"data": {"count": 7}})
+
+    @contextmanager
+    def replace_delay_identity(workdir):
+        state_path = Path(workdir) / ".notification" / ".delay_state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["target"] = "soul"
+        state["request_id"] = "replacement-request"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        yield
+
+    monkeypatch.setattr(notifications, "_delay_transaction", replace_delay_identity)
+    assert reconcile_notification_delay(tmp_path, agent._notification_store) is True
+
+    alarm = snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]["data"]["delay_alarm"]
+    assert alarm["target"] == "soul"
+    assert alarm["current"] == {"present": None}
+
+
 def test_expiry_marks_changed_without_claiming_capped_event_total(tmp_path: Path) -> None:
-    agent = _DelayAgent(tmp_path)
-    publish_test_payload(
-        tmp_path,
-        "daemon",
-        {"data": {"daemon_id": "delay-test", "events": [{"event_id": "old"}]}},
+    agent = _expired_delay(
+        tmp_path, "daemon", {"data": {"daemon_id": "delay-test", "events": [{"event_id": "old"}]}}
     )
-    assert _call(agent, "daemon", 30)["status"] == "ok"
     publish_test_payload(
         tmp_path,
         "daemon",
@@ -208,8 +259,6 @@ def test_expiry_marks_changed_without_claiming_capped_event_total(tmp_path: Path
             }
         },
     )
-    _expire_state(agent)
-
     assert reconcile_notification_delay(tmp_path, agent._notification_store) is True
     alarm = snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]["data"]["delay_alarm"]
     assert alarm["changed"] is True
@@ -227,10 +276,7 @@ def test_delay_core_rejects_mismatched_early_cancel(tmp_path: Path) -> None:
 
 
 def test_replacement_recovers_an_overdue_alarm_before_overwriting_state(tmp_path: Path) -> None:
-    agent = _DelayAgent(tmp_path)
-    publish_test_payload(tmp_path, "email", {"data": {"count": 1}})
-    assert _call(agent, "email", 30)["status"] == "ok"
-    _expire_state(agent)
+    agent = _expired_delay(tmp_path, payload={"data": {"count": 1}})
 
     replacement = _call(agent, "soul", 30)
     assert replacement["status"] == "ok"
@@ -242,7 +288,6 @@ def test_replacement_recovers_an_overdue_alarm_before_overwriting_state(tmp_path
 
 
 def test_process_timer_prompts_expiry_recovery(monkeypatch, tmp_path: Path) -> None:
-    """The durable heartbeat path is backed by a prompt process-timer callback."""
     import lingtai.kernel.notifications as notifications
 
     fired = []
@@ -263,11 +308,8 @@ def test_process_timer_prompts_expiry_recovery(monkeypatch, tmp_path: Path) -> N
             self.cancelled = True
 
     monkeypatch.setattr(notifications.threading, "Timer", _Timer)
-    agent = _DelayAgent(tmp_path)
-    publish_test_payload(tmp_path, "email", {"data": {"count": 1}})
-    assert _call(agent, "email", 30)["status"] == "ok"
+    agent = _expired_delay(tmp_path, payload={"data": {"count": 1}})
     assert len(fired) == 1
-    _expire_state(agent)
 
     fired[0].callback(*fired[0].args)
     alarm = snapshot_notifications(tmp_path)[DELAY_ALARM_CHANNEL]
@@ -278,9 +320,7 @@ def test_process_timer_prompts_expiry_recovery(monkeypatch, tmp_path: Path) -> N
 def test_concurrent_expiry_recovery_claims_one_alarm_publication(tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    agent = _DelayAgent(tmp_path)
-    assert _call(agent, "email", 30)["status"] == "ok"
-    _expire_state(agent)
+    agent = _expired_delay(tmp_path)
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(lambda _: reconcile_notification_delay(tmp_path, agent._notification_store), range(6)))

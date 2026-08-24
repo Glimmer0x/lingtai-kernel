@@ -552,6 +552,107 @@ def test_soul_manual_destination_collision_is_not_first_wins(tmp_path):
             raise ValueError("Soul manual destination collision: multiple operational owners")
 
 
+def _bare_manual_installer(tmp_path):
+    """Minimal owner for exercising Agent's file-only manual installation seam."""
+    from lingtai.agent import Agent
+
+    agent = object.__new__(Agent)
+    agent._working_dir = tmp_path / "agent"
+    agent._capabilities = []
+    return agent
+
+
+def _patched_manual_roots(tmp_path, monkeypatch):
+    import lingtai.intrinsic_skills as intrinsic_skills_pkg
+    import lingtai.tools as tools_pkg
+
+    tools_root = tmp_path / "tools"
+    skills_root = tmp_path / "intrinsic_skills"
+    monkeypatch.setattr(tools_pkg, "__file__", str(tools_root / "__init__.py"))
+    monkeypatch.setattr(
+        intrinsic_skills_pkg, "__file__", str(skills_root / "__init__.py")
+    )
+    return tools_root, skills_root
+
+
+def _write_skill_dir(path: Path, body: str) -> None:
+    path.mkdir(parents=True)
+    (path / "SKILL.md").write_text(body, encoding="utf-8")
+
+
+_SOUL_REDIRECT_FRONTMATTER = (
+    "---\n"
+    "name: soul-manual\n"
+    "legacy_redirect: src/lingtai/tools/soul/manual\n"
+    "redirect_marker: soul-manual-legacy-redirect-v1\n"
+    "redirect_target: src/lingtai/tools/soul/manual/SKILL.md\n"
+    "operational_content: false\n"
+    "---\n"
+)
+
+
+def test_installer_package_soul_wins_over_retained_redirect(tmp_path, monkeypatch):
+    """The real installer copies package bytes to the historical destination."""
+    tools_root, skills_root = _patched_manual_roots(tmp_path, monkeypatch)
+    _write_skill_dir(tools_root / "soul" / "manual", "CANONICAL SOUL PACKAGE\n")
+    _write_skill_dir(
+        skills_root / "soul-manual",
+        _SOUL_REDIRECT_FRONTMATTER + "\nRedirect notice only.\n",
+    )
+
+    agent = _bare_manual_installer(tmp_path)
+    agent._install_intrinsic_manuals()
+
+    installed = (
+        agent._working_dir / ".library/intrinsic/capabilities/soul-manual/SKILL.md"
+    )
+    assert installed.read_text(encoding="utf-8") == "CANONICAL SOUL PACKAGE\n"
+
+
+@pytest.mark.parametrize(
+    "broken_frontmatter",
+    [
+        _SOUL_REDIRECT_FRONTMATTER.replace(
+            "redirect_marker: soul-manual-legacy-redirect-v1", "redirect_marker: wrong"
+        ),
+        _SOUL_REDIRECT_FRONTMATTER.replace(
+            "redirect_target: src/lingtai/tools/soul/manual/SKILL.md",
+            "redirect_target: src/lingtai/tools/other/manual/SKILL.md",
+        ),
+        _SOUL_REDIRECT_FRONTMATTER.replace(
+            "operational_content: false\n", ""
+        ),
+        _SOUL_REDIRECT_FRONTMATTER.replace(
+            "legacy_redirect: src/lingtai/tools/soul/manual\n", ""
+        ),
+    ],
+)
+def test_installer_rejects_soul_redirect_with_missing_or_wrong_marker(
+    tmp_path, monkeypatch, broken_frontmatter
+):
+    """A wrong or missing Soul marker is a collision, never a scan-order pick."""
+    tools_root, skills_root = _patched_manual_roots(tmp_path, monkeypatch)
+    _write_skill_dir(tools_root / "soul" / "manual", "canonical\n")
+    _write_skill_dir(
+        skills_root / "soul-manual",
+        broken_frontmatter + "\nRedirect notice only.\n",
+    )
+
+    with pytest.raises(RuntimeError, match="collision"):
+        _bare_manual_installer(tmp_path)._install_intrinsic_manuals()
+
+
+def test_installer_rejects_second_operational_soul_owner(tmp_path, monkeypatch):
+    """Two operational sources for the soul-manual destination fail loudly."""
+    tools_root, skills_root = _patched_manual_roots(tmp_path, monkeypatch)
+    _write_skill_dir(tools_root / "soul" / "manual", "canonical soul\n")
+    _write_skill_dir(
+        skills_root / "soul-manual", "A second operational soul manual.\n"
+    )
+
+    with pytest.raises(RuntimeError, match="collision"):
+        _bare_manual_installer(tmp_path)._install_intrinsic_manuals()
+
 def test_manual_returns_the_full_body_and_host_local_path(agent):
     body = "# soul manual\n\nfull body, not a summary.\n"
     path = _install_manual(agent, body)

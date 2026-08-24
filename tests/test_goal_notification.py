@@ -7,7 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from lingtai.tools import notification as notif_intrinsic
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import (
     fingerprint_notifications,
     notification_store_for,
@@ -153,7 +154,7 @@ def test_goal_reminder_republishes_after_whole_system_dismiss_and_fresh_delay(tm
     agent._notification_fp = fp
     agent._notification_raw_fp = fp
 
-    result = notif_intrinsic.handle(
+    result = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_channel",

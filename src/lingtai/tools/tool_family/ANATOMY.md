@@ -49,7 +49,10 @@ v2 shape defined in `../CONTRACT.md`. It standardizes the wire envelope
 dispatch-validation boilerplate that would otherwise be duplicated by every
 hand-migrated family; it does not standardize implementations, handlers, or
 result types (`../CONTRACT.md` "Implementation independence" is binding on
-this package too — using it is optional, not mandatory).
+this package too — using it is optional, not mandatory). Official declared
+families use a runtime-bound registrar/host bridge and narrow ports; any direct
+per-call Agent family construction described below is legacy compatibility, not
+that generic dispatch route.
 
 ## Components
 
@@ -150,8 +153,8 @@ both children take the canonical strict-empty `input`. It follows the same
 division — the `manual` child from
 `build_manual_child(host.workdir, DECLARATION.manual)` is registered directly
 and unwrapped, and `mcp`'s own flat `mcp_manual` public shape is reconstructed
-post-dispatch by a Host-owned adapter. `mcp` is the one family recut onto the
-kernel-owned declared host-plugin contract
+post-dispatch by a Host-owned adapter. `mcp` is the current base reference slice
+recut onto the kernel-owned family-generic declared host-plugin contract
 (`src/lingtai/kernel/tool_plugin/ANATOMY.md`), so it never receives the `Agent`
 at all: the builder is handed the granted `WorkdirPort`, and the installed
 manual's destination name is read back out of the family's own declaration
@@ -259,7 +262,7 @@ verbatim; its only Host normalization is narrowing this package's generic
 `ACTION_REQUIRED` message to daemon's exact six actions.
 
 `context/__init__.py` ([`../context/ANATOMY.md`](../context/ANATOMY.md)) uses
-the module-level schema-only / per-call agent-bound composition shape from one
+the module-level schema-only plus legacy per-call agent-bound compatibility shape from one
 `_CHILD_SPECS` registry. It is the intrinsic family that genuinely **consumes**
 the kernel-injected `_tc_id` rather than dropping it: `molt` needs that wire id
 to locate and replay its own ToolCallBlock. `handle()` strips it from the closed

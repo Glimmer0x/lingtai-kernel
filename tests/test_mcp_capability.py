@@ -590,7 +590,7 @@ def test_mcp_show_action_returns_health_snapshot(tmp_path):
 
 def test_mcp_manual_preserves_tui_command_boundary():
     """The shipped MCP router must not route setup to a retired TUI surface."""
-    manual_root = Path(__file__).resolve().parents[1] / "src/lingtai/tools/mcp/manual"
+    manual_root = Path(__file__).resolve().parents[1] / "src/lingtai/tools/mcp/skills/mcp-manual"
     router = (manual_root / "SKILL.md").read_text(encoding="utf-8")
     curated = (manual_root / "reference/curated-addons.md").read_text(encoding="utf-8")
 

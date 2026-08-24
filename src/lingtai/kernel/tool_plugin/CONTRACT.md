@@ -12,12 +12,43 @@ related_files:
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/mcp/__init__.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
+  - src/lingtai/tools/avatar/__init__.py
+  - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
+  - src/lingtai/tools/daemon/__init__.py
+  - src/lingtai/tools/daemon/manual/SKILL.md
+  - src/lingtai/tools/email/__init__.py
+  - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
+  - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/manual/SKILL.md
+  - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/kernel/notifications.py
+  - src/lingtai/tools/bash/__init__.py
+  - src/lingtai/tools/bash/_tool_family.py
+  - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/tools/bash/CONTRACT.md
+  - src/lingtai/tools/bash/manual/SKILL.md
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_avatar_migration.py
+  - tests/test_context_declared_tool_plugin.py
+  - tests/test_daemon.py
+  - tests/test_email_official_tool_plugin.py
+  - tests/test_file_tool_plugin_package.py
+  - tests/test_notification_delay_alarm.py
+  - tests/test_notification_store.py
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -25,7 +56,7 @@ maintenance: |
   BEHAVIORS.md, the Port module, the production Adapter
   (src/lingtai/adapters/tool_plugin_host.py), the host mount seam
   (src/lingtai/kernel/base_agent/tools.py), the owning LTP contract
-  (src/lingtai/tools/CONTRACT.md), the one declared slice and its manual, the
+  (src/lingtai/tools/CONTRACT.md), declared slices and their manuals, the
   Composition Root, and the contract tests. OFFICIAL_TOOL_PLUGIN_NAMES is
   normative: adding, removing, or renaming a reserved official name is a change
   to this contract and must move the list, this file, BEHAVIORS.md, and
@@ -43,8 +74,8 @@ maintenance: |
 ## Purpose
 Guarded by: [TP001](BEHAVIORS.md#behavior-tp001), [TP002](BEHAVIORS.md#behavior-tp002)
 
-This component is the kernel's boundary for **one declared official
-model-facing tool plugin**. Every official tool family in this distribution
+This component is the kernel's boundary for **one declared official**
+model-facing tool plugin. Every official tool family in this distribution
 follows one declared plugin contract: a static declaration of its identity and
 public actions, a bind step against a least-privilege host facade, and a
 kernel-owned registrar that reserves official names and refuses a conflict
@@ -54,8 +85,17 @@ It owns exactly four things:
 
 1. `ToolPluginDeclaration` — the static declaration shape and its
    construction-time validation.
-2. The host Ports (`WorkdirPort`, `PromptSectionPort`, `ToolMountPort`) through
-   which a plugin controls the live Agent body, and the `ToolPluginHost` facade
+2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`, `FileIOPort`,
+   `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
+   read-only `PluginCatalogPort`, Shell's `NotificationPort` and
+   `ConfigurationPort`, `ToolMountPort`), File's structural
+   match/traversal result Protocols, and Email's family-owned
+   `EmailRuntimePort`, through which a plugin receives only its
+   capability-native view of the live Agent body, plus the `ToolPluginHost`
+   facade that grants a declaration exactly the ports it named.
+   `NotificationStatePort`, `ToolMountPort`) and Email's family-owned
+   `EmailRuntimePort`, through which a plugin controls the live Agent body, and
+   the `ToolPluginHost` facade
    that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -101,8 +141,15 @@ Coding agents and LingTai agents MUST observe the following.
   mounting are the registrar's steps, in that order, and `tool_mount` is never
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
-  vertical slice lands with its own evidence. Today two families are declared:
-  `mcp` and `soul`.
+  vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
+  `daemon`, `email`, `file`, `plugin`, `shell`, and `soul` are declared, in
+  that official order;
+  every remaining target stays outside this contract.
+  `daemon`, `email`, and `notification` are declared; every remaining target
+  stays outside this contract. Notification is a mandatory injected official
+  family: its declaration remains mounted once through the existing official
+  boot route on construction and refresh even when its capability is null or
+  listed in `disable`.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -129,12 +176,48 @@ capability.
 |---|---|---|
 | `WorkdirPort` | `path -> Path` | The agent working directory, read through on every access so a holder never renders a stale directory after a refresh. Grants no read, write, listing, or lease operation. |
 | `PromptSectionPort` | `write_protected_section(body) -> None` | Replace **this plugin's own** protected system-prompt section. There is no section argument and no `protected` flag: the granted port is bound to the declaring plugin's name, so a plugin can neither address another's section nor write an unprotected one. |
+| `FileIOPort` | `read`, `write`, `glob`, `grep`, `last_traversal`, `max_result_chars` | File-only bounded UTF-8 text operations and concrete match/traversal facts. It exposes neither the backing generic service nor the Agent; path rooting remains the separate `WorkdirPort`. |
+| `AvatarParentPort` | `parent_name`, `venv_path`, `has_rule_privilege()` | Avatar-only parent context: the identity placed in a newborn prompt, optional runtime location inherited into its init, and the existing any-admin-value gate for rules. It grants no mutable admin/configuration surface or Agent reference. |
+| `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
+| `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
+| `NotificationStatePort` | `dismiss(channel, *, force, reason, event_id=None, ref_id=None)`, `delay(channel, seconds)`, hook operations, bounded `log` | Notification-only Core delegation. `AgentNotificationStateAdapter` owns only callbacks bound to the live Agent; it hands the family no Agent, Store, fingerprint, producer state, generic dispatch, or mount seam. Notification Core retains dismissal authorization, stale-delivery comparison, producer guards, acknowledgement, delay/timer, hook-manifest, and logging policy. |
+| `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
+| `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
+| `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
+| `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override today); no Agent configuration lookup or write operation. |
 | `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
-`workdir` and `prompt_section` for `mcp`, plus `soul_runtime` for Soul's real self-state/flow operations. Every member is earned by a shipped
-vertical slice; future families still add only the port they actually consume.
+`workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
+`daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
+`notifications`, `configuration`, and `soul_runtime`: `mcp`
+consumes the first two as its base reference; Avatar, Context, and Daemon
+consume their respective narrow runtime ports; Email consumes `workdir` plus its
+Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
+`file_io`; and Plugin consumes `workdir`, its own `prompt_section`, and the
+read-only `plugin_catalog` projection; Shell consumes `workdir` plus
+`notifications` and `configuration` for its existing durable async execution
+semantics; and Soul consumes `workdir` plus its explicit `soul_runtime`
+live-self operations vocabulary. Family-specific runtime ports are
+composed only for their declaration through `extra_ports` or `extra_ports_for`,
+so they do not expand another declaration's grant; a port built in the standard
+table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only
+by a declaration that named it, because `ToolPluginHost.grant` copies exactly
+`requires`. `tool_mount` remains absent. Later families must earn a named
+capability-native port with implementation, adapter, declaration, and vertical
+evidence rather than pre-enumerating a dispatch escape hatch.
+`daemon_runtime`, `email_runtime`, and `notification_state`: `mcp` consumes the
+first two as the shared-C base reference; Avatar, Context, and Daemon consume
+their respective narrow runtime ports; Email consumes `workdir` plus its
+Email-owned `email_runtime` boundary; and Notification consumes exactly
+`workdir` plus `notification_state`. `email_runtime` is a grant name, not a
+universal kernel Protocol. Its one production adapter is family-specific; the
+Notification base-table adapter is still granted only to a declaration that
+requires it. Neither expands a family into a generic Agent or dispatch seam.
+Later families must earn a named capability-native port with implementation,
+adapter, declaration, and vertical evidence rather than pre-enumerating a
+dispatch escape hatch.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -148,9 +231,42 @@ argument surface** handed to a plugin, not about deep object-graph isolation.
 placed outside the kernel package so the dependency points inward
 (`Adapter -> Port <- Core`). `AgentWorkdirAdapter` and
 `AgentPromptSectionAdapter` translate the live
-`BaseAgent` into the grantable ports, each constructed from a bound method rather
-than from the agent object. `agent_host_ports` builds one declaration's grantable
-table; `register_agent_tool_plugins` is the composition/registrar wiring helper.
+`BaseAgent` into the grantable ports, each constructed from a bound method or
+one narrow read closure rather than from the agent object.
+`AgentAvatarParentAdapter` supplies Avatar's identity/runtime/authorization
+facts without passing the Agent through. `AgentDaemonRuntimeAdapter` supplies
+Daemon's named runtime operations; its notification operation looks up the
+current host route when publishing, so a replaced failing route keeps terminal
+state retryable rather than reporting a stale callback as published.
+`AgentEmailRuntimeAdapter` holds only a manager reader, performs the
+Email-owned action check before a single flattened manager call, and reads a
+replacement manager live; it never uses `_intrinsics` or a tool-handler route.
+`AgentFileIOAdapter` holds only typed read/write/glob/grep callbacks plus
+traversal and result-cap readers. It has no `Any`-typed File surface, generic
+forwarding/dispatch, whole-Agent reference, or mount operation. File's `setup`
+captures the service and executor separately before supplying the adapter only
+through `extra_ports_for`.
+`AgentPluginCatalogAdapter` is a read-only value projection: it holds one
+registration reader and one capability reader, deep-copies the registration
+snapshot on every `read_state()`, and returns a frozen `PluginCatalogState`. A
+tool result mutated by a caller therefore cannot reach the Agent's snapshot or
+capability configuration, and the adapter exposes no registration, prune,
+launch, config-write, or mount operation.
+`AgentNotificationStateAdapter` holds only Notification Core callbacks: a
+`dismiss_channel(..., invoked_by="notification")` partial, delay, hook, and
+bounded logging operations. It does not pass the Notification declaration an
+Agent, Store, producer state, fingerprint, generic handler, or `ToolMountPort`.
+`AgentNotificationAdapter` translates only the canonical system-event method
+and a store reader into Shell's two durable publication operations, preserving
+the pre-plugin compare-and-update semantics, while `StaticConfigurationAdapter`
+carries only copied setup values and is granted to Shell alone through
+`extra_ports_for`.
+Daemon's host runtime continues to omit the parent `email` official surface, so
+its separately accepted explicit task-scoped daemon-email MCP route is not
+silently widened by Email's parent declaration. `agent_host_ports` builds one
+declaration's grantable table;
+`register_agent_tool_plugins` is the
+composition/registrar wiring helper.
 
 The registrar-local mount seam reaches `BaseAgent._mount_official_tool`, then
 `_add_tool` at the common model-facing boundary
@@ -161,9 +277,19 @@ common-boundary rejection for reserved official names. Direct generic `add_tool`
 external stdio/HTTP catalogs, and foreign registrar declarations cannot overwrite
 an existing official claim; same-name replacement for nonreserved tools remains.
 
-The Composition Root stays `src/lingtai/agent.py` and the capability `setup()`
-it drives: it selects which declarations are registered and when. This
-component never selects.
+The Composition Root stays `src/lingtai/agent.py`: dynamic capability `setup()`
+hooks and injected official-family `boot()` hooks select when a declaration is
+registered. Email is the latter: its boot creates/replaces its real manager,
+then uses `extra_ports_for` to grant `email_runtime`. File remains a dynamic
+capability and uses the same per-declaration seam for `file_io`. The Agent manual
+installer maps File's package-owned body to the established `file-manual`
+destination and excludes the retained standalone redirect marker, preventing a
+second body or `capabilities/file` install. This component never selects.
+then uses `extra_ports_for` to grant `email_runtime`. Notification is also a
+mandatory injected official family, registered through that existing route with
+its static `DECLARATION` and canonical package-owned manual; capability null and
+`disable` declarations do not suppress its first-construction or refresh mount.
+This component never selects.
 
 ## Contract rules
 
@@ -246,11 +372,32 @@ component never selects.
 
 ## Contract tests
 
-`tests/test_tool_plugin_declaration.py` is the shared contract suite:
+`tests/test_tool_plugin_declaration.py` is the shared primitive/slice suite;
+`tests/test_tool_family_avatar_migration.py` supplies Avatar's focused declared
+vertical proof; `tests/test_context_declared_tool_plugin.py` supplies Context's
+focused static-declaration, restricted-runtime-port, canonical-manual, and
+installer-collision proof; `tests/test_daemon.py` preserves Daemon manager
+lifecycle coverage, including terminal-notification retry behavior;
+`tests/test_email_official_tool_plugin.py` supplies Email's manager/port,
+no-row/one-mount, and refresh-replacement proof; and
+`tests/test_file_tool_plugin_package.py` supplies File's typed port/adapter,
+two-port grant, one-body manual, one-mount, and packaging proof; and
+`tests/test_plugin_tool.py` supplies Plugin's read-only action boundary,
+protected-field projection, closed vanilla-skills namespace, and detached
+catalog-state proof:
 
-- declaration staticness and the `mcp` declared-versus-composed surface
-  agreement (`test_mcp_declaration_is_static_and_needs_no_agent`,
-  `test_mcp_is_reserved_and_declares_only_the_ports_it_consumes`);
+- declaration staticness and the
+  `mcp`/`avatar`/`context`/`daemon`/`email`/`file`/`plugin`
+  declared-versus-composed surfaces, including the official Daemon binding
+  manager's live notification-route retry regression, and the standard-table
+  proof that `plugin_catalog`/`avatar_parent` stay unreachable for a
+  declaration that did not name them;
+`tests/test_notification_delay_alarm.py` plus `tests/test_notification_store.py`
+preserve Notification Core delay/timer and Store behavior:
+
+- declaration staticness and the `mcp`/`avatar`/`context`/`daemon`/`email`/
+  `notification` declared-versus-composed surfaces, including the official
+  Daemon binding manager's live notification-route retry regression;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;
@@ -286,7 +433,21 @@ component never selects.
   only this plugin's protected section;
 - kernel isolation — no file under `src/lingtai/kernel/` imports
   `lingtai.tools`, with relative imports resolved so the kernel's own
-  `base_agent.tools` module is not mistaken for it.
+  `base_agent.tools` module is not mistaken for it;
+- Avatar's static declaration, local packaged-manual result, restricted port
+  grant, preserved spawn/rules facts, and one live registrar mount;
+- Email's static declaration, canonical package manual, one mounted schema, no
+  capability/manifest manager row, null/disable parity, and a production adapter
+  that observes a replaced manager at call time without intrinsic dispatch;
+- File's exact `workdir`/`file_io` grant, typed adapter without Agent/generic
+  dispatch/mount authority, unchanged five operations plus reserved manual,
+  established `file-manual` runtime destination with no second `file` install,
+  and one live registrar mount.
+- Notification's static `DECLARATION`, exact `workdir`/`notification_state`
+  grant, no-Agent/no-Store boundary, package-owned canonical manual, unchanged
+  `check` placeholder, one claimed/mounted schema and handler under both
+  capability opt-out forms on construction and refresh, and real
+  Core-backed `dismiss_channel` behavior.
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,

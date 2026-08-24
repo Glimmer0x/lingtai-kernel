@@ -8,6 +8,9 @@ related_files:
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/tool_family/manual.py
   - src/lingtai/tools/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/bash/_async_supervisor.py
   - src/lingtai/tools/bash/_async_process.py
   - src/lingtai/tools/bash/_state_lock.py
@@ -26,6 +29,7 @@ related_files:
   - src/lingtai/adapters/posix/bash_state_lock.py
   - src/lingtai/tools/bash/ANATOMY.md
   - src/lingtai/tools/bash/manual/SKILL.md
+  - tests/test_shell_tool_plugin_declaration.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -72,6 +76,22 @@ invariants.
 **Non-goals:** `shell` does not sandbox the command's own filesystem writes
 beyond the `working_dir` scope check; it does not manage agent lifecycle; it
 does not stream output incrementally (async jobs are polled, not streamed).
+
+## Official declared-plugin binding
+
+`_tool_family.py` owns one static `ToolPluginDeclaration` for the canonical
+`"shell"` name: operational actions `("run", "poll", "cancel")`, reserved
+`manual="shell"`, the three existing strict action input schemas, and only
+`("workdir", "notifications", "configuration")` as its host requirements.
+`setup()` supplies copied policy/dialect overrides through the configuration
+port and calls the kernel registrar; it does not call generic `add_tool`.
+`_bind(host)` constructs the retained `ShellManager` with the workdir and
+notification ports only, derives the public family/manual from the declaration,
+and defers async rehydration to its registrar-controlled activation step.
+The notification adapter preserves the existing idempotent system watchdog and
+Bash completion channel semantics. This is an internal least-privilege recut:
+tool name, LTP-v2 surface, manual result, policy, sync execution, durable async
+state, poll/cancel, and notification behavior are unchanged.
 
 ## Tool surface
 

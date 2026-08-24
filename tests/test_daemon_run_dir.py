@@ -198,65 +198,23 @@ def test_bump_turn_updates_daemon_json(tmp_path):
     assert data["state"] == "running"  # unchanged
 
 
-def test_construct_writes_matching_session_stats_record(tmp_path):
-    """Every daemon.json write — including the constructor's — refreshes the
-    compact self-record kernel.session_stats aggregates (see
-    kernel/session_stats/CONTRACT.md)."""
-    from lingtai.kernel import session_stats
-
+def test_daemon_json_is_the_only_per_turn_state_artifact(tmp_path):
+    """The dispatch-ledger migration removes duplicate session_stats writes."""
     rd = _make_run_dir(tmp_path)
-    record_path = rd.path / session_stats.DAEMON_RECORD_FILENAME
-    assert record_path.is_file()
-    record = json.loads(record_path.read_text())
-    assert record["schema"] == session_stats.DAEMON_RECORD_SCHEMA
-    assert record["run_id"] == rd.run_id
-    assert record["state"] == "running"
-    assert record["turn"] == 0
+    assert rd.daemon_json_path.is_file()
+    assert not (rd.path / "session_stats.json").exists()
 
 
-def test_bump_turn_refreshes_session_stats_record(tmp_path):
-    from lingtai.kernel import session_stats
-
-    rd = _make_run_dir(tmp_path)
-    rd.bump_turn(turn=3, response_text="Scanning...")
-    record = json.loads((rd.path / session_stats.DAEMON_RECORD_FILENAME).read_text())
-    assert record["turn"] == 3
-
-
-def test_mark_done_records_terminal_state_and_tokens_in_session_stats(tmp_path):
-    from lingtai.kernel import session_stats
-
+def test_mark_done_keeps_authoritative_state_and_usage_in_daemon_json(tmp_path):
     rd = _make_run_dir(tmp_path)
     rd.append_tokens(input=10, output=4, thinking=0, cached=0)
     rd.record_cli_tokens(input=7, output=3, cached=1, thinking=0)
     rd.mark_done("all done")
-    record = json.loads((rd.path / session_stats.DAEMON_RECORD_FILENAME).read_text())
-    assert record["state"] == "done"
-    assert record["finished_at"] is not None
-    assert record["tokens"] == {"input": 10, "output": 4, "thinking": 0, "cached": 0}
-    assert record["cli_tokens"] == {"input": 7, "output": 3, "thinking": 0, "cached": 1, "calls": 1}
-
-
-def test_session_stats_record_never_carries_task_text(tmp_path):
-    from lingtai.kernel import session_stats
-
-    rd = _make_run_dir(tmp_path, task="do something with API_KEY=leak-me")
-    record_path = rd.path / session_stats.DAEMON_RECORD_FILENAME
-    assert "leak-me" not in record_path.read_text()
-
-
-def test_session_stats_record_write_failure_does_not_break_daemon_json(tmp_path, monkeypatch):
-    from lingtai.kernel import session_stats
-
-    def _boom(*args, **kwargs):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(session_stats, "write_daemon_record", _boom)
-    rd = _make_run_dir(tmp_path)  # must not raise despite the self-record failure
-    rd.bump_turn(turn=1, response_text="still working")
-    data = json.loads(rd.daemon_json_path.read_text())
-    assert data["turn"] == 1
-
+    state = json.loads(rd.daemon_json_path.read_text())
+    assert state["state"] == "done"
+    assert state["finished_at"] is not None
+    assert state["tokens"] == {"input": 10, "output": 4, "thinking": 0, "cached": 0}
+    assert state["cli_tokens"] == {"input": 7, "output": 3, "thinking": 0, "cached": 1, "calls": 1}
 
 def test_bump_turn_appends_assistant_chat_entry(tmp_path):
     rd = _make_run_dir(tmp_path)

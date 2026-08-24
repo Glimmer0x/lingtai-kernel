@@ -4,7 +4,7 @@ description: >
   One web workflow: search first, browse a known result next, and use one
   explicit legacy fallback only when static browsing cannot serve the need.
 version: 8.2.0
-last_changed_at: "2026-08-05T08:40:00-07:00"
+last_changed_at: "2026-08-24T08:27:11Z"
 related_files:
   - src/lingtai/tools/web_search/__init__.py
   - src/lingtai/tools/web_search/settings.py
@@ -268,6 +268,13 @@ for structured data, or the documented Playwright/academic references under
 `reference/`. Do not advertise or invoke a second public tool; do not silently
 chain tiers. The scripts and deeper references in this bundle are procedure
 fallbacks, not additional capabilities.
+
+When fetching a public page through a documented HTTP fallback, if the default
+`curl` request returns empty or clearly incomplete content, retry once with a
+search/AI crawler User-Agent such as `OAI-SearchBot`, `Claude-User`, or
+`Bytespider` to seek a fuller public representation. Keep this a public,
+read-only, rate-respecting fallback: do not impersonate a person, bypass a
+login, paywall, robots directive, or other access control, or chain identities.
 
 For interactive browser work that browse cannot serve — forms, logins,
 JS-heavy SPAs, uploads — see [agent-native-browser.md](./reference/agent-native-browser.md)

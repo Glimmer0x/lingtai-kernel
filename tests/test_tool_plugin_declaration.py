@@ -1,5 +1,16 @@
-"""Focused live proofs for the official MCP and Soul host-plugin mounts."""
+"""Focused behavioral coverage for official declared host-plugin mounts.
+
+The shared primitive has three real vertical proofs: ``mcp`` demonstrates the
+small presentation-only slice, ``notification`` demonstrates a Core-backed
+state slice bound only to a narrow port, ``daemon`` demonstrates a manager-owning
+slice that consumes its current-agent model/tool/preset/notification semantics
+through the capability-native runtime port, and ``plugin`` demonstrates a slice
+whose only earned port is a detached read-only projection. All are mounted only
+through the registrar's controlled host path.
+"""
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -8,7 +19,7 @@ from tests._service_helpers import make_gemini_mock_service
 
 
 @pytest.fixture
-def declared_agent(tmp_path):
+def mcp_agent(tmp_path):
     agent = Agent(
         service=make_gemini_mock_service(),
         agent_name="tool-plugin-declaration",
@@ -22,15 +33,76 @@ def declared_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(declared_agent):
-    """MCP remains the signpost slice on its two earned ports."""
+@pytest.fixture
+def daemon_agent(tmp_path):
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="daemon-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"daemon": {}},
+    )
+    try:
+        yield agent
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.fixture
+def plugin_agent(tmp_path):
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="tool-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"plugin": {}},
+    )
+    try:
+        yield agent
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_all_ten_official_families_mount_exactly_once_together(tmp_path):
+    """The cumulative composition keeps every landed family and no duplicate."""
+    from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
+
+    assert OFFICIAL_TOOL_PLUGIN_NAMES == (
+        "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
+        "notification", "shell", "soul",
+    )
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="all-ten-official-plugins",
+        working_dir=tmp_path / "agent",
+        capabilities={
+            "mcp": {},
+            "avatar": {},
+            "context": {},
+            "daemon": {},
+            "file": {},
+            "plugin": {},
+            "notification": {},
+            "shell": {"yolo": True},
+        },
+    )
+    try:
+        assert set(agent.official_tool_plugins) == set(OFFICIAL_TOOL_PLUGIN_NAMES)
+        mounted_names = [schema.name for schema in agent._tool_schemas]
+        for name in OFFICIAL_TOOL_PLUGIN_NAMES:
+            assert mounted_names.count(name) == 1, name
+            assert name in agent._tool_handlers
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
+    """Boot registration claims the declaration and dispatches both actions."""
     from lingtai.tools.mcp import DECLARATION
 
     assert DECLARATION.requires == ("workdir", "prompt_section")
-    assert declared_agent.official_tool_plugins["mcp"] is DECLARATION
-    assert [schema.name for schema in declared_agent._tool_schemas].count("mcp") == 1
+    assert mcp_agent.official_tool_plugins["mcp"] is DECLARATION
+    assert [schema.name for schema in mcp_agent._tool_schemas].count("mcp") == 1
 
-    handler = declared_agent._tool_handlers["mcp"]
+    handler = mcp_agent._tool_handlers["mcp"]
     info = handler({"action": "info", "input": {}, "reasoning": "health"})
     assert info["status"] == "ok"
     assert info["registered"][0]["name"] == "imap"
@@ -42,20 +114,18 @@ def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(declared_agen
     assert manual["manual_path"].endswith("capabilities/mcp/SKILL.md")
 
 
-def test_official_soul_mount_preserves_real_flow_and_packaged_manual(declared_agent):
-    """Soul uses its earned self/runtime port, without a second public root."""
-    from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
+def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):
+    """Soul uses only its earned self/runtime port, without a second public root."""
     from lingtai.tools.soul import DECLARATION
 
-    assert OFFICIAL_TOOL_PLUGIN_NAMES == ("mcp", "soul")
     assert DECLARATION.public_actions == (
         "inquiry", "flow", "config", "voice", "dismiss", "manual",
     )
     assert DECLARATION.requires == ("workdir", "soul_runtime")
-    assert declared_agent.official_tool_plugins["soul"] is DECLARATION
-    assert [schema.name for schema in declared_agent._tool_schemas].count("soul") == 1
+    assert mcp_agent.official_tool_plugins["soul"] is DECLARATION
+    assert [schema.name for schema in mcp_agent._tool_schemas].count("soul") == 1
 
-    handler = declared_agent._tool_handlers["soul"]
+    handler = mcp_agent._tool_handlers["soul"]
     disabled = handler({"action": "flow", "input": {}, "reasoning": "health"})
     assert disabled["status"] == "disabled"
     assert disabled["enabled"] is False
@@ -64,3 +134,288 @@ def test_official_soul_mount_preserves_real_flow_and_packaged_manual(declared_ag
     assert manual["status"] == "ok"
     assert manual["manual"]
     assert manual["manual_path"].endswith("capabilities/soul-manual/SKILL.md")
+
+
+def test_official_notification_mount_preserves_core_state_and_packaged_manual(mcp_agent):
+    """The Notification declaration reaches real Core state only through its port."""
+    from lingtai.kernel.notifications import submit
+    from lingtai.tools.notification import DECLARATION
+
+    assert DECLARATION.requires == ("workdir", "notification_state")
+    assert mcp_agent.official_tool_plugins["notification"] is DECLARATION
+    assert [schema.name for schema in mcp_agent._tool_schemas].count("notification") == 1
+
+    handler = mcp_agent._tool_handlers["notification"]
+    check = handler({"action": "check", "input": {}, "reasoning": "probe"})
+    assert check["_notification_placeholder"] is True
+
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["notification_manual"]
+    assert manual["manual_path"].endswith("capabilities/notification/SKILL.md")
+
+    submit(mcp_agent, "system", data={"events": []}, header="dismiss me")
+    dismissed = handler(
+        {
+            "action": "dismiss_channel",
+            "input": {"channel": "system", "force": True, "reason": None},
+            "reasoning": "clear the mirror only",
+        }
+    )
+    assert dismissed == {
+        "status": "ok",
+        "channel": "system",
+        "cleared": True,
+        "forced": True,
+    }
+    assert not (mcp_agent.working_dir / ".notification" / "system.json").exists()
+
+
+@pytest.mark.parametrize(
+    "construction_kwargs",
+    [
+        pytest.param({"capabilities": {"notification": None}}, id="capabilities-null"),
+        pytest.param({"capabilities": {}, "disable": ["notification"]}, id="disable-list"),
+    ],
+)
+def test_notification_is_mounted_once_on_live_construction_despite_opt_out(
+    tmp_path, construction_kwargs
+):
+    """Both capability-shaped opt-outs preserve one live official Notification mount."""
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="notification-always-on-construction",
+        working_dir=tmp_path / "agent",
+        **construction_kwargs,
+    )
+    try:
+        from lingtai.tools.notification import DECLARATION
+
+        assert agent.official_tool_plugins["notification"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("notification") == 1
+        assert list(name for name in agent._tool_handlers if name == "notification") == [
+            "notification"
+        ]
+        assert agent._tool_handlers["notification"](
+            {"action": "check", "input": {}, "reasoning": "live construction"}
+        )["_notification_placeholder"] is True
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize(
+    "manifest_overrides",
+    [
+        pytest.param({"capabilities": {"notification": None}}, id="refresh-capabilities-null"),
+        pytest.param({"capabilities": {}, "disable": ["notification"]}, id="refresh-disable-list"),
+    ],
+)
+def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
+    tmp_path, manifest_overrides
+):
+    """Refresh clears/rebuilds the surface but cannot remove the official mount."""
+    workdir = tmp_path / "agent"
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="notification-always-on-refresh",
+        working_dir=workdir,
+        capabilities={},
+    )
+    try:
+        manifest = {
+            "agent_name": "notification-always-on-refresh",
+            "language": "en",
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "base_url": None,
+            },
+            "capabilities": {},
+            "soul": {"delay": 60},
+            "stamina": 3600,
+            "context_limit": None,
+            "molt_pressure": 0.8,
+            "molt_prompt": "",
+            "max_turns": 100,
+            "admin": {"karma": True},
+            "streaming": False,
+            **manifest_overrides,
+        }
+        (workdir / "init.json").write_text(
+            json.dumps(
+                {
+                    "manifest": manifest,
+                    "principle": "",
+                    "covenant": "",
+                    "pad": "",
+                    "lingtai": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        agent._setup_from_init()
+
+        from lingtai.tools.notification import DECLARATION
+
+        assert agent.official_tool_plugins["notification"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("notification") == 1
+        assert list(name for name in agent._tool_handlers if name == "notification") == [
+            "notification"
+        ]
+        assert agent._tool_handlers["notification"](
+            {"action": "check", "input": {}, "reasoning": "live refresh"}
+        )["_notification_placeholder"] is True
+    finally:
+        agent.stop(timeout=1.0)
+
+
+
+def test_official_daemon_mount_uses_runtime_port_and_preserves_dispatch(daemon_agent):
+    """Daemon keeps one real manager/tool surface without binding to an Agent.
+
+    ``list`` exercises the unchanged manager's durable-state path (no process is
+    spawned), and ``manual`` proves that the declaration's installed manual is
+    the registered reserved child rather than the legacy flat manager branch.
+    """
+    from lingtai.tools.daemon import DECLARATION, DaemonManager
+
+    assert DECLARATION.requires == ("workdir", "daemon_runtime")
+    assert daemon_agent.official_tool_plugins["daemon"] is DECLARATION
+    assert [schema.name for schema in daemon_agent._tool_schemas].count("daemon") == 1
+
+    manager = daemon_agent._capability_managers["daemon"]
+    assert isinstance(manager, DaemonManager)
+    assert not hasattr(manager, "_agent")
+    assert manager._runtime.service is daemon_agent.service
+
+    handler = daemon_agent._tool_handlers["daemon"]
+    listed = handler(
+        {
+            "action": "list",
+            "input": {
+                "contains": None,
+                "status": None,
+                "include_done": None,
+                "last": None,
+            },
+            "reasoning": "inspect daemon state",
+        }
+    )
+    assert listed["emanations"] == []
+    assert listed["history_included"] is True
+
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["structuredContent"]["manual_path"].endswith(
+        "capabilities/daemon/SKILL.md"
+    )
+    assert manual["content"][0]["text"]
+
+
+def test_official_daemon_manager_reads_replaced_notification_route_for_retryable_terminal_state(
+    daemon_agent, monkeypatch,
+):
+    """The official Daemon binding must not retain a stale notification callback.
+
+    A terminal publish runs through the manager produced by the declared-host
+    registration. Replacing its host notification route after binding with a
+    failure must make publication fail; once the durable claim is cleared by the
+    terminal caller, the run can claim the same terminal notification again.
+    """
+    from lingtai.tools.daemon import DaemonManager
+    from lingtai.tools.daemon.run_dir import DaemonRunDir
+
+    manager = daemon_agent._capability_managers["daemon"]
+    assert isinstance(manager, DaemonManager)
+    assert daemon_agent.official_tool_plugins["daemon"].name == "daemon"
+
+    run_dir = DaemonRunDir(
+        parent_working_dir=daemon_agent.working_dir,
+        handle="em-live-route",
+        run_id="em-live-route",
+        task="exercise live daemon notification route",
+        tools=[],
+        model="test-model",
+        max_turns=1,
+        timeout_s=1.0,
+        parent_addr="daemon-plugin-declaration",
+        parent_pid=0,
+        system_prompt="",
+    )
+    run_dir.mark_done("terminal result")
+    idempotency_key = run_dir.claim_terminal_notification("done")
+    assert idempotency_key is not None
+
+    def replaced_route(**_kwargs):
+        raise OSError("replacement notification route failed")
+
+    monkeypatch.setattr(daemon_agent, "_enqueue_system_notification", replaced_route)
+    assert manager._publish_daemon_notification(
+        "em-live-route",
+        status="done",
+        text="terminal result",
+        run_dir=run_dir,
+        idempotency_key=idempotency_key,
+    ) is False
+
+    run_dir.clear_terminal_notification_claim()
+    state = run_dir.state_snapshot()
+    assert state["terminal_notified"] is False
+    assert state["terminal_notification_claim"] is None
+    assert run_dir.claim_terminal_notification("done") == idempotency_key
+
+
+def test_official_plugin_mount_uses_only_catalog_state_and_real_dispatch(plugin_agent):
+    """Plugin's declaration mounts through the controlled host path unchanged."""
+    from lingtai.tools.plugin import DECLARATION
+
+    assert DECLARATION.requires == ("workdir", "prompt_section", "plugin_catalog")
+    assert plugin_agent.official_tool_plugins["plugin"] is DECLARATION
+    assert [schema.name for schema in plugin_agent._tool_schemas].count("plugin") == 1
+
+    handler = plugin_agent._tool_handlers["plugin"]
+    info = handler({"action": "info", "input": {}, "reasoning": "health"})
+    assert info["status"] == "ok"
+    assert info["registered"] == []
+    assert info["discovered"] == []
+    assert "plugin_manual" not in info
+
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["plugin_manual"]
+    assert manual["manual_path"].endswith("capabilities/plugin/SKILL.md")
+
+
+def test_standard_port_table_grants_each_declaration_only_its_requires(plugin_agent):
+    """A standard-table port is reachable only by a declaration that names it.
+
+    ``plugin_catalog`` and ``avatar_parent`` are built for every declaration in
+    ``agent_host_ports``. This proves that placement in the full table is not a
+    grant: MCP, which requires neither, cannot reach either one through its
+    least-privilege facade, while Plugin reaches exactly its three.
+    """
+    from lingtai.adapters.tool_plugin_host import (
+        AgentPluginCatalogAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.tool_plugin import PluginCatalogState, ToolPluginHost
+    from lingtai.tools.mcp import DECLARATION as MCP_DECLARATION
+    from lingtai.tools.plugin import DECLARATION as PLUGIN_DECLARATION
+
+    table = agent_host_ports(plugin_agent, "plugin")
+    assert isinstance(table["plugin_catalog"], AgentPluginCatalogAdapter)
+
+    plugin_host = ToolPluginHost.grant(PLUGIN_DECLARATION, table)
+    assert plugin_host.granted == ("workdir", "prompt_section", "plugin_catalog")
+    assert isinstance(plugin_host.plugin_catalog.read_state(), PluginCatalogState)
+
+    mcp_host = ToolPluginHost.grant(
+        MCP_DECLARATION, agent_host_ports(plugin_agent, "mcp")
+    )
+    assert mcp_host.granted == ("workdir", "prompt_section")
+    with pytest.raises(AttributeError):
+        mcp_host.plugin_catalog
+    with pytest.raises(AttributeError):
+        mcp_host.avatar_parent
