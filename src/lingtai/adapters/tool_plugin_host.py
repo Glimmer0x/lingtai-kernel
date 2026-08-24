@@ -20,9 +20,11 @@ only builds the ports.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
@@ -32,6 +34,9 @@ if TYPE_CHECKING:
 
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
+    FileGrepMatch,
+    FileTraversalStats,
+    PluginCatalogState,
     ToolPluginDeclaration,
     register_official_tool_plugins,
 )
@@ -39,10 +44,12 @@ from lingtai.kernel.tool_plugin import (
 __all__ = [
     "AgentWorkdirAdapter",
     "AgentPromptSectionAdapter",
+    "AgentFileIOAdapter",
     "AgentContextRuntimeAdapter",
     "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
     "AgentEmailRuntimeAdapter",
+    "AgentPluginCatalogAdapter",
     "AgentNotificationStateAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
@@ -87,6 +94,90 @@ class AgentPromptSectionAdapter:
 
     def write_protected_section(self, body: str) -> None:
         self._write(self._section, body, protected=True)
+
+
+class _FileGlobOperation(Protocol):
+    def __call__(self, pattern: str, root: str | None = None) -> list[str]: ...
+
+
+class _FileGrepOperation(Protocol):
+    def __call__(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[FileGrepMatch]: ...
+
+
+class AgentFileIOAdapter:
+    """``FileIOPort`` assembled from only File's consumed host callables.
+
+    The adapter owns no Agent, has no generic forwarding or dispatch operation,
+    and never publishes the backing FileIOService. It receives individual
+    service methods plus two read-only fact readers and forwards only the exact
+    vocabulary the declared ``file`` family consumes. Workdir remains a separate
+    port, and model-facing mounting remains registrar-only.
+    """
+
+    __slots__ = (
+        "_read",
+        "_write",
+        "_glob",
+        "_grep",
+        "_last_traversal",
+        "_max_result_chars",
+    )
+
+    def __init__(
+        self,
+        *,
+        read: Callable[[str], str],
+        write: Callable[[str, str], None],
+        glob: _FileGlobOperation,
+        grep: _FileGrepOperation,
+        last_traversal: Callable[[], FileTraversalStats | None],
+        max_result_chars: Callable[[], int | None],
+    ) -> None:
+        self._read = read
+        self._write = write
+        self._glob = glob
+        self._grep = grep
+        self._last_traversal = last_traversal
+        self._max_result_chars = max_result_chars
+
+    def read(self, path: str) -> str:
+        return self._read(path)
+
+    def write(self, path: str, content: str) -> None:
+        self._write(path, content)
+
+    def glob(self, pattern: str, root: str | None = None) -> list[str]:
+        return self._glob(pattern, root=root)
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[FileGrepMatch]:
+        return self._grep(
+            pattern,
+            path=path,
+            max_results=max_results,
+            glob_filter=glob_filter,
+        )
+
+    @property
+    def last_traversal(self) -> FileTraversalStats | None:
+        return self._last_traversal()
+
+    @property
+    def max_result_chars(self) -> int | None:
+        return self._max_result_chars()
 
 
 class AgentNotificationStateAdapter:
@@ -265,6 +356,63 @@ class _DaemonPresetToolCollector:
         self._agent = agent
         self.schemas: dict[str, FunctionSchema] = {}
         self.handlers: dict[str, Callable[[dict], dict]] = {}
+        self._official_tool_plugins: dict[str, Any] = {}
+        self._official_tool_declarations: dict[str, Any] = {}
+        self._official_tool_bindings: dict[str, Any] = {}
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._authorize_official_tool_declaration(self, declaration)
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._record_official_tool_binding(self, declaration, plugin)
+
+    def _claim_official_tool(self, transaction) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._claim_official_tool(self, transaction)
+
+    def _mount_official_tool(self, transaction) -> None:
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OfficialMountTransaction,
+        )
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError(
+                "official tool mounting requires a registrar transaction"
+            )
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        self.add_tool(
+            name,
+            schema=dict(plugin.schema),
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(self)
 
     def add_tool(
         self,
@@ -542,6 +690,60 @@ def daemon_runtime_for_agent(
     )
 
 
+class AgentPluginCatalogAdapter:
+    """Read-only :class:`PluginCatalogPort` over the current Agent state.
+
+    It holds only two narrow readers rather than an ``Agent``.  Each read creates
+    a detached value projection: mutating a tool result cannot alter the Agent's
+    registration snapshot or capability configuration, and the adapter grants no
+    registration, prune, launch, or prompt operation.
+    """
+
+    __slots__ = ("_read_registration", "_read_capabilities")
+
+    def __init__(
+        self,
+        read_registration: Callable[[], Any],
+        read_capabilities: Callable[[], Any],
+    ) -> None:
+        self._read_registration = read_registration
+        self._read_capabilities = read_capabilities
+
+    def read_state(self) -> PluginCatalogState:
+        registration = self._read_registration()
+        snapshot = deepcopy(dict(registration)) if isinstance(registration, Mapping) else {}
+
+        configured_paths: tuple[str, ...] = ()
+        skill_paths: tuple[str, ...] = ()
+        skills_enabled = False
+        capabilities = self._read_capabilities()
+        if isinstance(capabilities, (list, tuple)):
+            for item in capabilities:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                name, kwargs = item
+                if name == "skills":
+                    skills_enabled = True
+                    if isinstance(kwargs, Mapping):
+                        raw_paths = kwargs.get("paths", [])
+                        if isinstance(raw_paths, (list, tuple)):
+                            skill_paths = tuple(
+                                path for path in raw_paths if isinstance(path, str)
+                            )
+                elif name == "plugin" and isinstance(kwargs, Mapping):
+                    raw_paths = kwargs.get("paths", [])
+                    if isinstance(raw_paths, (list, tuple)):
+                        configured_paths = tuple(
+                            path for path in raw_paths if isinstance(path, str)
+                        )
+        return PluginCatalogState(
+            registration=snapshot,
+            configured_paths=configured_paths,
+            skill_paths=skill_paths,
+            skills_enabled=skills_enabled,
+        )
+
+
 def agent_host_ports(
     agent: Any,
     plugin_name: str,
@@ -549,24 +751,29 @@ def agent_host_ports(
 ) -> dict[str, Any]:
     """Build the complete grantable table for one declaration on *agent*.
 
-    The standard table preserves the landed MCP, Avatar, Context, and
-    Notification wiring; a family-specific factory adds only the earned port
-    required by that declaration. The registrar grants just ``requires``, never
-    this whole map.
+    The table preserves the landed MCP, Avatar, Plugin, Context, Daemon, Email,
+    and File wiring while constructing only each declaration's earned adapter.
+    Notification receives its narrow state port at this composition boundary.
+    The registrar grants just ``requires``, never this whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
-    # Construct only the declaration's earned adapter. Lightweight Core test
-    # agents must not implement unrelated MCP/Avatar methods merely because a
-    # Notification declaration is being granted its two narrow ports.
-    if plugin_name == "mcp":
+    # Construct only the declaration's earned standard adapter. Lightweight Core
+    # test agents need not implement MCP or Avatar APIs when Notification is being
+    # granted its own narrow ports.
+    if plugin_name in ("mcp", "plugin"):
         ports["prompt_section"] = AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
         )
-    elif plugin_name == "avatar":
+    if plugin_name == "avatar":
         ports["avatar_parent"] = AgentAvatarParentAdapter(
             lambda: agent.agent_name or agent.working_dir.name,
             lambda: getattr(agent, "_venv_path", None),
             lambda: any((getattr(agent, "_admin", {}) or {}).values()),
+        )
+    elif plugin_name == "plugin":
+        ports["plugin_catalog"] = AgentPluginCatalogAdapter(
+            lambda: getattr(agent, "_plugin_registration", {}),
+            lambda: getattr(agent, "_capabilities", ()),
         )
     elif plugin_name == "notification":
         # Import Notification Core lazily at the composition-root boundary. The
@@ -593,7 +800,6 @@ def agent_host_ports(
     if extra_ports:
         ports.update(extra_ports)
     return ports
-
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
@@ -611,9 +817,10 @@ def register_agent_tool_plugins(
     leaves members 1..*N*-1 mounted and claimed and propagates, because
     unmounting is not a capability this component owns.
 
-    ``extra_ports`` remains the current Context compatibility seam. New
-    family-specific ports use ``extra_ports_for`` so Daemon can earn its runtime
-    port without granting it to every declaration. Both are merged per
+    ``extra_ports`` remains the current Context compatibility seam. Daemon,
+    Email, and File use ``extra_ports_for`` so each can earn its runtime port;
+    Notification receives its dedicated state port in ``agent_host_ports``.
+    without granting it to every declaration. Both maps are merged per
     declaration; conflicting keys from the factory intentionally win only for
     that declaration.
 

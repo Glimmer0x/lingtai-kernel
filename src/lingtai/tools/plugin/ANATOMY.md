@@ -5,6 +5,8 @@ related_files:
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/CONTRACT.md
   - src/lingtai/tools/plugin/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/plugin/glossary-en.md
   - src/lingtai/tools/plugin/glossary-zh.md
   - src/lingtai/tools/plugin/glossary-wen.md
@@ -18,6 +20,7 @@ related_files:
   - src/lingtai/agent.py
   - src/lingtai/init_schema.py
   - tests/test_plugin_tool.py
+  - tests/test_tool_plugin_declaration.py
   - docs/examples/agent-plugins/hello-lingtai/plugin.json
   - docs/examples/agent-plugins/hello-lingtai/mcp.json
   - docs/examples/agent-plugins/hello-lingtai/server.py
@@ -38,69 +41,76 @@ maintenance: |
 
 Plugin capability — the per-agent **Agent Plugins** (agent-plugins.org, v1.0.0)
 catalog and registration. It scans the configured plugin paths, validates each
-`plugin.json`, mounts what was declared, and renders the result as XML into the
-system prompt. It is the structural twin of `src/lingtai/tools/mcp/ANATOMY.md` —
+`plugin.json`, registers what was declared, and renders the protected Plugin
+field as XML into the system prompt. It is the structural twin of `src/lingtai/tools/mcp/ANATOMY.md` —
 same two-child LTP v2 family, same tool/service split, same lazy back-edge — and
 its registration half mirrors that package's addon decompression.
 
 **Two tiers, and the line between them is a security boundary.** A plugin
 *declared* in `init.json` `manifest.plugins` (or its alias
 `manifest.capabilities.plugin.paths`) is **registered**: each of its validated
-skill directories is
-composed into the skills-catalog scan and its `mcp.json` servers become
-`mcp_registry.jsonl` records stamped `source="plugin:<name>"`. A plugin merely
+skill names/count are rendered in the protected Plugin field (never the vanilla
+`skills` catalog) and its `mcp.json` servers become `mcp_registry.jsonl`
+records stamped `source="plugin:<name>"`. A plugin merely
 found on an inherited `manifest.capabilities.skills.paths` directory is
-**discovered**: listed, nothing mounted. Dropping a directory somewhere must
+**discovered**: listed in the protected field, with no plugin component registered. Dropping a directory somewhere must
 never silently register a third party's MCP server.
 
-**The tool is still read-only.** Mounting happens once, in `register_plugins`,
+**The tool is still read-only.** Registration happens once, in `register_plugins`,
 called by `Agent` before capability setup — no model-facing action can reach it,
 which is what keeps the capability safe in `CORE_DEFAULTS`. Registration is also
 registry-level only: a registered server is registered, never running.
 
+**Declared host composition.** `plugin` is the second official declared family.
+Its import-time `DECLARATION` is reserved by the kernel and its bind receives
+only `workdir`, a protected prompt-section writer, and a detached
+`plugin_catalog` state projection. The projection supplies the registration
+snapshot, configured plugin paths, inherited skill paths, and skills
+availability; it cannot validate, register, prune, launch, or mount. The
+family never receives a whole Agent.
+
 ## Components
 
-- `plugin/__init__.py` — the tool slice (~351 lines). One model-facing LTP v2
+- `plugin/__init__.py` — the tool slice (~282 lines). One model-facing LTP v2
   family: public tool name `plugin`, public actions `info`/`manual`, carried in
   the canonical `action` + `input` + `reasoning` + `summarize` envelope composed
   by the generic `lingtai.tools.tool_family` infrastructure
   (`src/lingtai/tools/tool_family/ANATOMY.md`).
-  `get_description` (`src/lingtai/tools/plugin/__init__.py:287`),
-  `get_schema` (`src/lingtai/tools/plugin/__init__.py:291`) returns
+  `get_description` (`src/lingtai/tools/plugin/__init__.py:217`),
+  `get_schema` (`src/lingtai/tools/plugin/__init__.py:221`) returns
   `ToolFamily.build_schema()` with the family's own `action` description
   substituted, and `_build_family`
-  (`src/lingtai/tools/plugin/__init__.py:250`) is the single source of the
+  (`src/lingtai/tools/plugin/__init__.py:195`) is the single source of the
   two-child registry — called with `None` at import for the module-level
-  schema-only family `_FAMILY` (`src/lingtai/tools/plugin/__init__.py:284`),
+  schema-only family `_FAMILY` (`src/lingtai/tools/plugin/__init__.py:275`),
   which fails loudly on a duplicate/reserved-name collision and never
-  dispatches, and called with the agent from `setup`
-  (`src/lingtai/tools/plugin/__init__.py:300`) for the real dispatching family
-  whose `manual` child comes straight from
-  `tool_family.manual.build_manual_child`. Both children share the one
-  `_EMPTY_INPUT` literal (`src/lingtai/tools/plugin/__init__.py:237`)
+  dispatches, and called with the granted `ToolPluginHost` from `_bind` for the
+  real dispatching family, whose `manual` child receives only `host.workdir`
+  through `tool_family.manual.build_manual_child`. Both children share the one
+  `_EMPTY_INPUT` literal (`src/lingtai/tools/plugin/__init__.py:182`)
   re-exported from `tool_family.manual.MANUAL_INPUT_SCHEMA`, so the advertised
   and validated shapes cannot drift. `_reconcile`
-  (`src/lingtai/tools/plugin/__init__.py:144`) backs the `info` child: it reads
-  the boot snapshot off `agent._plugin_registration`, re-scans discovery live,
-  splits the result into the registered and discovered tiers, and renders both.
+  (`src/lingtai/tools/plugin/__init__.py:108`) backs the `info` child: it reads
+  the detached `host.plugin_catalog` state plus `host.workdir`, re-scans
+  discovery live, splits the registered and discovered tiers, and renders only
+  through `host.prompt_section`.
   It never registers — that is what makes `info` safe to call.
-  `_registered_entries` (`src/lingtai/tools/plugin/__init__.py:123`) projects the
-  snapshot, consulting `_skills_enabled`
-  (`src/lingtai/tools/plugin/__init__.py:113`) so a plugin whose skills could not
-  be composed says so in `skipped` rather than claiming a mount that did not
-  happen. `_catalog_entry` (`src/lingtai/tools/plugin/__init__.py:98`) projects a
+  `_registered_entries` (`src/lingtai/tools/plugin/__init__.py:80`) projects the
+  snapshot and the catalog state's `skills_enabled` fact, so a plugin whose
+  skills capability is disabled says so in `skipped`; the protected Plugin field
+  still reports validated skill facts without claiming vanilla-catalog composition
+  that did not happen. `_catalog_entry` (`src/lingtai/tools/plugin/__init__.py:65`) projects a
   discovered record down to catalog facts. `_collect_paths`
-  (`src/lingtai/tools/plugin/__init__.py:63`) is where this capability differs
+  (`src/lingtai/tools/plugin/__init__.py:52`) is where this capability differs
   from mcp — it unions its own configured `manifest.capabilities.plugin.paths`,
   the snapshot's declared paths (the canonical `manifest.plugins`, which does not
-  otherwise reach this capability), and the skills capability's
-  `manifest.capabilities.skills.paths` read off `agent._capabilities`, in that
-  order and de-duplicated. `_flatten_manual_result`
-  (`src/lingtai/tools/plugin/__init__.py:182`) is the Host-owned adapter that
+  otherwise reach this capability), and the inherited skills paths from
+  `host.plugin_catalog`, in that order and de-duplicated. `_flatten_manual_result`
+  (`src/lingtai/tools/plugin/__init__.py:143`) is the Host-owned adapter that
   turns the manual child's canonical `content`/`structuredContent` result back
   into the flat `plugin_manual` public shape strictly *after* dispatch (no
   double wrap), and `handle_plugin`
-  (`src/lingtai/tools/plugin/__init__.py:318`) owns the unknown-action envelope —
+  (`src/lingtai/tools/plugin/__init__.py:231`) owns the unknown-action envelope —
   including the missing-action empty-string default and unhashable `action`
   values (issue #513), routed by tuple membership against `child_names`, which
   compares by `==` and never hashes — before delegating to `ToolFamily.handle`.
@@ -123,10 +133,10 @@ registry-level only: a registered server is registered, never running.
   `_scan_skills` (`src/lingtai/services/plugin_registry.py:273`) enumerates the
   plugin's skills through `_walk_skills`
   (`src/lingtai/services/plugin_registry.py:195`), whose traversal deliberately
-  mirrors `tools._catalog._scan_recursive` so the reported set is the mounted set
-  and each skill directory is contained-checked individually — it returns the
-  per-skill validated paths, which is what registration composes, never the
-  parent `skills/` (whose symlink-following scan would re-admit a reject); and
+  validates each skill directory individually so the reported set is exactly the
+  protected Plugin-field set and returns per-skill validated paths for the host
+  registration snapshot; the vanilla `skills` catalog never receives the parent
+  `skills/` or any Plugin path; and
   `_scan_mcp_servers`
   (`src/lingtai/services/plugin_registry.py:412`) reads `mcp.json` into validated
   `{name, spec}` entries, each applying the per-component failure boundary.
@@ -173,12 +183,11 @@ registry-level only: a registered server is registered, never running.
   was given `capabilities=` or `plugins=`, though: the CLI's minimal construction
   declares neither and defers to `_setup_from_init`, which always calls it, so
   the boot flow registers once instead of pruning and re-appending every record.
-- The skills side of the mount is `_compose_paths`
-  (`src/lingtai/tools/skills/__init__.py:105`), which unions the declared Tier-1
-  paths with `_plugin_skill_paths` — per-skill directories, each scanned by
-  `_scan_one_skill` (`src/lingtai/tools/skills/__init__.py:88`). Because it reads off the agent, all three of
-  that capability's reconcile entry points (setup, the post-manual-install
-  re-reconcile, and full-context reconstruction) pick plugin skills up for free.
+- The vanilla skills capability remains a separate closed namespace. Its
+  `_compose_paths` (`src/lingtai/tools/skills/__init__.py:105`) intentionally
+  excludes Plugin paths; Plugin skill names/counts are rendered only by the
+  protected field through `plugin_registry._plugin_xml`
+  (`src/lingtai/services/plugin_registry.py:941`).
 - The canonical config key is declared in `src/lingtai/init_schema.py`
   (`MANIFEST_OPTIONAL["plugins"]`), with a shape-only warning for malformed
   entries; per-plugin validation happens at registration.
@@ -206,7 +215,7 @@ Installing and uninstalling are not actions: both are edits to
 ```
 my-plugin/
 ├── plugin.json          # required: $schema + name
-├── skills/<name>/SKILL.md   # optional — composed into the skills catalog when declared
+├── skills/<name>/SKILL.md   # optional — listed in the protected Plugin field when declared; not vanilla-catalog injected
 ├── mcp.json             # optional — becomes registry records when declared
 └── com.example.client/  # optional reverse-domain extension namespace (ignored)
 ```
@@ -229,8 +238,7 @@ plugin/__init__.py
   │
   ├── Reconciliation
   │   ├── _catalog_entry()          — one discovered record → the catalog facts
-  │   ├── _skills_enabled()         — is there a catalog to compose plugin skills into?
-  │   ├── _registered_entries()     — boot snapshot → the registered tier
+  │   ├── _registered_entries()     — catalog-state snapshot → the registered tier
   │   └── _reconcile()              — report snapshot + re-scan discovery + render prompt
   │
   ├── Manual adaptation
@@ -239,7 +247,9 @@ plugin/__init__.py
   └── Tool surface
       ├── _build_family()           — the one two-child registry (info + manual)
       ├── get_description/schema()  — module-level, backed by the schema-only _FAMILY
-      └── setup()                   — registers the plugin tool, runs initial _reconcile
+      ├── _bind()                   — pure host-bound family composition
+      ├── DECLARATION               — import-time official identity and ports
+      └── setup()                   — registrar wiring only; activation reconciles
 
 services/plugin_registry.py
   ├── §4.1 containment
@@ -275,7 +285,7 @@ services/plugin_registry.py
 
 ## Key Invariants
 
-- **Declaration gates mounting:** an inherited skills path is scanned and listed
+- **Declaration gates registration:** an inherited skills path is scanned and listed
   but never registers anything. Only `manifest.plugins` and its alias mount.
 - **No model-facing mutation:** no action registers, unregisters, copies, or
   spawns anything. `register_plugins` is boot/refresh-only and unreachable from
@@ -283,9 +293,10 @@ services/plugin_registry.py
 - **Registration never executes:** a registered MCP server holds a registry
   record and nothing more, exactly as a decompressed addon does. Running it
   still requires an `init.json` top-level `mcp` entry.
-- **Skills are composed, never copied:** a registered plugin's skill keeps a
-  `location` inside the plugin. Nothing is written under `.library/`, which is
-  why uninstall needs no file deletion.
+- **Plugin skills stay in the protected namespace:** a registered plugin's
+  skill names/counts are rendered with a `source` inside the plugin. Nothing
+  is written under `.library/` or injected into the vanilla `skills` catalog,
+  which is why uninstall needs no file deletion.
 - **Registration owns only its own stamp:** a name already held by a
   hand-written or addon record skips the plugin's server rather than
   overwriting it; between two plugins, first declared wins. Pruning likewise
@@ -303,7 +314,7 @@ services/plugin_registry.py
 - **Two failure boundaries:** an unreadable or invalid `plugin.json` rejects the
   whole plugin (absent from the catalog, registers nothing, reason in
   `problems`); an individual escaping or malformed skill directory / MCP server
-  is skipped while the rest of the plugin still mounts, with the reason in that
+  is skipped while the rest of the plugin remains listed, with the reason in that
   plugin's `skipped` list.
 - **`$schema` is a local identifier, never a fetch:** the pinned v1.0.0 URLs are
   compared as opaque strings; the kernel makes no network call during a scan.
@@ -312,10 +323,12 @@ services/plugin_registry.py
   handling.
 - **Paths are inherited, not duplicated:** the skills capability's configured
   paths are scanned for plugins too, so operators declare a directory once for
-  discovery — but inheritance never mounts.
+  discovery — but inheritance never registers.
 
 ## Dependencies
 
+- `lingtai.kernel.tool_plugin` — `ToolPluginDeclaration`, `BoundToolPlugin`, and
+  the narrow catalog-state contract
 - `lingtai.tools.tool_family` — `ChildTool` / `ToolFamily` / `build_manual_child`
 - `lingtai.services.plugin_registry` — lazily imported inside `_reconcile`
   (the `lingtai.tools → lingtai` back-edge)
@@ -331,8 +344,8 @@ services/plugin_registry.py
   `src/lingtai/services/`.
 - **Siblings:** `mcp/` (the pattern this package mirrors, on both the family and
   the decompression sides), `skills/` (whose configured paths this capability
-  inherits and whose catalog scan registration composes into), `knowledge/`,
-  `daemon/`.
+  inherits for discovery; its vanilla catalog intentionally excludes Plugin
+  skills), `knowledge/`, `daemon`.
 - **Manual:** `plugin/manual/SKILL.md` — the `plugin-manual` router.
 - **Kernel hooks:** `setup()` is called during capability initialization from
   `src/lingtai/tools/registry.py`; boot-time registration is called earlier, by

@@ -1,102 +1,69 @@
 """Plugin capability — Agent Plugins catalog and registration snapshot.
 
-Symmetric to the ``mcp`` capability, and deliberately just as thin. What the
-capability reports splits along one line, and that line is the design:
+This official model-facing ``plugin`` family reports third-party Agent Plugins
+(agent-plugins.org v1.0.0); it is not itself an Agent Plugin.  Its public
+``info``/``manual`` surface is read-only presentation:
 
-- **Declared → registered.** ``init.json`` ``manifest.plugins`` (canonical) and
-  ``manifest.capabilities.plugin.paths`` (its alias, the key PR #1232 shipped)
-  name plugin package directories. ``Agent`` registers them at boot — *before*
-  capability setup, next to addon decompression — so the plugin's ``skills/``
-  is composed into the skills catalog and its ``mcp.json`` servers hold
-  ``mcp_registry.jsonl`` records stamped ``source="plugin:<name>"``.
-- **Inherited → discovered only.** ``manifest.capabilities.skills.paths`` is
-  still scanned, and plugins found there are still listed — but nothing of
-  theirs is mounted. Dropping a directory into a skills path must never silently
-  register a third party's MCP server; only an explicit declaration does that.
+- **Declared → registered.** ``manifest.plugins`` and its compatibility alias
+  name package directories.  The Agent registers those packages at boot, before
+  capability setup: their validated skill names become visible in the protected Plugin
+  prompt field and their ``mcp.json`` declarations become ``mcp_registry.jsonl`` records
+  stamped ``source="plugin:<name>"``.
+- **Inherited → discovered only.** Plugin packages found on an inherited skills
+  path are listed, but cannot mount skills or register MCP servers.  Discovery
+  is never an implicit install.
 
-The capability itself remains **pure presentation**: it writes no file. It reads
-the boot registration snapshot the Agent stored, re-scans the configured paths
-for the catalog, and renders both into the protected ``plugin`` prompt section.
-The one mutation point is ``services.plugin_registry.register_plugins``, which
-runs at boot/refresh, not from any model-facing action — so ``info`` cannot mount
-anything, and picking up a newly declared plugin is a ``system(action="refresh")``.
+The service owns validation, containment, registration, and pruning.  This
+family owns only the presentation adapter over those facts.  Its static
+:data:`DECLARATION` binds through exactly three narrow host ports: ``workdir``
+for service/manual paths, ``prompt_section`` for its own protected prompt
+section, and ``plugin_catalog`` for a read-only projection of the registration
+snapshot and discovery inputs.  It never receives a whole ``Agent`` and cannot
+register, prune, activate, launch, or mount itself.
 
-Registration is registry-level, exactly as ``addons:[]`` is: a plugin's MCP
-server becomes registered and visible, never running. Activation still requires
-an explicit ``init.json`` top-level ``mcp`` entry.
-
-Tool surface: ``info`` returns the registration snapshot — every declared plugin
-with what mounted, what was skipped and why — plus the discovery catalog and
-per-path health, without the manual body; ``manual`` returns the plugin-manual
-body on demand. Both are action children of one LTP v2 ``ToolFamily`` (see
-``lingtai/tools/CONTRACT.md`` "Envelope"): the public tool name is ``plugin`` and
-the public action values are ``info``/``manual``, carried in the canonical
-``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope with a strict
-empty ``input`` per action.
-
-Ownership: this module is the agent-callable *tool* slice only. The machinery it
-renders (manifest validation, §4.1 path containment, skills/MCP component
-discovery, registration, pruning, XML build) is a service and lives at
-``lingtai/services/plugin_registry.py``; it is imported lazily inside ``setup``
-and the handlers, per the ``lingtai.tools → lingtai`` lazy-back-edge rule.
-
-Usage: ``Agent(plugins=[...])`` or ``Agent(capabilities={"plugin": {"paths":
-[...]}})``, or via init.json.
+Usage: ``Agent(plugins=[...])`` or
+``Agent(capabilities={"plugin": {"paths": [...]}})``, or via init.json.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Mapping
+
+from lingtai.kernel.tool_plugin import BoundToolPlugin, PluginCatalogState, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 PROVIDERS = {"providers": [], "default": "builtin"}
 
 
 # ---------------------------------------------------------------------------
-# Path collection
+# Catalog projection — read-only presentation over the host's narrow state port
 # ---------------------------------------------------------------------------
 
-def _collect_paths(agent: "BaseAgent", paths: list[str] | None) -> list[str]:
-    """Union the declared paths with the skills capability's, for **discovery**.
+def _collect_paths(state: PluginCatalogState) -> list[str]:
+    """Union configured, declared, and inherited paths for discovery only.
 
-    Three sources, in order: this capability's own ``paths`` (the alias
-    declaration key), every path the boot registration declared (the canonical
-    ``manifest.plugins``, which does not otherwise reach this capability), and
-    the skills capability's paths. Duplicates are dropped, so a directory named
-    by more than one is scanned once.
-
-    The discovery set is deliberately wider than the declaration set. A plugin
-    bundles Agent Skills, so the directories an operator already points the
-    skills capability at are the same directories plugins land in; inheriting
-    them means a plugin dropped there is at least *visible* without a second
-    declaration. It is not mounted — inherited paths never register anything,
-    only ``manifest.plugins`` and its alias do. Including the declared paths here
-    is what keeps a declared plugin's per-path health and scan problems visible
-    in ``info`` even when it was declared through the canonical key alone.
+    The registration snapshot is host-owned boot state.  The configured paths
+    are the ``manifest.capabilities.plugin.paths`` alias; the snapshot's
+    ``declared`` entries represent canonical ``manifest.plugins``; inherited
+    skills paths remain visible but never register anything.  Order and
+    de-duplication retain the pre-declaration behavior.
     """
-    ordered: list[str] = list(paths or [])
-    snapshot = getattr(agent, "_plugin_registration", None) or {}
-    ordered.extend(p for p in snapshot.get("declared", []) or [] if isinstance(p, str))
-    for name, kwargs in getattr(agent, "_capabilities", []) or []:
-        if name != "skills" or not isinstance(kwargs, Mapping):
-            continue
-        for raw in kwargs.get("paths", []) or []:
-            if isinstance(raw, str):
-                ordered.append(raw)
+    ordered = list(state.configured_paths)
+    declared = state.registration.get("declared", [])
+    if isinstance(declared, (list, tuple)):
+        ordered.extend(path for path in declared if isinstance(path, str))
+    ordered.extend(state.skill_paths)
     seen: set[str] = set()
-    return [p for p in ordered if not (p in seen or seen.add(p))]
+    return [path for path in ordered if not (path in seen or seen.add(path))]
 
-
-# ---------------------------------------------------------------------------
-# Reconciliation (shared by setup and the ``info`` action)
-# ---------------------------------------------------------------------------
 
 def _catalog_entry(record: dict) -> dict:
-    """Build one ``discovered`` entry — the catalog facts, not the full record."""
+    """Project one discovered record to catalog facts, not its full manifest."""
     entry = {
         "name": record["name"],
         "version": record["version"],
@@ -110,31 +77,22 @@ def _catalog_entry(record: dict) -> dict:
     return entry
 
 
-def _skills_enabled(agent: "BaseAgent") -> bool:
-    """Whether the skills capability is loaded on this agent.
-
-    A declared plugin's ``skills/`` is composed into the skills catalog scan; if
-    the capability is off there is no catalog to compose into, and the snapshot
-    must say so rather than claim a mount that did not happen.
-    """
-    return any(name == "skills" for name, _ in getattr(agent, "_capabilities", []) or [])
-
-
-def _registered_entries(agent: "BaseAgent", snapshot: dict) -> list[dict]:
-    """Project the boot registration snapshot into the ``registered`` list."""
-    skills_on = _skills_enabled(agent)
+def _registered_entries(state: PluginCatalogState) -> list[dict]:
+    """Project the boot registration snapshot into the registered tier."""
     entries: list[dict] = []
-    for plugin in snapshot.get("plugins", []) or []:
+    plugins = state.registration.get("plugins", [])
+    if not isinstance(plugins, (list, tuple)):
+        return entries
+    for plugin in plugins:
+        if not isinstance(plugin, Mapping):
+            continue
         entry = dict(plugin)
         entry.pop("skill_paths", None)
         entry["skipped"] = list(plugin.get("skipped") or [])
-        # Closed namespace: a plugin's skills live inside the plugin (readable
-        # via file/read from <source>) and are listed in the plugins field as
-        # <skill_names>; they are never composed into the vanilla skills
-        # catalog. skills_mounted therefore means "visible as the plugin's own
-        # skills", not "composed into the skills catalog".
-        entry["skills_mounted"] = bool(plugin.get("skills")) and skills_on
-        if plugin.get("skills") and not skills_on:
+        # Closed namespace: a plugin's skills remain in its own catalog field;
+        # they are not injected into the vanilla skills prompt catalog.
+        entry["skills_mounted"] = bool(plugin.get("skills")) and state.skills_enabled
+        if plugin.get("skills") and not state.skills_enabled:
             entry["skipped"].append({
                 "component": "skills/",
                 "reason": (
@@ -147,56 +105,43 @@ def _registered_entries(agent: "BaseAgent", snapshot: dict) -> list[dict]:
     return entries
 
 
-def _reconcile(agent: "BaseAgent", paths: list[str] | None = None) -> dict:
-    """Re-scan the configured paths, render the prompt, return the snapshot.
+def _reconcile(host: "ToolPluginHost") -> dict:
+    """Re-scan configured paths, render this plugin's prompt, return snapshot.
 
-    Read-only. The registration snapshot is whatever ``Agent`` recorded when it
-    ran ``register_plugins`` at boot/refresh; this function reports it, never
-    re-runs it. Discovery is re-scanned live, so a plugin added to a configured
-    directory shows up as ``discovered`` immediately — mounting it is a
-    declaration in ``init.json`` plus ``system(action="refresh")``.
+    This is presentation only.  It reads the host's detached catalog state and
+    working directory, then writes only the granted ``plugin`` prompt section.
+    It never re-runs ``register_plugins``; a changed declaration takes effect
+    through the host's ``system(action=\"refresh\")`` boot path.
     """
     from lingtai.services.plugin_registry import _build_registry_xml, read_plugins
 
-    snapshot = getattr(agent, "_plugin_registration", None) or {}
-    registered = _registered_entries(agent, snapshot)
+    state = host.plugin_catalog.read_state()
+    registered = _registered_entries(state)
     registered_names = {entry["name"] for entry in registered}
-
-    resolved_paths = _collect_paths(agent, paths)
-    records, problems, report = read_plugins(agent._working_dir, resolved_paths)
+    records, problems, report = read_plugins(host.workdir.path, _collect_paths(state))
     discovered = [
-        _catalog_entry(r) for r in records if r["name"] not in registered_names
+        _catalog_entry(record) for record in records if record["name"] not in registered_names
     ]
 
-    xml = _build_registry_xml(registered, discovered)
-    agent.update_system_prompt("plugin", xml, protected=True)
-
+    host.prompt_section.write_protected_section(
+        _build_registry_xml(registered, discovered)
+    )
     return {
         "status": "ok",
-        "declared": list(snapshot.get("declared", []) or []),
+        "declared": list(state.registration.get("declared", []) or []),
         "registered_count": len(registered),
         "registered": registered,
         "discovered_count": len(discovered),
         "discovered": discovered,
-        "mcp_appended": list(snapshot.get("mcp_appended", []) or []),
-        "mcp_pruned": list(snapshot.get("mcp_pruned", []) or []),
+        "mcp_appended": list(state.registration.get("mcp_appended", []) or []),
+        "mcp_pruned": list(state.registration.get("mcp_pruned", []) or []),
         "paths": report,
         "problems": problems,
     }
 
 
 def _flatten_manual_result(plugin_result: dict) -> dict:
-    """Adapt the canonical ``manual`` child result to plugin's flat public shape.
-
-    ``ToolFamily.handle()`` has already dispatched to the registered ``manual``
-    child (``build_manual_child``) and returned its canonical result *verbatim*
-    (no double wrap) — full body at ``content[0].text``, host-local path at
-    ``structuredContent.manual_path``, plus the loader's truthful
-    ``status``/``error`` facts. This capability's public result keys its body
-    ``plugin_manual`` (the tool-specific key ``mcp`` established with
-    ``mcp_manual``), so this Host-owned adapter runs strictly *after* dispatch —
-    never inside a registered child, and never on the ``info`` path.
-    """
+    """Adapt the canonical manual child result to plugin's flat public shape."""
     flat = {
         "status": plugin_result.get("status", "ok"),
         "plugin_manual": plugin_result["content"][0]["text"],
@@ -216,15 +161,18 @@ _DESCRIPTION = (
     "configured plugin paths and returns the boot registration snapshot; "
     "`manual` returns the plugin-manual body. Neither action mounts, "
     "unmounts, or launches anything. "
-    "Your per-agent Agent Plugins catalog (agent-plugins.org, v1.0.0). The "
+    "Your protected per-agent Agent Plugins catalog (agent-plugins.org, v1.0.0). The "
     "<registered_plugin> section in your system prompt lists every visible "
     "plugin with a <mount> stamp. `registered` = declared in init.json "
-    "manifest.plugins and mounted at boot: its skills are in your skills "
-    "catalog and its mcp.json servers hold mcp_registry.jsonl records with "
+    "manifest.plugins and registered at boot: its validated skills are "
+    "listed in the protected Plugin field (registered[].skills), not in "
+    "the vanilla skills catalog, and its mcp.json servers hold "
+    "mcp_registry.jsonl records with "
     "source=\"plugin:<name>\" — registered but NOT running, so activation "
     "still needs an init.json top-level mcp entry. `discovered` = merely found "
-    "on an inherited skills path: nothing mounted, skills absent from your "
-    "catalog, MCP servers absent from mcp_registry.jsonl. Before using this "
+    "on an inherited skills path: its metadata is listed in the protected "
+    "Plugin field, but no skills enter the vanilla skills catalog and MCP "
+    "servers are absent from mcp_registry.jsonl. Before using this "
     "tool (inspecting, authoring, installing, or uninstalling a plugin), read "
     "the `plugin-manual` skill — call `manual` to fetch its body (plugin.json "
     "contract, path containment, the registration and uninstall flow), and "
@@ -234,60 +182,39 @@ _DESCRIPTION = (
     "uninstall, remove it from that list and refresh."
 )
 
-# Both actions are flagpost-only reads that take no arguments at all, so both
-# children share the one canonical strict-empty ``input`` — the same literal
-# the generic ``manual`` child registers, reused rather than hand-copied so the
-# schema-only and dispatching families cannot advertise different shapes.
-# ``ToolFamily.build_schema`` deep-copies per child, and dispatch reads only
-# ``properties``, so one shared object is safe.
 _EMPTY_INPUT: dict[str, Any] = MANUAL_INPUT_SCHEMA
 
 _ACTION_DESCRIPTION = (
     "info: read-only action; re-scans the configured plugin paths and returns "
-    "the boot registration snapshot (registered plugins with what mounted and "
-    "what was skipped and why, discovered-only plugins, per-path report, "
+    "the boot registration snapshot (registered plugins, their registration "
+    "facts, skipped reasons, discovered-only plugins, per-path report, "
     "problems) without the manual body. manual: return only the plugin-manual "
-    "skill body. Neither action registers or unregisters anything — mounting "
+    "skill body. Neither action registers or unregisters anything — registration "
     "happens at boot from init.json manifest.plugins, so a newly declared "
     "plugin needs system(action=\"refresh\")."
 )
 
 
-def _build_family(agent: "BaseAgent | None", paths: list[str] | None = None) -> ToolFamily:
-    """Build the two-child ``plugin`` family; the registry is declared exactly once.
-
-    With an ``agent``, children are bound to real handlers for dispatch. With
-    ``None``, the module-level schema-only family is built: its handlers raise
-    if ever called, and constructing it at import time proves the fixed
-    registry has no duplicate or reserved-name collision (``ToolFamilyError``
-    raises here rather than shipping silently). Both paths declare the same
-    ordered children, so the composed schema and the dispatching family can
-    never drift apart.
-    """
-    if agent is None:
+def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
+    """Build the fixed ``info``/``manual`` family from :data:`DECLARATION`."""
+    info_input = DECLARATION.input_schemas["info"]
+    manual_input = DECLARATION.manual_input_schema
+    if host is None:
         def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
             raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
         info_handler: Any = _unused
-        manual_child = ChildTool("manual", _EMPTY_INPUT, _unused, title="manual input")
+        manual_child = ChildTool("manual", manual_input, _unused, title="manual input")
     else:
-        info_handler = lambda _input: _reconcile(agent, paths)  # noqa: E731
-        # Registered directly, unwrapped: ``ToolFamily.handle()`` must dispatch
-        # this child's own canonical MCP-compatible result verbatim (no double
-        # wrap). This capability's flat public shape is reconstructed from that
-        # canonical result strictly *after* dispatch, in ``handle_plugin`` —
-        # never inside a registered child.
-        manual_child = build_manual_child(agent, "plugin")
+        info_handler = lambda _input: _reconcile(host)  # noqa: E731
+        manual_child = build_manual_child(host.workdir, DECLARATION.manual)
     return ToolFamily(
-        "plugin",
+        DECLARATION.name,
         [
-            ChildTool("info", _EMPTY_INPUT, info_handler, title="info input"),
+            ChildTool("info", info_input, info_handler, title="info input"),
             manual_child,
         ],
     )
-
-
-_FAMILY = _build_family(None)
 
 
 def get_description(lang: str = "en") -> str:
@@ -295,63 +222,64 @@ def get_description(lang: str = "en") -> str:
 
 
 def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from each child's own canonical
-    # ``input_schema``. The public action enum is exactly ``["info",
-    # "manual"]`` — the same two-action flagpost surface ``mcp`` exposes.
     schema = _FAMILY.build_schema()
     schema["properties"]["action"]["description"] = _ACTION_DESCRIPTION
     return schema
 
 
-def setup(agent: "BaseAgent", paths: list[str] | None = None, **_ignored) -> None:
-    """Set up the plugin capability.
-
-    ``paths`` is the alias declaration list from ``init.json``
-    ``manifest.capabilities.plugin.paths``; the canonical declaration key is the
-    manifest-level ``manifest.plugins``, and the skills capability's own paths
-    are inherited on top of both for *discovery* (see ``_collect_paths``).
-
-    Setup itself writes nothing. Registration of the declared plugins already
-    happened in ``Agent``, before capability setup, so by the time this runs the
-    skills catalog and ``mcp_registry.jsonl`` are in their mounted state and this
-    capability only has to report them.
-    """
-    resolved = list(paths) if paths else []
-    _reconcile(agent, resolved)
-
-    family = _build_family(agent, resolved)
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose Plugin against only its declared host ports; mount nothing."""
+    family = _build_family(host)
 
     def handle_plugin(args: dict) -> dict:
-        # The generic ``ToolFamily`` dispatcher validates ``action``,
-        # type-checks and strips root ``summarize``, rejects unknown root
-        # fields, and rejects any ``input`` key outside the selected action's
-        # own declared schema — both actions declare a strict empty input, so
-        # any extra input field fails here, before ``_reconcile`` re-scans the
-        # plugin paths or the manual child touches the filesystem.
-        #
-        # The unknown-action envelope is rendered here, in the Host layer, for
-        # the same two reasons ``mcp`` renders its own: a missing ``action`` key
-        # must show the empty-string default (not ``None``), and invalid JSON
-        # can make ``action`` unhashable (``[]`` / ``{}``, issue #513's explicit
-        # blocker). Membership is tested against ``child_names``, a tuple, which
-        # compares by ``==`` and never hashes, so an unhashable value simply
-        # does not match — whereas ``ToolFamily.handle``'s ``action not in
-        # self._children`` dict lookup would raise ``TypeError`` on it.
+        # Preserve Plugin's pre-declaration unknown-action result including its
+        # unhashable-action behavior, before generic ToolFamily dict lookup.
         action = args.get("action", "") if isinstance(args, Mapping) else ""
         if action not in family.child_names:
+            supported = " or ".join(repr(name) for name in DECLARATION.public_actions)
             return {
                 "status": "error",
-                "message": f"unknown action: {action!r}, only 'info' or 'manual' is supported",
+                "message": f"unknown action: {action!r}, only {supported} is supported",
             }
         result = family.handle(args)
         if action == "manual" and "content" in result:
             return _flatten_manual_result(result)
         return result
 
-    agent.add_tool(
-        "plugin",
+    return BoundToolPlugin(
+        name=DECLARATION.name,
         schema=get_schema(),
         handler=handle_plugin,
-        description=get_description(),
-        glossary_package=__package__,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+        activate=lambda: _reconcile(host),
     )
+
+
+#: The static declaration of the official ``plugin`` tool family.  ``manual`` is
+#: the package-owned installed-manual destination and is appended by the kernel,
+#: never listed in ``actions``.  All composed identity values above derive from
+#: this declaration so public schema/manual/name cannot silently drift.
+DECLARATION = ToolPluginDeclaration(
+    name="plugin",
+    actions=("info",),
+    input_schemas={"info": _EMPTY_INPUT},
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="plugin",
+    description=_DESCRIPTION,
+    binder=_bind,
+    requires=("workdir", "prompt_section", "plugin_catalog"),
+    glossary_package=__package__,
+)
+
+
+#: Schema-only import-time composition validates the fixed child registry before
+#: any Agent exists; host-bound composition uses the exact same declaration.
+_FAMILY = _build_family(None)
+
+
+def setup(agent: "BaseAgent", **_ignored) -> None:
+    """Wire this static declaration through the host-owned registrar only."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])

@@ -771,6 +771,12 @@ class BaseAgent:
         self._llm_worker_refresh_requested: bool = False
         self._llm_worker_refresh_source: str | None = None
 
+        # system.sleep's persisted `.alarm` is shared by the tool handler and
+        # the heartbeat. This narrow lock makes arm/expiry last-writer-wins
+        # without widening notification or lifecycle state ownership.
+        self._sleep_alarm_lock: threading.RLock = threading.RLock()
+        self._sleep_alarm_problem_signature: str | None = None
+
         # Notification sync state (filesystem-as-protocol redesign).
         # _notification_fp: last-seen `.notification/` fingerprint for
         #   change-detection between heartbeat ticks.
@@ -904,6 +910,9 @@ class BaseAgent:
         # impossible, sequence is a bonus ordering signal for one process.
         self._session_stats_last_written_at: float | None = None
         self._session_stats_sequence: int = 0
+        # Created lazily by _write_session_stats_record so the explicit
+        # background owner is only present for agents that publish this record.
+        self._daemon_stats_snapshot = None
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
@@ -2802,6 +2811,7 @@ class BaseAgent:
         logged and never interrupts the turn.
         """
         from ..session_stats import (
+            RecentDaemonSnapshot,
             build_agent_record,
             session_stats_refresh_seconds,
             should_refresh_agent_record,
@@ -2816,8 +2826,19 @@ class BaseAgent:
                 session_stats_refresh_seconds(),
             ):
                 return
+            snapshot_owner = getattr(self, "_daemon_stats_snapshot", None)
+            if snapshot_owner is None:
+                snapshot_owner = RecentDaemonSnapshot(self._working_dir)
+                self._daemon_stats_snapshot = snapshot_owner
+            # Never wait for the newest-1000 daemon reads: a blocked storage
+            # read must not delay the heartbeat's liveness publication.
+            snapshot_owner.schedule()
             self._session_stats_sequence += 1
-            record = build_agent_record(self, sequence=self._session_stats_sequence)
+            record = build_agent_record(
+                self,
+                sequence=self._session_stats_sequence,
+                daemon_summary=snapshot_owner.snapshot(),
+            )
             write_agent_record(self._working_dir, record)
             self._session_stats_last_written_at = wall_now
         except Exception as e:

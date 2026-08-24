@@ -92,6 +92,14 @@ def _sleep(agent, args: dict) -> dict:
 
     reason = args.get("reason", "")
     force = bool(args.get("force", False))
+    delay_seconds = None
+    if "delay" in args:
+        from lingtai.kernel.base_agent.lifecycle import _sleep_alarm_delay_decimal
+
+        try:
+            delay_seconds = _sleep_alarm_delay_decimal(args["delay"])
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
 
     store = agent._notification_store
     # Masked, like the committed fingerprint: a below-threshold daemon batch is
@@ -125,10 +133,36 @@ def _sleep(agent, args: dict) -> dict:
             pending_fp=list(pending_fp),
         )
 
-    agent._log("self_sleep", reason=reason)
-    agent._set_state(AgentState.ASLEEP, reason="self-sleep")
-    agent._asleep.set()
-    agent._cancel_event.set()
+    alarm_deadline = None
+    if delay_seconds is not None:
+        from lingtai.kernel.base_agent.lifecycle import (
+            _arm_sleep_alarm,
+            _sleep_alarm_lock,
+        )
+
+        # The heartbeat shares this narrow lock. Persist first so an ASLEEP
+        # transition can never expose an unarmed requested alarm, and so an
+        # expiry cannot delete an alarm that a later sleep call overwrote.
+        with _sleep_alarm_lock(agent):
+            try:
+                alarm_deadline = _arm_sleep_alarm(agent, delay_seconds)
+            except Exception as exc:
+                agent._log("sleep_alarm_arm_failed", error=str(exc)[:200])
+                return {
+                    "status": "error",
+                    "message": "Could not arm sleep alarm; staying awake",
+                }
+            agent._log("self_sleep", reason=reason, alarm_deadline=alarm_deadline)
+            agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+            agent._asleep.set()
+            agent._cancel_event.set()
+    else:
+        # Keep the no-delay path byte-for-byte compatible, including leaving an
+        # already-armed alarm untouched.
+        agent._log("self_sleep", reason=reason)
+        agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+        agent._asleep.set()
+        agent._cancel_event.set()
     return {
         "status": "ok",
         "message": t(agent._config.language, "system_tool.sleep_message"),

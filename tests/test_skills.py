@@ -422,6 +422,33 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "9-section summary scaffold" in context_manual_body
         assert "9. **Context Status**" not in context_manual_body
 
+        file_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "file-manual"
+            / "SKILL.md"
+        )
+        assert file_manual_md.is_file()
+        file_manual_body = file_manual_md.read_text(encoding="utf-8")
+        package_file_manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        redirect_marker = Path(
+            "src/lingtai/intrinsic_skills/file-manual/SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert file_manual_body == package_file_manual
+        assert file_manual_body != redirect_marker
+        assert "# File Manual" in file_manual_body
+        assert not (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "file"
+        ).exists()
+
         molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
         assert molt_template_asset.is_file()
         molt_template_body = molt_template_asset.read_text(encoding="utf-8")

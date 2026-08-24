@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING
 from .._file_paths import resolve_workdir_path
 
 if TYPE_CHECKING:
-    from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import FileIOPort, WorkdirPort
 
 __all__ = ["build_operation"]
 
 
-def build_operation(agent: "BaseAgent"):
+def build_operation(workdir: "WorkdirPort", file_io: "FileIOPort"):
     """Return the bound ``edit`` operation for the ``file`` family.
 
     The returned callable takes only this action's own validated ``input``
@@ -35,12 +35,12 @@ def build_operation(agent: "BaseAgent"):
             return {"status": "error", "message": "old_string is required"}
         if "new_string" not in args:
             return {"status": "error", "message": "new_string is required"}
-        path = resolve_workdir_path(agent, path)
+        path = resolve_workdir_path(workdir.path, path)
         old = args["old_string"]
         new = args["new_string"]
         replace_all = args.get("replace_all", False)
         try:
-            content = agent._file_io.read(path)
+            content = file_io.read(path)
         except FileNotFoundError:
             return {"status": "error", "message": f"File not found: {path}"}
         except Exception as e:
@@ -55,7 +55,7 @@ def build_operation(agent: "BaseAgent"):
         else:
             updated = content.replace(old, new, 1)
         try:
-            agent._file_io.write(path, updated)
+            file_io.write(path, updated)
         except Exception as e:
             return {"status": "error", "message": f"Cannot write {path}: {e}"}
         return {"status": "ok", "replacements": count if replace_all else 1}

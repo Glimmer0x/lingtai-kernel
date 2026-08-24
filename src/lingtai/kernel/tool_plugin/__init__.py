@@ -45,9 +45,14 @@ __all__ = [
     "HostPortError",
     "WorkdirPort",
     "PromptSectionPort",
+    "FileGrepMatch",
+    "FileTraversalStats",
+    "FileIOPort",
     "ContextRuntimePort",
     "AvatarParentPort",
     "DaemonRuntimePort",
+    "PluginCatalogState",
+    "PluginCatalogPort",
     "NotificationStatePort",
     "ToolMountPort",
     "ToolPluginHost",
@@ -70,8 +75,10 @@ MANUAL_ACTION = "manual"
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, or ``notification``).
-#: Root ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a
+#: ``email``, ``file``, ``plugin``, or ``notification``. Plugin consumes
+#: only the read-only ``plugin_catalog`` projection. Root ``CONTRACT.md``
+#: rules 10-11
+#: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
@@ -84,6 +91,8 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "context_runtime",
     "daemon_runtime",
     "email_runtime",
+    "file_io",
+    "plugin_catalog",
     "notification_state",
 )
 
@@ -97,7 +106,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
-    "mcp", "avatar", "context", "daemon", "email", "notification"
+    "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification"
 )
 
 
@@ -183,6 +192,64 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class FileGrepMatch(Protocol):
+    """The three immutable match fields File consumes from bounded grep."""
+
+    path: str
+    line_number: int
+    line: str
+
+
+class FileTraversalStats(Protocol):
+    """The bounded traversal facts File surfaces for partial glob/grep results."""
+
+    visited: int
+    elapsed_ms: int
+    truncated_reason: str | None
+    files_skipped_size: int
+    files_skipped_binary: int
+    dirs_pruned: int
+
+
+class FileIOPort(Protocol):
+    """The File family's narrow runtime file-operation capability.
+
+    This is deliberately not ``Agent._file_io`` exposed as an attribute and is
+    not a generic filesystem or dispatch port. It is the exact vocabulary the
+    official ``file`` family consumes: UTF-8 text read/write, bounded glob/grep,
+    the latest traversal facts those searches report, and the active result-size
+    ceiling used by its paged reader. Path rooting remains the separate
+    :class:`WorkdirPort` capability.
+    """
+
+    def read(self, path: str) -> str:
+        """Read one UTF-8 text file."""
+
+    def write(self, path: str, content: str) -> None:
+        """Create or overwrite one UTF-8 text file."""
+
+    def glob(self, pattern: str, root: str | None = None) -> list[str]:
+        """Return sorted paths matching *pattern* below *root*."""
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[FileGrepMatch]:
+        """Return concrete text matches from the bounded search service."""
+
+    @property
+    def last_traversal(self) -> FileTraversalStats | None:
+        """The latest glob/grep traversal facts, if the service reports them."""
+
+    @property
+    def max_result_chars(self) -> int | None:
+        """The live executor result limit, if it exposes a positive integer."""
 
 
 class ContextRuntimePort(Protocol):
@@ -306,6 +373,37 @@ class DaemonRuntimePort(Protocol):
 
     def log(self, event_type: str, **fields: Any) -> None:
         """Record one Daemon lifecycle event through the host journal."""
+
+
+@dataclass(frozen=True)
+class PluginCatalogState:
+    """Read-only facts the official ``plugin`` family presents.
+
+    This is intentionally a projection, not an Agent Plugins implementation:
+    the host owns registration, the service owns manifest/component validation,
+    and the family merely needs the latest boot snapshot plus the three path/
+    availability inputs that define discovery.  The state has no mutation,
+    lifecycle, launch, or filesystem operation.
+    """
+
+    registration: Mapping[str, Any]
+    configured_paths: tuple[str, ...]
+    skill_paths: tuple[str, ...]
+    skills_enabled: bool
+
+
+class PluginCatalogPort(Protocol):
+    """Read the current Agent Plugins catalog presentation inputs.
+
+    The official ``plugin`` family needs exactly this one read-only projection to
+    preserve its pre-declaration behavior: the registration snapshot produced at
+    boot, its own configured discovery paths, inherited skill paths, and whether
+    the skills catalog is enabled.  It cannot register, prune, launch, or alter
+    any of those facts through this port.
+    """
+
+    def read_state(self) -> PluginCatalogState:
+        """Return the current detached catalog presentation state."""
 
 
 class NotificationStatePort(Protocol):

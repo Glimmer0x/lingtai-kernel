@@ -13,6 +13,7 @@ related_files:
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/system_prompt.py
 - src/lingtai/tools/daemon/manual/reference/forensics/SKILL.md
+- src/lingtai/tools/daemon/manual/reference/dispatch-ledger/SKILL.md
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -65,6 +66,11 @@ files, not standalone top-level skills.
   description: |
     Scope boundaries and daemon footprint cleanup: what the manual does not
     cover, reclaim persistence, and safe cleanup of old daemon artifacts.
+- name: daemon-dispatch-ledger
+  location: reference/dispatch-ledger/SKILL.md
+  description: |
+    Append-only dispatch membership/order, scoped list warnings, marker-only
+    recovery, recent background session snapshots, and no-repair diagnosis.
 ```
 
 ## Call shape
@@ -136,17 +142,13 @@ Behavior worth knowing before wiring it into a job:
 - **Preset allowlist is fail-closed.** A task naming a preset outside
   `manifest.preset.allowed` refuses the *whole* batch, at preview time as well
   as at dispatch. An agent with no allowlist grants no preset.
-- **`list` and `check` are categorically read-only.** They perform none of the
-  startup reconciliation an agent boot does (no reaping stale records, no
-  replaying pending terminal notifications) *and* never lazily repair a
-  `daemon.json` that is missing, unreadable, or written by an older
-  `data_version`. Such runs are still listed — reconstructed in memory — with a
-  stderr note naming them; run `daemon(action="list", input={"contains": null, "status": null, "include_done": null, "last": null})` as the owning agent to
-  actually repair them. That omitted/null `last` uses the newest-1000 default;
-  pass a positive `last: N` explicitly when a larger page is needed. The deferred
-  prompt/result materialization benefit applies only when `contains` is absent or
-  empty; a non-empty `contains` searches prompt-preview text, so it preserves
-  full candidate materialization before filtering and paging.
+- **`list` and `check` are categorically read-only.** Default list tails the
+  newest 1000 append-order dispatch records and reads only their referenced
+  `daemon.json` files; it never scans, sorts, backfills, or repairs historical
+  folders. Its scoped `warnings` are advisory. A known legacy run remains
+  inspectable by exact id/filesystem forensics, not by an automatic migration.
+  Pass a positive `last: N` for an explicit page; non-empty `contains` searches prompt-preview text
+  among explicitly ledger-selected candidates and may stream more ledger records as an ad-hoc query.
 - **Terminal notifications stay with the owning agent.** Runs dispatched from
   the CLI are detached and still notify the agent that owns the working
   directory; the CLI process itself publishes nothing.
@@ -165,6 +167,7 @@ Behavior worth knowing before wiring it into a job:
 | Decide whether a daemon is stuck; choose when to list/check/tail; avoid polling too often; set a reminder before resting | `reference/inspection/SKILL.md` |
 | Use `daemon(action="list", input={})`; choose `lingtai` vs `claude-p`/`codex`/`opencode`; pass `backend_options`; understand CLI backend limitations | `reference/cli-backends/SKILL.md` |
 | Retire or audit old daemon artifacts; understand what `reclaim` does and does not delete; scope boundaries | `reference/cleanup/SKILL.md` |
+| Interpret `daemon(list)` ledger warnings, missing legacy history, malformed tails, recovery markers, or recent snapshot lag | `reference/dispatch-ledger/SKILL.md` |
 
 ## Quick decision tree
 

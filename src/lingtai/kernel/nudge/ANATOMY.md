@@ -36,7 +36,7 @@ the ordinary Notification Store channel; it does not create a second transport.
 
 ## Components
 
-- `__init__.py` — `run_checks`, `upsert`, `remove`, `effective_policy`, and
+- `__init__.py` — `run_checks`, `run_checks_nonblocking`, `NudgeObservationOwner`, `upsert`, `remove`, `effective_policy`, and
   `record_dismissal` provide the shared policy, finding identity, dismissal mute,
   and `.notification/nudge.json` mutation (`src/lingtai/kernel/nudge/__init__.py:1-360`).
   New built-in producer entries carry fixed `nudge_channel` metadata:
@@ -63,19 +63,20 @@ the ordinary Notification Store channel; it does not create a second transport.
 - `init_config.py` — consumes the last structured real-reader outcome and
   publishes/clears the typed configuration-shape finding; it never reads
   `init.json` independently (`src/lingtai/kernel/nudge/init_config.py:1-74`).
-- `folder_size.py` — read-only recursive size walk of the agent working
-  directory, throttled to one walk per UTC day via a per-kind persistent date
-  gate; every heartbeat re-evaluates the persisted observation through the
-  shared `upsert`/`remove` so global repeat/enable/retry semantics stay live.
+- `folder_size.py` — separates its read-only recursive size walk (`observe`)
+  from persisted-fact rendering (`evaluate`). The daily tree walk is scheduled
+  by the single-flight owner off heartbeat; heartbeat re-evaluates its last
+  persisted observation through shared `upsert`/`remove` so repeat/enable/retry
+  semantics stay live.
   Emits/clears a `storage_size` finding when the directory crosses
   `LINGTAI_NUDGE_FOLDER_SIZE_GB` (default `5` decimal GB) (`src/lingtai/kernel/nudge/folder_size.py:1-182`).
   `event_journal_count.py` has no user setting: its once-per-UTC-day direct
   physical-line count is a fixed advisory human-discussion boundary.
 - `event_journal_count.py` — fixed 1,000,000-record advisory for active root
-  `events.jsonl`. It directly counts physical newlines once per UTC day for an
-  unchanged regular non-link file, with immediate re-count after identity
-  change/shrink; ordinary heartbeats only open/fstat the exact path. It never
-  parses, indexes, scans elsewhere, or changes journal data
+  `events.jsonl`. It separates direct physical-line counting (`observe`) from
+  persisted-fact rendering (`evaluate`); the potentially long count is a
+  single-flight background observation, with immediate re-count after identity
+  change/shrink. It never parses, indexes, scans elsewhere, or changes journal data
   (`src/lingtai/kernel/nudge/event_journal_count.py:1-151`).
 - `kernel_version.py` — read-only installed/running observation plus bounded
   GitHub/Gitee release-manifest comparison; it does not own a product repeat
@@ -96,9 +97,10 @@ the ordinary Notification Store channel; it does not create a second transport.
 
 ## Connections
 
-`../base_agent/lifecycle.py` calls `run_checks` once per heartbeat
-(checks must never block on the network — long work goes to a background
-thread, see `kernel_version.py`);
+`../base_agent/lifecycle.py` calls `run_checks_nonblocking` once per heartbeat:
+cheap policy/current-fact evaluation remains synchronous while the one
+`NudgeObservationOwner` coalesces folder and event-journal observations off the
+heartbeat;
 protected goal reminders are dispatched separately by
 `run_system_notifications`. Producer checks call `upsert`/`remove`; the shared
 `NotificationStorePort` persists `nudge.json`. `notification(action="dismiss_channel", input={"channel": "nudge", ...},
@@ -121,9 +123,11 @@ an internal `.notification/.nudge_state.json` dismissal map keyed by a stable
 finding hash with an expiry. The latter stores no migration version, progress
 chain, or process cadence. `folder_size` additionally keeps a per-kind UTC
 `last_check_date` plus its last observed `size_bytes`/`limit_gb` in the same
-file; that date gates only the recursive directory walk (bounded observation
-cost), never the upsert/remove decision, which is re-evaluated on every
-heartbeat so shared global enabled/repeat values stay product semantics. Goal
+file; that date gates a background recursive directory walk, never the
+upsert/remove decision, which is re-evaluated on every heartbeat. The event
+journal stores its latest regular-file identity/size/count observation there
+as well. The ephemeral owner holds at most one coalesced pending task per kind,
+not a durable or unbounded queue. Goal
 source state remains protected `.notification/goal.json` and its reminder
 remains in `system.json`.
 
