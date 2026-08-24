@@ -1,6 +1,6 @@
 ---
 name: init-reader
-contract_version: 1
+contract_version: 2
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/ANATOMY.md
@@ -16,6 +16,9 @@ related_files:
   - src/lingtai/kernel/nudge/init_config.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
+  - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/system/settings.py
+  - src/lingtai/kernel/meta_block.py
   - ENVIRONMENT_VARIABLES.md
   - tests/test_init_reader.py
   - tests/test_cli.py
@@ -33,6 +36,8 @@ maintenance: |
   ownership, state, or retirement conditions change. If code and Contract
   disagree, fail loud and repair the implementation or obtain an authorized
   contract change; never hide the mismatch by weakening the promise.
+  Contract version 2 retires manifest.cache_miss_budget from the effective
+  schema/hydrator and routes ownership to System settings.
 ---
 # Init reader
 
@@ -75,6 +80,14 @@ There is no automatic rewrite, strip-and-write-back, migration registry, version
 chain, stored progress, or remote runtime dependency in this read path. Explicit
 agent/human actions such as an intentional preset activation remain separate
 writes and are not reader side effects.
+
+`manifest.cache_miss_budget` is now an ordinary schema-unknown legacy path: the
+reader reports it in `warnings`/`ignored_paths`, leaves its raw bytes untouched,
+and does not hydrate or apply it. Effective cache-miss budget ownership is
+`tools/system/settings.py`, projected through the outer
+`Agent.resolve_cache_miss_budget()` hook and outside this init reader (guarded by
+[B009](tools/system/BEHAVIORS.md#behavior-b009)); exact file/key/source guidance
+lives in the System manual.
 
 ## Port
 
@@ -153,6 +166,9 @@ Guarded by: [K001](kernel/BEHAVIORS.md#behavior-k001), [K002](kernel/BEHAVIORS.m
    and omission sends no reasoning field so DeepSeek's own default applies.
    Invalid values or scopes fail validation rather than being normalized
    silently.
+9. `manifest.cache_miss_budget` is not schema-known or effective. Any value at
+   that raw path follows the existing unknown-field ignored-path behavior and
+   must not fail, hydrate, override System settings, or be rewritten.
 
 ## Contract tests
 
@@ -161,6 +177,9 @@ outcomes, ignored-path reporting, structured parse/validation failure evidence,
 secret-redacted effective-manifest use, and the no-auto-mutation invariant.
 Focused Nudge tests prove defaults, invalid-value fallback, self-describing
 messages, global suppression, and dismiss/repeat semantics.
+`tests/test_init_schema.py`, `tests/test_init_reader.py`, and
+`tests/test_agent_config_hydration.py` prove the legacy budget is schema-unknown,
+reported/ignored without writeback, and absent from AgentConfig hydration.
 `tests/test_nudge_inline_cap.py` proves the exact 10,000/10,001-char boundary,
 Unicode character-vs-byte counting, exact sidecar content/hash/path/
 permissions under `tmp/nudge-findings/`, directory-permission enforcement even

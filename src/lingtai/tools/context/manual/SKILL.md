@@ -2,13 +2,17 @@
 name: context-manual
 description: |
   Router and operational guide for the context tool: molt, summarize/rebuild, session journaling, and post-wipe recovery. Read it when molting, compacting or rebuilding provider context, tending the four durable stores, or waking from a system-performed wipe. Routes consequential handoffs to assets/molt-template.md and the summarize/rebuild procedure to reference/summarize-manual.
-version: 2.1.0
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 2.2.0
+last_changed_at: "2026-08-24T21:00:00Z"
 related_files:
 - src/lingtai/tools/context/__init__.py
 - src/lingtai/tools/context/_molt.py
 - src/lingtai/tools/context/_session_journal.py
 - src/lingtai/tools/system/summarize.py
+- src/lingtai/tools/system/CONTRACT.md
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/kernel/meta_block.py
+- ENVIRONMENT_VARIABLES.md
 - src/lingtai/agent.py
 - src/lingtai/intrinsic_skills/context-manual/SKILL.md
 maintenance: |
@@ -200,10 +204,45 @@ When this reminder appears, follow the urgent cadence in `reference/summarize-ma
 
 ### Cache-miss budget
 
-The soft **cache-miss token budget** (default 1,000,000 via `manifest.cache_miss_budget`, cumulative since your last molt, surfaced as `cache miss budget {N} reached, molt now`) is owned by the resident `meta_guidance` token-efficiency guidance. Two details only documented here:
+The soft **cache-miss token budget** is cumulative since your last molt and is
+surfaced as `cache miss budget {N} reached, molt now`. Its configuration belongs
+to System, not to Context or init.json:
 
-- It is **overridable at runtime** by `LINGTAI_CACHE_MISS_BUDGET` (positive int, read live at every budget resolution, so `env_file` + refresh applies it without an init.json edit; an invalid or non-positive value silently falls back to the configured budget). `_meta.agent_meta.agent_state.context` reports the effective `cache_miss_budget` and the current `cache_miss_tokens`.
-- The total **survives a refresh/restart** — it is not the since-refresh runtime delta, so refreshing does not reset the remaining budget. If the sustained context-pressure reminder is also active, both warnings are preserved in `context.molt`.
+```text
+<agent-workdir>/settings/system.json
+{"schema_version": 1, "cache_miss_budget": 2000000}
+LINGTAI_CACHE_MISS_BUDGET=3000000
+```
+
+Precedence is valid positive-integer env string, then the exact closed System v1
+document, then the fixed default `2,000,000`. Its two required keys are
+`schema_version` as JSON integer `1` and `cache_miss_budget` as a positive JSON
+integer. Wrong/unsupported version, boolean/zero/negative/string/float/null
+budget, missing/unknown/duplicate keys, malformed/non-object JSON, non-UTF-8,
+non-regular, over-64-KiB, or unstable/replaced files never become effective. A
+missing file defaults without a diagnostic and a present invalid file falls back
+to the default with one bounded `cache_miss_budget_settings_invalid` event per
+unchanged problem/snapshot — but only when no valid env wins. A valid env
+value returns before the lower-priority file is read or diagnosed. Invalid env is
+treated as unset. Neither source can disable the positive default.
+
+The resolver live-reads the process environment on every metadata snapshot and,
+only when no valid env wins, live-reads the file in that same snapshot. Direct
+running-process env changes therefore apply on the next snapshot; file changes do
+too while unshadowed. An `env_file` edit still needs refresh to enter the current
+process environment.
+Changing the threshold, refreshing, or restarting never changes the persisted
+since-last-molt cumulative token counters. Only a successful molt resets the
+cycle. `_meta.agent_meta.agent_state.token_usage.session` reports effective
+`cache_miss_budget`, current `cache_miss_tokens`, and remaining tokens; at/above
+budget `_meta.agent_meta.agent_state.context` repeats the budget/current total
+with the soft molt reminder. If sustained context pressure is also active, both
+warnings are preserved. The reminder never blocks a request.
+
+Do not confuse this settings file with `.notification/system.json` (notification
+state). Legacy `init.json` `manifest.cache_miss_budget` is schema-unknown ignored
+data and has no effect. See `system-manual` for the System settings contract and
+the environment-variable registry's process-loading caveat.
 
 ## 8. Post-Wipe Recovery
 

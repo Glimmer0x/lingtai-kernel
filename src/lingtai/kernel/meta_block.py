@@ -446,24 +446,20 @@ TOOL_META_CONTEXT_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 # cumulative cache miss and how much budget remains without recomputing
 # ``input_tokens - cached_tokens`` or remembering the default budget:
 #   * ``cache_miss_tokens``            = max(input_tokens - cached_tokens, 0)
-#   * ``cache_miss_budget``            = the effective budget (see
-#                                        :func:`_resolve_cache_miss_budget`:
-#                                        ``LINGTAI_CACHE_MISS_BUDGET`` env
-#                                        override, then agent config)
+#   * ``cache_miss_budget``            = one effective positive budget resolved
+#                                        by the outer Agent hook, or the fixed
+#                                        compatibility fallback
 #   * ``cache_miss_remaining_tokens``  = max(cache_miss_budget - cache_miss_tokens, 0)
-# The two budget-derived fields are omitted (never invented) when no positive-int
-# budget is resolvable from either source; ``cache_miss_tokens`` — derivable
-# from session data alone — is always emitted with the session half.
+# ``cache_miss_tokens`` — derivable from session data alone — is always emitted
+# with the session half.
 TOKEN_USAGE_CACHE_MISS_TOKENS_KEY = "cache_miss_tokens"
 TOKEN_USAGE_CACHE_MISS_BUDGET_KEY = "cache_miss_budget"
 TOKEN_USAGE_CACHE_MISS_REMAINING_KEY = "cache_miss_remaining_tokens"
 
-# Env-var override for the cache-miss budget. When set to a positive int, it
-# overrides agent._config.cache_miss_budget at every budget resolution (live-read,
-# like the nudge env vars — no restart needed). An invalid value (missing,
-# non-int, bool, <= 0) falls back SILENTLY to the configured/default budget:
-# unlike the nudge vars there is no bounded diagnostic for a rejected value.
-CACHE_MISS_BUDGET_ENV = "LINGTAI_CACHE_MISS_BUDGET"
+# Fixed compatibility fallback for a bare kernel Agent, a missing outer hook, or
+# any hook failure/invalid return. Concrete source and settings ownership remains
+# outside Core.
+CACHE_MISS_BUDGET_DEFAULT = 2_000_000
 
 # Current context state carried under the ``session`` half of
 # ``agent_meta.agent_state.token_usage`` (moved off ``current_call``, since context usage is
@@ -1312,51 +1308,31 @@ def build_context_overflow_warning(agent) -> str | None:
     return render_forced_rebuild_failed_warning(usage)
 
 
-def _resolve_cache_miss_budget(agent) -> int | None:
-    """Return the effective positive-int cache-miss budget, or ``None``.
-
-    Resolution order (same semantics at every call site; live-read, like the
-    nudge env vars — but the fallback here is silent, with no bounded
-    diagnostic for a rejected value):
-
-    1. ``LINGTAI_CACHE_MISS_BUDGET`` env var — live ``os.environ`` read at each
-       budget resolution, so the operator (or the agent itself via its env_file
-       + refresh) can override the budget without a restart. An invalid value
-       (missing, non-int, bool, <= 0) is treated as unset.
-    2. ``agent._config.cache_miss_budget`` (hydrated from
-       ``manifest.cache_miss_budget``; default 1_000_000).
-
-    ``bool`` is an ``int`` subclass, so it is rejected explicitly (a ``True``
-    budget must never mean ``1``); any non-int or non-positive value disables
-    the budget-derived telemetry.  Shared by
-    :func:`build_cache_miss_budget_context` (the at/above-budget guard) and
-    :func:`_build_session_token_economy` (the always-on session-half fields) so
-    both read the budget with identical semantics.
-    """
-    env_raw = os.environ.get(CACHE_MISS_BUDGET_ENV, "").strip()
-    if env_raw:
-        try:
-            env_budget = int(env_raw)
-        except (TypeError, ValueError):
-            env_budget = None
-        # The bool check can never fire here — env values are always ``str`` and
-        # ``int(str)`` never yields a ``bool``. Kept for symmetry with the config
-        # check below, where a ``bool`` genuinely can arrive.
-        if (
-            env_budget is not None
-            and not isinstance(env_budget, bool)
-            and env_budget > 0
-        ):
-            return env_budget
-    config = getattr(agent, "_config", None)
-    budget = getattr(config, "cache_miss_budget", None)
-    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
-        return None
+def _resolve_cache_miss_budget(agent) -> int:
+    """Return a positive outer-hook budget or the fixed compatibility fallback."""
+    try:
+        resolve = getattr(agent, "resolve_cache_miss_budget", None)
+    except Exception:
+        return CACHE_MISS_BUDGET_DEFAULT
+    if not callable(resolve):
+        return CACHE_MISS_BUDGET_DEFAULT
+    try:
+        budget = resolve()
+    except Exception:
+        return CACHE_MISS_BUDGET_DEFAULT
+    if type(budget) is not int or budget <= 0:
+        return CACHE_MISS_BUDGET_DEFAULT
     return budget
 
 
-def build_cache_miss_budget_context(agent) -> dict | None:
+def build_cache_miss_budget_context(
+    agent, *, resolved_budget: int | None = None
+) -> dict | None:
     """Return the cache-miss budget guard sub-object, or ``None``.
+
+    ``build_meta`` passes its one immutable per-snapshot ``resolved_budget`` so
+    the guard and session telemetry cannot observe different live file values.
+    Standalone/test calls that omit it preserve the helper's live resolution.
 
     A soft since-last-molt cap on total cache-miss (uncached input) tokens.  The
     cache-miss total is derived from ``agent.get_token_usage()`` — the
@@ -1367,9 +1343,9 @@ def build_cache_miss_budget_context(agent) -> dict | None:
 
         cache_miss = max(input_tokens - cached_tokens, 0)
 
-    When ``cache_miss >=`` the effective budget (inclusive) — see
-    :func:`_resolve_cache_miss_budget`: the ``LINGTAI_CACHE_MISS_BUDGET`` env
-    override first, then ``agent._config.cache_miss_budget`` — return a
+    When ``cache_miss >=`` the effective budget (inclusive) — resolved through
+    the outer Agent hook with a fixed ``2_000_000`` compatibility fallback —
+    return a
     dict destined for the SAME ``_tool_meta_context`` transit sub-object as the
     sustained-pressure ``molt`` reminder::
 
@@ -1393,10 +1369,14 @@ def build_cache_miss_budget_context(agent) -> dict | None:
     if "context" not in getattr(agent, "_intrinsics", set()):
         return None
 
-    # Defensive: only a positive int arms the guard (shared with the always-on
-    # session-half telemetry so both read the budget identically).
-    budget = _resolve_cache_miss_budget(agent)
-    if budget is None:
+    # Defensive: only a positive int arms the guard. ``build_meta`` supplies its
+    # single resolved snapshot value; standalone helper calls still resolve live.
+    budget = (
+        _resolve_cache_miss_budget(agent)
+        if resolved_budget is None
+        else resolved_budget
+    )
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         return None
 
     # Since-last-molt basis: read the cumulative/restored totals so a refresh
@@ -1674,8 +1654,13 @@ def _session_context_window(agent) -> int:
     return fallback if isinstance(fallback, int) and fallback > 0 else 0
 
 
-def _build_session_token_economy(agent) -> dict:
+def _build_session_token_economy(
+    agent, *, resolved_budget: int | None = None
+) -> dict:
     """Return the ``session`` (since-last-molt) half of the token_usage block.
+
+    ``build_meta`` passes its one immutable per-snapshot ``resolved_budget``;
+    standalone/test calls that omit it continue to resolve the live setting.
 
     Sources the aggregate from the AGENT-SESSION object when available
     (``agent.agent_session_token_usage()``), falling back to
@@ -1721,12 +1706,9 @@ def _build_session_token_economy(agent) -> dict:
       since-last-molt cumulative cache miss, on the same cumulative basis as
       :func:`build_cache_miss_budget_context`, so a refresh does not reset it.
       Always emitted here, since it needs only the aggregate counters.
-    * ``cache_miss_budget`` = the effective budget (see
-      :func:`_resolve_cache_miss_budget`: the ``LINGTAI_CACHE_MISS_BUDGET`` env
-      override first, then ``agent._config.cache_miss_budget``) and
-      ``cache_miss_remaining_tokens`` = ``max(cache_miss_budget - cache_miss_tokens, 0)``
-      — emitted only when a positive-int budget is resolvable from either
-      source; omitted, never invented, for env-less/config-less stubs.
+    * ``cache_miss_budget`` = the effective positive budget from the outer Agent
+      hook (or the fixed ``2_000_000`` compatibility fallback), and
+      ``cache_miss_remaining_tokens`` = ``max(cache_miss_budget - cache_miss_tokens, 0)``.
 
     Returns ``{}`` when no aggregate usage is available; numeric zeros are preserved.
     """
@@ -1785,15 +1767,24 @@ def _build_session_token_economy(agent) -> dict:
                 context_tokens / window, 5
             )
 
-    budget = _resolve_cache_miss_budget(agent)
-    if budget is not None:
+    budget = (
+        _resolve_cache_miss_budget(agent)
+        if resolved_budget is None
+        else resolved_budget
+    )
+    if isinstance(budget, int) and not isinstance(budget, bool) and budget > 0:
         economy[TOKEN_USAGE_CACHE_MISS_BUDGET_KEY] = budget
         economy[TOKEN_USAGE_CACHE_MISS_REMAINING_KEY] = max(budget - cache_miss, 0)
     return economy
 
 
-def build_tool_meta_token_usage(agent) -> dict | None:
+def build_tool_meta_token_usage(
+    agent, *, resolved_budget: int | None = None
+) -> dict | None:
     """Return the token diagnostics block for ``agent_meta.agent_state``.
+
+    ``build_meta`` supplies the same immutable ``resolved_budget`` used by the
+    Context guard; callers that omit it retain standalone live resolution.
 
     ALL token-related diagnostics live in ONE ``_meta.agent_meta.agent_state.token_usage``
     block — there is no separate ``agent_meta.agent_state.token_efficiency`` nor
@@ -1824,7 +1815,9 @@ def build_tool_meta_token_usage(agent) -> dict | None:
     ``None`` when neither half has any data (never an empty block).
     """
     current_call = _build_provider_round_token_usage(agent)
-    session = _build_session_token_economy(agent)
+    session = _build_session_token_economy(
+        agent, resolved_budget=resolved_budget
+    )
     if not current_call and not session:
         return None
     block: dict = {}
@@ -1928,7 +1921,11 @@ def build_meta(agent) -> dict:
     ``_tool_meta_context_event``, and the context-pressure event still hashes only
     its own pure message.
 
+    The effective cache-miss budget is resolved exactly once per snapshot and
+    passed as one immutable integer to both the Context guard and session-token
+    telemetry projections.
     """
+    resolved_budget = _resolve_cache_miss_budget(agent)
     meta: dict = {}
     ts = now_iso(agent)
     if ts:
@@ -1986,7 +1983,9 @@ def build_meta(agent) -> dict:
     # line (never replacing the context-pressure prose), and the budget fields
     # are merged in alongside.  This is a soft signal, not a new event route, so
     # no ``_tool_meta_context_event`` is emitted for it.
-    budget_ctx = build_cache_miss_budget_context(agent)
+    budget_ctx = build_cache_miss_budget_context(
+        agent, resolved_budget=resolved_budget
+    )
     if budget_ctx:
         existing = meta.get(TOOL_META_CONTEXT_PENDING_KEY)
         if isinstance(existing, dict):
@@ -2019,7 +2018,9 @@ def build_meta(agent) -> dict:
                 TOOL_META_CONTEXT_SYSTEM_PROMPT_KEY: system_prompt_warning
             }
 
-    tool_meta_token_usage = build_tool_meta_token_usage(agent)
+    tool_meta_token_usage = build_tool_meta_token_usage(
+        agent, resolved_budget=resolved_budget
+    )
     if tool_meta_token_usage:
         meta[TOOL_META_TOKEN_USAGE_PENDING_KEY] = tool_meta_token_usage
 

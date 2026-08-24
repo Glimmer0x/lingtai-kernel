@@ -250,18 +250,13 @@ def test_build_agent_config_non_codex_omitted_thinking_keeps_legacy_high():
     assert cfg.thinking == "high"
 
 
-def test_cache_miss_budget_defaults_to_one_million():
-    # Bare AgentConfig and a manifest without the field both default to 1M.
-    assert AgentConfig().cache_miss_budget == 1_000_000
-    manifest = _init_data()["manifest"]
-    cfg = build_agent_config(manifest, max_rpm=0)
-    assert cfg.cache_miss_budget == 1_000_000
-
-
-def test_cache_miss_budget_overlays_explicit_manifest_value():
+def test_cache_miss_budget_is_not_an_agent_config_or_manifest_hydration_field():
+    assert not hasattr(AgentConfig(), "cache_miss_budget")
     manifest = _init_data({"cache_miss_budget": 250_000})["manifest"]
+
     cfg = build_agent_config(manifest, max_rpm=0)
-    assert cfg.cache_miss_budget == 250_000
+
+    assert not hasattr(cfg, "cache_miss_budget")
 
 
 def test_boot_omitted_defaults_update_artifacts_and_ignore_stale_molt(tmp_path):

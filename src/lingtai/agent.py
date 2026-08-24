@@ -150,11 +150,6 @@ def build_agent_config(manifest: dict[str, Any], *, max_rpm: int) -> AgentConfig
         language=manifest.get("language", defaults.language),
         activeness=manifest.get("activeness", defaults.activeness),
         context_limit=manifest.get("context_limit", defaults.context_limit),
-        # Soft per-molt/session cache-miss token budget (default 1_000_000).
-        # Validated as a positive int in init_schema; hydrated verbatim here.
-        cache_miss_budget=manifest.get(
-            "cache_miss_budget", defaults.cache_miss_budget
-        ),
         # Providers that own their omitted-thinking default keep the "default"
         # sentinel instead of being promoted to the legacy cross-provider
         # "high" main-session default: the Codex family (omitted ->
@@ -224,6 +219,12 @@ class Agent(BaseAgent):
         if self._from_init_boot:
             return
         super()._boot_official_intrinsics()
+
+    def resolve_cache_miss_budget(self) -> int:
+        """Lazily delegate cache-miss budget resolution to System settings."""
+        from lingtai.tools.system.settings import resolve_cache_miss_budget
+
+        return resolve_cache_miss_budget(self)
 
     def __init__(
         self,

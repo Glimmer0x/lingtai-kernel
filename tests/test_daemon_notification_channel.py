@@ -699,7 +699,6 @@ def _make_daemon_sync_agent(tmp_path):
                 time_awareness=False,
                 timezone_awareness=False,
                 context_limit=0,
-                cache_miss_budget=None,
                 language="en",
             )
             self._state = AgentState.IDLE

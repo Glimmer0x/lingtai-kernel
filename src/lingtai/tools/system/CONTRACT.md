@@ -1,10 +1,11 @@
 ---
 name: system-contract
 tool: system
-contract_version: 3
+contract_version: 4
 related_files:
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/tools/system/plugin.py
+  - src/lingtai/tools/system/settings.py
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/agent.py
@@ -18,8 +19,14 @@ related_files:
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/kernel/meta_block.py
+  - src/lingtai/init_schema.py
+  - ENVIRONMENT_VARIABLES.md
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/tools/context/manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_meta_block.py
+  - tests/test_init_reader.py
   - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
 maintenance: |
@@ -29,7 +36,9 @@ maintenance: |
   suite. If behavior and this contract disagree, the code is the source of
   truth — fix the contract in the same change and bump contract_version on
   breaking contract edits.
-  contract_version 3 is the breaking public-ownership change: the public
+  contract_version 4 adds System's family-owned cache-miss budget setting,
+  removes the legacy init/AgentConfig source, and changes the fallback to
+  2,000,000. contract_version 3 was the breaking public-ownership change: the public
   summarize action left for context (which split it into record-only summarize and full reconstruction rebuild)
   and the two name actions arrived here from the dissolved psyche family.
   summarize.py stays here as a private engine only — keep the context Contract
@@ -90,6 +99,51 @@ in-process compatibility adapter, while normal `lingtai.Agent` dispatch uses
 the registrar-mounted bound handler. `tests/test_system_declared_plugin.py`
 pins the static declaration, single official mount, identity port behavior, and
 manual path.
+
+### Cache-miss budget family settings
+
+Guarded by: [B009](BEHAVIORS.md#behavior-b009)
+
+`src/lingtai/tools/system/settings.py` is the sole source/schema/read/diagnostic
+owner. It reads System's LTP family address
+`<agent-workdir>/settings/system.json`, not the derived `system/` directory and
+not `.notification/system.json`; there is no per-action settings sibling. The
+closed v1 document contains exactly two required keys:
+`schema_version` as JSON integer `1` and `cache_miss_budget` as a positive JSON
+integer. Missing, unknown, or duplicate keys; non-object/malformed/non-UTF-8
+JSON; wrong/non-integer/boolean or unsupported versions; boolean/non-integer/
+non-positive budgets; non-regular, over-64-KiB, unreadable, or unstable reads are
+invalid. No migration, healing, creation, normalization, or rewrite is allowed.
+
+One `lingtai.Agent.resolve_cache_miss_budget()` hook lazily delegates to that
+System owner. Kernel Core never imports `lingtai.tools`: `kernel/meta_block.py`
+knows only the fixed `2_000_000` compatibility fallback and calls the hook once
+per immutable `build_meta()` snapshot, validating its positive-integer return
+before sharing the scalar between always-on token telemetry and the at-budget
+Context guard. A bare kernel stub, missing/failing hook, or invalid hook return
+uses the same fallback. `manifest.cache_miss_budget` is schema-unknown ignored
+legacy data and is never hydrated into `AgentConfig` or consulted by either
+owner.
+
+Precedence inside System is live valid positive integer env string from
+`LINGTAI_CACHE_MISS_BUDGET`, then a live valid stable file snapshot, then
+`2_000_000`. Invalid env is treated as unset. A valid env returns before any file
+read, lock/state creation, or diagnostic. Only when no valid env wins is the file
+consulted: a missing file selects the default quietly, while a present invalid
+file selects the default and emits one redaction-safe
+`cache_miss_budget_settings_invalid` event per unchanged problem/snapshot, with
+only relative `settings_path`, bounded reason code, and `fallback_budget`.
+
+The stable file read and problem-signature transition share one per-agent lock.
+The accepted bytes must match one regular opened-file identity/stat before and
+after the bounded read and the same path identity/stat afterward, so parallel
+metadata snapshots and atomic external replacement cannot mix observations.
+Valid or missing file state clears the prior signature, allowing the same
+problem to be diagnosed after an intervening repair. The setting changes only
+the comparison threshold: cumulative/restored cache miss remains since-last-
+molt, refresh/restart/threshold changes do not reset it, and reaching threshold
+is soft advice with no effect on request admission, context-pressure thresholds,
+reconstruction, token accounting, configuration authority, or authorization.
 
 ### Single sleep use case
 
@@ -265,7 +319,13 @@ A failed publish or consume retains the file for retry; Store ref/idempotency
 deduplication suppresses duplicate retries. Malformed/unreadable state stays in
 place and emits at most one `sleep_alarm_malformed` event per unchanged problem
 per process. No queue, cancellation action, scheduler, timer service, or
-configuration is part of this capability.
+configuration is part of this alarm behavior.
+
+System's one operator/agent-owned configuration input is
+`<workdir>/settings/system.json`; `tools/system/settings.py` only reads it and
+never creates, migrates, heals, normalizes, or rewrites it.
+`.notification/system.json` remains Notification Store state and is never read by
+the budget resolver.
 
 `nirvana` writes `.suspend`, waits up to ~10s for shutdown, then
 `shutil.rmtree`s the whole target directory. `refresh`/preset swaps persist
@@ -315,6 +375,7 @@ drive it are `context`'s.
 | Envelope metadata never reaches a child handler | `src/lingtai/tools/system/__init__.py:_build_children` | `tests/test_tool_family_system_migration.py::test_envelope_metadata_never_reaches_a_child_handler` |
 | `manual` is the reserved family-owned child, returned without double wrap | `src/lingtai/tools/system/__init__.py:_adapt_manual_result` | `tests/test_tool_family_system_migration.py::test_manual_child_is_registered_unwrapped`, `::test_manual_returns_the_pinned_flat_public_shape` |
 | `system` is on the kernel `summarize` allowlist | `src/lingtai/kernel/tool_result_summary.py:_LTP_V2_MIGRATED_FAMILIES` | `tests/test_tool_family_system_migration.py::test_system_is_on_the_kernel_summarize_allowlist` |
+| Cache-miss budget resolves env > stable closed-v1 `settings/system.json` > 2,000,000 live, and legacy init is ignored | `src/lingtai/tools/system/settings.py:resolve_cache_miss_budget`, `src/lingtai/agent.py:Agent.resolve_cache_miss_budget`, `src/lingtai/kernel/meta_block.py:_resolve_cache_miss_budget`, `src/lingtai/init_schema.py` | `tests/test_system_declared_plugin.py`, `tests/test_meta_block.py`, `tests/test_init_reader.py`, `tests/test_agent_config_hydration.py` |
 
 ## Verification matrix
 
@@ -329,6 +390,7 @@ drive it are `context`'s.
 | No notification verbs on `system` | `tests/test_notification_tool.py::test_system_schema_drops_notification_and_dismiss` | Call `system(action='check')` | Duplicate notification surfaces diverge |
 | Cross-action input cannot reach a lifecycle handler | `tests/test_tool_family_system_migration.py::test_cross_action_input_is_rejected_before_any_lifecycle_io` | Call `sleep` with an `address` in `input` | A weaker action smuggles a privileged target |
 | `nirvana`'s blast radius is exactly one directory | `tests/test_tool_family_system_migration.py::test_nirvana_destroys_only_the_disposable_target` | Inspect siblings after a disposable-target nirvana | Irreversible over-deletion |
+| Budget ownership/default/precedence and since-last-molt counters stay aligned | `tests/test_system_declared_plugin.py`, `tests/test_meta_block.py`, `tests/test_init_reader.py`, `tests/test_agent_config_hydration.py` | [B009](BEHAVIORS.md#behavior-b009) | A stale source silently controls the reminder or a threshold change falsifies token usage |
 
 Run before merging system changes:
 

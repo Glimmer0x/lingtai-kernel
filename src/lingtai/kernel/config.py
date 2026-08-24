@@ -242,27 +242,6 @@ class AgentConfig:
     time_awareness: bool = True  # experimental: False strips LLM-visible timestamps (perception nerf)
     timezone_awareness: bool = True  # when True, now_iso emits OS local time; when False, UTC
     context_limit: int | None = None  # max context tokens; None = use model default
-    # Soft since-last-molt cache-miss token budget. Once the cumulative/restored
-    # cache-miss (uncached input) total reaches or exceeds this value, a "molt
-    # now" reminder is restamped into _meta.agent_meta.agent_state.context.molt (see
-    # meta_block.build_cache_miss_budget_context) and the budget value is surfaced
-    # under _meta.agent_meta.agent_state.context. It is a soft cap — nothing is blocked; the
-    # agent is expected to molt. The cache-miss total is read from the cumulative
-    # get_token_usage() totals (which SURVIVE restore_token_state), so a refresh
-    # does NOT reset the remaining budget; a successful molt starts a new
-    # since-last-molt session/budget cycle. It is deliberately NOT the
-    # since-refresh get_runtime_session_token_usage delta. Validated as a positive
-    # int (bool and <= 0 rejected) in lingtai/init_schema.py and hydrated from
-    # manifest.cache_miss_budget by lingtai/agent.py build_agent_config.
-    #
-    # The effective budget may also be overridden at runtime by the
-    # LINGTAI_CACHE_MISS_BUDGET env var (see meta_block._resolve_cache_miss_budget):
-    # a positive-int env value wins over this config/default at every budget
-    # resolution (live-read, like the nudge env vars — no restart). This lets the
-    # operator or the agent itself (via its env_file + refresh) tune the budget
-    # without editing init.json. An invalid env value falls back here SILENTLY
-    # (no bounded diagnostic, unlike the nudge vars).
-    cache_miss_budget: int = 1_000_000
     # Legacy molt-threshold fields, retained ONLY for backward compatibility
     # (old AgentConfig constructions / serialized state still set them). They are
     # NOT the active warning threshold and are no longer read by the warning

@@ -114,33 +114,14 @@ def test_summarize_notification_threshold_allows_zero():
     validate_init(data)  # 0 intentionally disables large-result notifications.
 
 
-def test_cache_miss_budget_accepts_positive_int():
+@pytest.mark.parametrize("legacy_value", [500_000, 0, -5, True, "500000", None])
+def test_cache_miss_budget_is_schema_unknown_legacy_data(legacy_value):
     data = _valid_init()
-    data["manifest"]["cache_miss_budget"] = 500_000
-    validate_init(data)  # positive int is valid
+    data["manifest"]["cache_miss_budget"] = legacy_value
 
+    warnings = validate_init(data)
 
-def test_cache_miss_budget_rejects_zero():
-    data = _valid_init()
-    data["manifest"]["cache_miss_budget"] = 0
-    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
-        validate_init(data)
-
-
-def test_cache_miss_budget_rejects_negative():
-    data = _valid_init()
-    data["manifest"]["cache_miss_budget"] = -5
-    with pytest.raises(ValueError, match="manifest.cache_miss_budget"):
-        validate_init(data)
-
-
-def test_cache_miss_budget_rejects_bool():
-    data = _valid_init()
-    # bool is an int subclass in Python — rejected by _check_type's general
-    # rule for any int-accepting field (issue #737).
-    data["manifest"]["cache_miss_budget"] = True
-    with pytest.raises(ValueError, match="manifest.cache_miss_budget.*bool"):
-        validate_init(data)
+    assert "unknown field: manifest.cache_miss_budget" in warnings
 
 
 @pytest.mark.parametrize("bad_value", [True, False])

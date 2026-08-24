@@ -3,8 +3,8 @@ name: environment-variable-registry
 description: >
   Canonical registry for environment variables consumed by LingTai source,
   bundled MCPs, adapters, daemon composition, and focused tests.
-version: 1.2.0
-last_changed_at: "2026-08-20"
+version: 1.3.0
+last_changed_at: "2026-08-24"
 related_files:
 - ANATOMY.md
 - CONTRACT.md
@@ -16,6 +16,8 @@ related_files:
 - src/lingtai/auth/ANATOMY.md
 - src/lingtai/intrinsic_skills/ANATOMY.md
 - src/lingtai/kernel/ANATOMY.md
+- src/lingtai/agent.py
+- src/lingtai/tools/system/settings.py
 - src/lingtai/kernel/base_agent/ANATOMY.md
 - src/lingtai/kernel/base_agent/CONTRACT.md
 - src/lingtai/kernel/daemon_supervisor/ANATOMY.md
@@ -30,6 +32,10 @@ related_files:
 - src/lingtai/prompts/ANATOMY.md
 - src/lingtai/services/ANATOMY.md
 - src/lingtai/tools/ANATOMY.md
+- src/lingtai/tools/system/ANATOMY.md
+- src/lingtai/tools/system/CONTRACT.md
+- src/lingtai/intrinsic_skills/system-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 - src/lingtai/tools/bash/ANATOMY.md
 - src/lingtai/tools/daemon/ANATOMY.md
 - src/lingtai/tools/daemon/CONTRACT.md
@@ -67,7 +73,7 @@ reports, prompts, or this registry.
 | `LINGTAI_SESSION_STATS_REFRESH_SECONDS` | `5` seconds | Finite positive number of seconds; one process | Agent Record (`system/agent_record.json`) refresh throttle | Each of the three existing `.status.json` write hooks (`_save_chat_history`, the ACTIVE no-progress watchdog, the heartbeat tick); no restart | Missing, blank, non-numeric, non-finite, zero, or negative values fall back to `5` | `src/lingtai/kernel/session_stats/__init__.py` | Refresh-cadence tuning only; never authorizes access or changes what fields are published |
 | `LINGTAI_SESSION_STATS_DAEMON_LIMIT` | `1000` | Positive integer; one Agent Record's daemon aggregation | Bound on how many newest-mtime `<run_dir>/session_stats.json` daemon self-records `kernel.session_stats.aggregate_daemon_records` reads into one Agent Record | Every Agent Record refresh | Missing, blank, non-integer, zero, or negative values fall back to `1000` | `src/lingtai/kernel/session_stats/__init__.py` | Aggregation-scope control only; a daemon whose self-record falls outside the bound is simply excluded from the aggregate, never faked as zero |
 | `LINGTAI_DAEMON_SYSTEM_PROMPT_BUDGET_CHARS` | The explicit daemon capability kwarg or `<workdir>/daemon/daemon.json` `system_prompt_budget_chars`; otherwise `20,000` | Positive integer string | One `DaemonManager`'s LingTai rendered-system-prompt character limit | `DaemonManager` construction; recreate the daemon capability/manager after changing it | Missing, blank, non-integer, zero, or negative values retain the valid explicit-capability/file result; invalid/missing/non-positive file values already fall back to `20,000`, and an invalid explicit capability value retains the file result. A valid environment value wins over both file and explicit capability values | `src/lingtai/tools/daemon/__init__.py`, `src/lingtai/tools/daemon/system_prompt.py` | Context-size control only; it cannot truncate prompt constraints, grant authority, or affect non-LingTai CLI backend prompts |
-| `LINGTAI_CACHE_MISS_BUDGET` | unset; `1_000_000` from `manifest.cache_miss_budget` | Positive integer; one agent/process | Soft since-last-molt cache-miss budget guard (restamps the `cache miss budget {N} reached, molt now` reminder and surfaces budget/remaining under `agent_meta.agent_state`) | Every cache-miss budget resolution (each meta snapshot) | Missing, non-int, bool, zero, or negative values fall back to the configured/default budget; the env never disables the guard below a positive int | `src/lingtai/kernel/meta_block.py` | Soft molt steering only; never blocks; not an authorization boundary. Governance delta: a budget that previously required a config-owner edit to schema-validated `manifest.cache_miss_budget` is now additionally agent-writable via `env_file`, with no upper bound and no validation feedback — an agent can set a huge value and silence its own molt nudge |
+| `LINGTAI_CACHE_MISS_BUDGET` | unset; valid closed-v1 `settings/system.json` budget, else `2_000_000` | Positive integer string; one agent/process | Highest-precedence source for the soft since-last-molt cache-miss budget guard (restamps `cache miss budget {N} reached, molt now` and surfaces budget/remaining under `agent_meta.agent_state`) | Every cache-miss budget resolution (each meta snapshot); direct running-process changes need no restart | Missing, blank, non-integer, zero, or negative values are treated as unset, falling through to valid System JSON and then `2_000_000`; the env never disables the positive default | `src/lingtai/tools/system/settings.py` via `lingtai.Agent.resolve_cache_miss_budget()` | Soft molt steering only; never blocks and grants no authority. No upper bound: a very large value can suppress the advisory nudge but cannot alter token accounting or context-pressure policy |
 | `LINGTAI_NOTIFICATION_MAX_CHARS` | `10000` | Positive integer; values below `2048` clamp up to `2048` (shared floor so the terminal recovery envelope always fits on BOTH lanes); values above `10000` clamp to `10000` | Model-visible notification envelope cap for BOTH lanes: the persistent block (`notification_persistent`) and the attention lane (`_meta.agent_meta.notifications.attention`) | Every notification payload build (persistent per build; attention every tool batch + IDLE pair); no restart | Missing, blank, non-numeric, zero, or negative values fall back to `10000` | `src/lingtai/kernel/meta_block.py` | Context-size steering only; never grants access. Persistent overflow spills to `logs/notification-overflow-<ts>.json`; attention overflow spills to `logs/notification-attention-overflow-<digest>.json` (content-addressed, so an unchanged oversized lane reuses the same file; a different-content collision allocates `<digest>-<N>.json` and the exact basename, including any `-N` suffix, is returned as `overflow.spill_file`). The model-visible copy carries an `overflow` marker pointing at the file (or the producer tool when the spill fails). Persistent compaction always preserves message ids; attention compaction preserves routing ids (including `message_ids`) and bounds or drops them only under pathological compaction against a tiny cap. Measurement uses provider-visible ASCII escaping, so multilingual content is counted exactly as the provider will serialize it. Attention spill is content-addressed digest8: an unchanged oversized lane reuses the same file, and if even the marker-only envelope cannot fit, the marker path is stripped (`path_omitted`, exact `spill_file` basename retained) so the model-visible envelope is capped by construction |
 | `LINGTAI_NOTIFICATION_DELAY_MAX_SECONDS` | `600` seconds | Positive integer; per agent/process | Consumer-only `notification(action='delay')` nonzero duration cap | Every delay action invocation; no restart | Missing uses `600`; blank, non-numeric, zero, or negative values log `notification_delay_max_seconds_invalid` and fall back to `600` | `src/lingtai/kernel/notifications.py` | Availability/attention tuning only: it never modifies producer files or state. `seconds=0` remains cancel-only; every nonzero delay is finite and must not exceed the live cap |
 | `LINGTAI_REFRESH_ENV_OVERWRITE` | unset and off | `1` enables one refresh overwrite | One refresh handoff | Boot or refresh setup; consumed and removed after use | Other values are treated as off | `src/lingtai/cli.py`, `src/lingtai/agent.py` | Do not log inherited or env-file contents |
@@ -132,15 +138,19 @@ surface is explicit; do not set test hooks in a production agent environment.
 
 ## Reading and ownership notes
 
-- `LINGTAI_CACHE_MISS_BUDGET` is read live at each cache-miss budget resolution
-  (live-read, like the nudge env vars), so setting it in the agent's `env_file`
-  and refreshing applies it without editing `init.json`. The agent itself may
-  tune it (e.g. raise the budget on a long, cache-expensive session) the same
-  way. It is a soft steer: nothing is blocked, and an invalid value simply falls
-  back to the configured/default budget. Note that *deleting* the line from
-  `env_file` does not unset it — a refresh relaunches inheriting the old
-  `os.environ`, and `load_env_file` only writes keys it finds in the file; to
-  fall back to the configured budget in-band, set the value to `0` or blank.
+- `LINGTAI_CACHE_MISS_BUDGET` is read live at each metadata snapshot. A valid
+  value wins immediately: the lower-priority
+  `<agent-workdir>/settings/system.json` file is not read or diagnosed. Only
+  when no valid env wins is that file read live in the same snapshot; then a
+  missing file defaults quietly and a present invalid file falls back to
+  `2_000_000` with one bounded `cache_miss_budget_settings_invalid` event per
+  unchanged problem. A direct running-process environment change therefore
+  applies on the next resolution, and an unshadowed file change does too. An
+  `env_file` edit still needs refresh to load its value into the running
+  process. Deleting a line from `env_file` does not necessarily unset an
+  already inherited `os.environ` value; set it blank/`0` to make that invalid
+  env source fall through to System JSON/default. Changing either threshold or
+  refreshing does not reset since-last-molt counters; only molt does.
 - Environment values are process input, not authorization grants. Human or
   configuration-owner approval remains required for writes, refreshes, downloads,
   sends, and other consequential actions.
