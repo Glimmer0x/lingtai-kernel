@@ -32,6 +32,7 @@ from lingtai.kernel.time_veil import now_iso as render_now_iso
 if TYPE_CHECKING:
     from lingtai.tools.email import EmailResult, EmailRuntimeRequest
 
+from lingtai.kernel import notifications
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
     FileGrepMatch,
@@ -58,6 +59,10 @@ __all__ = [
     "AgentSystemRuntimeAdapter",
     "AgentIdentityAdapter",
     "agent_system_runtime",
+    "AgentShutdownAdapter",
+    "AgentTaskCardLifecycleAdapter",
+    "AgentTaskCardNotificationsAdapter",
+    "agent_task_card_ports",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -1269,6 +1274,196 @@ def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
     )
 
 
+class AgentShutdownAdapter:
+    """One-predicate ``ShutdownPort`` over the Agent shutdown event."""
+
+    __slots__ = ("_is_set",)
+
+    def __init__(self, is_set: Callable[[], bool]) -> None:
+        self._is_set = is_set
+
+    def is_set(self) -> bool:
+        return self._is_set()
+
+
+class AgentTaskCardLifecycleAdapter:
+    """The one current-Agent manager slot Task Card needs across refreshes."""
+
+    __slots__ = ("_current", "_retain", "_report")
+
+    def __init__(
+        self,
+        current: Callable[[], Any | None],
+        retain: Callable[[Any], None],
+        report: Callable[[str], None],
+    ) -> None:
+        self._current = current
+        self._retain = retain
+        self._report = report
+
+    def current_manager(self) -> Any | None:
+        return self._current()
+
+    def retain_manager(self, manager: Any) -> None:
+        self._retain(manager)
+
+    def report_resume_failure(self, error: str) -> None:
+        self._report(error)
+
+
+class AgentTaskCardNotificationsAdapter:
+    """``TaskCardNotificationsPort`` over the Agent's system-event publisher.
+
+    Five closed operations only.  The Agent's generic publisher is held as a
+    private callable and is never exposed: every wire field other than the
+    producer's body, identity, and bounded facts — ``source``, ``channel``,
+    priority, idempotency skip, and the ``extra`` projection — is pinned here
+    to the Task Card producer's established forms.  A holder therefore cannot
+    publish a foreign source, address another channel, or smuggle generic
+    notification fields through this port.
+    """
+
+    __slots__ = ("_enqueue", "_submit", "_clear")
+
+    #: The established error stream; ``recovered`` is a state on it.
+    _ERROR_SOURCE = "task_card.error"
+    _LIMIT_SOURCE = "task_card.limit"
+    _CHANNEL = "system"
+
+    def __init__(
+        self,
+        enqueue: Callable[..., Any],
+        submit: Callable[[int], None],
+        clear: Callable[[], None],
+    ) -> None:
+        self._enqueue = enqueue
+        self._submit = submit
+        self._clear = clear
+
+    def publish_error(
+        self,
+        watch_id: str,
+        body: str,
+        code: str,
+        retryable: bool | str,
+        idempotency_key: str,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        extra: dict[str, Any] = {
+            "watch_id": watch_id,
+            "state": "error",
+            "code": code,
+            "retryable": retryable,
+        }
+        if last_valid_body_at:
+            extra["last_valid_body_at"] = last_valid_body_at
+        self._enqueue(
+            source=self._ERROR_SOURCE,
+            channel=self._CHANNEL,
+            ref_id=watch_id,
+            body=body,
+            idempotency_key=idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="high",
+            extra=extra,
+        )
+
+    def publish_recovered(self, watch_id: str, body: str, idempotency_key: str) -> None:
+        self._enqueue(
+            source=self._ERROR_SOURCE,
+            channel=self._CHANNEL,
+            ref_id=watch_id,
+            body=body,
+            idempotency_key=idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="normal",
+            extra={"watch_id": watch_id, "state": "recovered"},
+        )
+
+    def publish_limit(
+        self,
+        watch_id: str,
+        body: str,
+        idempotency_key: str,
+        used: int,
+        max_refreshes: int,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        extra: dict[str, Any] = {
+            "watch_id": watch_id,
+            "state": "stopped",
+            "reason": "max_refreshes",
+            "used": used,
+            "max": max_refreshes,
+        }
+        if last_valid_body_at:
+            extra["last_valid_body_at"] = last_valid_body_at
+        self._enqueue(
+            source=self._LIMIT_SOURCE,
+            channel=self._CHANNEL,
+            ref_id=watch_id,
+            body=body,
+            idempotency_key=idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="normal",
+            extra=extra,
+        )
+
+    def submit_reminder(self, turns: int) -> None:
+        self._submit(turns)
+
+    def clear_reminder(self) -> None:
+        self._clear()
+
+
+def agent_task_card_ports(agent: Any) -> dict[str, Any]:
+    """Bind Task Card's three earned ports to one live Agent.
+
+    Composition-only: the lifecycle closures read/replace the Agent's retained
+    ``_task_card_manager`` slot (the same object ``BaseAgent`` lifecycle stops
+    and the Daemon runtime's ``has_active_task_card_watch`` probes), the
+    shutdown predicate is the Agent's own event, and the notification adapter
+    holds the Agent's system-event publisher privately behind its five closed
+    operations.  Nothing here hands the family the Agent.
+    """
+
+    def _retain_task_card_manager(manager: Any) -> None:
+        agent._task_card_manager = manager
+
+    def _report_task_card_resume_failure(error: str) -> None:
+        log = getattr(agent, "_log", None)
+        if callable(log):
+            log("task_card_resume_failed", error=error)
+
+    def _submit_task_card_reminder(turns: int) -> None:
+        notifications.submit(
+            agent,
+            "task_card",
+            data={"source": "task_card.reminder", "turns": turns},
+            header="Task Card reminder",
+            instructions=(
+                "Check whether the Task Card is absent or stale; update or issue one only if useful."
+            ),
+        )
+
+    def _clear_task_card_reminder() -> None:
+        notifications.clear(agent, "task_card")
+
+    return {
+        "shutdown": AgentShutdownAdapter(agent._shutdown.is_set),
+        "task_card_lifecycle": AgentTaskCardLifecycleAdapter(
+            lambda: getattr(agent, "_task_card_manager", None),
+            _retain_task_card_manager,
+            _report_task_card_resume_failure,
+        ),
+        "task_card_notifications": AgentTaskCardNotificationsAdapter(
+            agent._enqueue_system_notification,
+            _submit_task_card_reminder,
+            _clear_task_card_reminder,
+        ),
+    }
+
+
 def agent_host_ports(
     agent: Any,
     plugin_name: str,
@@ -1283,7 +1478,9 @@ def agent_host_ports(
     setup-selected ``configuration`` port arrives through ``extra_ports``.
     Soul receives its explicit live-self ``soul_runtime`` port here as well,
     and System receives its ``system_runtime`` lifecycle vocabulary plus the
-    durable naming ``identity`` port.
+    durable naming ``identity`` port. Task Card receives its ``shutdown``
+    predicate, current-Agent ``task_card_lifecycle`` slot, and closed
+    ``task_card_notifications`` operations from ``agent_task_card_ports``.
     The registrar grants just ``requires``, never this whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
@@ -1341,6 +1538,8 @@ def agent_host_ports(
             lambda name: agent.set_name(name),
             lambda nickname: agent.set_nickname(nickname),
         )
+    elif plugin_name == "task_card":
+        ports.update(agent_task_card_ports(agent))
     if extra_ports:
         ports.update(extra_ports)
     return ports

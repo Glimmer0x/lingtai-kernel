@@ -22,6 +22,8 @@ related_files:
   - src/lingtai/tools/soul/manual/SKILL.md
   - src/lingtai/tools/system/__init__.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
+  - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/tools/task_card/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -35,6 +37,8 @@ related_files:
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
   - tests/test_system_declared_plugin.py
+  - tests/test_task_card_controller.py
+  - tests/test_task_card_notifications.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
@@ -47,7 +51,7 @@ maintenance: |
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
   reference; Avatar, Context, Daemon, Email, File, Plugin, Notification, Shell,
-  and Soul are current
+  Soul, System, and Task Card are current
   vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
   than per-call Agent dispatch.
@@ -83,13 +87,18 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    `file ('read', 'write', 'edit', 'glob', 'grep') ('read', 'write', 'edit',
    'glob', 'grep', 'manual') ('workdir', 'file_io')`. No `Agent` was constructed;
    each reserved `manual` action is appended, not declared.
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.notification import DECLARATION as notification; print(mcp.name, mcp.actions, mcp.public_actions, mcp.requires); print(notification.name, notification.requires, notification.public_actions)"
+
+   Then prove the twelfth slice's declaration the same way:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.task_card import DECLARATION as tc; print(tc.name, tc.actions, tc.public_actions, tc.requires)"
    ```
 
-   Expect `mcp ('info',) ('info', 'manual') ('workdir', 'prompt_section')` and
-   `notification ('workdir', 'notification_state')` followed by its declared
-   actions plus one reserved `manual`. No `Agent` was constructed; both static
-   declarations append rather than declare the reserved action.
+   Expect `task_card ('start', 'inspect', 'retry', 'stop', 'remove') ('start',
+   'inspect', 'retry', 'stop', 'remove', 'manual') ('workdir', 'shutdown',
+   'task_card_lifecycle', 'task_card_notifications')`. No `Agent` was
+   constructed; the static declaration appends rather than declares the
+   reserved action.
 
 2. Prove the public model-facing surface is unchanged by the recut:
 
@@ -107,8 +116,10 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    ```
 
    Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
-   'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog') ('workdir',
-   'file_io')` printed,
+   'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog',
+   'notification_state', 'notifications', 'configuration', 'soul_runtime',
+   'system_runtime', 'identity', 'shutdown', 'task_card_lifecycle',
+   'task_card_notifications') ('workdir', 'file_io')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
    port* `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort` plus `FileIOPort`,
@@ -124,10 +135,20 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    Expect `1 passed`: Plugin reaches exactly
    `('workdir', 'prompt_section', 'plugin_catalog')` while MCP reaches neither
    `plugin_catalog` nor `avatar_parent`.
-   Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime', 'daemon_runtime', 'email_runtime', 'notification_state') ('workdir',)` printed, then an
+
+   Task Card's three ports are built in the standard table only for its own
+   declaration, and its notification port is closed to five operations:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.kernel.tool_plugin import ToolPluginHost, TaskCardNotificationsPort; from lingtai.tools.task_card import DECLARATION; h = ToolPluginHost.grant(DECLARATION, {'workdir': object(), 'shutdown': object(), 'task_card_lifecycle': object(), 'task_card_notifications': object(), 'prompt_section': object()}); print(h.granted); print(sorted(n for n in dir(TaskCardNotificationsPort) if not n.startswith('_'))); h.prompt_section"
+   ```
+
+   Expect `('workdir', 'shutdown', 'task_card_lifecycle',
+   'task_card_notifications')`, then `['clear_reminder', 'publish_error',
+   'publish_limit', 'publish_recovered', 'submit_reminder']`, then an
    `AttributeError` whose message says the plugin *did not require host port*
-   `'prompt_section'`. Confirm `tool_mount` is absent from
-   `GRANTABLE_HOST_PORTS`.
+   `'prompt_section'`. No `enqueue`, `source`, `channel`, or `**kwargs` name
+   appears on the port.
 
 4. Prove the family reaches the live Agent body only through granted ports:
 
@@ -184,9 +205,15 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
      tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py \
      tests/test_context_declared_tool_plugin.py tests/test_daemon.py \
      tests/test_email_official_tool_plugin.py tests/test_file_tool_plugin_package.py \
-     tests/test_file_tool_family.py tests/test_plugin_tool.py
-     tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py tests/test_context_declared_tool_plugin.py tests/test_daemon.py tests/test_email_official_tool_plugin.py tests/test_notification_delay_alarm.py tests/test_notification_store.py
+     tests/test_file_tool_family.py tests/test_plugin_tool.py \
+     tests/test_notification_delay_alarm.py tests/test_notification_store.py \
+     tests/test_task_card_controller.py tests/test_task_card_notifications.py
    ```
+
+   Task Card's focused pair proves one retained manager bound only to its four
+   ports, exact error/recovered/limit wire parity through the production
+   `AgentTaskCardNotificationsAdapter`, reminder submit/clear parity, the
+   five-operation port surface, and foreign source/channel/field refusal.
 
 ### Expected evidence
 
@@ -222,6 +249,12 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
       clears the live mirror.
 - [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's, and
       Notification's focused declared/Core slices pass.
+- [ ] Task Card: its static `DECLARATION` requires exactly `workdir`,
+      `shutdown`, `task_card_lifecycle`, and `task_card_notifications`; the
+      granted notification port exposes exactly five closed operations and no
+      generic publisher; one `TaskCardManager` is retained on the Agent and
+      rebound across refresh; and the family suites' wire assertions pass
+      through the production adapter.
 
 ### Pass / Fail
 
@@ -257,8 +290,9 @@ writes.
 
    Expect the module docstring, `__all__`, module-level tuple, and registrar check/error as the relevant matches.
    Confirm the literal is exactly `('mcp', 'avatar', 'context', 'daemon',
-   'email', 'file', 'plugin')` in that order and contains bare names only — no
-   module path, import, or family behavior.
+   'email', 'file', 'plugin', 'notification', 'shell', 'soul', 'system',
+   'task_card')` in that order and contains bare names only — no module path,
+   import, or family behavior.
 
 2. Prove a conflicting declaration is refused with nothing bound and nothing
    mounted:
@@ -300,7 +334,7 @@ writes.
 
    ```bash
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_tool_plugin_declaration.py::test_all_ten_official_families_mount_exactly_once_together
+     tests/test_tool_plugin_declaration.py::test_all_twelve_official_families_mount_exactly_once_together
    ```
 
    Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by
@@ -355,7 +389,8 @@ writes.
 ### Expected evidence
 
 - [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is the exact ordered static tuple
-      `mcp, avatar, context, daemon, email, file, plugin, notification` of bare names.
+      `mcp, avatar, context, daemon, email, file, plugin, notification, shell,
+      soul, system, task_card` of bare names.
 - [ ] Step 2: `5 passed` — an unreserved name, an in-batch duplicate, and a
       second declaration against a live claim are each refused with zero binds,
       zero mounts, and an unchanged claim map; the same declaration re-registers
@@ -365,7 +400,7 @@ writes.
       public adapter/factory bypass and a forged transaction are unavailable,
       backing-map tampering cannot admit a foreign declaration, and the public
       claim view cannot unlock one.
-- [ ] Step 4: `1 passed` — all eight reserved names mount exactly once in one
+- [ ] Step 4: `1 passed` — all twelve reserved names mount exactly once in one
       live composition.
 - [ ] Step 5: the batch-wide check loop precedes the bind/mount loop in source
       order.

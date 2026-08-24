@@ -79,7 +79,8 @@ maintenance: |
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
   not a claim that every shared-C target has merged: `mcp` is the base reference,
-  while the separately landed `avatar`, Context, Daemon, Email, File, and Plugin
+  while the separately landed `avatar`, Context, Daemon, Email, File, Plugin,
+  Notification, Shell, Soul, System, and Task Card
   vertical slices are actual declared evidence; only the remaining target names
   stay candidates. The normative rules — including the selected form,
   while the separately landed `avatar`, Context, Daemon, Email, and Notification
@@ -253,16 +254,16 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, and System are
-accepted vertical
+Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System, and
+Task Card are accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
 `context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
 `prompt_section`/`plugin_catalog`, `notification_state`,
-`notifications`/`configuration`, `soul_runtime`, and
-`system_runtime`/`identity` (all also retain
-`workdir`). The remaining candidate targets are only `vision`, `web`,
-and `task_card`; the list is not a generic dispatch or admission
-mechanism.
+`notifications`/`configuration`, `soul_runtime`,
+`system_runtime`/`identity`, and
+`shutdown`/`task_card_lifecycle`/`task_card_notifications` (all also retain
+`workdir`). The remaining candidate targets are only `vision` and `web`; the
+list is not a generic dispatch or admission mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
@@ -302,7 +303,16 @@ family and binds the five operational children only to `workdir` plus the
 explicit `SoulRuntimePort`; Soul stays an injected intrinsic for kernel
 lifecycle hooks while its model-facing root mounts only through the registrar,
 and its package manual is the sole operational body installed at the historical
-`soul-manual` destination. Every landed
+`soul-manual` destination. `src/lingtai/tools/task_card/__init__.py` is the
+twelfth slice: its `DECLARATION` preserves the public
+`start | inspect | retry | stop | remove | manual` family and binds the one
+retained `TaskCardManager` against `workdir`, `shutdown`,
+`task_card_lifecycle`, and the closed operation-native
+`task_card_notifications` port; one manager per current Agent survives and is
+rebound across refresh, the persisted watch resumes only after a successful
+bind, the family-local `TaskCardNotificationsAdapter` consumes only the five
+native notification operations, and the producer stays channel-neutral (it
+writes the `taskcard/` artifact and never calls Telegram/Feishu). Every landed
 family retains its public name, actions, inputs, and result shapes. Candidate-local families may still boot through legacy
 `setup(agent)` paths until their own vertical slice lands; that compatibility
 fact is not a generic registrar/bridge dispatch model.

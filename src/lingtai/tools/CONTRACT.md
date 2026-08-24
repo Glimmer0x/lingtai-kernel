@@ -69,7 +69,7 @@ maintenance: |
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
   `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-  `soul`, and `system` are the declared families
+  `soul`, `system`, and `task_card` are the declared families
   today, in that official order; do not widen that claim without another
   family's evidence.
 ---
@@ -295,17 +295,21 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing tool
 family shares. The accepted declared evidence is exactly `mcp`, `avatar`,
-`context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, and
-`soul`, in that
-order. `mcp` is the base reference; the remaining ten are accepted vertical
+`context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
+`soul`, `system`, and `task_card`, in that
+order. `mcp` is the base reference; the remaining eleven are accepted vertical
 slices with their narrow earned ports. Email retains its call-time manager port,
 File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
 `workdir`/`notification_state` with Core-bound callbacks, Soul retains
 `workdir` plus its explicit `soul_runtime` live-self port, and System retains
 `workdir` plus its `system_runtime` lifecycle vocabulary and durable naming
-`identity` port. The remaining target
-register is only `vision`, `web`, and `task_card`; it is not
+`identity` port, and Task Card retains `workdir` plus `shutdown`, its
+current-Agent `task_card_lifecycle` manager slot, and the closed
+operation-native `task_card_notifications` port (five scalar operations, no
+generic publisher), keeping one manager across refresh and its channel-neutral
+`taskcard/` artifact ownership. The remaining target
+register is only `vision` and `web`; it is not
 proof that their candidate slices merged and is never a generic dispatch or
 admission path. Every other registry family remains an explicit future migration
 unit and none ships as an MCP plugin package today.
@@ -431,17 +435,11 @@ register is family-generic rather than MCP-only.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
-  Plugin, Notification, Shell, Soul, and System are accepted vertical evidence
-  here.
+  Plugin, Notification, Shell, Soul, System, and Task Card are accepted vertical
+  evidence here.
   The remaining target
-  register names only `vision`, `web`, and
-  `task_card`; those
+  register names only `vision` and `web`; those
   names are targets, not a claim that candidate slices have merged.
-  `mcp` is the current base reference; Avatar, Context, Daemon, Email,
-  Notification, and System are accepted vertical evidence here. The remaining
-  target register
-  names only `vision`, `web`, and `task_card`; those
-  names are targets, not a claim that their candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -616,8 +614,16 @@ non-goal for third-party-versus-third-party mounts.
   manager. File's declaration binds only `workdir`/`file_io`; its focused suites
   prove the typed adapter, exact grant, preserved operations, one mount, sole
   package body at `file-manual`, excluded redirect marker, and wheel/sdist source
-  route. The remaining target register names only `vision`, `web`,
-  and `task_card`. Avatar, Context, and Daemon retain
+  route. Task Card's declaration binds only
+  `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; its
+  focused suites (`tests/test_task_card_controller.py`,
+  `tests/test_task_card_notifications.py`, plus the Task Card cases in
+  `tests/test_tool_plugin_declaration.py`) prove one retained manager rebound
+  across refresh, post-bind persisted-watch resume, the package-owned manual,
+  exact error/recovered/limit and reminder wire parity through the production
+  five-operation notification adapter, and foreign source/channel/field
+  refusal. The remaining target register names only `vision` and `web`.
+  Avatar, Context, and Daemon retain
   their independently accepted declarations and focused coverage. The shared
   test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
   own vertical evidence. `src/lingtai/kernel/tool_plugin/__init__.py` owns the
@@ -643,7 +649,7 @@ non-goal for third-party-versus-third-party mounts.
   `workdir`/`notification_state`; `tests/test_tool_plugin_declaration.py` and
   its Notification Core tests prove the one mount, canonical installed manual,
   placeholder check, and Core-backed dismiss behavior. The remaining target
-  register names only `vision`, `web`, and `task_card`.
+  register names only `vision` and `web`.
   Avatar, Context, and Daemon retain their independently accepted declarations
   and focused coverage. The shared test seam is
   `tests/_tool_plugin_helpers.py`;

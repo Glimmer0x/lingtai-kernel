@@ -14,6 +14,7 @@ from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 from lingtai.tools import task_card as task_card_tool
+from tests.test_task_card_controller import _FakeAgent, _task_card_host
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,7 +103,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
     daemon_manager._workdir = SimpleNamespace(path=tmp_path)
     web_manager = web_tool.setup(agent)
     vision_manager = vision_tool.setup(agent)
-    task_card_manager = task_card_tool.setup(agent)
+    task_card_manager = task_card_tool.TaskCardManager(_task_card_host(_FakeAgent(tmp_path)))
 
     # ``shell`` is a migrated LTP v2 family: its ``manual`` is the reserved
     # family child dispatched through the registered envelope handler, not an

@@ -39,7 +39,8 @@ maintenance: |
   change. LP002 guards the `### Tool-to-MCP Plugin Contract` section: it
   verifies only what is true today (the section's scope-qualified status
   wording — current `mcp` base evidence, Avatar's, Context's, Daemon's,
-  Email's, File's, and Plugin's separately landed vertical evidence, plus the
+  Email's, File's, Plugin's, Notification's, Shell's, Soul's, System's, and
+  Task Card's separately landed vertical evidence, plus the
   family-generic C integration register's remaining targets —
   wording — current `mcp` base evidence, Avatar's, Context's, Daemon's, Email's, and Notification's
   separately landed vertical evidence, and the family-generic C integration register's remaining targets —
@@ -118,8 +119,11 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    `src/lingtai/tools/{avatar,context,daemon,email,file,plugin}/__init__.py` are
    actual landed vertical proof; that File is sixth after Email and requires only
    `workdir`/`file_io`; that Plugin is seventh and requires only
-   `workdir`/`prompt_section`/`plugin_catalog`; that the C register's remaining
-   names are targets rather
+   `workdir`/`prompt_section`/`plugin_catalog`; that Task Card is twelfth and
+   requires only `workdir`/`shutdown`/`task_card_lifecycle`/
+   `task_card_notifications` with its notification port closed to five
+   operations; that the C register's remaining
+   names (`vision`, `web`) are targets rather
    than candidate-merge claims; and that each claim is scoped to the declaration
    clauses only; that every remaining negative claim
    is **scope-qualified** — every other family registered through
@@ -182,41 +186,39 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove all seven landed declarations — the current base `mcp`, Avatar,
-   Context, Daemon, Email, File, and Plugin — none of which goes through
-   Then prove all six landed declarations — the current base `mcp`, Avatar,
-   Context, Daemon, Email, and Notification — none of which goes through
-   packaging; the C register is broader but its remaining candidate-local proofs
-   stay separate:
+   Then prove all twelve landed declarations — the current base `mcp`, Avatar,
+   Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System, and
+   Task Card — none of which goes through packaging; the C register is broader
+   but its remaining candidate-local proofs stay separate:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.file import DECLARATION as file; from lingtai.tools.plugin import DECLARATION as plugin; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, file, plugin); print(tuple((d.name, d.public_actions, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.file import DECLARATION as file; from lingtai.tools.plugin import DECLARATION as plugin; from lingtai.tools.notification import DECLARATION as notification; from lingtai.tools.bash._tool_family import DECLARATION as shell; from lingtai.tools.soul import DECLARATION as soul; from lingtai.tools.system import DECLARATION as system; from lingtai.tools.task_card import DECLARATION as task_card; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, file, plugin, notification, shell, soul, system, task_card); print(tuple((d.name, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES); print(tuple(d.name for d in declarations) == OFFICIAL_TOOL_PLUGIN_NAMES)"
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
      tests/test_file_tool_plugin_package.py tests/test_file_tool_family.py \
-     tests/test_plugin_tool.py
+     tests/test_plugin_tool.py tests/test_task_card_notifications.py
    ```
 
-   Expect seven ordered triples whose names are `mcp, avatar, context, daemon,
-   email, file, plugin`, with requires respectively `workdir/prompt_section`,
-   `workdir/avatar_parent`, `workdir/context_runtime`, `workdir/daemon_runtime`,
-   `workdir/email_runtime`, `workdir/file_io`, and
-   `workdir/prompt_section/plugin_catalog`; then expect exactly
-   `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin')`. All seven
-   declarations construct at import with no Agent, server, transport, or catalog
-   record. The two File focused suites pass, proving its narrow adapter/grant,
-   one mount, unchanged operations, sole package manual body at `file-manual`,
-   absent `capabilities/file`, and package-data source routes; Plugin's focused
-   suite passes, proving its read-only action boundary, its protected-field skill
-   projection with the vanilla skills catalog left closed, and its detached
-   per-read catalog projection.
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.notification import DECLARATION as notification; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; print(mcp.name, mcp.requires, avatar.name, avatar.requires, context.name, context.requires, daemon.name, daemon.requires, email.name, email.requires, notification.name, notification.requires, OFFICIAL_TOOL_PLUGIN_NAMES)"
-   ```
-
-   Expect six declarations constructed at import with no Agent, their actual
-   narrow host ports, the exact reservation
-   `('mcp', 'avatar', 'context', 'daemon', 'email', 'notification')`, and no
-   server, transport, or catalog record involved. In particular, Notification
-   prints `notification ('workdir', 'notification_state')`.
+   Expect twelve ordered pairs whose names are `mcp, avatar, context, daemon,
+   email, file, plugin, notification, shell, soul, system, task_card`, with
+   requires respectively `workdir/prompt_section`, `workdir/avatar_parent`,
+   `workdir/context_runtime`, `workdir/daemon_runtime`,
+   `workdir/email_runtime`, `workdir/file_io`,
+   `workdir/prompt_section/plugin_catalog`, `workdir/notification_state`,
+   `workdir/notifications/configuration`, `workdir/soul_runtime`,
+   `workdir/system_runtime/identity`, and
+   `workdir/shutdown/task_card_lifecycle/task_card_notifications`; then expect
+   exactly `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin',
+   'notification', 'shell', 'soul', 'system', 'task_card')`, then `True`. All
+   twelve declarations construct at import with no Agent, server, transport, or
+   catalog record. The two File focused suites pass, proving its narrow
+   adapter/grant, one mount, unchanged operations, sole package manual body at
+   `file-manual`, absent `capabilities/file`, and package-data source routes;
+   Plugin's focused suite passes, proving its read-only action boundary, its
+   protected-field skill projection with the vanilla skills catalog left closed,
+   and its detached per-read catalog projection; Task Card's typed notification
+   suite passes, proving exact error/recovered/limit and reminder wire parity
+   through the production five-operation port adapter and foreign
+   source/channel/field refusal.
 5. Inspect the **kernel-shipped MCP class** of the governed surface. A
    registry-only grep proves nothing about these families, so check them
    directly:
@@ -339,10 +341,11 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Expected evidence
 
 - [ ] Step 1: the section opens by distinguishing base `mcp` evidence, Avatar's,
-      Context's, Daemon's, Email's, File's, and Plugin's actual landed vertical
-      evidence, and the family-generic C register's remaining targets, with File
-      sixth after Email, Plugin seventh, and every remaining negative claim
-      properly scoped.
+      Context's, Daemon's, Email's, File's, Plugin's, Notification's, Shell's,
+      Soul's, System's, and Task Card's actual landed vertical
+      evidence, and the family-generic C register's remaining targets
+      (`vision`, `web`), with File sixth after Email, Plugin seventh, Task Card
+      twelfth, and every remaining negative claim properly scoped.
 - [ ] Step 1: the section exists in `src/lingtai/tools/CONTRACT.md` and opens
       by distinguishing current `mcp` evidence, Avatar's, Context's, Daemon's, Email's, and
       Notification's actual landed vertical evidence, and the family-generic C integration register's
@@ -358,21 +361,25 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       Plugins v1.0.0 and raw third-party MCP schemas stay excluded, and no
       manifest compiler, admission engine, or wrapper runtime is introduced.
 - [ ] Step 4: `registry.py` contains no MCP-server packaging reference (grep
-      exit 1), all seven declarations import with no Agent and require only their
-      named narrow ports, File is exactly `workdir`/`file_io` and Plugin exactly
-      `workdir`/`prompt_section`/`plugin_catalog`, the reservation is exactly
-      `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin')`, both
-      File focused suites pass with one manual body/destination and one mount,
-      and Plugin's suite passes with its read-only boundary, protected-field
-      projection, closed vanilla-skills namespace, and detached catalog state.
+      exit 1), all twelve declarations import with no Agent and require only
+      their named narrow ports, File is exactly `workdir`/`file_io`, Plugin
+      exactly `workdir`/`prompt_section`/`plugin_catalog`, and Task Card exactly
+      `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; the
+      reservation is exactly `('mcp', 'avatar', 'context', 'daemon', 'email',
+      'file', 'plugin', 'notification', 'shell', 'soul', 'system',
+      'task_card')`; both File focused suites pass with one manual
+      body/destination and one mount, Plugin's suite passes with its read-only
+      boundary, protected-field projection, closed vanilla-skills namespace, and
+      detached catalog state, and Task Card's typed notification suite passes.
 - [ ] Step 4: `src/lingtai/tools/registry.py` contains no `lingtai.mcp_servers`
       import and no `CuratedMcpPlugin` reference (grep exit status 1), and all
-      six landed `DECLARATION`s import with no Agent: `mcp` requires only
+      twelve landed `DECLARATION`s import with no Agent: `mcp` requires only
       `workdir`/`prompt_section`, Avatar only `workdir`/`avatar_parent`, Context
       only `workdir`/`context_runtime`, Daemon only `workdir`/`daemon_runtime`,
-      Email only `workdir`/`email_runtime`, and Notification only
-      `workdir`/`notification_state`; the official reservation is exactly
-      `('mcp', 'avatar', 'context', 'daemon', 'email', 'notification')`.
+      Email only `workdir`/`email_runtime`, Notification only
+      `workdir`/`notification_state`, and Task Card only
+      `workdir`/`shutdown`/`task_card_lifecycle`/`task_card_notifications`; the
+      official reservation is the exact twelve-name tuple above.
 - [ ] Step 5: exactly six curated `plugin.py` descriptors and six
       `lingtai-curated` catalog records exist, and the built-in daemon MCP
       families carry no descriptor (grep exit status 1) — matching the

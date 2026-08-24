@@ -16,7 +16,7 @@ from lingtai.mcp_servers.telegram._family import (
 from lingtai.mcp_servers.telegram.service import TelegramService
 from lingtai.tools.task_card import TaskCardManager, get_schema as task_card_schema
 
-from .test_task_card_controller import _FakeAgent, _OK_BODY, _write_renderer
+from .test_task_card_controller import _FakeAgent, _OK_BODY, _manager, _write_renderer
 
 
 class _CountingManager:
@@ -206,7 +206,7 @@ def test_intrinsic_task_card_schema_is_a_strict_ltp_v2_family():
 
 
 def _start_with_ceiling(agent: _FakeAgent, ceiling: int, *, requested=None):
-    manager = TaskCardManager(agent)
+    manager = _manager(agent)
     args = {
         "action": "start",
         "input": {
@@ -221,7 +221,7 @@ def _start_with_ceiling(agent: _FakeAgent, ceiling: int, *, requested=None):
 
 def test_intrinsic_start_caps_requested_refresh_limit_at_configured_default_2000(tmp_path):
     agent = _FakeAgent(tmp_path)
-    manager = TaskCardManager(agent)
+    manager = _manager(agent)
     result = manager.handle(
         {
             "action": "start",
@@ -240,7 +240,7 @@ def test_intrinsic_start_caps_requested_refresh_limit_at_configured_default_2000
 @pytest.mark.parametrize("requested", [0, -1, True, "2"])
 def test_intrinsic_start_rejects_invalid_refresh_limits(requested, tmp_path):
     agent = _FakeAgent(tmp_path)
-    manager = TaskCardManager(agent)
+    manager = _manager(agent)
     result = manager.handle(
         {
             "action": "start",

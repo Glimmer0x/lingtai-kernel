@@ -61,17 +61,31 @@ def plugin_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_eleven_official_families_mount_exactly_once_together(tmp_path):
+@pytest.fixture
+def task_card_agent(tmp_path):
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="task-card-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"task_card": {}},
+    )
+    try:
+        yield agent
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_all_twelve_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
         "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
-        "notification", "shell", "soul", "system",
+        "notification", "shell", "soul", "system", "task_card",
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-eleven-official-plugins",
+        agent_name="all-twelve-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -82,6 +96,7 @@ def test_all_eleven_official_families_mount_exactly_once_together(tmp_path):
             "plugin": {},
             "notification": {},
             "shell": {"yolo": True},
+            "task_card": {},
         },
     )
     try:
@@ -112,6 +127,78 @@ def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
     assert manual["status"] == "ok"
     assert manual["mcp_manual"]
     assert manual["manual_path"].endswith("capabilities/mcp/SKILL.md")
+
+
+def test_official_task_card_mount_keeps_the_current_agent_lifecycle(task_card_agent):
+    """The twelfth declared slice mounts, retains its manager, and serves its package manual."""
+    from lingtai.tools.task_card import DECLARATION, TaskCardManager
+
+    assert DECLARATION.requires == (
+        "workdir", "shutdown", "task_card_lifecycle", "task_card_notifications"
+    )
+    assert task_card_agent.official_tool_plugins["task_card"] is DECLARATION
+    assert [schema.name for schema in task_card_agent._tool_schemas].count("task_card") == 1
+
+    manager = task_card_agent._task_card_manager
+    assert isinstance(manager, TaskCardManager)
+    assert not hasattr(manager, "_agent")
+    handler = task_card_agent._tool_handlers["task_card"]
+    assert handler.__self__ is manager
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["content"][0]["text"]
+    assert manual["structuredContent"]["manual_path"].endswith(
+        "capabilities/task_card/SKILL.md"
+    )
+
+
+def test_official_task_card_manager_holds_only_the_native_notification_operations(
+    task_card_agent,
+):
+    """The bound manager sees five closed notification operations and no publisher.
+
+    The granted ``task_card_notifications`` port is the production
+    ``AgentTaskCardNotificationsAdapter``; a foreign source/channel/field cannot
+    be supplied to any of its operations, and the manager keeps only the
+    family's typed view over it.
+    """
+    from lingtai.adapters.tool_plugin_host import (
+        AgentTaskCardNotificationsAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.task_card import DECLARATION, TaskCardNotificationsAdapter
+
+    table = agent_host_ports(task_card_agent, "task_card")
+    host = ToolPluginHost.grant(DECLARATION, table)
+    assert host.granted == DECLARATION.requires
+    native = host.task_card_notifications
+    assert isinstance(native, AgentTaskCardNotificationsAdapter)
+    assert sorted(name for name in dir(native) if not name.startswith("_")) == [
+        "clear_reminder", "publish_error", "publish_limit", "publish_recovered",
+        "submit_reminder",
+    ]
+    assert not hasattr(native, "enqueue_system_notification")
+
+    for foreign in ({"source": "foreign"}, {"channel": "foreign"}, {"extra": {"x": 1}}):
+        with pytest.raises(TypeError):
+            native.publish_error(
+                watch_id="tc", body="b", code="c", retryable=True, idempotency_key="k",
+                **foreign,
+            )
+        with pytest.raises(TypeError):
+            native.publish_recovered(watch_id="tc", body="b", idempotency_key="k", **foreign)
+        with pytest.raises(TypeError):
+            native.publish_limit(
+                watch_id="tc", body="b", idempotency_key="k", used=1, max_refreshes=1,
+                **foreign,
+            )
+
+    manager = task_card_agent._task_card_manager
+    view = manager._host.task_card_notifications
+    assert isinstance(view, TaskCardNotificationsAdapter)
+    assert not hasattr(view, "enqueue_system_notification")
+    assert not hasattr(manager._host, "task_card_lifecycle")
 
 
 def test_official_soul_mount_preserves_real_flow_and_packaged_manual(mcp_agent):

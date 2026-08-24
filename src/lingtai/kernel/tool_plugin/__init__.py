@@ -59,6 +59,9 @@ __all__ = [
     "SoulRuntimePort",
     "SystemRuntimePort",
     "IdentityPort",
+    "ShutdownPort",
+    "TaskCardLifecyclePort",
+    "TaskCardNotificationsPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -80,12 +83,15 @@ MANUAL_ACTION = "manual"
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``, or
-#: ``system``. Plugin
+#: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
+#: ``system``, or ``task_card``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
-#: vocabulary plus the durable naming ``identity`` port. Root ``CONTRACT.md``
+#: vocabulary plus the durable naming ``identity`` port; Task Card consumes
+#: ``workdir`` plus its one-predicate ``shutdown`` observation, its
+#: current-Agent ``task_card_lifecycle`` manager slot, and the closed
+#: operation-native ``task_card_notifications`` port. Root ``CONTRACT.md``
 #: rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
@@ -108,6 +114,9 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "soul_runtime",
     "system_runtime",
     "identity",
+    "shutdown",
+    "task_card_lifecycle",
+    "task_card_notifications",
 )
 
 
@@ -121,7 +130,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
-    "shell", "soul", "system",
+    "shell", "soul", "system", "task_card",
 )
 
 
@@ -653,6 +662,82 @@ class IdentityPort(Protocol):
     def set_name(self, name: str) -> None: ...
 
     def set_nickname(self, nickname: str) -> None: ...
+
+
+class ShutdownPort(Protocol):
+    """Observe whether this Agent is stopping.
+
+    A Task Card watch polls this one predicate between renderer runs so an
+    agent stop ends its thread promptly.  It grants no lifecycle transition,
+    join, or event mutation.
+    """
+
+    def is_set(self) -> bool:
+        """Return true after the current Agent has begun shutdown."""
+
+
+class TaskCardLifecyclePort(Protocol):
+    """Retain the one Task Card manager for this current Agent.
+
+    The public producer needs exactly one persistent in-process owner across
+    refreshes so the BaseAgent lifecycle can stop/re-persist the real watch.
+    This is intentionally not a generic state bag: it only reads or replaces
+    this family's manager and records its one boot-resume diagnostic.
+    """
+
+    def current_manager(self) -> Any | None:
+        """Return this Agent's existing Task Card manager, if any."""
+
+    def retain_manager(self, manager: Any) -> None:
+        """Make *manager* the current Agent's Task Card lifecycle owner."""
+
+    def report_resume_failure(self, error: str) -> None:
+        """Record a bounded diagnostic when persisted-watch resume fails."""
+
+
+class TaskCardNotificationsPort(Protocol):
+    """Emit only the Task Card producer's established current-Agent notices.
+
+    Five closed, operation-native methods and nothing else: there is no
+    generic ``enqueue``, no ``**kwargs``, and no ``source``/``channel``/
+    ``extra`` argument.  The production adapter pins the established
+    ``task_card.error``/``task_card.limit`` sources, the ``system`` channel,
+    priority, idempotency skip, and the bounded ``extra`` projection
+    internally, so a holder of this port can neither publish a foreign source
+    nor address another channel.  The kernel imports nothing from the family;
+    the signatures are scalar so the dependency direction stays inward.
+    """
+
+    def publish_error(
+        self,
+        watch_id: str,
+        body: str,
+        code: str,
+        retryable: bool | str,
+        idempotency_key: str,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        """Queue one deduplicated ``task_card.error`` event in state ``error``."""
+
+    def publish_recovered(self, watch_id: str, body: str, idempotency_key: str) -> None:
+        """Queue one deduplicated ``task_card.error`` event in state ``recovered``."""
+
+    def publish_limit(
+        self,
+        watch_id: str,
+        body: str,
+        idempotency_key: str,
+        used: int,
+        max_refreshes: int,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        """Queue one deduplicated ``task_card.limit`` refresh-exhaustion event."""
+
+    def submit_reminder(self, turns: int) -> None:
+        """Publish the producer's absent/stale Task Card reminder."""
+
+    def clear_reminder(self) -> None:
+        """Clear the producer's current Task Card reminder."""
 
 
 class ToolMountPort(Protocol):
