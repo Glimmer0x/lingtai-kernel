@@ -20,11 +20,12 @@ maintenance: |
   contract disagree, the code is the source of truth — fix the contract in the
   same change and bump contract_version on breaking contract edits. mcp's schema
   composition and envelope dispatch build on the generic tool_family package;
-  keep that link current when either side's boundary changes. mcp is the first
-  and only family declared under the kernel-owned declared host-plugin contract
-  (src/lingtai/kernel/tool_plugin/CONTRACT.md): keep §Declared host plugin below
-  and that contract in step, and if this family's required host ports change,
-  move the declaration, the port set, the adapter, and both contracts together.
+  keep that link current when either side's boundary changes. mcp is one declared
+  slice under the kernel-owned family-generic contract (the current base
+  reference); the shared C register also targets other names without claiming
+  their candidates merged. Keep §Declared host plugin below and that contract in
+  step, and if this family's required host ports change, move the declaration,
+  the narrow port set, the adapter, and both contracts together.
   The source package is additionally a built-in Agent Plugins v1.0.0
   documentation package: keep `plugin.json`, its sole owned
   `skills/mcp-manual/` source, `Agent._install_intrinsic_manuals`, and the

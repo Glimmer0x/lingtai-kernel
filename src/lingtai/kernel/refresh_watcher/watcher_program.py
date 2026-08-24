@@ -18,6 +18,12 @@ policy.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+from lingtai.kernel.notification_store._mutation_lock import (
+    channel_mutation_scope,
+    notification_mutation_lock_path,
+)
 
 from . import RefreshWatcherRequest
 
@@ -84,6 +90,10 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
     agent_name = request.agent_name
     address = request.address
     identity_fields = _decode_identity_fields(request.identity_fields_json)
+    scoped_system_lock_name = notification_mutation_lock_path(
+        Path(working_dir_str) / ".notification",
+        channel_mutation_scope("system"),
+    ).name
 
     return (
         "import time, os, sys, json\n"
@@ -97,7 +107,6 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         # src/lingtai/adapters/posix/notification_store_lock.py), and the
         # watcher must participate in that lock or its terminal alert can be
         # silently lost against a concurrent agent merge (issue #742).
-        "_NOTIFICATION_LOCK_FILE = '.store.lock'\n"
         "_NOTIFICATION_LOCK_TIMEOUT = 5.0\n"
         "def _process_mechanism():\n"
         "    try:\n"
@@ -236,39 +245,57 @@ def render_watcher_script(request: RefreshWatcherRequest) -> str:
         "    return meta\n"
         "def _acquire_system_notification_lock():\n"
         "    notif_dir = os.path.join(wd, '.notification')\n"
+        "    scope = 'channel:system'\n"
+        f"    scoped_name = {scoped_system_lock_name!r}\n"
         "    try:\n"
-        "        os.makedirs(notif_dir, exist_ok=True)\n"
+        "        os.makedirs(os.path.join(notif_dir, '.locks'), exist_ok=True)\n"
         "    except OSError:\n"
         "        pass\n"
         "    if _fcntl is None:\n"
-        "        log('refresh_failed_permanent_lock_unavailable', reason='no_fcntl')\n"
+        "        # Native Windows has no POSIX shared-lock bridge. Its upgrade is\n"
+        "        # intentionally quiesced; preserve the existing fail-open alert.\n"
+        "        log('refresh_failed_permanent_lock_unavailable', reason='windows_quiesced_cutover')\n"
         "        return None\n"
+        "    legacy_fd = None\n"
         "    try:\n"
-        "        fd = open(os.path.join(notif_dir, _NOTIFICATION_LOCK_FILE), 'a+b')\n"
+        "        legacy_fd = open(os.path.join(notif_dir, '.store.lock'), 'a+b')\n"
+        "        scoped_fd = open(os.path.join(notif_dir, '.locks', scoped_name), 'a+b')\n"
         "    except OSError as exc:\n"
+        "        if legacy_fd is not None:\n"
+        "            legacy_fd.close()\n"
         "        log('refresh_failed_permanent_lock_unavailable', reason='open_failed',\n"
         "            error=_bounded(str(exc), 200))\n"
         "        return None\n"
         "    deadline = time.time() + _NOTIFICATION_LOCK_TIMEOUT\n"
         "    while True:\n"
         "        try:\n"
-        "            _fcntl.flock(fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)\n"
-        "            return fd\n"
+        "            _fcntl.flock(legacy_fd.fileno(), _fcntl.LOCK_SH | _fcntl.LOCK_NB)\n"
+        "            _fcntl.flock(scoped_fd.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)\n"
+        "            return (legacy_fd, scoped_fd)\n"
         "        except OSError:\n"
+        "            try:\n"
+        "                _fcntl.flock(scoped_fd.fileno(), _fcntl.LOCK_UN)\n"
+        "                _fcntl.flock(legacy_fd.fileno(), _fcntl.LOCK_UN)\n"
+        "            except OSError:\n"
+        "                pass\n"
         "            if time.time() >= deadline:\n"
+        "                legacy_fd.close()\n"
+        "                scoped_fd.close()\n"
         "                log('refresh_failed_permanent_lock_timeout')\n"
-        "                return fd\n"
+        "                return None\n"
         "            time.sleep(0.1)\n"
-        "def _release_system_notification_lock(fd):\n"
-        "    if fd is None:\n"
+        "def _release_system_notification_lock(handles):\n"
+        "    if handles is None:\n"
         "        return\n"
+        "    legacy_fd, scoped_fd = handles\n"
         "    try:\n"
-        "        if _fcntl is not None:\n"
-        "            _fcntl.flock(fd.fileno(), _fcntl.LOCK_UN)\n"
+        "        _fcntl.flock(scoped_fd.fileno(), _fcntl.LOCK_UN)\n"
+        "        _fcntl.flock(legacy_fd.fileno(), _fcntl.LOCK_UN)\n"
         "    except OSError:\n"
         "        pass\n"
         "    finally:\n"
-        "        fd.close()\n"
+        "        scoped_fd.close()\n"
+        "        legacy_fd.close()\n"
         "def _append_system_notification(meta):\n"
         "    fd = _acquire_system_notification_lock()\n"
         "    try:\n"

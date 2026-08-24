@@ -13,7 +13,7 @@ related_files:
 - src/lingtai/intrinsic_skills/lingtai-manual/SKILL.md
 - src/lingtai/tools/knowledge/manual/SKILL.md
 - src/lingtai/tools/skills/manual/SKILL.md
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 maintenance: |
   This is the psyche family's own manual, loaded by
   `psyche(action='manual', input={}, reasoning='...')`.
