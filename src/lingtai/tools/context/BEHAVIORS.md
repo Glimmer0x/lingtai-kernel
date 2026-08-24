@@ -5,6 +5,8 @@ labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
+  - src/lingtai/tools/context/__init__.py
+  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/context/_molt.py
   - src/lingtai/tools/context/_session_journal.py
   - src/lingtai/tools/context/_snapshots.py
@@ -22,6 +24,7 @@ related_files:
   - tests/test_preset_context_guard.py
   - tests/test_how_to_change_name_e2e.py
   - tests/test_goal_notification.py
+  - tests/test_context_declared_tool_plugin.py
 maintenance: |
   Written by the lifecycle/state behavior audit. Keep in sync with the clauses
   these LABTs guard and with the paired ANATOMY.md files: when CONTRACT.md

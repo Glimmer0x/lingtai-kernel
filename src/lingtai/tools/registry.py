@@ -72,9 +72,9 @@ from . import email, system, context, soul, notification  # noqa: E402  (lingtai
 from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
-    "email": {"module": email},
+    "email": {"module": email, "official_plugin": True},
     "system": {"module": system},
-    "context": {"module": context},
+    "context": {"module": context, "official_plugin": True},
     "psyche": {"module": psyche},
     "soul": {"module": soul},
     "notification": {"module": notification},
@@ -102,10 +102,6 @@ CAPABILITY_UNAVAILABLE = _CapabilityUnavailable()
 # the old capabilities/core divide). Resolved lazily by importlib inside
 # setup_capability so importing the registry never imports every tool.
 BUILTIN_TOOLS: dict[str, str] = {
-    # Email keeps its real Agent-bound manager as an intrinsic runtime, then
-    # its setup() promotes the model-facing surface through the official host
-    # plugin registrar.
-    "email": "lingtai.tools.email",
     "knowledge": "lingtai.tools.knowledge",
     "skills": "lingtai.tools.skills",
     # ``bash`` remains a one-way read-only input alias only; the public
@@ -150,15 +146,7 @@ BUILTIN_TOOLS: dict[str, str] = {
 # another preset's vision service via the ``preset`` option. ``web_search``
 # is NOT in this set — it requires provider config and API keys, so it stays
 # explicit opt-in.
-# These names remain mandatory official surfaces even when a caller supplies
-# the generic capability opt-out forms. Their intrinsic runtime and declaration
-# mount are one reserved surface; dropping setup would expose a generic fallback.
-_MANDATORY_OFFICIAL_CAPABILITIES = frozenset({"email"})
-
 CORE_DEFAULTS: dict[str, dict] = {
-    # Email is always available as before; setup replaces only its generic
-    # model-facing intrinsic slot with the official declaration mount.
-    "email": {},
     "knowledge": {},
     "skills": {},
     "shell": {"yolo": True},
@@ -198,8 +186,7 @@ def apply_core_defaults(
             if kwargs is None:
                 # Explicit ``"name": null`` from JSON — disable without needing
                 # the ``disable`` list. Useful for one-off opt-outs in init.json.
-                if name not in _MANDATORY_OFFICIAL_CAPABILITIES:
-                    out.pop(name, None)
+                out.pop(name, None)
                 continue
             if name in out and isinstance(out[name], dict) and isinstance(kwargs, dict):
                 merged = dict(out[name])
@@ -209,9 +196,7 @@ def apply_core_defaults(
                 out[name] = kwargs
     if disable:
         for name in disable:
-            canonical_name = canonical_capability_name(name)
-            if canonical_name not in _MANDATORY_OFFICIAL_CAPABILITIES:
-                out.pop(canonical_name, None)
+            out.pop(canonical_capability_name(name), None)
     return out
 
 

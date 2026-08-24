@@ -34,31 +34,64 @@ def _assert_no_email_capability_row(agent):
     assert "email" not in {name for name, _ in persisted_rows}
 
 
-def test_email_runtime_port_is_domain_specific_and_rejects_foreign_action():
-    """The Email family consumes a typed manager request, never a generic lookup."""
-    from lingtai.tools.email import (
-        EmailRuntimeRequest,
-        EmailRuntimePort,
-        _EmailIntrinsicRuntimeAdapter,
-    )
+def _write_refresh_init(workdir, *, capabilities: dict, disable: list[str] | None) -> None:
+    """Supply the minimum persisted config needed to exercise real refresh."""
+    init_data = {
+        "manifest": {
+            "agent_name": "email-opt-out",
+            "language": "en",
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "base_url": None,
+            },
+            "capabilities": capabilities,
+            "disable": disable or [],
+            "soul": {"delay": 60},
+            "context_limit": None,
+            "admin": {"karma": True},
+            "streaming": False,
+        },
+        "principle": "",
+        "covenant": "",
+        "pad": "",
+        "lingtai": "",
+        "soul": "",
+    }
+    (workdir / "init.json").write_text(json.dumps(init_data), encoding="utf-8")
 
-    calls = []
-    adapter = _EmailIntrinsicRuntimeAdapter(
-        lambda envelope: calls.append(envelope) or {"status": "ok"}
-    )
+
+def test_email_runtime_port_is_domain_specific_and_rejects_foreign_action():
+    """The production port invokes only the live Email manager exactly once."""
+    from lingtai.adapters.tool_plugin_host import AgentEmailRuntimeAdapter
+    from lingtai.tools.email import EmailRuntimePort, EmailRuntimeRequest
+
+    class Manager:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def handle(self, args: dict) -> dict:
+            self.calls.append(args)
+            return {"status": "ok"}
+
+    manager = Manager()
+    adapter = AgentEmailRuntimeAdapter(lambda: manager)
     assert "handle_email" in EmailRuntimePort.__dict__
+    assert not hasattr(adapter, "_agent")
     assert not hasattr(adapter, "dispatch")
     assert adapter.handle_email(
         EmailRuntimeRequest("check", {"folder": "inbox"})
     ) == {"status": "ok"}
-    assert calls == [{"action": "check", "input": {"folder": "inbox"}}]
+    assert manager.calls == [{"action": "check", "folder": "inbox"}]
 
     with pytest.raises(ValueError, match="unsupported Email runtime action"):
         adapter.handle_email(EmailRuntimeRequest("mcp", {}))
+    assert manager.calls == [{"action": "check", "folder": "inbox"}]
 
 
 def test_email_bound_family_normalizes_before_typed_runtime_and_preserves_results(
-    email_agent, tmp_path, monkeypatch
+    email_agent, tmp_path
 ):
     """The final-port-shaped family boundary strips nulls before the runtime call."""
     from types import SimpleNamespace
@@ -81,13 +114,8 @@ def test_email_bound_family_normalizes_before_typed_runtime_and_preserves_result
             )
 
     runtime = CapturingEmailRuntime()
-    monkeypatch.setattr(
-        email_module, "_EmailIntrinsicRuntimeAdapter", lambda _dispatch: runtime
-    )
     host = SimpleNamespace(
-        intrinsic_dispatch=SimpleNamespace(
-            dispatch=lambda _envelope: pytest.fail("legacy intrinsic dispatch was called")
-        ),
+        email_runtime=runtime,
         workdir=tmp_path / "manual-workdir",
     )
     family = email_module._build_bound_family(host)
@@ -144,18 +172,17 @@ def test_official_email_mount_keeps_real_agent_runtime_and_package_manual(email_
     from lingtai.tools.email._family_schema import ACTION_ORDER
 
     assert DECLARATION.actions == ACTION_ORDER[:-1]
-    assert DECLARATION.requires == ("workdir", "intrinsic_dispatch")
+    assert DECLARATION.requires == ("workdir", "email_runtime")
     assert email_agent.official_tool_plugins["email"] is DECLARATION
-    # The official intrinsic is not a dynamic capability. The transitional
-    # setup bridge returns CAPABILITY_UNAVAILABLE so neither runtime bookkeeping
-    # nor the persisted manifest grows an Email capability row.
+    # The official intrinsic is not a dynamic capability, so neither runtime
+    # bookkeeping nor the persisted manifest grows an Email capability row.
     assert "email" not in {name for name, _ in email_agent._capabilities}
     _assert_no_email_capability_row(email_agent)
-    # The kernel retains the key for internal callers, but its handler is the
-    # official handler and the model-facing inventory has only the official tool.
+    # The kernel retains a transport shim for inbound hooks, while the
+    # model-facing handler is mounted only by the official registrar.
     assert "email" in email_agent._intrinsics
     assert "email" in email_agent._intrinsic_modules
-    assert email_agent._intrinsics["email"] is email_agent._tool_handlers["email"]
+    assert email_agent._intrinsics["email"] is not email_agent._tool_handlers["email"]
     assert [schema.name for schema in email_agent._tool_schemas].count("email") == 1
     assert [schema.name for schema in email_agent._build_tool_schemas()].count("email") == 1
 
@@ -168,6 +195,30 @@ def test_official_email_mount_keeps_real_agent_runtime_and_package_manual(email_
     assert manual["status"] == "ok"
     assert "# Email Manual" in manual["manual"]
     assert manual["manual_path"].endswith("capabilities/email/SKILL.md")
+
+
+def test_email_official_adapter_reads_replaced_manager_after_refresh(email_agent):
+    """Refresh replaces EmailManager and a bound port reads the current one live."""
+    _write_refresh_init(email_agent.working_dir, capabilities={}, disable=None)
+    original_manager = email_agent._email_manager
+    email_agent._setup_from_init()
+    assert email_agent._email_manager is not original_manager
+
+    class ReplacementManager:
+        def __init__(self):
+            self.calls: list[dict] = []
+
+        def handle(self, args: dict) -> dict:
+            self.calls.append(args)
+            return {"status": "replacement"}
+
+    replacement = ReplacementManager()
+    handler = email_agent._tool_handlers["email"]
+    email_agent._email_manager = replacement
+    assert handler(
+        {"action": "check", "input": {"folder": None}, "reasoning": "refresh"}
+    ) == {"status": "replacement"}
+    assert replacement.calls == [{"action": "check"}]
 
 
 @pytest.mark.parametrize(
@@ -191,30 +242,7 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
         disable=disable,
     )
     try:
-        init_data = {
-            "manifest": {
-                "agent_name": "email-opt-out",
-                "language": "en",
-                "llm": {
-                    "provider": "gemini",
-                    "model": "gemini-test",
-                    "api_key": "test-key",
-                    "base_url": None,
-                },
-                "capabilities": capabilities,
-                "disable": disable or [],
-                "soul": {"delay": 60},
-                "context_limit": None,
-                "admin": {"karma": True},
-                "streaming": False,
-            },
-            "principle": "",
-            "covenant": "",
-            "pad": "",
-            "lingtai": "",
-            "soul": "",
-        }
-        (workdir / "init.json").write_text(json.dumps(init_data), encoding="utf-8")
+        _write_refresh_init(workdir, capabilities=capabilities, disable=disable)
 
         from lingtai.tools.email import DECLARATION
 
@@ -226,6 +254,6 @@ def test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refre
             _assert_no_email_capability_row(agent)
             assert [schema.name for schema in agent._tool_schemas].count("email") == 1
             assert [schema.name for schema in agent._build_tool_schemas()].count("email") == 1
-            assert agent._tool_handlers["email"] is agent._intrinsics["email"]
+            assert agent._tool_handlers["email"] is not agent._intrinsics["email"]
     finally:
         agent.stop(timeout=1.0)

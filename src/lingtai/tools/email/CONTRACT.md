@@ -4,6 +4,9 @@ tool: email
 contract_version: 2
 related_files:
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/tools/email/_family_schema.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
@@ -11,7 +14,6 @@ related_files:
   - src/lingtai/tools/email/BEHAVIORS.md
   - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
-  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
@@ -172,33 +174,42 @@ The Email package owns the manager-facing `EmailRuntimeRequest` value and
 `EmailRuntimePort.handle_email()` operation (`src/lingtai/tools/email/__init__.py`).
 Operational children receive one fixed action plus its validated input through
 that port; they never receive an Agent, a capability-name lookup, or a generic
-`dispatch(args)` vocabulary. `_EmailIntrinsicRuntimeAdapter` is a transitional
-outer adapter for this stale candidate worktree only: it translates the existing
-`intrinsic_dispatch` bridge into the Email request once. Serialized integration
-must change the declaration's `intrinsic_dispatch` requirement to
-`email_runtime`, bypass and delete this temporary adapter rather than retargeting
-its constructor, and supply the host-granted typed port directly, preserving the
-Email family code and its typed request unchanged.
+`dispatch(args)` vocabulary. Family normalization is `_strip_nulls()` before the
+request is constructed. `DECLARATION.requires` is exactly `("workdir",
+"email_runtime")`, and `_build_bound_family(host)` reads only those two grants.
 
-The recut preserves the real Agent-bound mailbox manager rather than creating a
-shadow manager. `boot(agent)` still creates that manager and retains the module
-for the kernel's inbound-mail hook. The transitional `setup(agent)` registers
-the official declaration and returns `CAPABILITY_UNAVAILABLE` so the stale
-dynamic-capability caller removes Email from `_capabilities` and the persisted
-`.agent.json` manifest. Thus `capabilities={"email": None}` and
-`disable=["email"]` cannot create a generic Email fallback or an Email manifest
-row. After serialized integration, Email boot/official registration must remain
-mandatory and the dynamic registry/default/opt-out workaround must be removed
-from its shared owners.
+The real mailbox manager remains Agent-bound; it is not duplicated. Email is an
+injected `official_plugin` in `src/lingtai/tools/registry.py`, so
+`BaseAgent._boot_official_intrinsics()` invokes `email.boot(agent)` on
+construction and refresh. That boot creates/replaces `EmailManager` first, then
+calls `register_agent_tool_plugins(..., extra_ports_for=...)`. Its sole extra
+port is `AgentEmailRuntimeAdapter(lambda: getattr(agent, "_email_manager",
+None))`. The adapter owns no Agent object: it rejects an undeclared action,
+looks up the current manager at invocation time, and calls exactly once with
+`{"action": request.action, **dict(request.input)}`. It never captures
+`agent._intrinsics` and never recurses through the official handler. Thus a
+refresh replacement and any later manager replacement are observed by bound
+handlers without adding a universal dispatch seam. The deliberately minimal
+`DaemonEmailAgentShim` has no `official_tool_plugins` surface, so `boot()` gives
+that MCP server only the existing manager/hook runtime; it does not attempt an
+official mount and Daemon's explicit task-scoped `daemon_email` MCP route stays
+unchanged.
+
+There is no Email dynamic `setup()` function, `BUILTIN_TOOLS` row,
+`CORE_DEFAULTS` entry, capability-manager row, or manifest row. The mandatory
+injected official surface remains one schema and one canonical package manual
+when `capabilities={"email": None}` or `disable=["email"]`; neither opt-out
+form can reveal a generic fallback.
 
 The official mount swaps the same-name intrinsic handler while retaining the
 module-level hook exports. The public name, action order, closed LTP envelope,
 manual result, mailbox side effects, and error shapes are unchanged.
 
-`tests/test_email_official_tool_plugin.py` proves the typed request adapter, one
-real-Agent mount, retained manager, package manual, one model-facing schema, and
-absence of an Email dynamic-capability/manifest row during construction and
-refresh.
+`tests/test_email_official_tool_plugin.py` proves the production typed adapter,
+foreign-action rejection before manager invocation, normalization-before-request,
+one real-Agent mount, canonical package manual, one model-facing schema, no
+capability/manifest row for null or disabled input, and call-time observation of
+a manager replacement after refresh.
 
 ## State & storage
 

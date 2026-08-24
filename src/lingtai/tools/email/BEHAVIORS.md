@@ -21,7 +21,7 @@ maintenance: |
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/tools/email/CONTRACT.md` (closed LTP v2 envelope, validation
 before mailbox I/O, reserved `unread` rejection, exact receipts, typed
-manager-facing runtime, and absence of dynamic Email capability state). Pinned
+manager-facing runtime, live manager replacement, and absence of dynamic Email capability state). Pinned
 pytest commands must run from the repo root with the project's Python.
 
 ## Behavior EM001 — envelope failures are rejected before any mailbox I/O, and send returns the exact sent receipt
@@ -57,15 +57,34 @@ Pass when the suite passes and the before-I/O rejection and exact receipt hold. 
 
 ### Steps
 1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_email_official_tool_plugin.py`.
-2. Confirm `test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` rejects a foreign action, and `test_email_bound_family_normalizes_before_typed_runtime_and_preserves_results` captures `EmailRuntimeRequest` values with top-level/nested nulls removed before direct typed-port manager parity for `check` and `edit_contact`.
-3. Confirm the construction and refresh cases inspect `agent._capabilities`, `agent._build_manifest()["capabilities"]`, and persisted `.agent.json`; none contains an `email` row, while exactly one official `email` schema and handler remain mounted.
-4. Call the mounted handler's `check` and `manual` actions and confirm the real mailbox manager and package-owned manual remain available.
+2. Confirm `test_email_runtime_port_is_domain_specific_and_rejects_foreign_action`
+   exercises `AgentEmailRuntimeAdapter`: it rejects a foreign action before its
+   fake manager is called and flattens one valid normalized request into exactly
+   one manager call. Confirm
+   `test_email_bound_family_normalizes_before_typed_runtime_and_preserves_results`
+   captures `EmailRuntimeRequest` values with top-level/nested nulls removed
+   before typed-port manager parity for `check` and `edit_contact`.
+3. Confirm the construction and refresh cases inspect `agent._capabilities`,
+   `agent._build_manifest()["capabilities"]`, and persisted `.agent.json`; none
+   contains an `email` row, while exactly one official `email` schema and handler
+   remain mounted for null and disabled inputs.
+4. Confirm `test_email_official_adapter_reads_replaced_manager_after_refresh`
+   first observes refresh replacing `EmailManager`, then proves an already-bound
+   handler reads a later replacement manager at call time. Call `check` and
+   `manual` to confirm the real manager and package-owned manual remain available.
 
 ### Expected evidence
 - [ ] Step 1: the Email official-plugin suite passes.
-- [ ] Step 2: the family-facing boundary is `EmailRuntimePort.handle_email(EmailRuntimeRequest(...))`; top-level and nested nulls are absent before invocation, `check`/`edit_contact` results remain exact, a foreign capability action is rejected, and no generic `dispatch` method is exposed by the Email adapter.
-- [ ] Step 3: construction and refresh preserve the official surface without adding a dynamic capability or persisted `.agent.json` manifest row.
-- [ ] Step 4: `check` returns the empty-mailbox receipt and `manual` returns the installed `email-manual` body/path.
+- [ ] Step 2: the family-facing boundary is
+      `EmailRuntimePort.handle_email(EmailRuntimeRequest(...))`; top-level and
+      nested nulls are absent before invocation, results remain exact, a foreign
+      action is rejected before any manager call, and no generic dispatch or
+      intrinsic route is exposed by the adapter.
+- [ ] Step 3: construction and refresh preserve one official surface without a
+      dynamic capability or persisted `.agent.json` row, including null/disable
+      input parity.
+- [ ] Step 4: refresh replaces the manager and a bound handler observes a later
+      replacement at call time; `check` and `manual` retain their receipts.
 
 ### Pass / Fail
 Pass when all four steps hold and the official Email surface is mandatory by intrinsic/official registration rather than dynamic capability state. Fail on a generic/foreign operation reaching the manager, an Email capability/manifest row, a duplicate schema, a missing manager, or a non-package manual.

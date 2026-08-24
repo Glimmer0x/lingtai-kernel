@@ -980,15 +980,17 @@ class BaseAgent:
             tool_result_recovery_lookup_fn=self._recover_pending_tool_result,
         )
 
-        # Boot intrinsics that define an optional ``boot(agent)`` hook. Order
-        # follows the injected registry; the two intrinsics that historically
-        # booted (pad/lingtai, email) both define ``boot`` and run here without
-        # name special-casing. Absent-intrinsic = nothing to boot.
+        # Boot ordinary intrinsics first. Official-intrinsic shims retain the
+        # injected kernel-hook and tool-call-id path, but their public surface is
+        # mounted only by the declared host-plugin registrar below.
         for name in self._intrinsics:
+            if self._intrinsic_registry.get(name, {}).get("official_plugin"):
+                continue
             module = self._intrinsic_modules.get(name)
             boot_fn = getattr(module, "boot", None) if module is not None else None
             if boot_fn is not None:
                 boot_fn(self)
+        self._boot_official_intrinsics()
 
     # ------------------------------------------------------------------
     # Intrinsic wiring
@@ -1006,8 +1008,40 @@ class BaseAgent:
         for name, info in self._intrinsic_registry.items():
             module = info["module"]
             self._intrinsic_modules[name] = module
-            handle_fn = module.handle
-            self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+            if info.get("official_plugin"):
+                # Context needs the intrinsic dispatcher's private ``_tc_id``
+                # injection for its exact live ToolCallBlock replay, but its
+                # model-facing schema/handler are published exclusively through
+                # the official host mount. This shim is transport routing, not a
+                # second public registration.
+                def _official_dispatch(args, _name=name):
+                    handler = self._tool_handlers.get(_name)
+                    if handler is None:
+                        raise RuntimeError(
+                            f"official intrinsic {_name!r} was dispatched before it mounted"
+                        )
+                    return handler(args)
+
+                self._intrinsics[name] = _official_dispatch
+            else:
+                handle_fn = module.handle
+                self._intrinsics[name] = lambda args, fn=handle_fn: fn(self, args)
+
+    def _boot_official_intrinsics(self) -> None:
+        """Run declared mandatory-plugin wiring after construction or refresh.
+
+        Registry injection still keeps the kernel free of concrete family imports;
+        the flag only distinguishes an internal transport/hook shim from a
+        model-facing intrinsic registration. Each module's own ``boot`` owns the
+        registrar call and therefore the declaration it publishes.
+        """
+        for name, info in self._intrinsic_registry.items():
+            if not info.get("official_plugin"):
+                continue
+            module = self._intrinsic_modules.get(name)
+            boot_fn = getattr(module, "boot", None) if module is not None else None
+            if boot_fn is not None:
+                boot_fn(self)
 
     def _intrinsic_hook(self, intrinsic: str, name: str):
         """Resolve a kernel-facing hook function from an injected intrinsic.
@@ -2676,14 +2710,6 @@ class BaseAgent:
             glossary_package=plugin.glossary_package,
             _official_mount_token=_OFFICIAL_MOUNT_TOKEN,
         )
-        # A declared slice may recut an existing intrinsic whose real runtime is
-        # still needed by kernel hooks. Keep that same key reachable for internal
-        # callers, but replace its generic handler with the exact official one;
-        # `_build_tool_schemas` and `_refresh_tool_inventory_section` omit this
-        # retained alias once the registrar records the live official claim, so
-        # it never becomes a duplicate model-facing tool.
-        if name in self._intrinsics:
-            self._intrinsics[name] = plugin.handler
         transaction.mark_mounted(self)
 
     def add_tool(
