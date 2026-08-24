@@ -16,7 +16,7 @@ maintenance: |
 **术语对照**
 
 - `vision`：使用 LLM 的视觉能力分析图像。支持 JPEG、PNG 和 WebP。可以对图像提出任何问题——描述内容、识别文字、解读图表、识别物体、评估风格或氛围。结合 draw 可以先生成图像再分析。
-- `action`：所选子 Tool 名，`analyze` 直接分析，`manual` 仅返回只读指引
+- `action`：所选子 Tool 名，`analyze` 直接分析，`check` 检查路由，`list` 列出可用路由，`manual` 仅返回只读引导
 - `input`：所选 action 自身的严格输入
 - `image_path`：`analyze` 输入中的图像文件路径
 - `question`：`analyze` 输入中关于图像的问题，`null` 表示使用默认提问

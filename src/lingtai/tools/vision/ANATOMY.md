@@ -18,71 +18,81 @@ maintenance: |
   Keep related_files as repo-relative paths to real files and keep anatomy links
   reciprocal. Update citations with structural code changes and run the document
   validators after edits. tool_family is generic optional infrastructure this
-  package composes onto; vision's own provider routing and result shapes stay
-  here.
+  package composes onto; Vision owns its provider routing, action results, and
+  preset authorization boundary.
   Capability mentions in any document require explicit bidirectional
   related_files mapping to the implementing code (see root ## Maintenance).
 ---
 # src/lingtai/tools/vision/
 
-The `vision` tool registers one action-separated public family: direct
-current-preset image analysis (`analyze`) plus a provider-neutral, family-owned
-`manual` route when direct setup is unavailable. Schema composition and envelope
-dispatch delegate to the generic `tool_family` infrastructure; this package
-retains ownership of provider routing, identity resolution, and every action
-result shape.
+The `vision` package is one declaration-derived public family with four model-facing
+children: `analyze`, `check`, `list`, and the reserved `manual`. The generic
+`tool_family` package owns schema composition and envelope dispatch; this package
+owns provider identity, allowed-preset borrowing, route classification, and every
+Vision result shape.
 
 ## Components
 
-- `__init__.py:46-99` — Codex-family gate and bucket-driven route resolution plus the same-provider alias check; GLM/Zhipu and Codex spelling pairs share current identity, provider spelling is only a Codex-family compatibility gate, `_normalize_codex_auth_path` trims the bucket `codex_auth_path` once, and `_codex_bucket_route` picks direct (nonblank trimmed `codex_auth_path` in the active bucket) vs pool exactly as the canonical Codex factory does.
-- `__init__.py:120-128` — exact advertised provider registry; the local pseudo-provider remains explicit opt-in and intentionally excluded.
-- `__init__.py:130-150` — the two canonical child input schemas: `analyze` owns the strict `image_path`/nullable-`question` object, `manual` is strict empty.
-- `__init__.py` — `VisionConfiguration`, static `DECLARATION`, and the
-  declaration-derived `_build_family` are one source for identity, action
-  schemas, and the package-owned reserved manual. Import-time schema composition
-  catches a malformed fixed family before an Agent exists.
-- `__init__.py` — `_bind(host)` creates `VisionManager` from only the granted
-  workdir/current-provider/configuration ports; it retains same-provider route,
-  credential, Codex bucket, and local-settings behavior without retaining an
-  Agent. `handle()` owns canonical dispatch/manual flattening.
-- `__init__.py` — `setup` supplies the immutable public capability-kwargs
-  snapshot to `register_agent_tool_plugins`; the kernel registrar is the sole
-  mount path for the public `vision` name.
-
-- `settings.py` — strict per-Agent settings for the `provider: local` route. `settings/vision.json` is the family-owned provider configuration holding the operator-configured local OpenAI-compatible endpoint (`base_url`, `model`, optional `api_key`/`max_tokens`). It mirrors the `settings/web.json` pattern from `lingtai.tools.web_search.settings`: a bounded, race-checked read with a stable digest, so "default applied" is a truthful, verifiable fact (`src/lingtai/tools/vision/settings.py:1-8`).
+- `__init__.py:200-260` — strict declaration-owned input schemas: `analyze`
+  requires `image_path` and nullable `question` and accepts nullable `preset`,
+  `check` requires nullable `preset`, and `list` is strict empty input.
+- `__init__.py:263-325` — immutable `VisionConfiguration`, static description,
+  and declaration-derived `_build_family`; import-time and host-bound families
+  therefore expose the same three operational children plus `manual`.
+- `__init__.py:338-359` — `VisionManager` retains only the granted workdir and
+  live active-provider ports, the resolved service/reason, and the installed
+  manual child; it does not retain an Agent.
+- `__init__.py:365-446` — `_build_service_from_preset` checks
+  `manifest.preset.allowed`, loads the authorized preset read-only, and passes
+  that preset's provider/model/credential identity to the direct resolver.
+- `__init__.py:448-535` — `_dispatch_analyze` resolves relative image paths,
+  performs one request on either the default or explicitly borrowed service, and
+  returns the exact success/error shapes.
+- `__init__.py:537-584` — `_dispatch_check` constructs/resolves the selected route
+  and reports provider/model without sending an image request.
+- `__init__.py:586-634` — `_dispatch_list` mechanically classifies the active route
+  and only the authorized preset definitions; it constructs no provider service.
+- `__init__.py:636-681` — `manual` reads the installed package manual through the
+  reserved child, then the host flattens its canonical body/path result once.
+- `__init__.py:685-753` — `_bind`, `DECLARATION`, and `setup` compose Vision through
+  the official registrar with `workdir`, `active_provider`, and opaque
+  `configuration` ports.
+- `settings.py:1-188` — bounded, race-checked local-provider settings reader for
+  the workdir-relative `settings/vision.json` file.
 
 ## Connections
 
-- Schema composition and envelope dispatch build on
-  [`src/lingtai/tools/tool_family/ANATOMY.md`](../tool_family/ANATOMY.md), which
-  knows nothing of vision's providers or identity rules.
-- The reserved `manual` child reads the installed capability manual through the
-  shared `_manual.py` loader, so `manual_path` is host-local and truthful.
-- Setup lazily reaches `lingtai.services.vision` and the Codex pool selector.
-- Direct compatible aliases (`openrouter`, `deepseek`, `zhipu`, `glm`, `grok`,
-  `qwen`, `kimi`, `custom`) use current OpenAI/Anthropic-compatible identity.
-- MiniMax uses Anthropic; Codex aliases use the Codex service; Claude Code
-  (`claude-code`/`claude_code`/`claude-p`) returns explicit "use the Claude CLI
-  for vision" guidance; unresolved/unsupported routes remain manual-only. No
-  MCP fallback is used.
+- Schema composition, strict action/input correlation, and canonical manual-child
+  loading descend through [`src/lingtai/tools/tool_family/ANATOMY.md`](../tool_family/ANATOMY.md).
+- `_bind` receives the host's live active-provider read-through and one immutable
+  `VisionConfiguration` snapshot; it never reaches through to an Agent.
+- Direct routes call the service implementations under `lingtai.services.vision`.
+  Provider aliases and Codex route selection stay inside this family boundary.
+- Preset borrowing reads only an explicitly authorized preset and uses that
+  preset's own provider/model/credential route for the one requested call. It
+  does not switch the active preset and does not invoke MCP automatically.
+- The reserved `manual` child reads the installed `capabilities/vision/SKILL.md`;
+  `manual_path` is therefore host-local and truthful.
 
 ## Composition
 
-`VisionManager` owns only the granted workdir/current-provider ports, optional
-service, safe manual reason, and its per-instance `ToolFamily`; it holds no
-Agent. The built-in capability loader passes the setup configuration through
-`register_agent_tool_plugins`, whose kernel registrar claims and mounts exactly
-one `vision` tool with the declaration-derived schema and glossary package.
+`setup` creates `VisionConfiguration` and delegates one official declaration to the
+kernel registrar. The registrar claims and mounts exactly one public `vision` root;
+`_bind` creates `VisionManager` and its declaration-derived family. The package
+manual is the operational source, while the retained service package supplies
+provider adapters and this package supplies routing policy.
 
 ## State
 
-Only the in-memory manager/service/family references persist. Manual content is
-bundled with the package and installed into the agent's intrinsic capability
-library; analyses are not persisted.
+The manager retains ephemeral service, route reason, workdir, active-provider port,
+and family references. Preset files and local settings are read-only inputs for a
+call. Vision analyses are not persisted; manual content is bundled and installed
+into the agent's intrinsic capability library.
 
 ## Notes
 
-Setup failures retain provider plus exception type, never exception text. Direct
-request failures likewise expose only the exception type and a manual pointer.
-Active MiMo Responses/other unsupported wires are manual-only; supported Chat
-Completions does not receive unsupported headers or wire kwargs.
+Default provider failures and unsupported routes fail closed with sanitized guidance;
+there is no automatic provider or MCP fallback. A caller may explicitly request an
+authorized preset on `analyze` or `check`. Manual and list do not construct a
+provider or read a credential; check may construct the selected route but never
+sends an image request.

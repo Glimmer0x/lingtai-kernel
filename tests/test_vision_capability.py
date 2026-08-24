@@ -17,8 +17,9 @@ from lingtai.services.vision import VisionService, create_vision_service
 def analyze(image_path: str = "", question=None) -> dict:
     """Build one LTP v2 ``analyze`` envelope for the public ``vision`` family.
 
-    ``vision`` is action-separated (``analyze``/``manual``): the model sends
-    ``action`` + strict per-action ``input`` + required ``reasoning``. Optional
+    ``vision`` is action-separated (``analyze``/``check``/``list``/``manual``):
+    the model sends ``action`` + strict per-action ``input`` + required
+    ``reasoning``. Optional
     ``question`` is a required nullable branch property, so absent is ``None``.
     """
     return {

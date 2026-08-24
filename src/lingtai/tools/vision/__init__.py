@@ -30,8 +30,8 @@ children are ``analyze``/``check``/``list`` plus the family-owned reserved
 ``lingtai.tools.tool_family`` infrastructure. The public tool name and action
 values are unchanged; only the call envelope moved from flat arguments to
 ``action``/``input``/``reasoning``/``summarize``.
-Provider routing, credential/identity resolution, and every analyze/manual
-result shape are untouched by that migration.
+Provider routing, credential/identity resolution, and every action result
+shape are untouched by that migration.
 """
 from __future__ import annotations
 
