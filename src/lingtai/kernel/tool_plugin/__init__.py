@@ -51,6 +51,8 @@ __all__ = [
     "ContextRuntimePort",
     "AvatarParentPort",
     "DaemonRuntimePort",
+    "PluginCatalogState",
+    "PluginCatalogPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -72,8 +74,9 @@ MANUAL_ACTION = "manual"
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, or ``file``). Root ``CONTRACT.md`` rules 10-11 forbid a
-#: speculative port taxonomy, so a
+#: ``email``, ``file``, or ``plugin``, the last of which consumes only the
+#: read-only ``plugin_catalog`` projection). Root ``CONTRACT.md`` rules 10-11
+#: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
@@ -87,6 +90,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "daemon_runtime",
     "email_runtime",
     "file_io",
+    "plugin_catalog",
 )
 
 
@@ -99,7 +103,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
-    "mcp", "avatar", "context", "daemon", "email", "file"
+    "mcp", "avatar", "context", "daemon", "email", "file", "plugin"
 )
 
 
@@ -366,6 +370,37 @@ class DaemonRuntimePort(Protocol):
 
     def log(self, event_type: str, **fields: Any) -> None:
         """Record one Daemon lifecycle event through the host journal."""
+
+
+@dataclass(frozen=True)
+class PluginCatalogState:
+    """Read-only facts the official ``plugin`` family presents.
+
+    This is intentionally a projection, not an Agent Plugins implementation:
+    the host owns registration, the service owns manifest/component validation,
+    and the family merely needs the latest boot snapshot plus the three path/
+    availability inputs that define discovery.  The state has no mutation,
+    lifecycle, launch, or filesystem operation.
+    """
+
+    registration: Mapping[str, Any]
+    configured_paths: tuple[str, ...]
+    skill_paths: tuple[str, ...]
+    skills_enabled: bool
+
+
+class PluginCatalogPort(Protocol):
+    """Read the current Agent Plugins catalog presentation inputs.
+
+    The official ``plugin`` family needs exactly this one read-only projection to
+    preserve its pre-declaration behavior: the registration snapshot produced at
+    boot, its own configured discovery paths, inherited skill paths, and whether
+    the skills catalog is enabled.  It cannot register, prune, launch, or alter
+    any of those facts through this port.
+    """
+
+    def read_state(self) -> PluginCatalogState:
+        """Return the current detached catalog presentation state."""
 
 
 class ToolMountPort(Protocol):

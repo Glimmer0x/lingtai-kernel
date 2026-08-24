@@ -24,6 +24,8 @@ related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/intrinsic_skills/file-manual/SKILL.md
+  - src/lingtai/tools/plugin/__init__.py
+  - src/lingtai/tools/plugin/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -69,9 +71,10 @@ It owns exactly four things:
    construction-time validation.
 2. The kernel host Ports (`WorkdirPort`, `PromptSectionPort`, `FileIOPort`,
    `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
-   `ToolMountPort`), File's structural match/traversal result Protocols, and
-   Email's family-owned `EmailRuntimePort`, through which a plugin receives only
-   its capability-native view of the live Agent body, plus the `ToolPluginHost`
+   read-only `PluginCatalogPort`, `ToolMountPort`), File's structural
+   match/traversal result Protocols, and Email's family-owned
+   `EmailRuntimePort`, through which a plugin receives only its
+   capability-native view of the live Agent body, plus the `ToolPluginHost`
    facade that grants a declaration exactly the ports it named.
 3. `OFFICIAL_TOOL_PLUGIN_NAMES` — the auditable, static, kernel-owned reserved
    list of official plugin names.
@@ -118,8 +121,8 @@ Coding agents and LingTai agents MUST observe the following.
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
-  `daemon`, `email`, and `file` are declared, in that official order; every
-  remaining target stays outside this contract.
+  `daemon`, `email`, `file`, and `plugin` are declared, in that official order;
+  every remaining target stays outside this contract.
 - **Fail the boot, do not skip the capability.** Every error in this component
   descends from `ToolPluginError`, which is deliberately **not** a `ValueError`
   subclass. The Composition Root's capability loop
@@ -151,19 +154,24 @@ capability.
 | `ContextRuntimePort` | `molt(args)`, `summarize(args)`, `rebuild(args)` | Context-only lifecycle-operation boundary. It preserves the live molt, record-only summary, and reconstruction/replay engines without granting Context the Agent or unrelated private state. |
 | `DaemonRuntimePort` | named model/tool/preset/notification/log operations | Daemon-only parent-runtime boundary: inherited service and regular tool snapshots, preset sandbox/load, live notification route, time, Task Card, logging, and resolved manager options. It never grants the Agent or a mount operation. |
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
+| `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
 `workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
-`daemon_runtime`, `email_runtime`, and `file_io`: `mcp` consumes the first two as
-its base reference; Avatar, Context, and Daemon consume their respective narrow
-runtime ports; Email consumes `workdir` plus its Email-owned `email_runtime`;
-and File consumes exactly `workdir` plus kernel-owned `file_io`. Family-specific
-ports are composed only for their declaration through `extra_ports` or
-`extra_ports_for`, so they do not expand another declaration's grant. `tool_mount`
-remains absent. Later families must earn a named capability-native port with
-implementation, adapter, declaration, and vertical evidence rather than
-pre-enumerating a dispatch escape hatch.
+`daemon_runtime`, `email_runtime`, `file_io`, and `plugin_catalog`: `mcp`
+consumes the first two as its base reference; Avatar, Context, and Daemon
+consume their respective narrow runtime ports; Email consumes `workdir` plus its
+Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
+`file_io`; and Plugin consumes `workdir`, its own `prompt_section`, and the
+read-only `plugin_catalog` projection. Family-specific runtime ports are
+composed only for their declaration through `extra_ports` or `extra_ports_for`,
+so they do not expand another declaration's grant; a port built in the standard
+table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only
+by a declaration that named it, because `ToolPluginHost.grant` copies exactly
+`requires`. `tool_mount` remains absent. Later families must earn a named
+capability-native port with implementation, adapter, declaration, and vertical
+evidence rather than pre-enumerating a dispatch escape hatch.
 
 `ToolPluginHost` is the facade. A granted port is an attribute; anything else
 raises `AttributeError` naming the missing port. The facade holds no reference
@@ -192,6 +200,12 @@ traversal and result-cap readers. It has no `Any`-typed File surface, generic
 forwarding/dispatch, whole-Agent reference, or mount operation. File's `setup`
 captures the service and executor separately before supplying the adapter only
 through `extra_ports_for`.
+`AgentPluginCatalogAdapter` is a read-only value projection: it holds one
+registration reader and one capability reader, deep-copies the registration
+snapshot on every `read_state()`, and returns a frozen `PluginCatalogState`. A
+tool result mutated by a caller therefore cannot reach the Agent's snapshot or
+capability configuration, and the adapter exposes no registration, prune,
+launch, config-write, or mount operation.
 Daemon's host runtime continues to omit the parent `email` official surface, so
 its separately accepted explicit task-scoped daemon-email MCP route is not
 silently widened by Email's parent declaration. `agent_host_ports` builds one
@@ -307,12 +321,17 @@ lifecycle coverage, including terminal-notification retry behavior; and
 `tests/test_email_official_tool_plugin.py` supplies Email's manager/port,
 no-row/one-mount, and refresh-replacement proof; and
 `tests/test_file_tool_plugin_package.py` supplies File's typed port/adapter,
-two-port grant, one-body manual, one-mount, and packaging proof:
+two-port grant, one-body manual, one-mount, and packaging proof; and
+`tests/test_plugin_tool.py` supplies Plugin's read-only action boundary,
+protected-field projection, closed vanilla-skills namespace, and detached
+catalog-state proof:
 
 - declaration staticness and the
-  `mcp`/`avatar`/`context`/`daemon`/`email`/`file`
+  `mcp`/`avatar`/`context`/`daemon`/`email`/`file`/`plugin`
   declared-versus-composed surfaces, including the official Daemon binding
-  manager's live notification-route retry regression;
+  manager's live notification-route retry regression, and the standard-table
+  proof that `plugin_catalog`/`avatar_parent` stay unreachable for a
+  declaration that did not name them;
 - construction-time validation, including the reserved `manual` action,
   duplicate/empty actions, schema/action agreement, and the non-grantable
   `tool_mount` port;

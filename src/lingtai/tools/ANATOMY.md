@@ -79,9 +79,9 @@ maintenance: |
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
   not a claim that every shared-C target has merged: `mcp` is the base reference,
-  while the separately landed `avatar`, Context, Daemon, Email, and File vertical
-  slices are actual declared evidence; only the remaining target names stay
-  candidates. The normative rules — including the selected form,
+  while the separately landed `avatar`, Context, Daemon, Email, File, and Plugin
+  vertical slices are actual declared evidence; only the remaining target names
+  stay candidates. The normative rules — including the selected form,
   the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
@@ -136,11 +136,15 @@ capability names and lazy adapters.
   (agent-plugins.org, v1.0.0) catalog and registration snapshot, structural twin
   of `mcp` with the same `info`/`manual` children and the same tool/service split
   (`src/lingtai/tools/plugin/ANATOMY.md`, `src/lingtai/tools/plugin/CONTRACT.md`).
-  A plugin *declared* in `init.json` `manifest.plugins` is mounted at boot — its
-  `skills/` composed into the skills catalog, its `mcp.json` servers registered
-  in `mcp_registry.jsonl` with `source="plugin:<name>"` — while one merely
-  *discovered* on an inherited skills path is listed and nothing more. The tool
-  itself stays read-only: mounting happens in
+  A plugin *declared* in `init.json` `manifest.plugins` is registered at boot —
+  its validated `skills/` are named in the protected `plugins` prompt field and
+  its `mcp.json` servers are registered in `mcp_registry.jsonl` with
+  `source="plugin:<name>"` — while one merely *discovered* on an inherited
+  skills path is listed and nothing more. Plugin skills deliberately do **not**
+  enter the vanilla skills catalog: `src/lingtai/tools/skills/__init__.py`
+  `_compose_paths` unions only explicitly configured vanilla paths, so the two
+  namespaces stay parallel and closed and the protected Plugin field is the sole
+  Plugin projection. The tool itself stays read-only: registration happens in
   `Agent._register_declared_plugins` before capability setup, unreachable from
   any action, which is what makes it safe in `CORE_DEFAULTS`. Registration is
   registry-level like `addons:[]`: registered, never running.
@@ -243,12 +247,13 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, and File are accepted vertical evidence. Avatar binds
-only `workdir`/`avatar_parent`; Context `workdir`/`context_runtime`; Daemon
-`workdir`/`daemon_runtime`; Email `workdir`/`email_runtime`; and File exactly
-`workdir`/`file_io`. The remaining candidate targets are only `notification`,
-`soul`, `vision`, `web`, `system`, and `task_card`; the list is not a generic
-dispatch or admission mechanism.
+Context, Daemon, Email, File, and Plugin are accepted vertical evidence. Avatar
+binds only `workdir`/`avatar_parent`; Context `workdir`/`context_runtime`;
+Daemon `workdir`/`daemon_runtime`; Email `workdir`/`email_runtime`; File exactly
+`workdir`/`file_io`; and Plugin exactly
+`workdir`/`prompt_section`/`plugin_catalog`. The remaining candidate targets are
+only `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; the
+list is not a generic dispatch or admission mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
@@ -272,9 +277,17 @@ sixth slice: its declaration composes the unchanged operations against
 operation. The Agent installer maps the package-owned File manual body to the
 established `capabilities/file-manual` destination and excludes the standalone
 redirect marker, so no `capabilities/file` destination can overwrite or duplicate
-it. Candidate-local families may still boot through legacy `setup(agent)` paths
-until their own vertical slice lands; that compatibility fact is not a generic
-registrar/bridge dispatch model.
+it. `src/lingtai/tools/plugin/__init__.py` is the seventh slice: its
+`DECLARATION` binds `plugin` against `workdir`, its own protected prompt
+section, and the read-only `plugin_catalog` projection built by
+`AgentPluginCatalogAdapter`, so registration/discovery presentation is preserved
+without a whole `Agent`, without generic dispatch, and without any registration,
+prune, launch, config-write, or mount authority. Its validated skills are named
+only in the protected Plugin prompt field and never enter the vanilla skills
+catalog. Every landed family retains its public name, actions, inputs, and
+result shapes. Candidate-local families may still boot through legacy
+`setup(agent)` paths until their own vertical slice lands; that compatibility
+fact is not a generic registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

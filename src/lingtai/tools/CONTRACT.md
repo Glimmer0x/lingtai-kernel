@@ -68,8 +68,9 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, and `file` are the declared families today, in
-  that official order; do not widen that claim without another family's evidence.
+  `context`, `daemon`, `email`, `file`, and `plugin` are the declared families
+  today, in that official order; do not widen that claim without another
+  family's evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -294,9 +295,9 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 host, identifier, and migration vocabulary that every official model-facing
 tool family shares, so per-family recuts do not each invent their own. The
 accepted declared evidence is exactly `mcp`, `avatar`, `context`, `daemon`,
-`email`, and `file`, in that order. The remaining target register is only
-`notification`, `soul`, `vision`, `web`, `system`, and `task_card`; it is not
-proof that their candidate slices merged and is never a generic dispatch or
+`email`, `file`, and `plugin`, in that order. The remaining target register is
+only `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; it is
+not proof that their candidate slices merged and is never a generic dispatch or
 admission path.
 
 `mcp` is the base reference under the form this section selects: it owns a
@@ -316,9 +317,14 @@ sixth slice: its declaration requires exactly `workdir` and `file_io`; its typed
 grants that port only through `extra_ports_for`. Its package manual is the sole
 body installed at the established `file-manual` destination, while the retained
 standalone marker is excluded from copying and no `capabilities/file` destination
-is created. Every other family registered through `src/lingtai/tools/registry.py`
-remains an explicit future migration unit, and none ships as an MCP plugin
-package today.
+is created. Plugin is the seventh slice: its declaration requires exactly
+`workdir`, its own `prompt_section`, and the read-only `plugin_catalog`
+projection, so it retains its existing registration/discovery presentation
+without receiving an Agent, generic dispatch, config write, or mount authority.
+Its validated plugin skills are represented only in the protected Plugin prompt
+field and never enter the vanilla skills catalog. Every other family registered
+through `src/lingtai/tools/registry.py` remains an explicit future migration
+unit, and none ships as an MCP plugin package today.
 
 The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
 the *external stdio transport* form described below — evidence about
@@ -335,10 +341,10 @@ this contract's classification:
 - **Registry families** — the intrinsics and built-in capability rows
   registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`,
   `daemon`, `email`, `file`, and `plugin` are first-party families and are in
-  scope *as families*; the external records they render are not. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, and `file` are declared under the selected form;
-  every other family in this class is a future migration unit, and no family in
-  this class is wrapped as an MCP plugin package today.
+  scope *as families*; the external records they render are not. All seven are
+  declared under the selected form; every other family in this class is a future
+  migration unit, and no family in this class is wrapped as an MCP plugin
+  package today.
 - **Kernel-shipped MCP families** — the model-facing families this
   distribution ships as MCP server packages under `src/lingtai/mcp_servers/`.
   The curated catalog families (`imap`, `telegram`, `feishu`, `wechat`,
@@ -441,10 +447,10 @@ register is family-generic rather than MCP-only.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
-  `mcp` is the current base reference; Avatar, Context, Daemon, Email, and File
-  are accepted vertical evidence here. The remaining target register names only
-  `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; those names
-  are targets, not a claim that candidate slices have merged.
+  `mcp` is the current base reference; Avatar, Context, Daemon, Email, File, and
+  Plugin are accepted vertical evidence here. The remaining target register names
+  only `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; those
+  names are targets, not a claim that candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -608,7 +614,7 @@ non-goal for third-party-versus-third-party mounts.
 **Current evidence versus migration target.**
 
 - The selected form is generic. `mcp` is the base reference; Avatar, Context,
-  Daemon, Email, and File are accepted vertical evidence. Email's declaration
+  Daemon, Email, File, and Plugin are accepted vertical evidence. Email's declaration
   binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
   one mount/no capability row, canonical manual, and call-time replacement
   manager. File's declaration binds only `workdir`/`file_io`; its focused suites
@@ -623,9 +629,17 @@ non-goal for third-party-versus-third-party mounts.
   registrar; `src/lingtai/adapters/tool_plugin_host.py` is the one production
   adapter set; `src/lingtai/tools/mcp/__init__.py` is the base slice; and
   `tests/test_tool_plugin_declaration.py` plus the generic helper are shared
-  evidence. MCP public behavior remains guarded by its parity/capability suites;
-  Avatar's static declaration, restricted ports, local manual, behavior, and
-  registrar path remain guarded by `tests/test_tool_family_avatar_migration.py`.
+  evidence. Plugin's declaration binds only
+  `workdir`/`prompt_section`/`plugin_catalog`; its focused suite
+  (`tests/test_plugin_tool.py`) proves the read-only action boundary, the
+  protected-field skill projection, the closed vanilla-skills namespace, and the
+  detached per-read catalog projection, while
+  `tests/test_tool_plugin_declaration.py` proves its one mount, its real
+  `info`/`manual` dispatch, and that a standard-table port stays unreachable for
+  a declaration that did not name it. MCP public behavior remains guarded by its
+  parity/capability suites; Avatar's static declaration, restricted ports, local
+  manual, behavior, and registrar path remain guarded by
+  `tests/test_tool_family_avatar_migration.py`.
 - The curated **external-transport** route ships for the curated MCP families
   only, and is cited as precedent for that route rather than as conformance to
   the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one
@@ -643,8 +657,8 @@ non-goal for third-party-versus-third-party mounts.
   is cited only for the registration-versus-activation rule.
 
 Not evidenced, and therefore stated above only as a target: a declaration for
-any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, and `file`; any
-family registered through
+any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, `file`, and
+`plugin`; any family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
 packaged `SKILL.md` for the built-in daemon MCP families; and the retention,

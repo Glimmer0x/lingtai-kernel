@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/plugin/__init__.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
@@ -22,6 +23,7 @@ related_files:
   - tests/test_email_official_tool_plugin.py
   - tests/test_file_tool_plugin_package.py
   - tests/test_file_tool_family.py
+  - tests/test_plugin_tool.py
 maintenance: |
   Created with the declared host-plugin primitive. Keep this file reciprocal
   with CONTRACT.md and ANATOMY.md (tridirectional loop): when a behavior clause
@@ -33,8 +35,8 @@ maintenance: |
   drift, extend the affected evidence with that family's own focused proof rather
   than leaving a stale pass. The shared C register is family-generic and distinguishes
   target reserved names from candidate merge evidence. `mcp` is the shared-C base
-  reference; Avatar, Context, Daemon, Email, and File are current vertical
-  evidence. Ports remain least-privilege and tool-specific, while registrar
+  reference; Avatar, Context, Daemon, Email, File, and Plugin are current
+  vertical evidence. Ports remain least-privilege and tool-specific, while registrar
   mounts are runtime-bound rather
   than per-call Agent dispatch.
 ---
@@ -86,11 +88,23 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
    ```
 
    Expect `('workdir', 'prompt_section', 'avatar_parent', 'context_runtime',
-   'daemon_runtime', 'email_runtime', 'file_io') ('workdir', 'file_io')` printed,
+   'daemon_runtime', 'email_runtime', 'file_io', 'plugin_catalog') ('workdir',
+   'file_io')` printed,
    then an `AttributeError` whose message says the plugin *did not require host
    port* `'prompt_section'`. Confirm `tool_mount` is absent from
    `GRANTABLE_HOST_PORTS`: File receives exactly `WorkdirPort` plus `FileIOPort`,
-   even when the host table contains another grantable port.
+   even when the host table contains another grantable port. The same rule
+   covers the ports `agent_host_ports` always builds — `avatar_parent` and
+   `plugin_catalog` — so run:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py::test_standard_port_table_grants_each_declaration_only_its_requires
+   ```
+
+   Expect `1 passed`: Plugin reaches exactly
+   `('workdir', 'prompt_section', 'plugin_catalog')` while MCP reaches neither
+   `plugin_catalog` nor `avatar_parent`.
 
 4. Prove the family reaches the live Agent body only through granted ports:
 
@@ -147,7 +161,7 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
      tests/test_tool_plugin_declaration.py tests/test_tool_family_avatar_migration.py \
      tests/test_context_declared_tool_plugin.py tests/test_daemon.py \
      tests/test_email_official_tool_plugin.py tests/test_file_tool_plugin_package.py \
-     tests/test_file_tool_family.py
+     tests/test_file_tool_family.py tests/test_plugin_tool.py
    ```
 
 ### Expected evidence
@@ -157,7 +171,9 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 - [ ] Step 2: the closed LTP root and the `["info", "manual"]` enum are
       unchanged.
 - [ ] Step 3: only `requires` ports are granted; an ungranted port raises
-      `AttributeError`; `tool_mount` is not grantable at all.
+      `AttributeError`; `tool_mount` is not grantable at all; a standard-table
+      port such as `plugin_catalog` is unreachable for a declaration that did
+      not name it.
 - [ ] Step 4: MCP's workdir/prompt operations and File's workdir/file-I/O
       operations go only through granted ports; `AgentFileIOAdapter` has no Any,
       generic dispatch, whole Agent, or mount surface; each `setup` is wiring only.
@@ -166,8 +182,10 @@ environment (`uv venv --python 3.11 && uv pip install -e . pytest`, per
 - [ ] Step 6: MCP and File derive name, `input` schemas, and manual destination
       from their declarations; the four named live/static tests pass, including
       File's established `file-manual` destination and absent `file` destination.
-- [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's, and
-      File's focused declared slices pass.
+- [ ] Step 7: the shared suite plus Avatar's, Context's, Daemon's, Email's,
+      File's, and Plugin's focused declared slices pass. Plugin's slice includes
+      the detached per-read catalog projection: mutating a returned registration
+      mapping leaves the next read unchanged.
 
 ### Pass / Fail
 
@@ -203,8 +221,8 @@ writes.
 
    Expect the module docstring, `__all__`, module-level tuple, and registrar check/error as the relevant matches.
    Confirm the literal is exactly `('mcp', 'avatar', 'context', 'daemon',
-   'email', 'file')` in that order and contains bare names only — no module path,
-   import, or family behavior.
+   'email', 'file', 'plugin')` in that order and contains bare names only — no
+   module path, import, or family behavior.
 
 2. Prove a conflicting declaration is refused with nothing bound and nothing
    mounted:
@@ -242,7 +260,18 @@ writes.
    public/declared and extension paths; Python trusted internals are not an
    absolute security boundary.
 
-4. Confirm the registrar's ordering is structural, not incidental: read
+4. Prove the whole reserved namespace still mounts exactly once together:
+
+   ```bash
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
+     tests/test_tool_plugin_declaration.py::test_all_seven_official_families_mount_exactly_once_together
+   ```
+
+   Expect `1 passed`: every name in `OFFICIAL_TOOL_PLUGIN_NAMES` is claimed by
+   one declaration and appears exactly once in the live schema list, with no
+   family displacing another.
+
+5. Confirm the registrar's ordering is structural, not incidental: read
    `register_official_tool_plugins` in
    `src/lingtai/kernel/tool_plugin/__init__.py` and verify the name-checking
    loop over the whole batch completes before the second loop performs the
@@ -250,7 +279,7 @@ writes.
    issuance records the exact bind result and claims receive only the mounted
    transaction.
 
-5. Prove the refusal is *observable* — that it fails the boot instead of being
+6. Prove the refusal is *observable* — that it fails the boot instead of being
    absorbed as a skipped capability:
 
    ```bash
@@ -273,7 +302,7 @@ writes.
    `Agent(...)` boot), a mid-batch host-port failure is *not* rolled back, and
    the claim map tracks the live namespace across refresh.
 
-6. Confirm the non-official mount path is untouched:
+7. Confirm the non-official mount path is untouched:
 
    ```bash
    grep -n "Remove any existing schema with same name" src/lingtai/kernel/base_agent/tools.py
@@ -290,7 +319,7 @@ writes.
 ### Expected evidence
 
 - [ ] Step 1: `OFFICIAL_TOOL_PLUGIN_NAMES` is the exact ordered static tuple
-      `mcp, avatar, context, daemon, email, file` of bare names.
+      `mcp, avatar, context, daemon, email, file, plugin` of bare names.
 - [ ] Step 2: `5 passed` — an unreserved name, an in-batch duplicate, and a
       second declaration against a live claim are each refused with zero binds,
       zero mounts, and an unchanged claim map; the same declaration re-registers
@@ -300,12 +329,14 @@ writes.
       public adapter/factory bypass and a forged transaction are unavailable,
       backing-map tampering cannot admit a foreign declaration, and the public
       claim view cannot unlock one.
-- [ ] Step 4: the batch-wide check loop precedes the bind/mount loop in source
+- [ ] Step 4: `1 passed` — all seven reserved names mount exactly once in one
+      live composition.
+- [ ] Step 5: the batch-wide check loop precedes the bind/mount loop in source
       order.
-- [ ] Step 5: `6 passed` — official-plugin failures propagate past the
+- [ ] Step 6: `6 passed` — official-plugin failures propagate past the
       capability skip-guard, the all-or-nothing promise is scoped to names, and
       the claim map matches the live namespace across refresh and disable.
-- [ ] Step 6: `_add_tool`'s same-name replacement is still present and
+- [ ] Step 7: `_add_tool`'s same-name replacement is still present and
       unmodified.
 
 ### Pass / Fail

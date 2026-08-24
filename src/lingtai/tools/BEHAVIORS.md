@@ -18,11 +18,13 @@ related_files:
   - src/lingtai/tools/daemon/__init__.py
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/plugin/__init__.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
   - tests/test_context_declared_tool_plugin.py
   - tests/test_email_official_tool_plugin.py
   - tests/test_file_tool_plugin_package.py
+  - tests/test_plugin_tool.py
   - src/lingtai/mcp_servers/_plugin.py
   - src/lingtai/mcp_servers/telegram/plugin.py
   - src/lingtai/mcp_catalog.json
@@ -36,9 +38,9 @@ maintenance: |
   envelope or settings rule changes, update the guarding LABT here in the same
   change. LP002 guards the `### Tool-to-MCP Plugin Contract` section: it
   verifies only what is true today (the section's scope-qualified status
-  wording — current `mcp` base evidence, Avatar's, Context's, Daemon's, Email's,
-  and File's separately landed vertical evidence, plus the family-generic C
-  integration register's remaining targets —
+  wording — current `mcp` base evidence, Avatar's, Context's, Daemon's,
+  Email's, File's, and Plugin's separately landed vertical evidence, plus the
+  family-generic C integration register's remaining targets —
   its two-class governed surface, its single selected form as the kernel-owned declared
   host-plugin contract, the retained
   and reclassified curated transport route, the resolved official-name
@@ -101,15 +103,17 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
 1. Read `src/lingtai/tools/CONTRACT.md`, section `### Tool-to-MCP Plugin
    Contract` (it sits under `## Contract rules`, between `### Non-goals` and
-   `### Relationship to current runtime`; after this six-family recut it begins
-   at line 289 and its current-evidence block ends before line 652).
+   `### Relationship to current runtime`).
    Confirm its opening **Status** paragraph distinguishes the current base `mcp`
    evidence and the family-generic C integration register's remaining targets
-   from the separately landed `avatar`, `context`, `daemon`, `email`, and `file`
-   evidence; that `mcp` is the base reference and the `DECLARATION` values in
-   `src/lingtai/tools/{avatar,context,daemon,email,file}/__init__.py` are actual
-   landed vertical proof; that File is sixth after Email and requires only
-   `workdir`/`file_io`; that the C register's remaining names are targets rather
+   from the separately landed `avatar`, `context`, `daemon`, `email`, `file`, and
+   `plugin` evidence; that `mcp` is the base reference and the `DECLARATION`
+   values in
+   `src/lingtai/tools/{avatar,context,daemon,email,file,plugin}/__init__.py` are
+   actual landed vertical proof; that File is sixth after Email and requires only
+   `workdir`/`file_io`; that Plugin is seventh and requires only
+   `workdir`/`prompt_section`/`plugin_catalog`; that the C register's remaining
+   names are targets rather
    than candidate-merge claims; and that each claim is scoped to the declaration
    clauses only; that every remaining negative claim
    is **scope-qualified** — every other family registered through
@@ -129,8 +133,8 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    The first command must print nothing and exit 1. The second must print
    exactly three matches, all inside this section and all scope-qualified: line
-   320 closes the **Status** paragraph's sentence about every other registry
-   family; line 341 is inside the **Registry families** bullet; and line 646 names
+   327 closes the **Status** paragraph's sentence about every other registry
+   family; line 346 is inside the **Registry families** bullet; and line 662 names
    the registry path on the matched line itself. None may be a bare global
    negative.
 3. Confirm the section classifies the **whole** first-party boundary, not just
@@ -139,15 +143,15 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    ```bash
    grep -n "Registry families\|Kernel-shipped MCP families" src/lingtai/tools/CONTRACT.md
    grep -n "Selected wrapper form" src/lingtai/tools/CONTRACT.md
-   grep -n "separate standard, excluded" src/lingtai/tools/CONTRACT.md
+   grep -n "remain a \*\*separate standard\*\*" src/lingtai/tools/CONTRACT.md
    grep -n "plugin-admission engine" src/lingtai/tools/CONTRACT.md
    ```
 
-   Expect: two governed-surface class bullets (lines 335 and 342); two `Selected
-   wrapper form` references (the normative paragraph at 366 and back-reference at
-   640); exactly one `separate standard, excluded` line (420); and exactly three
-   `plugin-admission engine` lines (425, 586, 596) disclaiming a generic manifest
-   compiler, admission engine, and wrapper runtime.
+   Expect: two governed-surface class bullets (lines 341 and 348); two `Selected
+   wrapper form` references (the normative paragraph at 372 and back-reference at
+   656); exactly one `remain a **separate standard**` line (426); and exactly
+   three `plugin-admission engine` lines (433, 594, 604) disclaiming a generic
+   manifest compiler, admission engine, and wrapper runtime.
 
    Read the `**Selected wrapper form.**` paragraph and confirm the selected
    form is the kernel-owned declared host-plugin contract
@@ -172,25 +176,31 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect no output and shell exit status 1.
 
-   Then prove all six landed declarations — the current base `mcp`, Avatar,
-   Context, Daemon, Email, and File — none of which goes through packaging; the C
-   register is broader but its remaining candidate-local proofs stay separate:
+   Then prove all seven landed declarations — the current base `mcp`, Avatar,
+   Context, Daemon, Email, File, and Plugin — none of which goes through
+   packaging; the C register is broader but its remaining candidate-local proofs
+   stay separate:
 
    ```bash
-   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.file import DECLARATION as file; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, file); print(tuple((d.name, d.public_actions, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES)"
+   PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c "import sys; sys.path.insert(0, 'src'); from lingtai.tools.mcp import DECLARATION as mcp; from lingtai.tools.avatar import DECLARATION as avatar; from lingtai.tools.context import DECLARATION as context; from lingtai.tools.daemon import DECLARATION as daemon; from lingtai.tools.email import DECLARATION as email; from lingtai.tools.file import DECLARATION as file; from lingtai.tools.plugin import DECLARATION as plugin; from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES; declarations=(mcp, avatar, context, daemon, email, file, plugin); print(tuple((d.name, d.public_actions, d.requires) for d in declarations)); print(OFFICIAL_TOOL_PLUGIN_NAMES)"
    PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest -q -p no:cacheprovider \
-     tests/test_file_tool_plugin_package.py tests/test_file_tool_family.py
+     tests/test_file_tool_plugin_package.py tests/test_file_tool_family.py \
+     tests/test_plugin_tool.py
    ```
 
-   Expect six ordered triples whose names are `mcp, avatar, context, daemon,
-   email, file`, with requires respectively `workdir/prompt_section`,
+   Expect seven ordered triples whose names are `mcp, avatar, context, daemon,
+   email, file, plugin`, with requires respectively `workdir/prompt_section`,
    `workdir/avatar_parent`, `workdir/context_runtime`, `workdir/daemon_runtime`,
-   `workdir/email_runtime`, and `workdir/file_io`; then expect exactly
-   `('mcp', 'avatar', 'context', 'daemon', 'email', 'file')`. All six declarations
-   construct at import with no Agent, server, transport, or catalog record. The
-   two File focused suites pass, proving its narrow adapter/grant, one mount,
-   unchanged operations, sole package manual body at `file-manual`, absent
-   `capabilities/file`, and package-data source routes.
+   `workdir/email_runtime`, `workdir/file_io`, and
+   `workdir/prompt_section/plugin_catalog`; then expect exactly
+   `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin')`. All seven
+   declarations construct at import with no Agent, server, transport, or catalog
+   record. The two File focused suites pass, proving its narrow adapter/grant,
+   one mount, unchanged operations, sole package manual body at `file-manual`,
+   absent `capabilities/file`, and package-data source routes; Plugin's focused
+   suite passes, proving its read-only action boundary, its protected-field skill
+   projection with the vanilla skills catalog left closed, and its detached
+   per-read catalog projection.
 5. Inspect the **kernel-shipped MCP class** of the governed surface. A
    registry-only grep proves nothing about these families, so check them
    directly:
@@ -262,9 +272,9 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
    Expect `1` for each of the three files; exactly one
    `Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)` line directly under the
-   section heading (authoring time line 286); and exactly one anchored reverse
+   section heading (authoring time line 292); and exactly one anchored reverse
    clause link — the continuation line of this LABT's own `guards` annotation
-   (authoring time line 71) — satisfying root `BEHAVIORS.md`'s "`guards`
+   (authoring time line 91) — satisfying root `BEHAVIORS.md`'s "`guards`
    annotation + relative link back" rule. The anchor pattern deliberately
    excludes this step's own indented command text.
 
@@ -313,9 +323,10 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Expected evidence
 
 - [ ] Step 1: the section opens by distinguishing base `mcp` evidence, Avatar's,
-      Context's, Daemon's, Email's, and File's actual landed vertical evidence,
-      and the family-generic C register's remaining targets, with File sixth after
-      Email and every remaining negative claim properly scoped.
+      Context's, Daemon's, Email's, File's, and Plugin's actual landed vertical
+      evidence, and the family-generic C register's remaining targets, with File
+      sixth after Email, Plugin seventh, and every remaining negative claim
+      properly scoped.
 - [ ] Step 2: no unqualified "No LingTai-owned family ships as an MCP plugin"
       sentence survives (exit 1), and all three remaining `MCP plugin` matches
       are registry-scoped.
@@ -327,10 +338,13 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
       Plugins v1.0.0 and raw third-party MCP schemas stay excluded, and no
       manifest compiler, admission engine, or wrapper runtime is introduced.
 - [ ] Step 4: `registry.py` contains no MCP-server packaging reference (grep
-      exit 1), all six declarations import with no Agent and require only their
-      named narrow ports, File is exactly `workdir`/`file_io`, the reservation is
-      exactly `('mcp', 'avatar', 'context', 'daemon', 'email', 'file')`, and both
-      File focused suites pass with one manual body/destination and one mount.
+      exit 1), all seven declarations import with no Agent and require only their
+      named narrow ports, File is exactly `workdir`/`file_io` and Plugin exactly
+      `workdir`/`prompt_section`/`plugin_catalog`, the reservation is exactly
+      `('mcp', 'avatar', 'context', 'daemon', 'email', 'file', 'plugin')`, both
+      File focused suites pass with one manual body/destination and one mount,
+      and Plugin's suite passes with its read-only boundary, protected-field
+      projection, closed vanilla-skills namespace, and detached catalog state.
 - [ ] Step 5: exactly six curated `plugin.py` descriptors and six
       `lingtai-curated` catalog records exist, and the built-in daemon MCP
       families carry no descriptor (grep exit status 1) — matching the
@@ -355,9 +369,13 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 
 Pass when every box above is observed. **Fail loudly** — do not soften the
 report — if the contract section asserts that any family other than `mcp`,
-`avatar`, `context`, `daemon`, `email`, or `file` is already declared; if File
-is not sixth, does not require exactly `workdir`/`file_io`, exposes Agent/generic
-dispatch/mount authority, or installs a second/non-`file-manual` body; if it treats a
+`avatar`, `context`, `daemon`, `email`, `file`, or `plugin` is already declared;
+if File is not sixth, does not require exactly `workdir`/`file_io`, exposes
+Agent/generic dispatch/mount authority, or installs a second/non-`file-manual`
+body; if Plugin is not seventh, does not require exactly
+`workdir`/`prompt_section`/`plugin_catalog`, gains registration/prune/launch/
+config-write/mount authority, or claims its skills enter the vanilla skills
+catalog; if it treats a
 curated or built-in MCP package as already conforming to the selected declared
 host-plugin form merely because an external-transport descriptor, catalog
 record, or package exists; if it makes an unqualified global claim that no

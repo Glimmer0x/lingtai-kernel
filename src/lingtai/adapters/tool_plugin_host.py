@@ -20,6 +20,7 @@ only builds the ports.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
@@ -34,6 +35,7 @@ from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
     FileGrepMatch,
     FileTraversalStats,
+    PluginCatalogState,
     ToolPluginDeclaration,
     register_official_tool_plugins,
 )
@@ -46,6 +48,7 @@ __all__ = [
     "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
     "AgentEmailRuntimeAdapter",
+    "AgentPluginCatalogAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -617,6 +620,60 @@ def daemon_runtime_for_agent(
     )
 
 
+class AgentPluginCatalogAdapter:
+    """Read-only :class:`PluginCatalogPort` over the current Agent state.
+
+    It holds only two narrow readers rather than an ``Agent``.  Each read creates
+    a detached value projection: mutating a tool result cannot alter the Agent's
+    registration snapshot or capability configuration, and the adapter grants no
+    registration, prune, launch, or prompt operation.
+    """
+
+    __slots__ = ("_read_registration", "_read_capabilities")
+
+    def __init__(
+        self,
+        read_registration: Callable[[], Any],
+        read_capabilities: Callable[[], Any],
+    ) -> None:
+        self._read_registration = read_registration
+        self._read_capabilities = read_capabilities
+
+    def read_state(self) -> PluginCatalogState:
+        registration = self._read_registration()
+        snapshot = deepcopy(dict(registration)) if isinstance(registration, Mapping) else {}
+
+        configured_paths: tuple[str, ...] = ()
+        skill_paths: tuple[str, ...] = ()
+        skills_enabled = False
+        capabilities = self._read_capabilities()
+        if isinstance(capabilities, (list, tuple)):
+            for item in capabilities:
+                if not isinstance(item, tuple) or len(item) != 2:
+                    continue
+                name, kwargs = item
+                if name == "skills":
+                    skills_enabled = True
+                    if isinstance(kwargs, Mapping):
+                        raw_paths = kwargs.get("paths", [])
+                        if isinstance(raw_paths, (list, tuple)):
+                            skill_paths = tuple(
+                                path for path in raw_paths if isinstance(path, str)
+                            )
+                elif name == "plugin" and isinstance(kwargs, Mapping):
+                    raw_paths = kwargs.get("paths", [])
+                    if isinstance(raw_paths, (list, tuple)):
+                        configured_paths = tuple(
+                            path for path in raw_paths if isinstance(path, str)
+                        )
+        return PluginCatalogState(
+            registration=snapshot,
+            configured_paths=configured_paths,
+            skill_paths=skill_paths,
+            skills_enabled=skills_enabled,
+        )
+
+
 def agent_host_ports(
     agent: Any,
     plugin_name: str,
@@ -624,10 +681,12 @@ def agent_host_ports(
 ) -> dict[str, Any]:
     """Build the complete grantable table for one declaration on *agent*.
 
-    The standard table preserves landed MCP and Avatar wiring. Context's
-    compatibility map and the Daemon, Email, and File family-specific factories
-    add only the earned port required by that declaration. The registrar grants
-    just ``requires``, never this whole map.
+    The standard table preserves landed MCP and Avatar wiring and adds Plugin's
+    read-only catalog projection. Context's compatibility map and the Daemon,
+    Email, and File family-specific factories add only the earned port required
+    by that declaration. The registrar grants just ``requires``, never this
+    whole map, so a standard-table entry gives no capability to a declaration
+    that did not name it.
     """
     ports = {
         "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
@@ -638,6 +697,10 @@ def agent_host_ports(
             lambda: agent.agent_name or agent.working_dir.name,
             lambda: getattr(agent, "_venv_path", None),
             lambda: any((getattr(agent, "_admin", {}) or {}).values()),
+        ),
+        "plugin_catalog": AgentPluginCatalogAdapter(
+            lambda: getattr(agent, "_plugin_registration", {}),
+            lambda: getattr(agent, "_capabilities", ()),
         ),
     }
     if extra_ports:

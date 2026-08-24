@@ -9,11 +9,12 @@ adaptation — plus the facts unique to this standard: §4.1 path containment
 
 That contract is the thing to keep straight while reading this file. A plugin
 **declared** in ``manifest.plugins`` (or its alias
-``manifest.capabilities.plugin.paths``) is *registered*: its skills join the
-skills catalog and its ``mcp.json`` servers join ``mcp_registry.jsonl`` stamped
+``manifest.capabilities.plugin.paths``) is *registered*: its validated skills
+are listed in the protected Plugin field, not the vanilla skills catalog, and
+its ``mcp.json`` servers join ``mcp_registry.jsonl`` stamped
 ``source="plugin:<name>"``. A plugin merely found on an inherited
-``manifest.capabilities.skills.paths`` directory is *discovered*: listed, and
-nothing more. ``test_discovery_only_plugin_installs_nothing`` pins the second
+``manifest.capabilities.skills.paths`` directory is *discovered*: listed in the
+protected Plugin field, and nothing is registered. ``test_discovery_only_plugin_installs_nothing`` pins the second
 half; the registration tests pin the first.
 """
 from __future__ import annotations
@@ -252,7 +253,7 @@ def test_unparseable_manifest_rejects_whole_plugin(tmp_path):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation is privileged on Windows")
 def test_escaping_skill_is_skipped_but_plugin_survives(tmp_path):
-    """Skipped must mean *not mounted*, not merely reported as skipped.
+    """Skipped must mean *not represented*, not merely reported as skipped.
 
     The escaping skill carries valid frontmatter on purpose: a `SKILL.md` the
     catalog would happily mount is the only version of this test that can tell
@@ -281,8 +282,8 @@ def test_escaping_skill_is_skipped_but_plugin_survives(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation is privileged on Windows")
-def test_escaping_skill_is_absent_from_the_composed_skills_catalog(tmp_path):
-    """The F1 assertion the original test was missing: drive the real catalog.
+def test_escaping_skill_is_absent_from_the_plugin_field(tmp_path):
+    """The F1 assertion the original test was missing: drive the protected field.
 
     A skill reported in `skipped` and injected into the system prompt anyway is
     worse than no boundary at all, because the snapshot an operator audits says
@@ -304,10 +305,9 @@ def test_escaping_skill_is_absent_from_the_composed_skills_catalog(tmp_path):
     assert entry["skills"] == ["good"]
     assert any("escapes plugin root" in s["reason"] for s in entry["skipped"])
 
-    # Drive the real reconcile — the plugin field (closed namespace), not the
-    # vanilla skills catalog. Plugin skills stay inside the plugin; only the
-    # plugin prompt section lists them (as <skill_names>), the skills catalog
-    # never composes them in.
+    # Drive the real reconcile — the plugin field is a closed namespace,
+    # not the vanilla skills catalog. Plugin skills stay inside the plugin;
+    # only the protected field lists them (as <skill_names>).
     skillsmod._reconcile(agent, [])
     plugin_body = _prompt_section_named(agent, "plugin")
     assert "<name>mixed</name>" in plugin_body
@@ -319,7 +319,7 @@ def test_escaping_skill_is_absent_from_the_composed_skills_catalog(tmp_path):
     assert "name: good" not in skills_body, "plugin skills stay out of the vanilla catalog"
 
 
-def test_nested_skills_are_reported_exactly_as_they_mount(tmp_path):
+def test_nested_skills_are_reported_exactly_as_they_are_listed(tmp_path):
     """F2: `skills/group/nested/SKILL.md` is reported in the plugin field."""
     plugin_dir = _write_plugin(tmp_path / "plugins", "deep")
     nested = plugin_dir / "skills" / "group" / "nested"
@@ -336,7 +336,7 @@ def test_nested_skills_are_reported_exactly_as_they_mount(tmp_path):
     record, problems = read_plugin(plugin_dir)
     assert record is not None
     assert record["skills"] == ["group/nested", "top"]
-    assert record["skill_count"] == 2, "the count must match what actually mounts"
+    assert record["skill_count"] == 2, "the count must match what the protected field lists"
     assert problems == []
 
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
@@ -538,10 +538,40 @@ def test_both_actions_declare_the_canonical_strict_empty_input():
 
 
 def test_schema_only_and_dispatching_families_declare_identical_children(tmp_path):
-    from lingtai.tools.plugin import _FAMILY, _build_family
+    from lingtai.adapters.tool_plugin_host import agent_host_ports
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+    from lingtai.tools.plugin import DECLARATION, _FAMILY, _build_family
 
     agent, _workdir = _mk_agent(tmp_path)
-    assert _build_family(agent).child_names == _FAMILY.child_names == ("info", "manual")
+    host = ToolPluginHost.grant(
+        DECLARATION, agent_host_ports(agent, DECLARATION.name)
+    )
+    assert _build_family(host).child_names == _FAMILY.child_names == ("info", "manual")
+
+
+def test_plugin_catalog_state_is_detached_per_read():
+    """A caller cannot mutate the host registration snapshot through a read."""
+    from lingtai.adapters.tool_plugin_host import AgentPluginCatalogAdapter
+
+    registration = {
+        "declared": ["./alpha"],
+        "plugins": [{"name": "alpha", "skills": ["greeter"]}],
+    }
+    capabilities = [
+        ("plugin", {"paths": ["./plugins"]}),
+        ("skills", {"paths": ["./skills"]}),
+    ]
+    adapter = AgentPluginCatalogAdapter(lambda: registration, lambda: capabilities)
+
+    first = adapter.read_state()
+    first.registration["declared"].append("./mutated")
+    first.registration["plugins"][0]["name"] = "mutated"
+    second = adapter.read_state()
+
+    assert second.registration == registration
+    assert second.configured_paths == ("./plugins",)
+    assert second.skill_paths == ("./skills",)
+    assert second.skills_enabled is True
 
 
 def test_info_returns_catalog_snapshot(tmp_path):
@@ -570,7 +600,7 @@ def test_manual_returns_the_installed_body(tmp_path):
     })
     assert result["status"] == "ok"
     assert result["plugin_manual"]
-    assert "declaration is what mounts" in result["plugin_manual"]
+    assert "declaration is what registers" in result["plugin_manual"]
     assert result["manual_path"] == str(
         workdir / ".library" / "intrinsic" / "capabilities" / "plugin" / "SKILL.md"
     )
@@ -672,7 +702,7 @@ def test_non_string_plugin_entries_warn_without_failing_boot():
 
 
 # ---------------------------------------------------------------------------
-# Registration — skills mount
+# Registration — protected Plugin field
 # ---------------------------------------------------------------------------
 
 def _prompt_section_named(agent, name: str) -> str:
@@ -1049,10 +1079,8 @@ def test_uninstalling_removes_the_skill_from_the_plugin_field(tmp_path):
     agent, _workdir = _mk_agent(tmp_path, plugins=[str(plugin_dir)], skills_paths=[])
     assert "<skill_names>greeter</skill_names>" in _prompt_section_named(agent, "plugin")
 
-    from lingtai.tools import plugin as pluginmod
-
     _refresh_plugins(agent, [])
-    pluginmod._reconcile(agent, [])
+    _info(agent)
     assert "greeter" not in _prompt_section_named(agent, "plugin")
 
 
@@ -1245,7 +1273,7 @@ def test_discovery_only_plugin_installs_nothing(tmp_path):
     assert not list(library.rglob("a-skill"))
     # Nothing was registered — the file is not even created.
     assert not (workdir / "mcp_registry.jsonl").exists()
-    # The plugin's skills stayed out of the catalog scan entirely.
+    # The plugin's skills stay out of the vanilla catalog entirely.
     assert agent._plugin_skill_paths == []
     # The plugin directory itself is untouched.
     assert sorted(p.name for p in (root / "alpha").iterdir()) == [
@@ -1254,7 +1282,7 @@ def test_discovery_only_plugin_installs_nothing(tmp_path):
 
 
 def test_info_reports_registration_but_never_performs_it(tmp_path):
-    """`info` is read-only: a plugin added after boot shows up unmounted."""
+    """`info` is read-only: a plugin added after boot shows up discovered."""
     root = tmp_path / "plugins"
     _write_plugin(root, "alpha")
     agent, workdir = _mk_agent(tmp_path, [str(root)])
@@ -1334,7 +1362,7 @@ def test_manual_ships_with_the_package():
     assert "agent-plugins.org" in body
     # The manual must carry the two-tier mount contract, the boundary
     # registration stops at, and both halves of the declaration lifecycle.
-    assert "declaration is what mounts" in body
+    assert "declaration is what registers" in body
     assert "registered, *not running*" in body
     assert "## Installing a plugin" in body
     assert "### Uninstalling" in body
@@ -1348,8 +1376,7 @@ def test_default_plugin_root_is_scanned_without_declaration(tmp_path):
     root = workdir / "plugin"
     _write_plugin(root, "auto", skills=["hi"], mcp_servers={"s": {"type": "stdio", "command": "node"}})
     _refresh_plugins(agent, [])
-    from lingtai.tools import plugin as pluginmod
-    pluginmod._reconcile(agent, [])
+    _info(agent)
 
     assert "<name>auto</name>" in _prompt_section_named(agent, "plugin")
     assert "<skill_names>hi</skill_names>" in _prompt_section_named(agent, "plugin")
