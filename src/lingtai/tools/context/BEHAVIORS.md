@@ -13,8 +13,6 @@ related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/preset.py
-  - src/lingtai/tools/system/BEHAVIORS.md
-  - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/state.py
   - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/kernel/nudge/goal.py

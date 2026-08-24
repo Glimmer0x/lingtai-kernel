@@ -1,22 +1,15 @@
 ---
 name: system-behavior-tests
-behavior_version: 3
+behavior_version: 2
 labt_version: 2
 contract: CONTRACT.md
 anatomy: ANATOMY.md
 related_files:
   - src/lingtai/tools/system/karma.py
   - src/lingtai/tools/system/schema.py
-  - src/lingtai/tools/system/settings.py
-  - src/lingtai/agent.py
-  - src/lingtai/kernel/meta_block.py
-  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_karma.py
   - tests/test_system_declared_plugin.py
-  - tests/test_meta_block.py
-  - tests/test_init_reader.py
   - tests/_workdir_lease_helpers.py
   - tests/_snapshot_helpers.py
   - tests/_lifecycle_clock_helpers.py
@@ -25,9 +18,8 @@ related_files:
 maintenance: |
   Written by the karma-lifecycle audit (2026-08). Keep in sync with
   CONTRACT.md clauses this file guards and ANATOMY.md entries for karma.py /
-  name.py / preset.py / the System-owned cache-miss budget resolver; when CONTRACT.md or
-  ANATOMY.md changes in a way that affects agent-observable lifecycle behavior,
-  update the matching LABT here
+  name.py / preset.py; when CONTRACT.md or ANATOMY.md changes in a way that
+  affects agent-observable lifecycle behavior, update the matching LABT here
   in the same change.
 ---
 # System Behavior Tests — karma lifecycle control
@@ -249,39 +241,3 @@ if any observed exit is reported as `resuscitated`.
 
 ### Pass / Fail
 Pass only when mounted and direct routes agree on refusal, force escape, receipt, and state transition. A route that reimplements or weakens the pending-attention guard fails.
-
-## Behavior B009 — System cache-miss budget live settings preserve the counter
-
-- **id**: B009
-- **title**: System's live budget setting changes the soft threshold without resetting since-last-molt usage
-- **guards**: `system-contract` § [Cache-miss budget family settings](CONTRACT.md#cache-miss-budget-family-settings)
-- **supersedes**: `tests/test_system_declared_plugin.py` System settings tests; `tests/test_meta_block.py` hook/fallback/telemetry tests; `tests/test_init_reader.py::test_real_reader_reports_ignored_legacy_paths_without_mutating_input`
-- **runner**: a disposable real LingTai agent with `file`, `shell`, and `system`, whose launch environment does not set `LINGTAI_CACHE_MISS_BUDGET`
-- **prerequisites**: the executor owns the disposable `<WD>` and may write `<WD>/settings/system.json`; do not use a real agent runtime/config directory
-- **estimate**: 2 min
-
-### Steps
-1. Before creating the settings file, call `system(action="manual", input={}, reasoning="Read System's installed manual as a read-only carrier for B009 metadata.", summarize=false)`. Record the newest `_meta.agent_meta.agent_state.token_usage.session` values for `cache_miss_tokens`, `cache_miss_budget`, and `cache_miss_remaining_tokens`; the budget must be `2000000`.
-2. Write `<WD>/settings/system.json` as exactly `{"schema_version": 1, "cache_miss_budget": 1}`. Without refresh/restart, call `system(action="manual", input={}, reasoning="Read System's installed manual as a read-only carrier for B009 metadata.", summarize=false)` and inspect the newest metadata snapshot.
-3. Replace the file with exactly `{"schema_version": 1, "cache_miss_budget": 3000000}`. Without refresh/restart, call `system(action="manual", input={}, reasoning="Read System's installed manual as a read-only carrier for B009 metadata.", summarize=false)` and inspect the newest snapshot.
-4. Replace the file with the malformed text `{`. Call `system(action="manual", input={}, reasoning="Read System's installed manual as a read-only carrier for B009 metadata.", summarize=false)` twice and inspect both newest snapshots. Then run this exact bounded read-only query:
-
-   ```text
-   shell(action="run", input={"command": "tail -n 200 -- logs/events.jsonl | python -c 'import json,sys; rows=(json.loads(line) for line in sys.stdin if line.strip()); matches=[{key: row.get(key) for key in (\"event\",\"settings_path\",\"reason\",\"fallback_budget\")} for row in rows if row.get(\"event\")==\"cache_miss_budget_settings_invalid\"]; print(json.dumps(matches, sort_keys=True))'", "timeout": 30, "working_dir": "<WD>", "async": false, "reminder": null}, reasoning="Inspect a bounded event tail for the cache-miss settings diagnostic.", summarize=false)
-   ```
-
-5. Confirm no step created, rewrote, or consumed `<WD>/.notification/system.json` and no request was blocked.
-
-### Expected evidence
-- [ ] Step 1 reports default `cache_miss_budget == 2000000`.
-- [ ] Step 2 live-applies budget `1`; `cache_miss_tokens` does not reset or decrease, and the at-budget soft `context.molt` line is present.
-- [ ] Step 3 live-applies budget `3000000`; `cache_miss_tokens` still does not reset or decrease and remaining tokens are recomputed from that same cumulative total.
-- [ ] Both Step 4 snapshots fall back to `cache_miss_budget == 2000000`. The bounded query prints exactly `[{"event": "cache_miss_budget_settings_invalid", "fallback_budget": 2000000, "reason": "malformed_json", "settings_path": "settings/system.json"}]`: exactly one event, containing only the expected event name, static relative path, reason code, and fallback scalar across both calls.
-- [ ] `.notification/system.json` is untouched and every tool call completes normally.
-
-### Pass / Fail
-Pass when every checklist item holds, the Step 4 query returns exactly the one
-four-field object shown, and no forbidden side effect occurs. Fail if a refresh
-is required for the file, a threshold change resets usage, malformed JSON becomes
-effective, the diagnostic repeats for unchanged bytes, the bounded query omits or
-adds a field/event, or the soft guard blocks a request.

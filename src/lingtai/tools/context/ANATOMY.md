@@ -15,10 +15,6 @@ related_files:
   - src/lingtai/tools/pad/ANATOMY.md
   - src/lingtai/tools/lingtai/ANATOMY.md
   - src/lingtai/tools/system/ANATOMY.md
-  - src/lingtai/tools/system/CONTRACT.md
-  - src/lingtai/tools/system/settings.py
-  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/kernel/meta_block.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/context/__init__.py
   - tests/test_context_declared_tool_plugin.py
@@ -115,10 +111,4 @@ and current tool/meta sections.
 
 `summarize` never reconstructs. `rebuild` always composes before history
 mutation and provider request. `molt` retains refusal-before-shed and its distinct
-archive/count/replay effects. The soft cache-miss reminder points to this
-family's molt action, but its threshold configuration and live resolution belong
-to `tools/system/settings.py`; the outer `Agent.resolve_cache_miss_budget()` hook
-projects one positive integer to `kernel/meta_block.py`, which owns only the soft
-guard/telemetry projection and fixed compatibility fallback. Changing the
-threshold never resets Context's since-last-molt counter. No retired root or
-action is an alias.
+archive/count/replay effects. No retired root or action is an alias.

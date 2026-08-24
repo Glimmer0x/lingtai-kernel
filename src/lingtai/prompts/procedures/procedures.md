@@ -82,7 +82,7 @@ still cannot bring context below `0.75 * context_window`, the human explicitly
 asks for a reset, or conversation confusion makes the fresh briefing worth the
 molt cost. Independently, when `_meta.agent_meta.agent_state.context.molt` reports the
 cache-miss budget reached (`cache_miss_budget` / `cache_miss_tokens`, default
-2,000,000 uncached-input tokens accumulated since your last molt — it survives a
+1,000,000 uncached-input tokens accumulated since your last molt — it survives a
 refresh), molt to shed the carried context. If you have already decided to molt,
 do not summarize first
 merely to prepare; read `context-manual`, tend the stores, and molt deliberately.
