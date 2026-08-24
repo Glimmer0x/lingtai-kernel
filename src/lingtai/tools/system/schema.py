@@ -43,25 +43,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from .plugin import SYSTEM_DECLARED_ACTIONS
 
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three. The order
 # is the pre-migration enum order, unchanged.
-ACTION_ORDER = (
-    "refresh",
-    "sleep",
-    "lull",
-    "interrupt",
-    "suspend",
-    "cpr",
-    "clear",
-    "nirvana",
-    "presets",
-    "name_set",
-    "name_nickname",
-    "manual",
-)
+ACTION_ORDER = (*SYSTEM_DECLARED_ACTIONS, "manual")
 
 # --- Shared field descriptions, carried over verbatim from the flat schema ---
 

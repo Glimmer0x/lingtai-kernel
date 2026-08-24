@@ -4,6 +4,10 @@ tool: system
 contract_version: 3
 related_files:
   - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/agent.py
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
@@ -17,6 +21,7 @@ related_files:
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
   - tests/test_system_sleep_alarm.py
+  - tests/test_system_declared_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
   paired ANATOMY.md, the LTP/ToolFamily contracts this family is governed by,
@@ -64,6 +69,46 @@ are unchanged, and the children consume no additional model tool slots.
 `system` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
 (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
 it advertises is actually honored.
+
+## Declared host plugin and manual
+
+`DECLARATION` is a static official declaration constructed at import. The
+kernel reserves `system`, validates its unchanged operational action inventory,
+appends the reserved `manual` action, then binds and mounts it through the
+controlled registrar. The production binder receives only `workdir`,
+`system_runtime`, and `identity`: the first addresses the installed manual and
+agent-local documents; the second exposes the existing refresh/preset,
+self-sleep, authorization, CPR, token, and audit operations; the third exposes
+only durable naming. No plugin handler receives a whole Agent.
+
+The family-owned `manual` child derives its installed location from
+`DECLARATION.manual == "system-manual"`. The shipped router bundle remains
+`src/lingtai/intrinsic_skills/system-manual/SKILL.md` and the installed path
+remains `.library/intrinsic/capabilities/system-manual/SKILL.md`; no fallback
+or public manual result shape changed. `handle(agent, args)` remains a direct
+in-process compatibility adapter, while normal `lingtai.Agent` dispatch uses
+the registrar-mounted bound handler. `tests/test_system_declared_plugin.py`
+pins the static declaration, single official mount, identity port behavior, and
+manual path.
+
+### Single sleep use case
+
+`karma.py::sleep_use_case` is the sole System semantic owner for self-sleep:
+it validates the optional one-shot `delay`, reads attention fingerprints,
+applies the pending-notification refusal and explicit `force` escape hatch,
+emits the refusal/force/sleep/arm-failure audit events, returns the localized
+receipt, orders alarm arming before the transition under the port's
+heartbeat-shared lock, and performs the ASLEEP transition through the narrow
+`SystemSleepPort` (`karma.py:24-132`). `_DirectSleepPort` is only the
+legacy direct-entry translation (`karma.py:135-182`). The mounted route runs
+the same use case over the granted `SystemRuntimePort`, whose
+`sleep_attention_fingerprints` / `transition_to_asleep` / `sleep_alarm_lock` /
+`arm_sleep_alarm` members are translation-only: neither the kernel port nor
+`AgentSystemRuntimeAdapter` owns any fingerprint comparison, refusal/force
+branch, receipt, or duplicate sleep policy, and no `runtime.sleep(reason,
+force)` callback exists. Mounted and direct refusal/force parity
+is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
+`tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity`.
 
 ## Routing Card
 
@@ -249,8 +294,8 @@ drive it are `context`'s.
 | Claim | Source | Test |
 |---|---|---|
 | `system` is a wired intrinsic | `src/lingtai/tools/system/__init__.py` | `tests/test_system.py::test_system_in_all_intrinsics`, `tests/test_system.py::test_system_wired_in_agent` |
-| `sleep` transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:_sleep` | `tests/test_system.py::test_system_self_sleep` |
-| `sleep(delay)` atomically persists one deadline, and heartbeat publishes/consumes its idempotent ordinary system event | `src/lingtai/tools/system/karma.py:_sleep`, `src/lingtai/kernel/base_agent/lifecycle.py:_fire_sleep_alarm_if_due` | `tests/test_system_sleep_alarm.py` |
+| `sleep` applies one pending-attention/refusal/force use case and transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:sleep_use_case` | `tests/test_system.py::test_system_self_sleep`, `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity` |
+| `sleep(delay)` atomically persists one deadline, and heartbeat publishes/consumes its idempotent ordinary system event | `src/lingtai/tools/system/karma.py:sleep_use_case`, `src/lingtai/kernel/base_agent/lifecycle.py:_fire_sleep_alarm_if_due` | `tests/test_system_sleep_alarm.py` |
 | Unknown/legacy actions return the unknown-action error | `src/lingtai/tools/system/__init__.py:handle` | `tests/test_system.py::test_system_rejects_unknown_and_retired_actions` |
 | `refresh` with an unauthorized preset is refused | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` |
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |

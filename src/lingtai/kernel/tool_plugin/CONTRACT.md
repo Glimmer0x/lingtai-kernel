@@ -39,6 +39,11 @@ related_files:
   - src/lingtai/tools/soul/__init__.py
   - src/lingtai/tools/soul/CONTRACT.md
   - src/lingtai/tools/soul/manual/SKILL.md
+  - src/lingtai/tools/system/__init__.py
+  - src/lingtai/tools/system/CONTRACT.md
+  - src/lingtai/tools/system/plugin.py
+  - src/lingtai/tools/system/karma.py
+  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -49,6 +54,7 @@ related_files:
   - tests/test_notification_delay_alarm.py
   - tests/test_notification_store.py
   - tests/test_shell_tool_plugin_declaration.py
+  - tests/test_system_declared_plugin.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -142,8 +148,8 @@ Coding agents and LingTai agents MUST observe the following.
   grantable to a declaration.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
-  `daemon`, `email`, `file`, `plugin`, `shell`, and `soul` are declared, in
-  that official order;
+  `daemon`, `email`, `file`, `plugin`, `shell`, `soul`, and `system` are
+  declared, in that official order;
   every remaining target stays outside this contract.
   `daemon`, `email`, and `notification` are declared; every remaining target
   stays outside this contract. Notification is a mandatory injected official
@@ -186,20 +192,25 @@ capability.
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
 | `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override today); no Agent configuration lookup or write operation. |
 | `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
+| `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`; sleep evidence/effects via `sleep_attention_fingerprints()`, `transition_to_asleep()`, `sleep_alarm_lock()`, `arm_sleep_alarm()` | System's bounded runtime/lifecycle vocabulary. The four sleep members are translation-only evidence/effects: the one sleep policy (fingerprint comparison, refusal/force, receipts, audit) lives in `lingtai.tools.system.karma.sleep_use_case`, never in this port or its adapter. Identity is deliberately absent. |
+| `IdentityPort` | Read `name`; durably write `set_name()` and `set_nickname()` | System's separate naming vocabulary. The current name is read-only through the port; its two explicit writes may update durable identity, but cannot mutate address, workdir, or general runtime state. |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
 `workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
 `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
-`notifications`, `configuration`, and `soul_runtime`: `mcp`
+`notifications`, `configuration`, `soul_runtime`, `system_runtime`, and
+`identity`: `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
 Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
 `file_io`; and Plugin consumes `workdir`, its own `prompt_section`, and the
 read-only `plugin_catalog` projection; Shell consumes `workdir` plus
 `notifications` and `configuration` for its existing durable async execution
-semantics; and Soul consumes `workdir` plus its explicit `soul_runtime`
-live-self operations vocabulary. Family-specific runtime ports are
+semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
+live-self operations vocabulary; and System consumes `workdir` plus its
+`system_runtime` lifecycle vocabulary and the durable naming `identity`
+port. Family-specific runtime ports are
 composed only for their declaration through `extra_ports` or `extra_ports_for`,
 so they do not expand another declaration's grant; a port built in the standard
 table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only

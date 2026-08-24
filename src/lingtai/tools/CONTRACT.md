@@ -68,7 +68,8 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, `daemon`, `email`, `file`, and `plugin` are the declared families
+  `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
+  `soul`, and `system` are the declared families
   today, in that official order; do not widen that claim without another
   family's evidence.
 ---
@@ -296,13 +297,15 @@ host, identifier, and migration vocabulary that every official model-facing tool
 family shares. The accepted declared evidence is exactly `mcp`, `avatar`,
 `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, and
 `soul`, in that
-order. `mcp` is the base reference; the remaining nine are accepted vertical
+order. `mcp` is the base reference; the remaining ten are accepted vertical
 slices with their narrow earned ports. Email retains its call-time manager port,
 File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
-`workdir`/`notification_state` with Core-bound callbacks, and Soul retains
-`workdir` plus its explicit `soul_runtime` live-self port. The remaining target
-register is only `vision`, `web`, `system`, and `task_card`; it is not
+`workdir`/`notification_state` with Core-bound callbacks, Soul retains
+`workdir` plus its explicit `soul_runtime` live-self port, and System retains
+`workdir` plus its `system_runtime` lifecycle vocabulary and durable naming
+`identity` port. The remaining target
+register is only `vision`, `web`, and `task_card`; it is not
 proof that their candidate slices merged and is never a generic dispatch or
 admission path. Every other registry family remains an explicit future migration
 unit and none ships as an MCP plugin package today.
@@ -428,14 +431,16 @@ register is family-generic rather than MCP-only.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
-  Plugin, Notification, Shell, and Soul are accepted vertical evidence here.
+  Plugin, Notification, Shell, Soul, and System are accepted vertical evidence
+  here.
   The remaining target
-  register names only `vision`, `web`, `system`, and
+  register names only `vision`, `web`, and
   `task_card`; those
   names are targets, not a claim that candidate slices have merged.
-  `mcp` is the current base reference; Avatar, Context, Daemon, Email, and
-  Notification are accepted vertical evidence here. The remaining target register
-  names only `vision`, `web`, `system`, and `task_card`; those
+  `mcp` is the current base reference; Avatar, Context, Daemon, Email,
+  Notification, and System are accepted vertical evidence here. The remaining
+  target register
+  names only `vision`, `web`, and `task_card`; those
   names are targets, not a claim that their candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
@@ -611,7 +616,7 @@ non-goal for third-party-versus-third-party mounts.
   manager. File's declaration binds only `workdir`/`file_io`; its focused suites
   prove the typed adapter, exact grant, preserved operations, one mount, sole
   package body at `file-manual`, excluded redirect marker, and wheel/sdist source
-  route. The remaining target register names only `vision`, `web`, `system`,
+  route. The remaining target register names only `vision`, `web`,
   and `task_card`. Avatar, Context, and Daemon retain
   their independently accepted declarations and focused coverage. The shared
   test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
@@ -638,7 +643,7 @@ non-goal for third-party-versus-third-party mounts.
   `workdir`/`notification_state`; `tests/test_tool_plugin_declaration.py` and
   its Notification Core tests prove the one mount, canonical installed manual,
   placeholder check, and Core-backed dismiss behavior. The remaining target
-  register names only `vision`, `web`, `system`, and `task_card`.
+  register names only `vision`, `web`, and `task_card`.
   Avatar, Context, and Daemon retain their independently accepted declarations
   and focused coverage. The shared test seam is
   `tests/_tool_plugin_helpers.py`;
@@ -790,12 +795,18 @@ static declaration binds an agent-hosted ToolFamily through only `workdir` and
 stateful policy and Store mutation (see `src/lingtai/tools/notification/CONTRACT.md`).
 
 `system` (`refresh | sleep | lull | interrupt | suspend | cpr | clear |
-nirvana | presets | summarize | manual`) is the eleventh, and the third
+nirvana | presets | name_set | name_nickname | manual`) is the eleventh, and
+the third
 migrated *intrinsic*: its final model-facing root is likewise exactly `action`,
 `input`, `reasoning`, and `summarize`, and each action's arguments live only in
 that action's own strict `input` — so `address` belongs to the six address
-verbs, `preset`/`revert_preset` only to `refresh`, and `items`/`rebuild` only to
-`summarize` (see `src/lingtai/tools/system/CONTRACT.md`). Two facts are worth
+verbs, `preset`/`revert_preset` only to `refresh`, and `content` only to the
+two name actions; there is no public `system(action='summarize')`, and
+`items`/`rebuild` belong to no `system` action
+(see `src/lingtai/tools/system/CONTRACT.md`). It is also the eleventh declared
+official family: its static `DECLARATION` binds only `workdir`,
+`system_runtime`, and `identity`, and `karma.sleep_use_case` is the single
+self-sleep policy owner for both mounted and direct routes. Two facts are worth
 naming here because they are envelope consequences rather than local details.
 First, the family's three privilege classes (self, karma, karma+nirvana) are
 *per action*, so the closed per-action `input` is load-bearing for safety, not

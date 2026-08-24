@@ -57,6 +57,8 @@ __all__ = [
     "NotificationPort",
     "ConfigurationPort",
     "SoulRuntimePort",
+    "SystemRuntimePort",
+    "IdentityPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -78,10 +80,12 @@ MANUAL_ACTION = "manual"
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
-#: ``email``, ``file``, ``plugin``, ``notification``, or ``shell``. Plugin
+#: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``, or
+#: ``system``. Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
-#: ``notifications`` ports. Root ``CONTRACT.md``
+#: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
+#: vocabulary plus the durable naming ``identity`` port. Root ``CONTRACT.md``
 #: rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
@@ -102,6 +106,8 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "notifications",
     "configuration",
     "soul_runtime",
+    "system_runtime",
+    "identity",
 )
 
 
@@ -115,7 +121,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
-    "shell", "soul",
+    "shell", "soul", "system",
 )
 
 
@@ -586,6 +592,67 @@ class SoulRuntimePort(Protocol):
     def clear_notification(self, channel: str) -> None: ...
 
     def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict: ...
+
+
+class SystemRuntimePort(Protocol):
+    """The System family's bounded runtime/lifecycle vocabulary.
+
+    This is intentionally not an Agent-shaped object.  It supplies exactly the
+    existing lifecycle, preset, audit, authority, and self-sleep operations
+    System already needs; the adapter composes each operation from a narrow
+    Agent callback.  Agent identity is deliberately absent and lives on
+    :class:`IdentityPort` instead.
+
+    The four sleep members are evidence/effects only: the sleep *policy*
+    (fingerprint comparison, refusal/force, receipts, audit events) is owned by
+    ``lingtai.tools.system.karma.sleep_use_case``, which this port never
+    duplicates.  ``sleep_alarm_lock``/``arm_sleep_alarm`` carry the persisted
+    one-shot ``sleep(delay=...)`` alarm effect so arming and the ASLEEP
+    transition stay under the host's one heartbeat-shared lock.
+    """
+
+    @property
+    def admin(self) -> Mapping[str, Any]: ...
+
+    @property
+    def language(self) -> str: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def token_usage(self) -> Mapping[str, Any]: ...
+
+    def load_preset(self, name: str) -> dict: ...
+
+    def activate_preset(self, name: str) -> None: ...
+
+    def activate_default_preset(self) -> None: ...
+
+    def retry_failed_mcps(self) -> Mapping[str, Any]: ...
+
+    def perform_refresh(self) -> None: ...
+
+    def resuscitate(self, address: str) -> Any: ...
+
+    def sleep_attention_fingerprints(
+        self,
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]: ...
+
+    def transition_to_asleep(self) -> None: ...
+
+    def sleep_alarm_lock(self) -> Any: ...
+
+    def arm_sleep_alarm(self, delay_seconds: Any) -> str: ...
+
+
+class IdentityPort(Protocol):
+    """The System family's live, durable naming operations only."""
+
+    @property
+    def name(self) -> str | None: ...
+
+    def set_name(self, name: str) -> None: ...
+
+    def set_nickname(self, nickname: str) -> None: ...
 
 
 class ToolMountPort(Protocol):

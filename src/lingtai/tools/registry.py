@@ -73,7 +73,7 @@ from . import psyche  # noqa: E402  (lingtai.tools.psyche)
 
 INTRINSICS: dict[str, dict[str, Any]] = {
     "email": {"module": email, "official_plugin": True},
-    "system": {"module": system},
+    "system": {"module": system, "official_plugin": True},
     "context": {"module": context, "official_plugin": True},
     "psyche": {"module": psyche},
     "soul": {"module": soul},

@@ -77,7 +77,11 @@ code under `tools/` (`src/lingtai/intrinsic_skills/__init__.py:1-9`).
   `refresh-precheck`, `runtime-update-checks`, `sqlite-log-query`,
   `substrate-manual`, `trajectory-mining`). Two of them
   ship executable helpers — `how-to-change-name/scripts/change_name.py` and
-  `sqlite-log-query/scripts/event_summary.py`.
+  `sqlite-log-query/scripts/event_summary.py`. This bundle remains the
+  canonical System operational manual: the declared official `system` family
+  derives its reserved `manual` child from `DECLARATION.manual ==
+  "system-manual"` (`src/lingtai/tools/system/__init__.py`), and no second
+  package-owned System manual exists.
 - `notification-manual/` — the `notification` family manual plus the
   `channel-model` and `dismissal-safety` reference sub-skills.
 - `lingtai-kernel-anatomy/` — the repository's own navigation skill: how to read

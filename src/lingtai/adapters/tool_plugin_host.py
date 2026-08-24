@@ -55,6 +55,9 @@ __all__ = [
     "StaticConfigurationAdapter",
     "AgentSoulRuntimeAdapter",
     "agent_soul_runtime",
+    "AgentSystemRuntimeAdapter",
+    "AgentIdentityAdapter",
+    "agent_system_runtime",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -1093,6 +1096,179 @@ def agent_soul_runtime(agent: Any) -> AgentSoulRuntimeAdapter:
     )
 
 
+class AgentSystemRuntimeAdapter:
+    """SystemRuntimePort composed from narrow Agent callbacks, never an Agent.
+
+    Translation-only by contract (System's one sleep *policy* lives in
+    ``lingtai.tools.system.karma.sleep_use_case``): the four sleep members
+    below expose attention evidence, the ASLEEP transition, and the persisted
+    one-shot alarm effect, and this adapter owns no fingerprint comparison,
+    refusal/force branch, receipt, or audit decision of its own.
+    """
+
+    __slots__ = (
+        "_admin", "_language", "_log", "_token_usage", "_load_preset",
+        "_activate_preset", "_activate_default_preset", "_retry_failed_mcps",
+        "_perform_refresh", "_resuscitate", "_sleep_attention_fingerprints",
+        "_transition_to_asleep", "_sleep_alarm_lock", "_arm_sleep_alarm",
+    )
+
+    def __init__(
+        self,
+        *,
+        admin: Callable[[], Mapping[str, Any]],
+        language: Callable[[], str],
+        log: Callable[..., None],
+        token_usage: Callable[[], Mapping[str, Any]],
+        load_preset: Callable[[str], dict],
+        activate_preset: Callable[[str], None],
+        activate_default_preset: Callable[[], None],
+        retry_failed_mcps: Callable[[], Mapping[str, Any]],
+        perform_refresh: Callable[[], None],
+        resuscitate: Callable[[str], Any],
+        sleep_attention_fingerprints: Callable[[], tuple[tuple, tuple]],
+        transition_to_asleep: Callable[[], None],
+        sleep_alarm_lock: Callable[[], Any],
+        arm_sleep_alarm: Callable[[Any], str],
+    ) -> None:
+        self._admin = admin
+        self._language = language
+        self._log = log
+        self._token_usage = token_usage
+        self._load_preset = load_preset
+        self._activate_preset = activate_preset
+        self._activate_default_preset = activate_default_preset
+        self._retry_failed_mcps = retry_failed_mcps
+        self._perform_refresh = perform_refresh
+        self._resuscitate = resuscitate
+        self._sleep_attention_fingerprints = sleep_attention_fingerprints
+        self._transition_to_asleep = transition_to_asleep
+        self._sleep_alarm_lock = sleep_alarm_lock
+        self._arm_sleep_alarm = arm_sleep_alarm
+
+    @property
+    def admin(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(self._admin() or {}))
+
+    @property
+    def language(self) -> str:
+        return self._language()
+
+    def log(self, event: str, **fields: Any) -> None:
+        self._log(event, **fields)
+
+    def token_usage(self) -> Mapping[str, Any]:
+        return self._token_usage()
+
+    def load_preset(self, name: str) -> dict:
+        return self._load_preset(name)
+
+    def activate_preset(self, name: str) -> None:
+        self._activate_preset(name)
+
+    def activate_default_preset(self) -> None:
+        self._activate_default_preset()
+
+    def retry_failed_mcps(self) -> Mapping[str, Any]:
+        return self._retry_failed_mcps()
+
+    def perform_refresh(self) -> None:
+        self._perform_refresh()
+
+    def resuscitate(self, address: str) -> Any:
+        return self._resuscitate(address)
+
+    def sleep_attention_fingerprints(self) -> tuple[tuple, tuple]:
+        return self._sleep_attention_fingerprints()
+
+    def transition_to_asleep(self) -> None:
+        self._transition_to_asleep()
+
+    def sleep_alarm_lock(self) -> Any:
+        return self._sleep_alarm_lock()
+
+    def arm_sleep_alarm(self, delay_seconds: Any) -> str:
+        return self._arm_sleep_alarm(delay_seconds)
+
+
+class AgentIdentityAdapter:
+    """IdentityPort over exactly the System naming surface."""
+
+    __slots__ = ("_name", "_set_name", "_set_nickname")
+
+    def __init__(
+        self,
+        name: Callable[[], str | None],
+        set_name: Callable[[str], None],
+        set_nickname: Callable[[str], None],
+    ) -> None:
+        self._name = name
+        self._set_name = set_name
+        self._set_nickname = set_nickname
+
+    @property
+    def name(self) -> str | None:
+        return self._name()
+
+    def set_name(self, name: str) -> None:
+        self._set_name(name)
+
+    def set_nickname(self, nickname: str) -> None:
+        self._set_nickname(nickname)
+
+
+def agent_system_runtime(agent: Any) -> AgentSystemRuntimeAdapter:
+    """Bind System's explicit runtime port to one live Agent.
+
+    Composition-only: each value is one deferred read closure or bound
+    operation, so an agent that never invokes a given System action never
+    needs the corresponding attribute.  The sleep evidence/effect closures
+    reuse the kernel's coherent attention reader and persisted sleep-alarm
+    helpers verbatim — no second sleep decision tree is created here.
+    """
+    from lingtai.kernel.base_agent.lifecycle import (
+        _arm_sleep_alarm,
+        _sleep_alarm_lock,
+    )
+    from lingtai.kernel.notifications import (
+        _workdir_key,
+        attention_fingerprint,
+        is_channel_allowed,
+    )
+    from lingtai.kernel.state import AgentState
+
+    def _sleep_attention_fingerprints() -> tuple[tuple, tuple]:
+        workdir = _workdir_key(agent)
+        pending = attention_fingerprint(
+            agent._notification_store,
+            lambda channel: is_channel_allowed(channel, workdir=workdir),
+            workdir,
+        )
+        return pending, tuple(agent._notification_fp or ())
+
+    def _transition_to_asleep() -> None:
+        agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+        agent._asleep.set()
+        agent._cancel_event.set()
+
+    return AgentSystemRuntimeAdapter(
+        admin=lambda: getattr(agent, "_admin", {}) or {},
+        language=lambda: agent._config.language,
+        log=lambda event, **fields: agent._log(event, **fields),
+        token_usage=lambda: agent.get_token_usage(),
+        load_preset=lambda name: agent.load_preset(name),
+        activate_preset=lambda name: agent._activate_preset(name),
+        activate_default_preset=lambda: agent._activate_default_preset(),
+        retry_failed_mcps=lambda: getattr(agent, "_retry_failed_mcps", lambda: {})(),
+        perform_refresh=lambda: agent._perform_refresh(),
+        resuscitate=lambda address: agent._cpr_agent(address),
+        sleep_attention_fingerprints=_sleep_attention_fingerprints,
+        transition_to_asleep=_transition_to_asleep,
+        sleep_alarm_lock=lambda: _sleep_alarm_lock(agent),
+        arm_sleep_alarm=lambda delay_seconds: _arm_sleep_alarm(agent, delay_seconds),
+    )
+
+
 def agent_host_ports(
     agent: Any,
     plugin_name: str,
@@ -1105,7 +1281,9 @@ def agent_host_ports(
     Notification receives its narrow state port at this composition boundary, and
     Shell receives its narrow durable-notification port here too; Shell's
     setup-selected ``configuration`` port arrives through ``extra_ports``.
-    Soul receives its explicit live-self ``soul_runtime`` port here as well.
+    Soul receives its explicit live-self ``soul_runtime`` port here as well,
+    and System receives its ``system_runtime`` lifecycle vocabulary plus the
+    durable naming ``identity`` port.
     The registrar grants just ``requires``, never this whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
@@ -1156,6 +1334,13 @@ def agent_host_ports(
         )
     elif plugin_name == "soul":
         ports["soul_runtime"] = agent_soul_runtime(agent)
+    elif plugin_name == "system":
+        ports["system_runtime"] = agent_system_runtime(agent)
+        ports["identity"] = AgentIdentityAdapter(
+            lambda: getattr(agent, "agent_name", None),
+            lambda name: agent.set_name(name),
+            lambda nickname: agent.set_nickname(nickname),
+        )
     if extra_ports:
         ports.update(extra_ports)
     return ports

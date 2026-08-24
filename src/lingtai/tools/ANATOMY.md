@@ -150,13 +150,16 @@ capability names and lazy adapters.
   `Agent._register_declared_plugins` before capability setup, unreachable from
   any action, which is what makes it safe in `CORE_DEFAULTS`. Registration is
   registry-level like `addons:[]`: registered, never running.
-- `system/` — mandatory intrinsic owning the public `system` family: runtime,
-  lifecycle, preset, and identity-naming actions behind one model-facing root
-  (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene
-  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` it is
-  an intrinsic rather than a manager-owning capability, so it composes its
-  schema from a module-level schema-only family and builds a dispatching one
-  per `handle(agent, args)` call.
+- `system/` — the official declared `system` family (a mandatory intrinsic
+  whose model-facing surface mounts only through the kernel registrar):
+  runtime, lifecycle, preset, and identity-naming actions behind one
+  model-facing root (`src/lingtai/tools/system/ANATOMY.md`). Its static
+  `DECLARATION` binds only `workdir`, `system_runtime`, and `identity`;
+  `karma.sleep_use_case` owns the one self-sleep policy. It owns no public
+  context-hygiene action — `summarize.py` stays here as the private engine
+  `context` drives. It composes its schema from a module-level schema-only
+  family, retains one port-bridge family per mount, and builds a direct
+  dispatching one per compatibility `handle(agent, args)` call.
 - `knowledge/` — private durable knowledge catalog, migrated to the LTP v2
   family envelope with the unchanged public actions `info`/`manual`
   (`src/lingtai/tools/knowledge/ANATOMY.md`).
@@ -250,12 +253,15 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, File, Plugin, and Notification are accepted vertical
+Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, and System are
+accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
 `context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
-`prompt_section`/`plugin_catalog`, and `notification_state` (all also retain
+`prompt_section`/`plugin_catalog`, `notification_state`,
+`notifications`/`configuration`, `soul_runtime`, and
+`system_runtime`/`identity` (all also retain
 `workdir`). The remaining candidate targets are only `vision`, `web`,
-`system`, and `task_card`; the list is not a generic dispatch or admission
+and `task_card`; the list is not a generic dispatch or admission
 mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
