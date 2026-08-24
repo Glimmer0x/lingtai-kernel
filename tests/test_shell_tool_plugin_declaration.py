@@ -1,6 +1,7 @@
 """Vertical evidence for Shell's declared official host-plugin slice."""
 from __future__ import annotations
 
+import sys
 import time
 
 import pytest
@@ -31,6 +32,19 @@ def _run_input(command: str, *, asynchronous: bool = False) -> dict:
         "async": asynchronous,
         "reminder": None,
     }
+
+
+def _official_command(marker: str) -> str:
+    """Return a command accepted by the selected POSIX/PowerShell dialect."""
+    if sys.platform == "win32":
+        return f"Write-Output {marker}"
+    return f"printf {marker}"
+
+
+def _official_sleep_command(seconds: int = 30) -> str:
+    if sys.platform == "win32":
+        return f"Start-Sleep -Seconds {seconds}"
+    return f"sleep {seconds}"
 
 
 def test_shell_declaration_is_static_and_derives_its_shipped_surface():
@@ -85,7 +99,7 @@ def test_official_shell_mount_uses_only_narrow_ports_and_keeps_real_dispatch(she
 
     sync = handler({
         "action": "run",
-        "input": _run_input("printf official-shell"),
+        "input": _run_input(_official_command("official-shell")),
         "reasoning": "verify official Shell execution",
     })
     assert sync["status"] == "ok"
@@ -105,7 +119,7 @@ def test_official_shell_async_run_and_poll_keep_durable_engine_semantics(shell_a
     handler = shell_agent._tool_handlers["shell"]
     started = handler({
         "action": "run",
-        "input": _run_input("printf official-async", asynchronous=True),
+        "input": _run_input(_official_command("official-async"), asynchronous=True),
         "reasoning": "verify official Shell async supervision",
     })
     assert started["status"] == "ok"
@@ -127,3 +141,19 @@ def test_official_shell_async_run_and_poll_keep_durable_engine_semantics(shell_a
     assert result["exit_code"] == 0
     assert result["stdout"] == "official-async"
     assert result["command_status"] == "success"
+
+
+def test_official_shell_async_cancel_is_native_route_safe(shell_agent):
+    handler = shell_agent._tool_handlers["shell"]
+    started = handler({
+        "action": "run",
+        "input": _run_input(_official_sleep_command(), asynchronous=True),
+        "reasoning": "verify official Shell cancellation",
+    })
+    assert started["status"] == "ok"
+    cancelled = handler({
+        "action": "cancel",
+        "input": {"job_id": started["job_id"]},
+        "reasoning": "cancel official Shell async job",
+    })
+    assert cancelled == {"status": "cancelled", "job_id": started["job_id"]}

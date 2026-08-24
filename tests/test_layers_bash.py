@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from unittest.mock import MagicMock
 
+from tests._service_helpers import make_gemini_mock_service
+
 from lingtai.tools.bash import (
     BashManager,
     BashPolicy,
@@ -411,30 +413,50 @@ class TestBroadScanHint:
 # setup()
 # ---------------------------------------------------------------------------
 
+@pytest.fixture
+def strict_setup_agent(tmp_path):
+    """Use the real host seams so setup tests cannot fabricate registrations."""
+    from lingtai.agent import Agent
+
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="strict-shell-setup",
+        working_dir=tmp_path / "agent",
+        capabilities={},
+    )
+    try:
+        yield agent
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def _assert_shell_is_officially_mounted(agent):
+    assert agent.official_tool_plugins["shell"].name == "shell"
+    assert [schema.name for schema in agent._tool_schemas].count("shell") == 1
+
+
 class TestSetupBash:
-    def test_setup_with_policy_file(self, tmp_path):
+    def test_setup_with_policy_file(self, strict_setup_agent, tmp_path):
         policy_file = tmp_path / "policy.json"
         policy_file.write_text(json.dumps({"allow": ["echo"]}))
-        agent = MagicMock()
-        agent._working_dir = Path("/tmp")
-        mgr = setup_bash(agent, policy_file=str(policy_file))
+        mgr = setup_bash(strict_setup_agent, policy_file=str(policy_file))
         assert isinstance(mgr, BashManager)
-        agent.add_tool.assert_called_once()
+        assert mgr._policy.is_allowed("echo hi")
+        assert not mgr._policy.is_allowed("printf hi")
+        _assert_shell_is_officially_mounted(strict_setup_agent)
 
-    def test_setup_yolo(self):
-        agent = MagicMock()
-        agent._working_dir = Path("/tmp")
-        mgr = setup_bash(agent, yolo=True)
+    def test_setup_yolo(self, strict_setup_agent):
+        mgr = setup_bash(strict_setup_agent, yolo=True)
         assert isinstance(mgr, BashManager)
-        agent.add_tool.assert_called_once()
+        assert mgr._policy.is_allowed("printf hi")
+        _assert_shell_is_officially_mounted(strict_setup_agent)
 
-    def test_setup_uses_default_policy_when_none_specified(self):
-        agent = MagicMock()
-        agent._working_dir = Path("/tmp")
-        agent._config.bash_policy_file = None  # no config fallback
-        # Should succeed — falls back to bundled default policy
-        setup_bash(agent)
-        agent.add_tool.assert_called_once()
+    def test_setup_uses_default_policy_when_none_specified(self, strict_setup_agent):
+        # Should succeed and use the bundled default policy when no override is given.
+        mgr = setup_bash(strict_setup_agent)
+        assert isinstance(mgr, BashManager)
+        assert mgr._policy.is_allowed("printf hi")
+        _assert_shell_is_officially_mounted(strict_setup_agent)
 
 
 # ---------------------------------------------------------------------------
