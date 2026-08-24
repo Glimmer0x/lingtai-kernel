@@ -192,9 +192,11 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
    `telegram`, `wechat`, `whatsapp` under `src/lingtai/mcp_servers/<name>/plugin.py`
    — then `6` curated catalog records, then no output and exit status 1 for the
    built-in daemon families. That is exactly the split the Contract's
-   `**Governed surface.**` bullets state: the six curated families already ship
-   in the selected form, the built-in daemon families are in the governed class
-   without a descriptor, and neither fact is a conformance claim.
+   `**Governed surface.**` bullets state: the six curated families carry the
+   retained external-transport descriptor/catalog form, while the built-in
+   daemon MCP families are in that governed external-transport class without a
+   descriptor; neither fact is evidence that those packages conform to the
+   selected declared host-plugin form.
 6. Prove the packaging precedent the section selects exists and is not a
    runtime:
 
@@ -341,11 +343,12 @@ Pass when the suite passes and the closed-envelope observation holds for a real 
 ### Pass / Fail
 
 Pass when every box above is observed. **Fail loudly** — do not soften the
-report — if the contract section asserts that any family other than `mcp`, `avatar`,
-`context`, or `daemon` is already declared or already ships as a *conforming*
-MCP plugin wrapper under
-this section, if it makes an unqualified global claim that no LingTai-owned
-family is packaged as an MCP plugin, if it leaves the first-party form
+report — if the contract section asserts that any family other than `mcp`,
+`avatar`, `context`, `daemon`, or `email` is already declared; if it treats a
+curated or built-in MCP package as already conforming to the selected declared
+host-plugin form merely because an external-transport descriptor, catalog
+record, or package exists; if it makes an unqualified global claim that no
+LingTai-owned family is packaged as an MCP plugin; if it leaves the first-party form
 unselected or admits more than one form, if it re-mandates an external stdio
 package for every official tool, if it removes or weakens the curated
 `CuratedMcpPlugin`/`mcp_catalog.json` route rather than reclassifying it, if it
