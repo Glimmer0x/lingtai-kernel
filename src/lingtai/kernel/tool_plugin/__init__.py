@@ -68,7 +68,7 @@ MANUAL_ACTION = "manual"
 #: Every host port an official declaration may name in ``requires``.
 #:
 #: Earned, not enumerated: each name below is consumed by a real vertical
-#: slice this component ships with (``mcp``, ``avatar``, ``context``, or ``daemon``).
+#: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``, or ``email``).
 #: Root ``CONTRACT.md`` rules 10-11 forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
 #:
@@ -81,6 +81,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "avatar_parent",
     "context_runtime",
     "daemon_runtime",
+    "email_runtime",
 )
 
 
@@ -92,7 +93,9 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "avatar", "context", "daemon")
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
+    "mcp", "avatar", "context", "daemon", "email"
+)
 
 
 # Opaque capability used only by the production host adapter's private

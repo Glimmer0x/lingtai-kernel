@@ -77,8 +77,8 @@ maintenance: |
   over a declaration, and the Agent Plugins entry is the excluded external
   standard kept only as the registration-versus-activation precedent. They are
   not a claim that every shared-C target has merged: `mcp` is the base reference,
-  while the separately landed `avatar`, Context, and Daemon vertical slices are
-  actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
+  while the separately landed `avatar`, Context, Daemon, and Email vertical slices
+  are actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
   the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
@@ -236,14 +236,13 @@ the artifact writer entirely within `lingtai.tools`. It writes only
 polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
-kernel-owned declared host-plugin contract. `mcp` is the current base reference
-slice; the shared C integration register targets `mcp`, `email`, `file`,
-`context`, `notification`, `soul`, `vision`, `web`, `daemon`, `system`, and
-`task_card`, and does not imply that every candidate family has merged. Avatar
-is separately landed actual evidence: its `DECLARATION` binds only `workdir` and
-`avatar_parent`. Context is current in-process vertical evidence: its declaration
-binds only `workdir` and `context_runtime`, preserving molt/summarize/rebuild.
-The remaining C target names remain candidate targets.
+kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
+Context, Daemon, and Email are accepted vertical evidence. Avatar binds only
+`workdir`/`avatar_parent`; Context binds `workdir`/`context_runtime`; Daemon
+binds `workdir`/`daemon_runtime`; and Email binds `workdir`/`email_runtime`.
+The remaining candidate targets are only `file`, `notification`, `soul`,
+`vision`, `web`, `system`, and `task_card`; the list is not a generic dispatch
+or admission mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
@@ -256,9 +255,13 @@ actions, inputs, and result shapes unchanged. `src/lingtai/tools/avatar/__init__
 `src/lingtai/tools/context/__init__.py` is the current in-process lifecycle
 slice: it binds `workdir` plus `context_runtime`, keeps the established live
 engines behind that narrow port, and owns the canonical package manual installed
-as `context-manual`. Candidate-local families may still boot through their legacy
-`setup(agent)` paths until their own vertical slice lands; that compatibility fact
-is not the generic registrar/bridge dispatch model.
+as `context-manual`. `src/lingtai/tools/email/__init__.py` is the fifth slice:
+it owns `EmailRuntimeRequest`/`EmailRuntimePort`, creates or replaces the real
+EmailManager before using `extra_ports_for` to grant a call-time
+`AgentEmailRuntimeAdapter`, and remains a mandatory injected official family
+with no capability/manifest row. Candidate-local families may still boot through
+their legacy `setup(agent)` paths until their own vertical slice lands; that
+compatibility fact is not a generic registrar/bridge dispatch model.
 
 `registry.py` remains the current first-party composition point and stays a
 hand-edited static table: it imports no `lingtai.mcp_servers` packaging and no

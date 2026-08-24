@@ -21,10 +21,13 @@ only builds the ports.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from lingtai.kernel.llm.base import FunctionSchema
 from lingtai.kernel.time_veil import now_iso as render_now_iso
+
+if TYPE_CHECKING:
+    from lingtai.tools.email import EmailResult, EmailRuntimeRequest
 
 from lingtai.kernel.tool_plugin import (
     BoundToolPlugin,
@@ -38,6 +41,7 @@ __all__ = [
     "AgentContextRuntimeAdapter",
     "AgentAvatarParentAdapter",
     "AgentDaemonRuntimeAdapter",
+    "AgentEmailRuntimeAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -147,6 +151,35 @@ class AgentAvatarParentAdapter:
     def has_rule_privilege(self) -> bool:
         return self._has_rule_privilege()
 
+
+
+class AgentEmailRuntimeAdapter:
+    """Email's narrow live-manager port over one call-time reader.
+
+    The adapter owns no Agent and never dispatches through an intrinsic or an
+    official tool handler.  It validates the Email-owned action set before it
+    reads the current manager, then invokes that manager exactly once with the
+    legacy flat payload it already owns.  The read callback is deliberately
+    evaluated per request so refresh or reconstruction can replace the manager
+    without leaving an already-bound declared family stale.
+    """
+
+    __slots__ = ("_read_manager",)
+
+    def __init__(self, read_manager: Callable[[], Any]) -> None:
+        self._read_manager = read_manager
+
+    def handle_email(self, request: "EmailRuntimeRequest") -> "EmailResult":
+        # Keep the action source of truth in Email's static declaration without
+        # adding a family import edge at host-module import time.
+        from lingtai.tools.email import DECLARATION as EMAIL_DECLARATION
+
+        if request.action not in EMAIL_DECLARATION.actions:
+            raise ValueError(f"unsupported Email runtime action: {request.action!r}")
+        manager = self._read_manager()
+        if manager is None:
+            return {"error": "Internal: email manager not initialized. boot() was not called."}
+        return manager.handle({"action": request.action, **dict(request.input)})
 
 
 class _DaemonPresetToolCollector:
@@ -399,10 +432,29 @@ def daemon_runtime_for_agent(
             _missing_notification(**kwargs)
         notify(**kwargs)
 
+    # Daemon's accepted email route is its task-scoped daemon_email MCP server,
+    # explicitly requested per emanation.  Email's parent official declaration
+    # must not turn that into inherited parent communication authority merely by
+    # appearing in the regular tool surface; keep the pre-existing Daemon filter
+    # at this composition boundary for both schema and dispatch views.
+    def _read_daemon_schemas() -> tuple[Any, ...]:
+        return tuple(
+            schema
+            for schema in getattr(agent, "_tool_schemas", ())
+            if getattr(schema, "name", None) != "email"
+        )
+
+    def _read_daemon_handlers() -> Mapping[str, Callable[[dict], dict]]:
+        return {
+            name: handler
+            for name, handler in dict(getattr(agent, "_tool_handlers", {})).items()
+            if name != "email"
+        }
+
     return AgentDaemonRuntimeAdapter(
         read_service=lambda: agent.service,
-        read_schemas=lambda: tuple(getattr(agent, "_tool_schemas", ())),
-        read_handlers=lambda: dict(getattr(agent, "_tool_handlers", {})),
+        read_schemas=_read_daemon_schemas,
+        read_handlers=_read_daemon_handlers,
         read_mcp_names=lambda: frozenset(
             name for name in getattr(agent, "_mcp_tool_names", set()) if isinstance(name, str)
         ),
