@@ -15,6 +15,7 @@ related_files:
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/manual/SKILL.md
+  - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/tools/context/__init__.py
   - src/lingtai/tools/context/manual/SKILL.md
   - src/lingtai/tools/daemon/ANATOMY.md
@@ -23,6 +24,9 @@ related_files:
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/tools/file/ANATOMY.md
+  - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -31,13 +35,14 @@ related_files:
   - tests/test_context_declared_tool_plugin.py
   - tests/test_daemon.py
   - tests/test_email_official_tool_plugin.py
+  - tests/test_file_tool_plugin_package.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
-  upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
-  src/lingtai/tools/daemon/ANATOMY.md, and src/lingtai/tools/email/ANATOMY.md
-  across to the declaring side). Code is the structural source of truth: update
+  upward; src/lingtai/tools/ANATOMY.md and the MCP, Avatar, Context, Daemon,
+  Email, and File owner Anatomies across to the declaring side). Code is the
+  structural source of truth: update
   this anatomy in the same change that moves files, symbols, connections,
   composition, or state — in particular when a host port is added, when a family
   recuts onto the declared contract, or when OFFICIAL_TOOL_PLUGIN_NAMES changes.
@@ -65,10 +70,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the six host Port Protocols `WorkdirPort`, `PromptSectionPort`,
-    `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`, and
-    `ToolMountPort`; `email_runtime` is also grantable, but its Protocol
-    (`EmailRuntimePort`) deliberately remains Email-owned rather than kernel-owned;
+  - the seven kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+    `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
+    and `ToolMountPort`, plus File's structural `FileGrepMatch` and
+    `FileTraversalStats` result Protocols; `email_runtime` is also grantable, but
+    its Protocol (`EmailRuntimePort`) deliberately remains Email-owned;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -92,17 +98,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `protected=True`), `AgentAvatarParentAdapter`, `AgentContextRuntimeAdapter`,
   and `AgentDaemonRuntimeAdapter` (the latter reads the current notification
   route at publish time), plus `AgentEmailRuntimeAdapter`, which owns only a
-  call-time manager reader and never an Agent or intrinsic dispatcher, plus
-  `agent_host_ports` and
-  `register_agent_tool_plugins`. The registrar constructs its mount seam
+  call-time manager reader, and `AgentFileIOAdapter`, which owns only File's
+  concrete operation callbacks and two fact readers. Neither adapter owns an
+  Agent or generic dispatcher. `agent_host_ports` and
+  `register_agent_tool_plugins` compose the tables; the registrar constructs its mount seam
   locally; no public mount adapter or factory exists.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   `DECLARATION` is built at module import; `_bind(host)` composes the
   per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
   `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
   only composition wiring. `mcp` remains the shared-C base reference; Avatar,
-  Context, Daemon, and Email below are the other accepted vertical slices. The
-  later-family target register is limited to `file`, `notification`, `soul`,
+  Context, Daemon, Email, and File below are the other accepted vertical slices.
+  The later-family target register is limited to `notification`, `soul`,
   `vision`, `web`, `system`, and `task_card`; it is not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
@@ -125,11 +132,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `AgentEmailRuntimeAdapter(lambda: getattr(agent, "_email_manager", None))`.
   The adapter flattens an already-normalized request into one manager call and
   reads the manager at call time; Email has no dynamic `setup()` bridge.
+- `src/lingtai/tools/file/__init__.py` is the sixth accepted vertical slice. Its
+  static `DECLARATION` preserves `read | write | edit | glob | grep | manual`
+  and binds only `workdir` plus the earned `file_io` port. `setup(agent)` captures
+  the live File service and executor as separate narrow objects, builds
+  `AgentFileIOAdapter`, and grants it only through `extra_ports_for`; the adapter
+  owns no Agent, `Any` surface, generic dispatch, or mount authority. The package
+  manual is the sole body and installs at the established `file-manual` path.
 
 ## Connections
 
 - `lingtai.tools.mcp`, `lingtai.tools.avatar`, `lingtai.tools.context`,
-  `lingtai.tools.daemon`, and `lingtai.tools.email` import
+  `lingtai.tools.daemon`, `lingtai.tools.email`, and `lingtai.tools.file` import
   `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
   imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
@@ -149,9 +163,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   for nonreserved tools remain unchanged. This is trusted-in-process Python
   provenance, not an absolute defense against deliberate private-state mutation.
 - `lingtai.tools.mcp.setup()`, `lingtai.tools.avatar.setup()`,
-  `lingtai.tools.context.setup()`, and `lingtai.tools.daemon.setup()` call
+  `lingtai.tools.context.setup()`, `lingtai.tools.daemon.setup()`, and
+  `lingtai.tools.file.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins` through the
-  ordinary capability boot loop. Email instead is an injected
+  ordinary capability boot loop. Daemon and File add their capability-native
+  ports through `extra_ports_for`. Email instead is an injected
   `official_plugin`: `BaseAgent._boot_official_intrinsics()` calls `email.boot`,
   which creates its manager before registering the declaration with its sole
   family-specific `email_runtime` grant.
@@ -159,13 +175,17 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
   the live Agent (private `_working_dir`) or a `WorkdirPort` (`path`), so
-  migrated and unmigrated families share one loader.
+  migrated and unmigrated families share one loader. File's local manual child
+  adds only its explicit `file-manual` first / stale `file` fallback route; the
+  installer maps the package body to `file-manual` and excludes the standalone
+  redirect marker so the runtime still has one body and one destination.
 
 ## Composition
 
 `import lingtai.tools.mcp`, `import lingtai.tools.avatar`,
-`import lingtai.tools.context`, `import lingtai.tools.daemon`, or
-`import lingtai.tools.email` → `ToolPluginDeclaration.__post_init__` validates
+`import lingtai.tools.context`, `import lingtai.tools.daemon`,
+`import lingtai.tools.email`, or `import lingtai.tools.file` →
+`ToolPluginDeclaration.__post_init__` validates
 its declared shape, with no Agent in existence.
 
 Dynamic-family boot remains `Agent.__init__` / `Agent._setup_from_init` →
@@ -177,8 +197,9 @@ Both routes reach `register_official_tool_plugins`, which then runs, in order:
 
 1. check every declared name against `OFFICIAL_TOOL_PLUGIN_NAMES`, the batch,
    and the live claim map;
-2. `ToolPluginHost.grant(declaration, agent_host_ports(agent, name))`;
-3. `declaration.bind(host)` → `_bind` composes the family and `handle_mcp`,
+2. build `agent_host_ports(agent, name, family_specific_ports)`, then
+   `ToolPluginHost.grant` only the declaration's ordered `requires` subset;
+3. `declaration.bind(host)` → the family's `_bind` composes its real surface,
    deriving the tool name, the per-action `input` schemas, and the installed
    manual's destination from `DECLARATION` itself; `bind()` then refuses a
    bound plugin whose advertised action enum is not `public_actions`;

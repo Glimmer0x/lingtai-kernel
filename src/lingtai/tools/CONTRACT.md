@@ -15,6 +15,9 @@ related_files:
   - src/lingtai/tools/knowledge/__init__.py
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
+  - tests/test_file_tool_plugin_package.py
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/avatar/CONTRACT.md
@@ -65,8 +68,8 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, `daemon`, and `email` are the declared families today; do not widen
-  that claim without another family's own evidence.
+  `context`, `daemon`, `email`, and `file` are the declared families today, in
+  that official order; do not widen that claim without another family's evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -290,10 +293,11 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 **Status.** This section fixes the declaration, activation, dispatch, manual,
 host, identifier, and migration vocabulary that every official model-facing
 tool family shares, so per-family recuts do not each invent their own. The
-accepted declared evidence is exactly `mcp`, `avatar`, `context`, `daemon`, and
-`email`. The remaining target register is only `file`, `notification`, `soul`,
-`vision`, `web`, `system`, and `task_card`; it is not proof that their candidate
-slices merged and is never a generic dispatch/admission path.
+accepted declared evidence is exactly `mcp`, `avatar`, `context`, `daemon`,
+`email`, and `file`, in that order. The remaining target register is only
+`notification`, `soul`, `vision`, `web`, `system`, and `task_card`; it is not
+proof that their candidate slices merged and is never a generic dispatch or
+admission path.
 
 `mcp` is the base reference under the form this section selects: it owns a
 static `ToolPluginDeclaration`, has a reserved name, and binds a
@@ -305,9 +309,16 @@ manager-owning slice: `src/lingtai/tools/email/__init__.py` owns
 `workdir` and `email_runtime`, and `email.boot` creates/replaces the real
 manager before registering through `extra_ports_for`. Its host adapter reads the
 current manager at call time, rejects foreign actions before one flattened
-manager call, and never uses intrinsic or official-handler dispatch. Every other
-family registered through `src/lingtai/tools/registry.py` remains an explicit
-future migration unit, and none of them ships as an MCP plugin package today.
+manager call, and never uses intrinsic or official-handler dispatch. File is the
+sixth slice: its declaration requires exactly `workdir` and `file_io`; its typed
+`AgentFileIOAdapter` owns only concrete File operations and fact readers, with no
+`Any`, generic dispatch, whole Agent, or mount authority; and File's `setup`
+grants that port only through `extra_ports_for`. Its package manual is the sole
+body installed at the established `file-manual` destination, while the retained
+standalone marker is excluded from copying and no `capabilities/file` destination
+is created. Every other family registered through `src/lingtai/tools/registry.py`
+remains an explicit future migration unit, and none ships as an MCP plugin
+package today.
 
 The kernel-shipped curated MCP families under `src/lingtai/mcp_servers/` ship
 the *external stdio transport* form described below — evidence about
@@ -323,9 +334,9 @@ this contract's classification:
 
 - **Registry families** — the intrinsics and built-in capability rows
   registered through `src/lingtai/tools/registry.py`. `mcp`, `avatar`, `context`,
-  `daemon`, `email`, and `plugin` are first-party families and are in scope *as
-  families*; the external records they render are not. `mcp`, `avatar`,
-  `context`, `daemon`, and `email` are declared under the selected form below;
+  `daemon`, `email`, `file`, and `plugin` are first-party families and are in
+  scope *as families*; the external records they render are not. `mcp`, `avatar`,
+  `context`, `daemon`, `email`, and `file` are declared under the selected form;
   every other family in this class is a future migration unit, and no family in
   this class is wrapped as an MCP plugin package today.
 - **Kernel-shipped MCP families** — the model-facing families this
@@ -430,10 +441,10 @@ register is family-generic rather than MCP-only.
   `DaemonManager`'s — but public semantics MUST survive unchanged.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
-  `mcp` is the current base reference; Avatar, Context, Daemon, and Email are
-  accepted vertical evidence here. The remaining target register names only
-  `file`, `notification`, `soul`, `vision`, `web`, `system`, and `task_card`;
-  those names are targets, not a claim that their candidate slices have merged.
+  `mcp` is the current base reference; Avatar, Context, Daemon, Email, and File
+  are accepted vertical evidence here. The remaining target register names only
+  `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; those names
+  are targets, not a claim that candidate slices have merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -597,25 +608,24 @@ non-goal for third-party-versus-third-party mounts.
 **Current evidence versus migration target.**
 
 - The selected form is generic. `mcp` is the base reference; Avatar, Context,
-  Daemon, and Email are accepted vertical evidence. Email's declaration binds
-  only `workdir`/`email_runtime`; `tests/test_email_official_tool_plugin.py`
-  proves its typed port, one mount/no capability row, canonical manual, and
-  call-time replacement-manager behavior. The remaining target register names
-  only `file`, `notification`, `soul`, `vision`, `web`, `system`, and
-  `task_card`. Avatar, Context, and Daemon retain their independently accepted
-  declarations and focused coverage. The shared test seam is
-  `tests/_tool_plugin_helpers.py`;
-  each other family still needs its own vertical evidence:
-  `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration type, the
-  host ports, the reserved official-name list, and the fail-fast registrar;
-  `src/lingtai/adapters/tool_plugin_host.py` is the one production adapter set;
-  `src/lingtai/tools/mcp/__init__.py` `DECLARATION` is the base reference slice;
-  and `tests/test_tool_plugin_declaration.py` plus the generic helper are shared
-  contract evidence. `mcp`'s public surface is unchanged by that recut
-  (`tests/test_tool_family_mcp_migration_parity.py`,
-  `tests/test_mcp_capability.py`), while
-  `tests/test_tool_family_avatar_migration.py` covers Avatar's static
-  declaration, restricted ports, local manual, behavior, and registrar path.
+  Daemon, Email, and File are accepted vertical evidence. Email's declaration
+  binds only `workdir`/`email_runtime`; its focused suite proves the typed port,
+  one mount/no capability row, canonical manual, and call-time replacement
+  manager. File's declaration binds only `workdir`/`file_io`; its focused suites
+  prove the typed adapter, exact grant, preserved operations, one mount, sole
+  package body at `file-manual`, excluded redirect marker, and wheel/sdist source
+  route. The remaining target register names only `notification`, `soul`,
+  `vision`, `web`, `system`, and `task_card`. Avatar, Context, and Daemon retain
+  their independently accepted declarations and focused coverage. The shared
+  test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
+  own vertical evidence. `src/lingtai/kernel/tool_plugin/__init__.py` owns the
+  declaration type, host ports, exact ordered reserved-name list, and fail-fast
+  registrar; `src/lingtai/adapters/tool_plugin_host.py` is the one production
+  adapter set; `src/lingtai/tools/mcp/__init__.py` is the base slice; and
+  `tests/test_tool_plugin_declaration.py` plus the generic helper are shared
+  evidence. MCP public behavior remains guarded by its parity/capability suites;
+  Avatar's static declaration, restricted ports, local manual, behavior, and
+  registrar path remain guarded by `tests/test_tool_family_avatar_migration.py`.
 - The curated **external-transport** route ships for the curated MCP families
   only, and is cited as precedent for that route rather than as conformance to
   the declaration clauses: `src/lingtai/mcp_servers/_plugin.py` binds one
@@ -633,7 +643,8 @@ non-goal for third-party-versus-third-party mounts.
   is cited only for the registration-versus-activation rule.
 
 Not evidenced, and therefore stated above only as a target: a declaration for
-any family beyond `mcp`, `avatar`, `context`, `daemon`, and `email`; any family registered through
+any family beyond `mcp`, `avatar`, `context`, `daemon`, `email`, and `file`; any
+family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
 packaged `SKILL.md` for the built-in daemon MCP families; and the retention,
@@ -680,8 +691,22 @@ runtime notification operation resolves the host route at publication time so
 terminal publication failure remains retryable (see
 `src/lingtai/tools/daemon/CONTRACT.md`).
 
-`file` (`read | write | edit | glob | grep | manual`) is the fourth family
-migrated to this contract, and the first aggregation of several former public
+`email` is the fifth declared vertical slice. Its declaration binds exactly
+`workdir` and its Email-owned `email_runtime`; mandatory boot creates/replaces
+the manager before registration, and the narrow adapter reads that manager at
+call time without intrinsic or official-handler dispatch (see
+`src/lingtai/tools/email/CONTRACT.md`).
+
+`file` is the sixth declared vertical slice. Its declaration binds exactly
+`workdir` and kernel-owned `file_io`; `AgentFileIOAdapter` exposes only typed
+text/search operations plus traversal and result-cap facts, and setup supplies it
+only through `extra_ports_for`. The package manual is the one operational body,
+installed at `capabilities/file-manual`, with the standalone redirect marker
+excluded and no second `capabilities/file` destination (see
+`src/lingtai/tools/file/CONTRACT.md`).
+
+Separately, `file` (`read | write | edit | glob | grep | manual`) is the fourth family
+migrated to the LTP envelope contract, and the first aggregation of several former public
 roots into one: its final model-facing root is exactly `action`, `input`,
 `reasoning`, and `summarize`. The migration was a clean break rather than an
 adapter layer — the five old model-facing roots, their implementation packages,

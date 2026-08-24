@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, NamedTuple
 
 
@@ -1389,6 +1390,73 @@ class _ToolCollector:
         self._parent = parent
         self.schemas: dict = {}
         self.handlers: dict = {}
+        # The collector owns the surface it builds, so official claims and bound
+        # results stay local too: preset/detached composition must never mutate
+        # the parent Agent's live namespace.
+        self._official_tool_plugins: dict[str, Any] = {}
+        self._official_tool_declarations: dict[str, Any] = {}
+        self._official_tool_bindings: dict[str, Any] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return Path(self._parent._working_dir)
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        raise RuntimeError("detached tool collector has no system-prompt sections")
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._authorize_official_tool_declaration(self, declaration)
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._record_official_tool_binding(self, declaration, plugin)
+
+    def _claim_official_tool(self, transaction) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._claim_official_tool(self, transaction)
+
+    def _mount_official_tool(self, transaction) -> None:
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OfficialMountTransaction,
+        )
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError(
+                "official tool mounting requires a registrar transaction"
+            )
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        self.add_tool(
+            name,
+            schema=dict(plugin.schema),
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(self)
 
     def add_tool(self, name, *, schema=None, handler=None,
                  description: str = "", system_prompt: str = "",

@@ -89,6 +89,10 @@ _SYSTEM_MANUAL_EXTERNAL_ATTACH_FILES = (
     "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md",
     "lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/scripts/external_attach_diagnostic.py",
 )
+_FILE_MANUAL_SOURCE_FILES = (
+    "lingtai/tools/file/manual/SKILL.md",
+    "lingtai/intrinsic_skills/file-manual/SKILL.md",
+)
 
 # The three per-tool glossary languages that each package must ship.
 _WEB_SEARCH_MANUAL_FILES = (
@@ -270,6 +274,16 @@ def test_archives_ship_system_manual_external_attach_diagnostic(request, entries
     entries = request.getfixturevalue(entries_fixture)
     missing = [path for path in _SYSTEM_MANUAL_EXTERNAL_ATTACH_FILES if path not in entries]
     assert not missing, "system-manual external attach files missing from %s: %r" % (entries_fixture, missing)
+
+
+@pytest.mark.parametrize("entries_fixture", ("wheel_entries", "sdist_entries"), ids=("wheel", "sdist"))
+def test_archives_ship_file_package_manual_and_retained_redirect(request, entries_fixture: str):
+    entries = request.getfixturevalue(entries_fixture)
+    missing = [path for path in _FILE_MANUAL_SOURCE_FILES if path not in entries]
+    assert not missing, "File manual sources missing from %s: %r" % (
+        entries_fixture,
+        missing,
+    )
 
 
 # ---------------------------------------------------------------------------

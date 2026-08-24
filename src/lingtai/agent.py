@@ -40,6 +40,7 @@ _TOOL_MANUAL_DESTINATION_NAMES: dict[str, str] = {
     "bash": "shell",
     "web_search": "web",
     "context": "context-manual",
+    "file": "file-manual",
 }
 
 # No-delete Context recut only: the retained standalone context-manual source is
@@ -682,20 +683,27 @@ class Agent(BaseAgent):
                 shutil.copytree(src, destination)
                 canonical_manual_owners[owner_key] = entry.name
 
-        def install_skills_from(pkg, subdir: str) -> None:
+        def install_skills_from(
+            pkg, subdir: str, *, exclude: frozenset[str] = frozenset()
+        ) -> None:
             """Install standalone skill bundles (no companion code, no manual/ wrapper).
 
             Each ``<pkg>/<entry>/`` directory IS the skill — copied verbatim into
             ``intrinsic/<subdir>/<entry>/`` (manuals plus any sidecar scripts/assets,
-            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). Used for
-            skills that don't belong to any single tool.
+            e.g. the ``lingtai-kernel-anatomy`` checker and benchmark). ``exclude``
+            retains a legacy source bundle that is now packaged by its owning tool,
+            so the installed library has one canonical family-manual destination.
             """
             pkg_file = getattr(pkg, "__file__", None)
             if not pkg_file:
                 return
             pkg_root = Path(pkg_file).parent
             for entry in sorted(pkg_root.iterdir()):
-                if not entry.is_dir() or entry.name.startswith("_"):
+                if (
+                    not entry.is_dir()
+                    or entry.name.startswith("_")
+                    or entry.name in exclude
+                ):
                     continue
                 destination = intrinsic_dir / subdir / entry.name
                 owner = canonical_manual_owners.get((subdir, entry.name))
@@ -725,11 +733,13 @@ class Agent(BaseAgent):
         # Every tool package with a manual/ installs into
         # intrinsic/capabilities/<name>/ — agents see one flat capability
         # namespace. Scanning the consolidated ``lingtai.tools`` package replaces the
-        # former core/ + capabilities/ dual scan; tools without a manual/ (the
-        # file tools, the non-email intrinsics whose manuals ship as
-        # intrinsic_skills bundles below) are simply skipped.
+        # former core/ + capabilities/ dual scan. File now ships its own
+        # package manual; its retained intrinsic source is excluded below so it
+        # cannot become a second public manual destination.
         install_from(tools_pkg, "capabilities")
-        install_skills_from(skills_pkg, "capabilities")
+        install_skills_from(
+            skills_pkg, "capabilities", exclude=frozenset({"file-manual"})
+        )
 
         # If the skills capability is loaded, re-run its reconcile now that
         # the manuals are on disk — so the injected catalog reflects them on

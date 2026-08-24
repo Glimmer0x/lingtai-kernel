@@ -7,7 +7,7 @@ last_changed_at: "2026-07-19T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/_read.py
 - src/lingtai/tools/file/__init__.py
-- src/lingtai/intrinsic_skills/file-manual/SKILL.md
+- src/lingtai/tools/file/manual/SKILL.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---

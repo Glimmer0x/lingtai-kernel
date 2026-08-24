@@ -363,7 +363,7 @@ def test_manual_rejects_any_input_field(file_agent):
 def test_read_manual_is_a_nested_reference_not_an_action():
     """Read pagination depth stays nested under the one family manual."""
     assert "read-manual" not in get_schema()["properties"]["action"]["enum"]
-    body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
+    body = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
     assert "read-manual" in body, "file-manual must point at the nested read reference"
 
 
