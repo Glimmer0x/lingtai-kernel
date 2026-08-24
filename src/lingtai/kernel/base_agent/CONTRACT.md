@@ -237,9 +237,10 @@ graph survives missing POSIX mechanisms — the construction-gate proof), and
 `tests/test_cli.py` (duplicate-guard policy), and
 `tests/test_aed_recovery.py` (partial-output and exhausted provider-recovery
 terminal guards before transient/AED replay). The
-Windows CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
-platform-marked tiers natively; the capability matrix cites which rows carry
-native receipts.
+Windows release CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
+platform-marked tiers natively on `release.published`; routine pull requests do
+not spend a Windows runner. The capability matrix cites which rows carry native
+receipts.
 
 ## Maintenance
 
