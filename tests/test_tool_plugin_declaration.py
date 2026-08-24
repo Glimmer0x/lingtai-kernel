@@ -1,13 +1,16 @@
 """Focused behavioral coverage for official declared host-plugin mounts.
 
 The shared primitive has three real vertical proofs: ``mcp`` demonstrates the
-small presentation-only slice, ``daemon`` demonstrates a manager-owning slice
-that consumes its current-agent model/tool/preset/notification semantics through
-the capability-native runtime port, and ``plugin`` demonstrates a slice whose
-only earned port is a detached read-only projection.  All three are mounted only
+small presentation-only slice, ``notification`` demonstrates a Core-backed
+state slice bound only to a narrow port, ``daemon`` demonstrates a manager-owning
+slice that consumes its current-agent model/tool/preset/notification semantics
+through the capability-native runtime port, and ``plugin`` demonstrates a slice
+whose only earned port is a detached read-only projection. All are mounted only
 through the registrar's controlled host path.
 """
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -58,16 +61,16 @@ def plugin_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_seven_official_families_mount_exactly_once_together(tmp_path):
+def test_all_eight_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
-        "mcp", "avatar", "context", "daemon", "email", "file", "plugin"
+        "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification"
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-seven-official-plugins",
+        agent_name="all-eight-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -76,6 +79,7 @@ def test_all_seven_official_families_mount_exactly_once_together(tmp_path):
             "daemon": {},
             "file": {},
             "plugin": {},
+            "notification": {},
         },
     )
     try:
@@ -106,6 +110,142 @@ def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
     assert manual["status"] == "ok"
     assert manual["mcp_manual"]
     assert manual["manual_path"].endswith("capabilities/mcp/SKILL.md")
+
+
+def test_official_notification_mount_preserves_core_state_and_packaged_manual(mcp_agent):
+    """The Notification declaration reaches real Core state only through its port."""
+    from lingtai.kernel.notifications import submit
+    from lingtai.tools.notification import DECLARATION
+
+    assert DECLARATION.requires == ("workdir", "notification_state")
+    assert mcp_agent.official_tool_plugins["notification"] is DECLARATION
+    assert [schema.name for schema in mcp_agent._tool_schemas].count("notification") == 1
+
+    handler = mcp_agent._tool_handlers["notification"]
+    check = handler({"action": "check", "input": {}, "reasoning": "probe"})
+    assert check["_notification_placeholder"] is True
+
+    manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+    assert manual["status"] == "ok"
+    assert manual["notification_manual"]
+    assert manual["manual_path"].endswith("capabilities/notification/SKILL.md")
+
+    submit(mcp_agent, "system", data={"events": []}, header="dismiss me")
+    dismissed = handler(
+        {
+            "action": "dismiss_channel",
+            "input": {"channel": "system", "force": True, "reason": None},
+            "reasoning": "clear the mirror only",
+        }
+    )
+    assert dismissed == {
+        "status": "ok",
+        "channel": "system",
+        "cleared": True,
+        "forced": True,
+    }
+    assert not (mcp_agent.working_dir / ".notification" / "system.json").exists()
+
+
+@pytest.mark.parametrize(
+    "construction_kwargs",
+    [
+        pytest.param({"capabilities": {"notification": None}}, id="capabilities-null"),
+        pytest.param({"capabilities": {}, "disable": ["notification"]}, id="disable-list"),
+    ],
+)
+def test_notification_is_mounted_once_on_live_construction_despite_opt_out(
+    tmp_path, construction_kwargs
+):
+    """Both capability-shaped opt-outs preserve one live official Notification mount."""
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="notification-always-on-construction",
+        working_dir=tmp_path / "agent",
+        **construction_kwargs,
+    )
+    try:
+        from lingtai.tools.notification import DECLARATION
+
+        assert agent.official_tool_plugins["notification"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("notification") == 1
+        assert list(name for name in agent._tool_handlers if name == "notification") == [
+            "notification"
+        ]
+        assert agent._tool_handlers["notification"](
+            {"action": "check", "input": {}, "reasoning": "live construction"}
+        )["_notification_placeholder"] is True
+    finally:
+        agent.stop(timeout=1.0)
+
+
+@pytest.mark.parametrize(
+    "manifest_overrides",
+    [
+        pytest.param({"capabilities": {"notification": None}}, id="refresh-capabilities-null"),
+        pytest.param({"capabilities": {}, "disable": ["notification"]}, id="refresh-disable-list"),
+    ],
+)
+def test_notification_is_remounted_once_on_live_refresh_despite_opt_out(
+    tmp_path, manifest_overrides
+):
+    """Refresh clears/rebuilds the surface but cannot remove the official mount."""
+    workdir = tmp_path / "agent"
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="notification-always-on-refresh",
+        working_dir=workdir,
+        capabilities={},
+    )
+    try:
+        manifest = {
+            "agent_name": "notification-always-on-refresh",
+            "language": "en",
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "base_url": None,
+            },
+            "capabilities": {},
+            "soul": {"delay": 60},
+            "stamina": 3600,
+            "context_limit": None,
+            "molt_pressure": 0.8,
+            "molt_prompt": "",
+            "max_turns": 100,
+            "admin": {"karma": True},
+            "streaming": False,
+            **manifest_overrides,
+        }
+        (workdir / "init.json").write_text(
+            json.dumps(
+                {
+                    "manifest": manifest,
+                    "principle": "",
+                    "covenant": "",
+                    "pad": "",
+                    "lingtai": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        agent._setup_from_init()
+
+        from lingtai.tools.notification import DECLARATION
+
+        assert agent.official_tool_plugins["notification"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("notification") == 1
+        assert list(name for name in agent._tool_handlers if name == "notification") == [
+            "notification"
+        ]
+        assert agent._tool_handlers["notification"](
+            {"action": "check", "input": {}, "reasoning": "live refresh"}
+        )["_notification_placeholder"] is True
+    finally:
+        agent.stop(timeout=1.0)
+
 
 
 def test_official_daemon_mount_uses_runtime_port_and_preserves_dispatch(daemon_agent):

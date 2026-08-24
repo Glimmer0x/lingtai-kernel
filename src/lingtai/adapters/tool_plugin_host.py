@@ -21,6 +21,7 @@ only builds the ports.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
@@ -49,6 +50,7 @@ __all__ = [
     "AgentDaemonRuntimeAdapter",
     "AgentEmailRuntimeAdapter",
     "AgentPluginCatalogAdapter",
+    "AgentNotificationStateAdapter",
     "agent_host_ports",
     "daemon_runtime_for_agent",
     "register_agent_tool_plugins",
@@ -176,6 +178,74 @@ class AgentFileIOAdapter:
     @property
     def max_result_chars(self) -> int | None:
         return self._max_result_chars()
+
+
+class AgentNotificationStateAdapter:
+    """Bind Notification Core's real agent-scoped operations to one narrow port.
+
+    The adapter retains callbacks only. It never exposes the Agent, Store,
+    notification fingerprints, or producer state to a plugin. Each callback
+    still enters the existing Core function with the live Agent bound by the
+    composition root, so producer guards, stale-delivery checks,
+    acknowledgement, timers, hook manifests, and Store semantics remain in
+    :mod:`lingtai.kernel.notifications`.
+    """
+
+    __slots__ = ("_dismiss", "_delay", "_add", "_drop", "_edit", "_list", "_log")
+
+    def __init__(
+        self,
+        *,
+        dismiss: Callable[..., dict[str, Any]],
+        delay: Callable[[str, int], dict[str, Any]],
+        add_hook: Callable[[dict[str, Any]], dict[str, Any]],
+        drop_hook: Callable[[str], dict[str, Any]],
+        edit_hook: Callable[[str, dict[str, Any]], dict[str, Any]],
+        list_hooks: Callable[[], list[dict[str, Any]] | dict[str, Any]],
+        log: Callable[..., None],
+    ) -> None:
+        self._dismiss = dismiss
+        self._delay = delay
+        self._add = add_hook
+        self._drop = drop_hook
+        self._edit = edit_hook
+        self._list = list_hooks
+        self._log = log
+
+    def dismiss(
+        self,
+        channel: str,
+        *,
+        force: bool,
+        reason: str | None,
+        event_id: str | None = None,
+        ref_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._dismiss(
+            channel,
+            force=force,
+            reason=reason,
+            event_id=event_id,
+            ref_id=ref_id,
+        )
+
+    def delay(self, channel: str, seconds: int) -> dict[str, Any]:
+        return self._delay(channel, seconds)
+
+    def add_hook(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return self._add(manifest)
+
+    def drop_hook(self, name: str) -> dict[str, Any]:
+        return self._drop(name)
+
+    def edit_hook(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
+        return self._edit(name, fields)
+
+    def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
+        return self._list()
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        self._log(event_type, **fields)
 
 
 class AgentContextRuntimeAdapter:
@@ -681,32 +751,55 @@ def agent_host_ports(
 ) -> dict[str, Any]:
     """Build the complete grantable table for one declaration on *agent*.
 
-    The standard table preserves landed MCP and Avatar wiring and adds Plugin's
-    read-only catalog projection. Context's compatibility map and the Daemon,
-    Email, and File family-specific factories add only the earned port required
-    by that declaration. The registrar grants just ``requires``, never this
-    whole map, so a standard-table entry gives no capability to a declaration
-    that did not name it.
+    The table preserves the landed MCP, Avatar, Plugin, Context, Daemon, Email,
+    and File wiring while constructing only each declaration's earned adapter.
+    Notification receives its narrow state port at this composition boundary.
+    The registrar grants just ``requires``, never this whole map.
     """
-    ports = {
-        "workdir": AgentWorkdirAdapter(lambda: agent.working_dir),
-        "prompt_section": AgentPromptSectionAdapter(
+    ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
+    # Construct only the declaration's earned standard adapter. Lightweight Core
+    # test agents need not implement MCP or Avatar APIs when Notification is being
+    # granted its own narrow ports.
+    if plugin_name in ("mcp", "plugin"):
+        ports["prompt_section"] = AgentPromptSectionAdapter(
             plugin_name, agent.update_system_prompt
-        ),
-        "avatar_parent": AgentAvatarParentAdapter(
+        )
+    if plugin_name == "avatar":
+        ports["avatar_parent"] = AgentAvatarParentAdapter(
             lambda: agent.agent_name or agent.working_dir.name,
             lambda: getattr(agent, "_venv_path", None),
             lambda: any((getattr(agent, "_admin", {}) or {}).values()),
-        ),
-        "plugin_catalog": AgentPluginCatalogAdapter(
+        )
+    elif plugin_name == "plugin":
+        ports["plugin_catalog"] = AgentPluginCatalogAdapter(
             lambda: getattr(agent, "_plugin_registration", {}),
             lambda: getattr(agent, "_capabilities", ()),
-        ),
-    }
+        )
+    elif plugin_name == "notification":
+        # Import Notification Core lazily at the composition-root boundary. The
+        # adapter binds Core policy to this live Agent without passing through
+        # Agent/Store state.
+        from lingtai.kernel.notifications import (
+            add_hook,
+            delay_notification_channel,
+            dismiss_channel,
+            drop_hook,
+            edit_hook,
+            list_hooks,
+        )
+
+        ports["notification_state"] = AgentNotificationStateAdapter(
+            dismiss=partial(dismiss_channel, agent, invoked_by="notification"),
+            delay=partial(delay_notification_channel, agent),
+            add_hook=partial(add_hook, agent),
+            drop_hook=partial(drop_hook, agent),
+            edit_hook=partial(edit_hook, agent),
+            list_hooks=partial(list_hooks, agent),
+            log=agent._log,
+        )
     if extra_ports:
         ports.update(extra_ports)
     return ports
-
 def register_agent_tool_plugins(
     agent: Any,
     declarations: Sequence[ToolPluginDeclaration],
@@ -725,7 +818,8 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, and File use ``extra_ports_for`` so each can earn its runtime port
+    Email, and File use ``extra_ports_for`` so each can earn its runtime port;
+    Notification receives its dedicated state port in ``agent_host_ports``.
     without granting it to every declaration. Both maps are merged per
     declaration; conflicting keys from the factory intentionally win only for
     that declaration.

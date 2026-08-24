@@ -231,8 +231,10 @@ class Agent(BaseAgent):
         # Inject the built-in intrinsic tool registry. The kernel owns the tool
         # machinery, not the concrete tools: it accepts intrinsics as injection
         # and a bare BaseAgent has none. lingtai.Agent is the composing layer, so
-        # it supplies the six mandatory intrinsics here. ``setdefault`` lets a
-        # host override (e.g. a test injecting a subset).
+        # it supplies the five mandatory intrinsics here. Notification is an
+        # always-on declared official family and mounts through the official
+        # plugin registrar. ``setdefault`` lets a host override (e.g. a test
+        # injecting a subset).
         from lingtai.tools.registry import INTRINSICS
         kwargs.setdefault("intrinsics", INTRINSICS)
 
@@ -704,6 +706,11 @@ class Agent(BaseAgent):
                     or entry.name.startswith("_")
                     or entry.name in exclude
                 ):
+                    continue
+                # Notification's retained intrinsic-skill source is migration
+                # history only. Its declared tool package owns the one canonical
+                # installed capabilities/notification/SKILL.md manual.
+                if entry.name == "notification-manual":
                     continue
                 destination = intrinsic_dir / subdir / entry.name
                 owner = canonical_manual_owners.get((subdir, entry.name))

@@ -17,7 +17,9 @@ from lingtai.kernel.notifications import (
     reconcile_notification_delay,
 )
 from lingtai.kernel.meta_block import _collect_active_notifications
-from lingtai.tools.notification import get_schema, handle
+from lingtai.tools.notification import get_schema
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import notification_store_for, publish_test_payload, snapshot_notifications
 
 
@@ -35,7 +37,7 @@ class _DelayAgent:
 
 
 def _call(agent: _DelayAgent, channel: str, seconds: int) -> dict:
-    return handle(
+    return dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "delay",

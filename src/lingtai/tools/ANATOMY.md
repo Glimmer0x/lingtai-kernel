@@ -82,6 +82,8 @@ maintenance: |
   while the separately landed `avatar`, Context, Daemon, Email, File, and Plugin
   vertical slices are actual declared evidence; only the remaining target names
   stay candidates. The normative rules — including the selected form,
+  while the separately landed `avatar`, Context, Daemon, Email, and Notification
+  vertical slices are actual declared evidence; only the remaining target names stay candidates. The normative rules — including the selected form,
   the reserved official-name rule, and the governed-surface classification — stay in the
   Contract and in the kernel component's own Contract.
   Capability mentions in any document require explicit bidirectional
@@ -151,7 +153,7 @@ capability names and lazy adapters.
 - `system/` — mandatory intrinsic owning the public `system` family: runtime,
   lifecycle, preset, and identity-naming actions behind one model-facing root
   (`src/lingtai/tools/system/ANATOMY.md`). It owns no public context-hygiene
-  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` and `notification` it is
+  action — `summarize.py` stays here as the private engine `context` drives. Like `soul` it is
   an intrinsic rather than a manager-owning capability, so it composes its
   schema from a module-level schema-only family and builds a dispatching one
   per `handle(agent, args)` call.
@@ -166,13 +168,14 @@ capability names and lazy adapters.
   the ToolFamily-composed LTP v2 envelope (`bash/_tool_family.py`) and is the
   package's only schema/description pair, while `ShellManager` remains the
   unchanged execution engine behind an internal-only flat call shape.
-- `notification/` — mandatory intrinsic owning the public `notification`
-  family: `check`, three atomic dismiss actions, and `manual`
-  (`src/lingtai/tools/notification/ANATOMY.md`). Its public model-facing schema
-  is the ToolFamily-composed LTP v2 envelope; unlike the capability families it
-  retains a legacy dispatching family per call, because an intrinsic receives `agent`
-  per call rather than owning a manager; this is not the generic registrar/bridge
-  dispatch path.
+- `notification/` — always-on declared official family owning the public
+  `notification` action set (`check`, three atomic dismiss actions, hook-registry
+  actions, `delay`, and `manual`; `src/lingtai/tools/notification/ANATOMY.md`).
+  Its static `DECLARATION` is registered through the official host-plugin route,
+  binds only `workdir` and `notification_state`, and preserves the ToolFamily
+  LTP v2 surface without receiving the Agent or a direct intrinsic dispatcher.
+  Its Host adapters retain presentation-only rules while Notification Core owns
+  all producer guards, Store mutation, and delay/timer policy.
 - `context/` — mandatory intrinsic owning the public `context` family: the
   agent's context lifecycle and hygiene — `molt`, `summarize`, `rebuild`, and
   `manual` — behind one root (`src/lingtai/tools/context/ANATOMY.md`). It
@@ -181,8 +184,8 @@ capability names and lazy adapters.
   the public `system` summarize action moved in. `summarize` records only;
   `rebuild` is the sole active full reconstruction: canonical prompt composition,
   summary application, then provider replay. Refresh/molt invoke the same
-  internal contract passively. Like `soul`/`notification` it builds its family
-  per call and alone consumes kernel `_tc_id`.
+  internal contract passively. Like `soul` it builds its family per call and
+  alone consumes kernel `_tc_id`.
 - `pad/` — mandatory `append | manual` family. `append` validates/persists pinned
   references without hot-loading; private `_pad_load` participates only in the
   Agent's canonical reconstruction path (`src/lingtai/tools/pad/ANATOMY.md`).
@@ -247,13 +250,13 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, File, and Plugin are accepted vertical evidence. Avatar
-binds only `workdir`/`avatar_parent`; Context `workdir`/`context_runtime`;
-Daemon `workdir`/`daemon_runtime`; Email `workdir`/`email_runtime`; File exactly
-`workdir`/`file_io`; and Plugin exactly
-`workdir`/`prompt_section`/`plugin_catalog`. The remaining candidate targets are
-only `notification`, `soul`, `vision`, `web`, `system`, and `task_card`; the
-list is not a generic dispatch or admission mechanism.
+Context, Daemon, Email, File, Plugin, and Notification are accepted vertical
+evidence. They bind respectively their narrow earned ports: `avatar_parent`,
+`context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
+`prompt_section`/`plugin_catalog`, and `notification_state` (all also retain
+`workdir`). The remaining candidate targets are only `soul`, `vision`, `web`,
+`system`, and `task_card`; the list is not a generic dispatch or admission
+mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
 least-privilege host ports, the reserved `OFFICIAL_TOOL_PLUGIN_NAMES` list, and
@@ -284,8 +287,10 @@ section, and the read-only `plugin_catalog` projection built by
 without a whole `Agent`, without generic dispatch, and without any registration,
 prune, launch, config-write, or mount authority. Its validated skills are named
 only in the protected Plugin prompt field and never enter the vanilla skills
-catalog. Every landed family retains its public name, actions, inputs, and
-result shapes. Candidate-local families may still boot through legacy
+catalog. `src/lingtai/tools/notification/__init__.py` is the eighth slice: its
+`DECLARATION` binds only `workdir`/`notification_state` and delegates Core policy
+through a callback-only adapter without exposing the Agent or Store. Every landed
+family retains its public name, actions, inputs, and result shapes. Candidate-local families may still boot through legacy
 `setup(agent)` paths until their own vertical slice lands; that compatibility
 fact is not a generic registrar/bridge dispatch model.
 

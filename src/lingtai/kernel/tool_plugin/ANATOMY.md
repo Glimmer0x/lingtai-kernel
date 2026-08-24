@@ -30,6 +30,11 @@ related_files:
   - src/lingtai/tools/plugin/ANATOMY.md
   - src/lingtai/tools/plugin/__init__.py
   - src/lingtai/tools/plugin/manual/SKILL.md
+  - src/lingtai/tools/notification/ANATOMY.md
+  - src/lingtai/tools/notification/CONTRACT.md
+  - src/lingtai/tools/notification/__init__.py
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/kernel/notifications.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
   - src/lingtai/agent.py
@@ -40,6 +45,8 @@ related_files:
   - tests/test_email_official_tool_plugin.py
   - tests/test_file_tool_plugin_package.py
   - tests/test_plugin_tool.py
+  - tests/test_notification_delay_alarm.py
+  - tests/test_notification_store.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
@@ -47,6 +54,9 @@ maintenance: |
   upward; src/lingtai/tools/ANATOMY.md and the MCP, Avatar, Context, Daemon,
   Email, File, and Plugin owner Anatomies across to the declaring side). Code is the
   structural source of truth: update
+  upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
+  src/lingtai/tools/daemon/ANATOMY.md, src/lingtai/tools/email/ANATOMY.md, and
+  src/lingtai/tools/notification/ANATOMY.md across to the declaring side). Code is the structural source of truth: update
   this anatomy in the same change that moves files, symbols, connections,
   composition, or state — in particular when a host port is added, when a family
   recuts onto the declared contract, or when OFFICIAL_TOOL_PLUGIN_NAMES changes.
@@ -74,12 +84,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the eight kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+  - the nine kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
     `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
-    read-only `PluginCatalogPort` (with its detached `PluginCatalogState` value),
-    and host-only `ToolMountPort`, plus File's structural `FileGrepMatch` and
-    `FileTraversalStats` result Protocols; `email_runtime` is also grantable, but
-    its Protocol (`EmailRuntimePort`) deliberately remains Email-owned;
+    read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
+    `NotificationStatePort`, and host-only `ToolMountPort`, plus File's
+    structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
+    `email_runtime` is also grantable but its Protocol remains Email-owned;
   - `ToolPluginHost`, the `__slots__`-based least-privilege facade, and its
     `grant()` classmethod;
   - `BoundToolPlugin`, the frozen mountable result carrying `schema`,
@@ -98,27 +108,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     body — check every name, then bind/activate/mount — is the ordering promise
     (guarded by TP002).
 - `src/lingtai/adapters/tool_plugin_host.py` — the production Adapter set,
-  outside the kernel package. `AgentWorkdirAdapter`,
-  `AgentPromptSectionAdapter` (bound to one plugin's section name and to
-  `protected=True`), `AgentAvatarParentAdapter`, `AgentContextRuntimeAdapter`,
-  and `AgentDaemonRuntimeAdapter` (the latter reads the current notification
-  route at publish time), plus `AgentEmailRuntimeAdapter`, which owns only a
-  call-time manager reader, `AgentFileIOAdapter`, which owns only File's
-  concrete operation callbacks and two fact readers, and
-  `AgentPluginCatalogAdapter`, which holds two narrow readers and deep-copies
-  the registration snapshot on every read so each projection is detached. No
-  adapter owns an Agent or generic dispatcher. `agent_host_ports` and
-  `register_agent_tool_plugins` compose the tables; the registrar constructs its mount seam
-  locally; no public mount adapter or factory exists.
+  outside the kernel package. It supplies callback-only adapters for File's
+  concrete operations/facts, Plugin's detached read-only catalog projection,
+  and Notification Core's dismissal, delay, hook, and logging operations,
+  alongside the existing MCP, Avatar, Context, Daemon, and Email adapters.
+  No adapter exposes an Agent or generic dispatcher; `agent_host_ports` and
+  `register_agent_tool_plugins` construct the private registrar mount seam.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
-  `DECLARATION` is built at module import; `_bind(host)` composes the
-  per-host `ToolFamily` and the `handle_mcp` Host wrapper and returns a
-  `BoundToolPlugin` whose `activate` is the boot reconcile; `setup(agent)` is
-  only composition wiring. `mcp` remains the shared-C base reference; Avatar,
-  Context, Daemon, Email, File, and Plugin below are the other accepted vertical
-  slices.
-  The later-family target register is limited to `notification`, `soul`,
-  `vision`, `web`, `system`, and `task_card`; it is not an admission path.
+  Its static declaration binds the per-host family and protected prompt
+  section; Avatar, Context, Daemon, Email, File, Plugin, and Notification
+  are separately accepted vertical slices. The later-family target register
+  remains limited to `soul`, `vision`, `web`, `system`, and `task_card`; it is
+  not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
   `workdir` plus the earned, narrow `avatar_parent` port; the local packaged
@@ -156,13 +157,24 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   skills catalog. The port carries no registration, prune, launch, config-write,
   or mount authority, so registration stays the boot-only service path and
   `setup(agent)` is composition wiring through the standard port table.
+- `src/lingtai/tools/notification/__init__.py` is the eighth accepted vertical
+  slice. Its static `DECLARATION` preserves the public action inventory and LTP
+  envelope but binds only `workdir` plus `notification_state`. The callback-only
+  adapter delegates every dismissal, stale-delivery comparison, producer guard,
+  delay, timer, hook-manifest, and logging decision to Notification Core; the
+  family receives no Agent, Store, fingerprint, or local parallel state machine.
+  Its package-owned `manual/SKILL.md` is the one canonical installed
+  `capabilities/notification/SKILL.md` source.
 
 ## Connections
 
 - `lingtai.tools.mcp`, `lingtai.tools.avatar`, `lingtai.tools.context`,
-  `lingtai.tools.daemon`, `lingtai.tools.email`, `lingtai.tools.file`, and
-  `lingtai.tools.plugin` import
+  `lingtai.tools.daemon`, `lingtai.tools.email`, `lingtai.tools.file`,
+  `lingtai.tools.plugin`, and `lingtai.tools.notification` import
   `lingtai.kernel.tool_plugin` (declarations depend on the shape). The kernel
+  `lingtai.tools.daemon`, `lingtai.tools.email`, and
+  `lingtai.tools.notification` import `lingtai.kernel.tool_plugin`
+  (declarations depend on the shape). The kernel
   imports nothing from `lingtai.tools`; that edge is
   swept by `tests/test_tool_plugin_declaration.py`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
@@ -191,6 +203,14 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `official_plugin`: `BaseAgent._boot_official_intrinsics()` calls `email.boot`,
   which creates its manager before registering the declaration with its sole
   family-specific `email_runtime` grant.
+  ordinary capability boot loop. Email and Notification instead are injected
+  `official_plugin` families: `BaseAgent._boot_official_intrinsics()` calls
+  Email's `boot` hook and Notification's `setup(agent)` wiring. Email creates
+  its manager before registering with its sole family-specific `email_runtime`
+  grant; Notification registers its static declaration with only `workdir` and
+  `notification_state`.
+  Notification remains always-on even when a capability manifest names it null
+  or lists it in `disable`.
 - `_build_family(host)` passes only `host.workdir` to
   `lingtai.tools.tool_family.manual.build_manual_child`, which reads the
   installed manual through `src/lingtai/tools/_manual.py`. That loader accepts
@@ -206,6 +226,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `import lingtai.tools.context`, `import lingtai.tools.daemon`,
 `import lingtai.tools.email`, `import lingtai.tools.file`, or
 `import lingtai.tools.plugin` →
+`import lingtai.tools.email`, or `import lingtai.tools.notification` →
 `ToolPluginDeclaration.__post_init__` validates
 its declared shape, with no Agent in existence.
 
@@ -214,7 +235,11 @@ Dynamic-family boot remains `Agent.__init__` / `Agent._setup_from_init` →
 `register_agent_tool_plugins(agent, [DECLARATION])`. Email's mandatory official
 boot is `BaseAgent._boot_official_intrinsics()` → `email.boot(agent)` → create or
 replace `EmailManager` → `register_agent_tool_plugins(..., extra_ports_for=...)`.
-Both routes reach `register_official_tool_plugins`, which then runs, in order:
+Notification is likewise a mandatory injected official family: the same existing
+official-intrinsic route runs its `setup(agent)` on first construction and every
+refresh, registering exactly its static declaration even when `notification` is
+null or disabled in the capability manifest. Both routes reach
+`register_official_tool_plugins`, which then runs, in order:
 
 1. check every declared name against `OFFICIAL_TOOL_PLUGIN_NAMES`, the batch,
    and the live claim map;
@@ -258,8 +283,10 @@ component does not own.
   tool surface but not the former, so clearing the claim map cannot admit a
   foreign declaration. A dynamic capability dropped on refresh leaves no live
   claim; surviving dynamic families re-register their declaration idempotently.
-  Email is a mandatory injected official family, so its refresh boot replaces its
-  manager and re-registers its same declaration regardless of capability opt-out.
+  Email and Notification are mandatory injected official families. Email's
+  refresh boot replaces its manager; Notification's reclaims one live static
+  binding with only `workdir`/`notification_state`. Neither is suppressed by a
+  null capability declaration or `disable` entry.
 - `ToolPluginHost._ports` — the granted subset, fixed at grant time.
 - No other state. The component keeps no cache, no registry file, and no
   process handle.
@@ -285,3 +312,6 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
+  The eight actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `file`, `plugin`, and `notification`; Notification demonstrates an always-on
+  injected family rather than a later-family target or normal opt-in capability.
