@@ -3,224 +3,115 @@ related_files:
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/notification/BEHAVIORS.md
   - src/lingtai/tools/ANATOMY.md
-  - src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md
   - src/lingtai/tools/notification/__init__.py
   - src/lingtai/tools/notification/schema.py
+  - src/lingtai/tools/notification/manual/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/channel-model/SKILL.md
+  - src/lingtai/tools/notification/manual/reference/dismissal-safety/SKILL.md
   - src/lingtai/tools/tool_family/ANATOMY.md
-  - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/kernel/notifications.py
-  - src/lingtai/kernel/base_agent/turn.py
-  - src/lingtai/kernel/tool_result_summary.py
+  - src/lingtai/tools/registry.py
   - src/lingtai/agent.py
-  - src/lingtai/intrinsic_skills/system-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/channel-model/SKILL.md
-  - src/lingtai/intrinsic_skills/notification-manual/reference/dismissal-safety/SKILL.md
+  - tests/test_tool_plugin_declaration.py
   - tests/test_notification_tool.py
   - tests/test_notification_delay_alarm.py
-  - tests/test_daemon_attention_delay.py
-  - tests/test_system_dismiss.py
-  - src/lingtai/tools/notification/glossary-en.md
-  - src/lingtai/tools/notification/glossary-zh.md
-  - src/lingtai/tools/notification/glossary-wen.md
+  - tests/test_notification_sync.py
 maintenance: |
-  tool_family is generic optional infrastructure this package composes onto;
-  notification's own per-call family construction, null-stripping, and manual
-  presentation adapter remain here.
-  Keep related_files repo-relative, duplicate-free, and linked to real files.
-  Keep this component's ANATOMY.md and CONTRACT.md reciprocal and keep
-  parent/child anatomy links bidirectional. Code is the structural source of
-  truth: update this anatomy in the same change that moves files, symbols,
-  connections, composition, or state. Verify every changed citation and run the
-  architecture-document validation before merge.
-  Follow the root Anatomy/Contract pairing rule, report mismatches, and do not duplicate or auto-fix the rule here.
-  Capability mentions in any document require explicit bidirectional
-  related_files mapping to the implementing code (see root ## Maintenance).
+  Notification is an official declared host-plugin slice. Keep this Anatomy
+  reciprocal with CONTRACT.md and BEHAVIORS.md and update the kernel Port,
+  production adapter, declaration test, and package-owned manual together when
+  its composition changes. Code is structural truth; report mismatches rather
+  than normalizing them. Keep related paths repo-relative, existing, and
+  duplicate-free.
 ---
 # Notification Tool Anatomy
 
-`src/lingtai/tools/notification/` is the mandatory agent-callable notification
-surface. It composes ten actions: four hook-registry actions (`add`, `drop`,
-`edit`, `list`), `check`, three atomic dismissal actions, consumer-only `delay`,
-and the strictly read-only `manual` action. Notification Core owns mirror guards and Store use;
-the tool owns only schema composition, envelope dispatch, the check
-placeholder, argument adaptation, hook-manifest forwarding, and installed-manual
-presentation.
+`src/lingtai/tools/notification/` owns the always-on public `notification`
+family. It is an official declared host plugin, not an intrinsic: its static
+`DECLARATION` is composed at import without an Agent, then its `setup(agent)`
+passes that declaration to the kernel registrar. The public name, ten actions
+(nine operational actions plus reserved `manual`), closed LTP v2 envelope,
+strict per-action schemas, result shapes, and Core authorization behavior are
+unchanged.
 
-Since the LTP v2 migration the public model-facing shape is the closed
-`action` + `input` + `reasoning` + `summarize` envelope, with each action's
-arguments in its own strict `input` object. Schema composition and envelope
-dispatch delegate to the generic `tool_family` infrastructure; this package
-retains ownership of the action implementations, the per-action schemas, and
-the manual presentation shape. The public tool name and the five pre-existing
-action values are unchanged; the four hook-registry actions are new.
+The family owns only model-facing adaptation. It never recreates notification
+Store, delivery, producer, hook, or delay state. Its `notification_state` host
+port reaches the existing Notification Core operations through a callback-only
+production adapter bound to the real agent.
 
 ## Components
 
-- `schema.py` is data only: `ACTION_ORDER` is the single source for enum,
-  branch, and child-registration order; `INPUT_SCHEMAS` holds each action's own
-  strict `input` schema, with optional dismiss fields in the
-  provider-compatible nullable representation; `ACTION_ENUM_DESCRIPTION` and
-  `get_description()` hold the canonical-English prose
-  (`src/lingtai/tools/notification/schema.py:48-178`). It deliberately defines
-  no `get_schema`.
-- `_schema_only_family()` / `_FAMILY` build the import-time `ToolFamily` used
-  only to compose the schema; constructing it at import proves the fixed
-  ten-child registry has no duplicate or reserved-`manual` collision
-  (`src/lingtai/tools/notification/__init__.py:95-122`).
-- `get_schema()` returns the composed family schema and substitutes
-  notification's own action prose for the generic composer's neutral
-  placeholder (`src/lingtai/tools/notification/__init__.py:125-140`).
-- `_build_family()` builds the per-call dispatching `ToolFamily` with handlers
-  bound to the calling `agent`, registering the shared `manual` child directly
-  and unwrapped (`src/lingtai/tools/notification/__init__.py:362-410`).
-- `handle()` strips kernel-injected `_tc_id`, delegates envelope validation and
-  dispatch to that family, adapts the `manual` child result, and normalizes the
-  generic `ACTION_REQUIRED` error back to the pinned unknown-action shape
-  (`src/lingtai/tools/notification/__init__.py:412-451`).
-- `_strip_nulls()` converts explicit `null` optionals back to absent so the
-  handlers' `args.get(..., default)` defaulting is preserved
-  (`src/lingtai/tools/notification/__init__.py:143-153`).
-- `_check()` returns the dict-shaped placeholder onto which the turn loop can
-  stamp the current notification payload
-  (`src/lingtai/tools/notification/__init__.py:156-161`).
-- `_adapt_manual_result()` flattens the shared ManualTool child's canonical
-  `content`/`structuredContent` result to notification's pinned public
-  `status`/`notification_manual`/`manual_path` shape, restating the exact
-  contract-pinned degraded sentence
-  (`src/lingtai/tools/notification/__init__.py:164-197`).
-- `_dismiss_channel()` adapts a whole-channel request and retains the inner
-  event/ref rejection as defense in depth behind the envelope's earlier,
-  no-I/O rejection (`src/lingtai/tools/notification/__init__.py:200-239`).
-- `_dismiss_event()` and `_dismiss_ref()` adapt targeted system-event removal
-  while defaulting the channel to `system`
-  (`src/lingtai/tools/notification/__init__.py:245-288`).
-- `_delay()` delegates to `notifications.delay_notification_channel()`, which
-  persists one active private `.notification/.delay_state.json` record, arms a
-  request-id-guarded process timer, and never mutates the target producer file.
-- `_add_hook()`, `_drop_hook()`, `_edit_hook()`, and `_list_hooks()` adapt the
-  hook-registry actions and delegate to
-  `lingtai.kernel.notifications.add_hook` / `drop_hook` / `edit_hook` /
-  `list_hooks`, which validate manifests, enforce name/channel uniqueness, and
-  write `.notification/hooks.json` through Store family 8
-  (`src/lingtai/tools/notification/__init__.py:291-359`).
-- `registry.INTRINSICS` registers `notification` as a mandatory intrinsic next
-  to email, system, context, pad, lingtai, and soul
-  (`src/lingtai/tools/registry.py:48-69`).
+- `schema.py` owns `NOTIFICATION_DECLARED_ACTIONS` and
+  `DECLARED_INPUT_SCHEMAS`, the one source for notification's nine operational
+  action names and strict input schemas. It deliberately excludes `manual`;
+  `ACTION_ORDER` is the public compatibility view with the reserved action
+  appended last.
+- `__init__.py` owns the static `DECLARATION`, declaration-derived public
+  `ACTION_ORDER`/`INPUT_SCHEMAS`, the schema-only `_FAMILY`, and `_bind(host)`.
+  `_build_family(host)` builds either never-dispatching import-time children or
+  a real host-bound `ToolFamily`; both read name, input schemas, manual
+  destination, and action order from `DECLARATION`.
+- The Host-layer action adapters perform only presentation rules: check's
+  placeholder, nullable-field stripping, pre-Core missing-target errors,
+  hook-manifest argument construction, and post-dispatch manual flattening.
+  They pass all stateful work through `host.notification_state`.
+- `manual/SKILL.md` and its nested `reference/` tree are the package-owned
+  progressive-disclosure manual. Agent initialization copies this tree to
+  `.library/intrinsic/capabilities/notification/`; the reserved child reads
+  that installed copy through `build_manual_child(host.workdir,
+  DECLARATION.manual)`.
+- `src/lingtai/kernel/tool_plugin/__init__.py` owns the declaration shape,
+  reserved official namespace, `NotificationStatePort`, and registrar.
+  `src/lingtai/adapters/tool_plugin_host.py::AgentNotificationStateAdapter`
+  implements that port from callbacks bound to the real Core functions.
 
 ## Connections
 
-- `BaseAgent._wire_intrinsics()` binds every registered intrinsic module's
-  `handle()` into the agent tool surface
-  (`src/lingtai/kernel/base_agent/__init__.py:783-796`).
-- The turn loop calls `attach_active_notifications()` after ordinary tool
-  results so `check` receives the canonical `_meta.agent_meta.notifications.attention` and
-  `_meta.agent_meta.guidance.transient` stamp
-  (`src/lingtai/kernel/base_agent/turn.py:1748-1764`;
-  `src/lingtai/kernel/meta_block.py:2944`).
-- All three dismissal handlers delegate to
-  `lingtai.kernel.notifications.dismiss_channel(...,
-  invoked_by="notification")`; Core owns allowlists, producer guards,
-  stale-version checks, protected channels, post-molt acknowledgement, and
-  targeted event/ref removal (`src/lingtai/kernel/notifications.py:923`).
-  The four hook-registry handlers delegate to Core's
-  `add_hook`/`drop_hook`/`edit_hook`/`list_hooks`, which own manifest
-  validation, uniqueness, and the family-8 Store writes
-  (`src/lingtai/kernel/notifications.py:358-512`).
-- `Agent._install_intrinsic_manuals()` copies the kernel-shipped
-  `system-manual` skill tree into the per-agent intrinsic library that the
-  `manual` child reads through `tool_family.manual.build_manual_child` and the
-  shared `tools/_manual.py::load_installed_manual` loader
-  (`src/lingtai/agent.py:311-372`).
-- `base_agent.tools._dispatch_tool()` injects `_tc_id` into every intrinsic's
-  args; only `context.molt` consumes it, so `handle()` strips it before the
-  closed envelope is validated (`src/lingtai/kernel/base_agent/tools.py:28-35`).
-- `kernel/tool_result_summary.py::_LTP_V2_MIGRATED_FAMILIES` lists
-  `notification`, so the advertised root `summarize` boolean is actually
-  honored as the a-priori summary control rather than silently ignored
-  (`src/lingtai/kernel/tool_result_summary.py:150-183`).
-- The notification manual is the progressive-disclosure router for procedures;
-  its channel-model and dismissal-safety children hold protocol and safety
-  depth. The paired Contract defines the normative tool Port and invariants.
+1. `tools.registry` lists `notification` in `BUILTIN_TOOLS` and `CORE_DEFAULTS`.
+   It is therefore available by default like the former mandatory intrinsic,
+   while absent from `INTRINSICS` so no direct-Agent dispatcher can mount it.
+2. `Agent` boots the default capability. `notification.setup(agent)` calls
+   `register_agent_tool_plugins(agent, [DECLARATION])`; the kernel checks the
+   reserved name, grants exactly `workdir` and `notification_state`, binds the
+   family, and mounts the resulting handler through the authorized transaction.
+3. `AgentNotificationStateAdapter` holds callbacks only. It binds
+   `dismiss_channel(..., invoked_by="notification")`,
+   `delay_notification_channel`, and the four hook-registry operations to the
+   real agent. Notification Core consequently remains the only implementation
+   of producer guards, stale-version comparison, protected-channel refusal,
+   post-molt acknowledgement, timer/alarm behavior, allowlist mirroring, and
+   Store mutations.
+4. `check` returns only a dict placeholder. The existing turn-loop
+   `attach_active_notifications` hook stamps canonical attention/guidance state
+   on that dict; the declared family does not build a second snapshot.
+5. The manual child is registered directly and returns its canonical
+   `content`/`structuredContent` result. `_adapt_manual_result` flattens it only
+   after dispatch to the pre-existing `status`/`notification_manual`/
+   `manual_path` public shape.
 
-## Composition
+## State and boundaries
 
-- **Parent:** `src/lingtai/tools/` (see `src/lingtai/tools/ANATOMY.md`).
-- **Generic infrastructure:** `src/lingtai/tools/tool_family/` supplies
-  `ChildTool`/`ToolFamily` schema composition and envelope dispatch plus the
-  reserved `manual` child. It is optional infrastructure this package composes
-  onto, not a base class it inherits from; unlike `web`, which owns a
-  per-Agent manager, this intrinsic builds its dispatching family per call
-  because `agent` only arrives per call.
-- **Core dependency:** `src/lingtai/kernel/notifications.py` and the notification
-  Store behind it. `delay` uses the same native mutation lock directly for its
-  private dotfile plus `delay-alarm` mirror, without widening the Store Port. The four hook-registry actions (`add`/`drop`/`edit`/`list`)
-  mutate the Store's family-8 hook-manifest registry
-  (`load_hook_manifests`/`update_hook_manifests`/`stat_hook_registry`,
-  `.notification/hooks.json`);
-  the read and dismiss actions add no Store operation.
-- **Turn-loop adapter:** `src/lingtai/kernel/base_agent/turn.py` completes the
-  `check` placeholder with model-visible state.
-- **Installed-resource adapter:** `src/lingtai/agent.py` installs the intrinsic
-  skill tree consumed by `manual`.
-- **Sibling ownership:** `system` retains `summarize`; producer tools retain
-  their own canonical read/dismiss operations.
+- Notification Core and its injected `NotificationStorePort` own all durable
+  files below `.notification/`, including hook manifests, delay state, alarms,
+  and producer-facing mirrors. The tool owns no parallel state or cache.
+- The declaration has no Agent argument. `ToolPluginHost` exposes only the two
+  ports in `DECLARATION.requires`; ungranted ports raise `AttributeError`.
+  Mount authority remains host-only.
+- `notification_state` is intentionally an operation port, not filesystem or
+  Store access. It preserves the real agent-scoped Core behavior instead of
+  granting a family the fields from which it could bypass producer policy.
+- Producer-specific state remains producer-owned. A generic dismissal clears
+  only the notification mirror, exactly as Notification Core enforces.
 
-## State
+## Tests
 
-- `_check()` is in-memory and write-free.
-- The `manual` child reads one fixed installed text file and does not inspect or
-  mutate `.notification/`, Notification Store state, producer state,
-  fingerprints, acknowledgements, or notification logs.
-- Envelope validation runs before any handler, so an unknown action, an unknown
-  root field, or an `input` key belonging to another action fails with no
-  notification I/O at all.
-- Dismiss handlers own no state directly. Through notification Core they clear
-  notification mirrors or remove targeted system events while leaving producer
-  canonical state untouched.
-- Delay owns no producer state. Core atomically records its private delay state
-  under the Store-native lock, suppresses only the active target in
-  `coherent_attention_read` (`src/lingtai/kernel/notifications.py:1013`), and at
-  timer/heartbeat expiry writes a stable high-priority `delay-alarm` mirror
-  before re-exposing the target. Corrupt or unreadable state is ignored
-  (visible, not silent). A `daemon` target is masked rather than hidden there:
-  the aggregate payload and raw version stay in the read and only the daemon
-  attention entry becomes `DAEMON_DELAYED_ATTENTION_TOKEN`
-  (`src/lingtai/kernel/notifications.py:911`), reusing the alarm-threshold mask
-  seam `apply_daemon_attention_mask`
-  (`src/lingtai/kernel/notifications.py:945`).
-- Hook-registry handlers own no state directly either. Through notification
-  Core they read/mutate `.notification/hooks.json` (Store family 8) and refresh
-  the module-level registered-hook channel mirror that widens the allow
-  predicate for THIS agent's workdir (hook channels are per-agent, not
-  process-global); `drop` revokes the channel and `edit` moves it. The mirror is
-  serialized under `_HOOK_REGISTRY_LOCK` and re-seeded by `sync_hook_registry`
-  whenever the registry's `(st_mtime_ns, st_size)` stat changes (cross-process),
-  with a workdir marked seeded only after a successful load. Read-only `list`
-  never mutates.
-
-## Notes
-
-- There is no aggregate `dismiss`, no `summarize` action, no source-checkout
-  fallback, and no `system` notification/dismiss compatibility alias. The
-  shared manual loader is now deliberately used (via the reserved `manual`
-  child), replacing this package's former private path construction.
-- The kernel may synthesize the same `notification(action="check")` call/result
-  shape at an idle boundary; that delivery plumbing is not another agent-callable
-  action (`src/lingtai/kernel/base_agent/__init__.py:1255-1461`;
-  `src/lingtai/kernel/base_agent/__init__.py:1582-1844`). Because that pair is
-  deliberately byte-shape-identical to a voluntary read, its synthesized call
-  args carry the same minimal LTP v2 envelope (`action`, `input: {}`, and a
-  `reasoning` string); the optional public `summarize` control is valid but
-  absent here. No `injection_seq` or other internal freshness field is admitted,
-  since a provider/model can copy assistant-turn call args verbatim into a new
-  real call, and `_ROOT_FIELDS` rejects keys outside the public root allowlist
-  with `INVALID_ARGUMENT: unsupported notification argument`. Freshness/novelty
-  against byte-equality is carried on the result side (`content`/`metadata`)
-  instead, which is never fed back as call args.
-- Large tool results are ranked and compacted through
-  `context(action="summarize")`. Notification dismissal retains only the legacy
-  reminder escape hatch described by the manual.
-- Changes to notification read/dismiss semantics must also check
-  `src/lingtai/services/LICC_NOTIFICATION_CONTRACT.md`; changes to Port behavior
-  must update the paired Contract and focused tests in the same PR.
+`tests/test_tool_plugin_declaration.py` is the compact live vertical proof: it
+asserts claim/mount, declaration ports, package-manual retrieval, check, and a
+Core-backed forced mirror dismissal. `tests/test_notification_tool.py` covers
+the unchanged public LTP and action behavior through a declaration-bound test
+host. `tests/test_notification_sync.py` and
+`tests/test_notification_delay_alarm.py` exercise the same host-bound dispatch
+alongside the real Core synchronization and durable delay/alarm paths.

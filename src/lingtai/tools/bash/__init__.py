@@ -46,6 +46,7 @@ from ._async_process import (
 # duck-typed names (the same single-surface shape ``web`` has). There is no
 # second, flat, pre-migration pair to drift against.
 from ._tool_family import (
+    DECLARATION,
     TIMEOUT_MAX_ENV,
     ShellFamilyDispatcher,
     _DEFAULT_TIMEOUT_SECONDS,
@@ -566,16 +567,22 @@ class ShellManager:
         self,
         policy: ShellPolicy,
         working_dir: str,
-        agent: "BaseAgent",
+        agent: "BaseAgent | object | None" = None,
         max_output: int = 50_000,
         dialect: ShellDialect | None = None,
         async_process: BashAsyncProcessPort | None = None,
         shell_kind: "ShellKind | str | None" = None,
+        notification_port: object | None = None,
+        rehydrate: bool = True,
     ):
         self._policy = policy
         self._working_dir = working_dir
         self._max_output = max_output
+        # Direct-manager callers retain the historical Agent-shaped injection
+        # for compatibility.  The official plugin path leaves this unset and
+        # receives only ``notification_port`` from its granted host facade.
         self._agent = agent
+        self._notifications = notification_port
         self._dialect = dialect or _select_shell_dialect()
         # Runtime shell-family metadata: classifier override when provided,
         # otherwise derived from the dialect.  Unknown dialects (test mocks)
@@ -587,6 +594,17 @@ class ShellManager:
         self._reminder_cancel_events: dict[str, threading.Event] = {}
         self._completion_lock = threading.Lock()
         self._completion_watchers: set[str] = set()
+        if rehydrate:
+            self._rehydrate_async_jobs()
+
+    def activate(self) -> None:
+        """Resume durable async reminders/completion watches after plugin bind.
+
+        Direct manager construction remains eager for compatibility; the
+        declared host-plugin path calls this only as the registrar's separate
+        post-name-check activation step, so binding itself neither starts a
+        watcher nor reaches a live Agent.
+        """
         self._rehydrate_async_jobs()
 
     @property
@@ -1531,6 +1549,20 @@ class ShellManager:
             f"Shell async job {job_id} may still be running. "
             f'Poll it with shell(action="poll", input={{"job_id": "{job_id}"}}).'
         )
+        notifications = self._notifications
+        if notifications is not None:
+            try:
+                return bool(notifications.publish_system(
+                    source="bash.reminder",
+                    ref_id=f"bash.reminder:{job_id}",
+                    body=body,
+                    skip_if_ref_id_exists=True,
+                ))
+            except Exception:
+                return False
+        # Compatibility-only direct-manager route. Official bindings never
+        # receive this Agent-shaped object; their port adapter preserves the
+        # same canonical enqueue/fallback behavior above.
         agent = self._agent
         if hasattr(agent, "_enqueue_system_notification"):
             try:
@@ -1643,11 +1675,15 @@ class ShellManager:
                     "ref_id": f"bash.completion:{job_id}",
                 },
             }
+            ref_id = f"bash.completion:{job_id}"
+            notifications = self._notifications
+            if notifications is not None:
+                return bool(notifications.publish_channel("bash", payload, ref_id=ref_id))
+            # Compatibility-only direct-manager route; official bindings carry
+            # only the port above and never reach an Agent or its store.
             store = self._agent._notification_store
             if hasattr(store, "compare_update_channel"):
                 from lingtai.kernel.notification_store import UNCONDITIONAL
-
-                ref_id = f"bash.completion:{job_id}"
 
                 def mutate(current_payload: dict) -> tuple[dict | None, bool, bool]:
                     current = current_payload if isinstance(current_payload, dict) else {}
@@ -2058,55 +2094,32 @@ def setup(
     yolo: bool = False,
     shell_kind: "ShellKind | str | None" = None,
 ) -> ShellManager:
-    """Set up the canonical shell capability on an agent.
+    """Mount the static Shell declaration through the controlled host route.
 
-    Args:
-        agent: The agent to extend.
-        policy_file: Path to JSON policy file (required unless yolo=True).
-        yolo: If True, allow all commands (no policy file needed).
-        shell_kind: Optional ShellKind override (init.json
-            ``manifest.capabilities.shell.shell_kind`` or ``LINGTAI_SHELL``).
-            Defaults to the platform classifier result.
-
-    Returns:
-        The BashManager instance for programmatic access.
+    Policy selection and durable async behavior live in ``_bind`` against the
+    declaration's narrow workdir/configuration/notification grant.  This
+    function remains composition wiring only: it supplies the explicit setup
+    values, delegates mounting to the kernel registrar, and preserves the
+    historical manager return for programmatic direct callers.
     """
-    # Resolve the dialect before the default policy so PowerShell does not
-    # silently reuse a POSIX denylist.  An explicit policy remains authoritative.
-    kind = _resolve_shell_kind(ShellKind.coerce(shell_kind))
-    dialect = _select_shell_dialect(kind)
-    resolved_policy_file = policy_file
-    if yolo:
-        policy = ShellPolicy.yolo()
-    elif resolved_policy_file is not None:
-        policy = ShellPolicy.from_file(resolved_policy_file)
-    else:
-        default_policy = _POWERSHELL_POLICY_FILE if dialect.state_key() == "powershell" else _DEFAULT_POLICY_FILE
-        policy = ShellPolicy.from_file(str(default_policy))
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        register_agent_tool_plugins,
+    )
 
-    mgr = ShellManager(
-        policy=policy,
-        working_dir=str(agent._working_dir),
-        agent=agent,
-        dialect=dialect,
-        shell_kind=kind,
+    configuration = StaticConfigurationAdapter({
+        "policy_file": policy_file,
+        "yolo": yolo,
+        "shell_kind": shell_kind,
+    })
+    (bound,) = register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        extra_ports_for=lambda declaration: (
+            {"configuration": configuration} if declaration is DECLARATION else {}
+        ),
     )
-    # Description is setup-time metadata derived from the injected adapter and
-    # host, documenting the registered action-separated call shape.  The shell
-    # kind + sequencing guidance tells the model which dialect it is using.
-    desc = get_description(
-        dialect=dialect.state_key(), host_os=_describe_host_os(), shell_kind=kind,
-    )
-    policy_summary = policy.describe()
-    if policy_summary:
-        desc = f"{desc}\n\n{policy_summary}"
-
-    # The dispatcher validates the envelope and flattens each action's own
-    # ``input`` into the internal call shape ``ShellManager.handle`` consumes,
-    # so the async lifecycle and durable state stay one untouched code path.
-    dispatcher = ShellFamilyDispatcher(mgr, agent)
-    agent.add_tool(
-        "shell", schema=get_schema(), handler=dispatcher.handle,
-        description=desc, glossary_package=__package__,
-    )
-    return mgr
+    dispatcher = getattr(bound.handler, "__self__", None)
+    if not isinstance(dispatcher, ShellFamilyDispatcher):  # pragma: no cover - wiring invariant
+        raise RuntimeError("Shell declaration did not bind a ShellFamilyDispatcher")
+    return dispatcher.manager

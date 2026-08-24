@@ -139,91 +139,87 @@ class TaskCardLimitNotification:
     last_valid_body_at: str | None = None
 
 
-class TaskCardNotificationsAdapter:
-    """Pin the legacy host publisher to Task Card's typed event forms.
+#: The five closed operations the kernel ``TaskCardNotificationsPort`` grants.
+#: There is deliberately no generic ``enqueue`` name in this tuple: a port that
+#: offers one is not the native port and is refused at the family boundary.
+_NATIVE_NOTIFICATION_OPERATIONS = (
+    "publish_error",
+    "publish_recovered",
+    "publish_limit",
+    "submit_reminder",
+    "clear_reminder",
+)
 
-    The current candidate host still exposes a generic callback internally. It
-    is consumed exactly once here at the family boundary; the manager retains
-    this adapter and never retains the generic callback or its arbitrary
-    keyword vocabulary. The serialized integration packet can replace the
-    bridge with operation-native host methods without changing producer policy.
+
+class TaskCardNotificationsAdapter:
+    """Family-local bridge from typed producer events to the native port.
+
+    The granted ``TaskCardNotificationsPort`` exposes only five closed,
+    scalar-signature operations; the production adapter pins source, channel,
+    priority, idempotency, and the bounded ``extra`` projection behind them.
+    This class keeps the producer's immutable typed event forms as the sole
+    family API and forwards each event's fields positionally by name to the
+    matching native operation. It consumes nothing but those five operations:
+    a port carrying a generic publisher (``enqueue_system_notification`` or any
+    ``**kwargs`` vocabulary) is refused, and the manager retains only this
+    typed view — never a host, a generic publisher, or a service locator.
     """
 
-    __slots__ = ("_enqueue", "_submit", "_clear")
+    __slots__ = ("_error", "_recovered", "_limit", "_submit", "_clear")
 
     def __init__(self, port: Any) -> None:
-        enqueue = getattr(port, "enqueue_system_notification", None)
-        submit = getattr(port, "submit_reminder", None)
-        clear = getattr(port, "clear_reminder", None)
-        if not callable(enqueue) or not callable(submit) or not callable(clear):
-            raise TypeError("Task Card notification port lacks its required operations")
-        self._enqueue = enqueue
-        self._submit = submit
-        self._clear = clear
+        operations = {}
+        for name in _NATIVE_NOTIFICATION_OPERATIONS:
+            operation = getattr(port, name, None)
+            if not callable(operation):
+                raise TypeError(
+                    f"Task Card notification port lacks native operation {name!r}"
+                )
+            operations[name] = operation
+        if callable(getattr(port, "enqueue_system_notification", None)):
+            raise TypeError(
+                "Task Card notification port must be operation-native, not a generic publisher"
+            )
+        self._error = operations["publish_error"]
+        self._recovered = operations["publish_recovered"]
+        self._limit = operations["publish_limit"]
+        self._submit = operations["submit_reminder"]
+        self._clear = operations["clear_reminder"]
 
     def publish_error(self, event: TaskCardErrorNotification) -> None:
         if not isinstance(event, TaskCardErrorNotification):
             raise TypeError("publish_error requires TaskCardErrorNotification")
-        extra: dict[str, Any] = {
-            "watch_id": event.watch_id,
-            "state": "error",
-            "code": event.code,
-            "retryable": event.retryable,
-        }
-        if event.last_valid_body_at:
-            extra["last_valid_body_at"] = event.last_valid_body_at
-        self._enqueue(
-            source="task_card.error",
-            channel="system",
-            ref_id=event.watch_id,
+        self._error(
+            watch_id=event.watch_id,
             body=event.body,
+            code=event.code,
+            retryable=event.retryable,
             idempotency_key=event.idempotency_key,
-            skip_if_idempotency_key_exists=True,
-            priority="high",
-            extra=extra,
+            last_valid_body_at=event.last_valid_body_at,
         )
 
     def publish_recovered(self, event: TaskCardRecoveredNotification) -> None:
         if not isinstance(event, TaskCardRecoveredNotification):
             raise TypeError("publish_recovered requires TaskCardRecoveredNotification")
-        self._enqueue(
-            # Preserve the established wire source: recovered is a state on
-            # the Task Card error stream, distinguished by extra.state and its
-            # recovered idempotency key.
-            source="task_card.error",
-            channel="system",
-            ref_id=event.watch_id,
+        # The native port keeps the established wire source: recovered is a
+        # state on the Task Card error stream, distinguished by extra.state and
+        # its recovered idempotency key.
+        self._recovered(
+            watch_id=event.watch_id,
             body=event.body,
             idempotency_key=event.idempotency_key,
-            skip_if_idempotency_key_exists=True,
-            priority="normal",
-            extra={
-                "watch_id": event.watch_id,
-                "state": "recovered",
-            },
         )
 
     def publish_limit(self, event: TaskCardLimitNotification) -> None:
         if not isinstance(event, TaskCardLimitNotification):
             raise TypeError("publish_limit requires TaskCardLimitNotification")
-        extra: dict[str, Any] = {
-            "watch_id": event.watch_id,
-            "state": "stopped",
-            "reason": "max_refreshes",
-            "used": event.used,
-            "max": event.max_refreshes,
-        }
-        if event.last_valid_body_at:
-            extra["last_valid_body_at"] = event.last_valid_body_at
-        self._enqueue(
-            source="task_card.limit",
-            channel="system",
-            ref_id=event.watch_id,
+        self._limit(
+            watch_id=event.watch_id,
             body=event.body,
             idempotency_key=event.idempotency_key,
-            skip_if_idempotency_key_exists=True,
-            priority="normal",
-            extra=extra,
+            used=event.used,
+            max_refreshes=event.max_refreshes,
+            last_valid_body_at=event.last_valid_body_at,
         )
 
     def submit_reminder(self, turns: int) -> None:
@@ -237,7 +233,7 @@ class TaskCardNotificationsAdapter:
 
 @dataclass(frozen=True, slots=True)
 class _TaskCardRuntime:
-    """Manager-only host view after the generic notification port is wrapped."""
+    """Manager-only host view: workdir, shutdown, and the typed notification bridge."""
 
     workdir: Any
     shutdown: Any

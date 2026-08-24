@@ -30,6 +30,7 @@ related_files:
   - docs/references/windows-support.md
   - tests/test_agent.py
   - tests/test_lifecycle_daemon_shutdown.py
+  - tests/test_system_sleep_alarm.py
   - tests/test_process_scan.py
   - tests/test_process_match.py
   - tests/test_windows_import_graph.py
@@ -93,6 +94,18 @@ per-platform matrix (see the
 an unsupported capability fails loudly at its own selector or composition
 gate — never silently degrades, never no-ops.
 
+A delayed self-sleep persists exactly one atomic `<workdir>/.alarm` absolute
+wall-clock deadline before it transitions ASLEEP. Heartbeat reads that file
+cheaply under the same capability-local lock as arming; before deadline it is a
+no-op, and at/after deadline it uses the existing ordinary system-notification
+producer and sync wake path. A stable stored-deadline-derived ref/idempotency
+identity makes retry after a publish/consume crash window safe. A successful
+publish consumes the file; a failed publish leaves it retryable. Early wake does
+not cancel the file, and a new delayed sleep last-writer-wins overwrites it.
+Malformed/unreadable state remains visible through a bounded once-per-unchanged
+problem `sleep_alarm_malformed` event; no scheduler, cross-process lock, or
+new Store protocol exists.
+
 ## Port
 
 This contract owns one new Core Port and composes the linked ones:
@@ -143,8 +156,9 @@ Clause IDs are stable; each rule composes the linked normative source.
    runtime artifacts are `.agent.json` (manifest), `.agent.heartbeat`
    (liveness), `.agent.lock` (lease), the signal files
    (`.suspend`/`.sleep`/`.interrupt`/`.refresh`/`.refresh.taken`/`.prompt`/
-   `.clear`/`.inquiry`/`.rules`), `.notification/`, `logs/`, and
-   `history/`. Artifact names and meanings are frozen; observers may read,
+   `.clear`/`.inquiry`/`.rules`), `.alarm` (the one self-sleep absolute
+   deadline), `.notification/`, `logs/`, and `history/`. Artifact names and
+   meanings are frozen; observers may read,
    only the owning agent/watcher mutates.
 2. `agent-runtime.presence.v1` — Liveness truth is manifest-first presence
    plus heartbeat freshness, per
@@ -237,9 +251,10 @@ graph survives missing POSIX mechanisms — the construction-gate proof), and
 `tests/test_cli.py` (duplicate-guard policy), and
 `tests/test_aed_recovery.py` (partial-output and exhausted provider-recovery
 terminal guards before transient/AED replay). The
-Windows CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
-platform-marked tiers natively; the capability matrix cites which rows carry
-native receipts.
+Windows release CI lane (`.github/workflows/kernel-windows-pr.yml`) executes the
+platform-marked tiers natively on `release.published`; routine pull requests do
+not spend a Windows runner. The capability matrix cites which rows carry native
+receipts.
 
 ## Maintenance
 

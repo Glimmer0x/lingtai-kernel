@@ -38,7 +38,7 @@ from typing import Any
 
 import pytest
 
-from lingtai.tools.registry import INTRINSICS as ALL_INTRINSICS
+from lingtai.tools.registry import BUILTIN_TOOLS, CORE_DEFAULTS, INTRINSICS as ALL_INTRINSICS
 from lingtai.tools import (
     notification as notif_intrinsic,
     system as sys_intrinsic,
@@ -54,6 +54,8 @@ from lingtai.kernel.notifications import (
     submit,
     sync_hook_registry,
 )
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 from tests._notification_store_helpers import (
     FakeNotificationStore,
     fingerprint_notifications,
@@ -81,7 +83,7 @@ def _call(agent: Any, action: str, **action_input: Any) -> dict:
     field) is on the same path as action behavior.  ``reasoning`` is required
     by the family schema and always supplied.
     """
-    return notif_intrinsic.handle(
+    return dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent, {"action": action, "input": dict(action_input), "reasoning": "test"}
     )
 
@@ -91,37 +93,16 @@ def _call(agent: Any, action: str, **action_input: Any) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_notification_is_registered_like_system() -> None:
-    """The notification intrinsic is in ALL_INTRINSICS — wired for every agent."""
-    assert "notification" in ALL_INTRINSICS
-    assert ALL_INTRINSICS["notification"]["module"] is notif_intrinsic
+def test_notification_is_always_on_declared_capability() -> None:
+    """Notification preserves availability, but mounts through its official declaration."""
+    assert "notification" not in ALL_INTRINSICS
+    assert BUILTIN_TOOLS["notification"] == "lingtai.tools.notification"
+    assert "notification" in CORE_DEFAULTS
 
 
-def test_notification_wired_into_every_agent() -> None:
-    """_wire_intrinsics iterates the injected registry unconditionally → mandatory.
-
-    There is no manifest gate: every key in the injected intrinsic registry
-    (``lingtai.tools.registry.INTRINSICS``) is wired into ``agent._intrinsics``. Proving
-    'notification' lands there alongside 'system' is the mandatory-include proof.
-    """
-    from lingtai.kernel.base_agent import BaseAgent
-
-    wired: dict[str, Any] = {}
-    modules: dict[str, Any] = {}
-
-    class _FakeAgent:
-        _intrinsic_registry = ALL_INTRINSICS
-        _intrinsics = wired
-        _intrinsic_modules = modules
-
-        def _log(self, *a, **k):
-            pass
-
-    BaseAgent._wire_intrinsics(_FakeAgent())  # type: ignore[arg-type]
-
-    assert "system" in wired
-    assert "notification" in wired
-    assert callable(wired["notification"])
+def test_notification_module_has_no_direct_agent_entrypoint() -> None:
+    """The declaration binder, never ``handle(agent, args)``, owns dispatch."""
+    assert not hasattr(notif_intrinsic, "handle")
 
 
 _ACTIONS = ["check", "dismiss_channel", "dismiss_event", "dismiss_ref", "add", "drop", "edit", "list", "delay", "manual"]
@@ -344,7 +325,7 @@ def _notification_manual_path(workdir: Path) -> Path:
         / ".library"
         / "intrinsic"
         / "capabilities"
-        / "notification-manual"
+        / "notification"
         / "SKILL.md"
     )
 
@@ -463,21 +444,14 @@ def test_dismiss_channel_rejects_event_target_before_any_io(tmp_path: Path) -> N
         assert agent._logs == before_logs, action_input
 
 
-def test_dismiss_channel_still_refuses_event_target_on_direct_call(
-    tmp_path: Path,
-) -> None:
-    """The inner defense-in-depth check survives the migration.
+def test_notification_action_handlers_receive_a_state_port_not_agent() -> None:
+    """Internal action adaptations accept the declared state port, never Agent."""
+    import inspect
 
-    The envelope now rejects these keys first, so this covers the second layer:
-    a direct in-process call that bypasses ``handle`` still gets the original
-    ``channel_dismiss_rejects_event_target`` refusal rather than silently
-    clearing the whole channel.
-    """
-    agent = _StubAgent(tmp_path)
-    for kwargs in ({"event_id": "evt_a"}, {"ref_id": "goal:current"}):
-        res = notif_intrinsic._dismiss_channel(agent, {"channel": "system", **kwargs})
-        assert res["status"] == "error", kwargs
-        assert res["reason"] == "channel_dismiss_rejects_event_target", kwargs
+    assert tuple(inspect.signature(notif_intrinsic._dismiss_channel).parameters) == (
+        "state",
+        "args",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +778,7 @@ def test_unknown_action_fails_before_any_io(tmp_path: Path) -> None:
 def test_unknown_root_field_is_rejected(tmp_path: Path) -> None:
     """The root is closed: a fifth public field never reaches an action."""
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {"action": "check", "input": {}, "reasoning": "r", "channel": "system"},
     )
@@ -815,7 +789,7 @@ def test_unknown_root_field_is_rejected(tmp_path: Path) -> None:
 def test_non_boolean_summarize_is_rejected(tmp_path: Path) -> None:
     """``summarize`` is a root boolean; a wrong type fails before dispatch."""
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent, {"action": "check", "input": {}, "reasoning": "r", "summarize": "yes"}
     )
     assert res["status"] == "failed"
@@ -826,7 +800,7 @@ def test_summarize_is_stripped_and_never_reaches_an_action(tmp_path: Path) -> No
     """A valid root ``summarize`` leaves the action result byte-identical."""
     agent = _StubAgent(tmp_path)
     plain = _call(agent, "check")
-    with_flag = notif_intrinsic.handle(
+    with_flag = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent, {"action": "check", "input": {}, "reasoning": "r", "summarize": True}
     )
     assert with_flag == plain
@@ -854,7 +828,7 @@ def test_tc_id_injection_does_not_break_dispatch(tmp_path: Path) -> None:
     Only psyche's molt consumes it; notification ignores it.
     """
     agent = _StubAgent(tmp_path)
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {"action": "check", "input": {}, "reasoning": "r", "_tc_id": "toolu_abc"},
     )
@@ -877,7 +851,7 @@ def test_null_optionals_are_treated_as_absent(tmp_path: Path) -> None:
     )
     _mark_delivered(agent)
 
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_event",
@@ -902,7 +876,7 @@ def test_null_force_and_reason_match_omission(tmp_path: Path) -> None:
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
 
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_channel",
@@ -2145,7 +2119,7 @@ def test_post_molt_instruction_template_round_trips_through_dispatcher(
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
 
-    result = notif_intrinsic.handle(agent, args)
+    result = dispatch_declared_tool(NOTIFICATION_DECLARATION, agent, args)
 
     assert result["status"] == "ok", result
     assert result["channel"] == "post-molt"
@@ -2159,7 +2133,7 @@ def test_post_molt_template_without_reason_still_refuses(tmp_path: Path) -> None
     publish_test_payload(tmp_path, "post-molt", {"header": "continue?"})
     _mark_delivered(agent)
 
-    res = notif_intrinsic.handle(
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_channel",
@@ -2195,7 +2169,7 @@ def test_runtime_producer_instruction_templates_are_dispatchable(
         publish_test_payload(workdir, channel, {"header": channel})
         _mark_delivered(agent)
 
-        res = notif_intrinsic.handle(
+        res = dispatch_declared_tool(NOTIFICATION_DECLARATION,
             agent,
             {
                 "action": "dismiss_channel",

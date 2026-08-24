@@ -78,7 +78,12 @@ def _make_init(
     return data
 
 
-def _make_agent(tmp_path: Path, init_data: dict | None = None):
+def _make_agent(
+    tmp_path: Path,
+    init_data: dict | None = None,
+    *,
+    _from_init_boot: bool = False,
+):
     """Create a bare Agent with a mock LLM service in a temp working dir."""
     from lingtai.agent import Agent
     from lingtai.kernel.config import AgentConfig
@@ -96,6 +101,7 @@ def _make_agent(tmp_path: Path, init_data: dict | None = None):
         agent_name="test-agent",
         working_dir=tmp_path,
         config=AgentConfig(),
+        _from_init_boot=_from_init_boot,
     )
     return agent
 
@@ -229,6 +235,104 @@ def test_cli_build_agent_uses_refresh(tmp_path):
 
     # Cleanup
     agent._workdir_lease.release()
+
+
+def test_cli_build_agent_composes_wrapper_surface_once(tmp_path, monkeypatch):
+    """CLI boot binds the configured declared MCP surface and loads MCPs once."""
+    from lingtai.agent import Agent
+    from lingtai.adapters import tool_plugin_host
+    from lingtai.cli import build_agent, load_init
+
+    init = _make_init()
+    init["mcp"] = {
+        "test-server": {
+            "type": "stdio",
+            "command": "test-server",
+            "args": [],
+        },
+        "unregistered-server": {
+            "type": "stdio",
+            "command": "unregistered-server",
+            "args": [],
+        },
+    }
+    (tmp_path / "init.json").write_text(json.dumps(init))
+    (tmp_path / "mcp_registry.jsonl").write_text(json.dumps({
+        "name": "test-server",
+        "summary": "test MCP",
+        "transport": "stdio",
+        "command": "test-server",
+        "args": [],
+        "source": "user",
+    }) + "\n")
+
+    mcp_registrations = 0
+    manual_installs = 0
+    mcp_loads = 0
+    mcp_launches = 0
+    launched_commands: list[str] = []
+    register = tool_plugin_host.register_agent_tool_plugins
+    install_manuals = Agent._install_intrinsic_manuals
+    load_mcps = Agent._load_mcp_from_workdir
+
+    def count_mcp_launch(self, command, args=None, env=None):
+        nonlocal mcp_launches
+        mcp_launches += 1
+        launched_commands.append(command)
+        return []
+
+    def count_mcp_registration(agent, declarations, **kwargs):
+        nonlocal mcp_registrations
+        if any(declaration.name == "mcp" for declaration in declarations):
+            mcp_registrations += 1
+        return register(agent, declarations, **kwargs)
+
+    def count_manual_install(self):
+        nonlocal manual_installs
+        manual_installs += 1
+        return install_manuals(self)
+
+    def count_mcp_load(self):
+        nonlocal mcp_loads
+        mcp_loads += 1
+        return load_mcps(self)
+
+    monkeypatch.setattr(
+        tool_plugin_host, "register_agent_tool_plugins", count_mcp_registration
+    )
+    monkeypatch.setattr(Agent, "_install_intrinsic_manuals", count_manual_install)
+    monkeypatch.setattr(Agent, "_load_mcp_from_workdir", count_mcp_load)
+    monkeypatch.setattr(Agent, "connect_mcp", count_mcp_launch)
+
+    agent = build_agent(load_init(tmp_path), tmp_path)
+    try:
+        assert mcp_registrations == 1
+        assert manual_installs == 1
+        assert mcp_loads == 1
+        assert mcp_launches == 1
+        assert launched_commands == ["test-server"]
+        assert "mcp" in agent.official_tool_plugins
+    finally:
+        agent._workdir_lease.release()
+
+
+def test_direct_agent_still_composes_default_mcp_surface(tmp_path):
+    """The private CLI shell does not change public Agent construction."""
+    agent = _make_agent(tmp_path)
+    shell_dir = tmp_path / "private-shell"
+    shell_dir.mkdir()
+    shell = _make_agent(shell_dir, _from_init_boot=True)
+    try:
+        assert "mcp" in agent.official_tool_plugins
+        assert "mcp" in {name for name, _kwargs in agent._capabilities}
+        manual_path = tmp_path / ".library" / "intrinsic" / "capabilities" / "mcp" / "SKILL.md"
+        assert manual_path.is_file()
+        assert agent._mcp_init_specs == {}
+        assert shell._capabilities == []
+        assert shell._from_init_boot is False
+    finally:
+        agent._workdir_lease.release()
+        shell._workdir_lease.release()
 
 
 def test_cli_build_agent_context_window_uses_config_or_conservative_fallback(tmp_path):

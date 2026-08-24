@@ -6,13 +6,16 @@ description: >
   communication and memory layers, collaboration topology, MCP/addon ownership,
   and (§11) the canonical `init.json` composition and preset runtime model.
   Route via `system-manual` when it is unclear whether this is the right node.
-version: 1.4.0
-tags: [lingtai, system-manual, substrate, runtime, lifecycle, communication, memory, notifications, mcp, preset]
-last_changed_at: "2026-08-07T00:00:00Z"
+version: 1.5.0
+tags: [lingtai, system-manual, substrate, runtime, lifecycle, alarm, communication, memory, notifications, mcp, preset]
+last_changed_at: "2026-08-24T08:45:00Z"
 related_files:
 - src/lingtai/intrinsic_skills/system-manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/substrate/substrate.yaml
+- src/lingtai/tools/system/schema.py
+- src/lingtai/tools/system/karma.py
+- src/lingtai/kernel/base_agent/lifecycle.py
 maintenance: |
   Tracks the substrate-manual topic it documents; update when that integration changes.
 ---
@@ -155,6 +158,33 @@ that latest guidance first when it appears.
 
 For peers, prefer communication and diagnosis before force. Karma operations are
 administrative tools, not shortcuts around collaboration.
+
+### Last-resort `sleep(delay=...)` alarm
+
+Normal waiting is **not** timed sleep: use reliable producer completion
+notifications and ordinary **IDLE** whenever the async producer can notify you.
+Only when deliberately waiting for async work that has no reliable completion
+notification may `system(action="sleep", input={"delay": <positive seconds>,
+...})` arm this one-shot last-resort alarm. `delay` is a finite positive JSON
+number of seconds and has no configured or public upper bound; `null`/omission
+means ordinary sleep.
+
+The agent workdir has at most one `<workdir>/.alarm`, containing only one
+parseable absolute wall-clock deadline. The sleep call atomically replaces that
+file before it enters ASLEEP. At or after the deadline, the heartbeat turns it
+into one ordinary system notification; normal notification sync then performs
+any ASLEEP wake. This is deliberately neither a scheduler nor a timer service:
+there is no list, history, cancel action, or early-wake cancellation. An early
+real notification may wake you, but the alarm remains armed; a later
+`system.sleep(delay=...)` replaces it, while `system.sleep` without `delay`
+leaves it alone. The file also survives restart until the due notification has
+been published and consumed.
+
+If `.alarm` is malformed or unreadable, the heartbeat leaves it untouched and
+records a bounded `sleep_alarm_malformed` diagnostic once per unchanged problem
+per process instead of firing or logging every tick. Do not guess or rewrite a
+bad deadline as a recovery shortcut: inspect the workdir/runtime evidence and
+choose an explicit later sleep alarm if appropriate.
 
 **Cross-platform CPR limitation (documented, not a bug):** ``cpr`` relaunches
 the target using its configured ``venv_path``, and the venv executable layout is

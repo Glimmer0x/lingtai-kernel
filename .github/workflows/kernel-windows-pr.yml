@@ -1,23 +1,8 @@
-name: Kernel Windows PR contract
+name: Kernel Windows release contract
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/kernel-windows-pr.yml"
-      - "src/lingtai/adapters/**"
-      - "src/lingtai/kernel/**"
-      - "src/lingtai/tools/daemon/**"
-      - "src/lingtai/tools/avatar/**"
-      - "src/lingtai/cli.py"
-      - "src/lingtai/agent.py"
-      - "tests/test_workdir_lease*.py"
-      - "tests/test_refresh_watcher_windows.py"
-      - "tests/test_process_scan.py"
-      - "tests/test_process_match.py"
-      - "tests/test_daemon_windows_*.py"
-      - "tests/test_avatar_launcher_windows.py"
-      - "tests/test_portable_adapter_encoding.py"
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read

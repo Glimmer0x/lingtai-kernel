@@ -1,12 +1,16 @@
 ---
 related_files:
   - src/lingtai/ANATOMY.md
+  - src/lingtai/kernel/ANATOMY.md
   - src/lingtai/adapters/windows/ANATOMY.md
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/avatar/BEHAVIORS.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/_launcher.py
   - src/lingtai/tools/avatar/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/adapters/avatar_launcher.py
   - src/lingtai/adapters/posix/ANATOMY.md
   - src/lingtai/adapters/posix/avatar_launcher.py
@@ -14,6 +18,7 @@ related_files:
   - src/lingtai/tools/tool_family/ANATOMY.md
   - tests/test_avatar_rules.py
   - tests/test_tool_family_avatar_migration.py
+  - tests/test_tool_plugin_declaration.py
   - src/lingtai/tools/avatar/glossary-en.md
   - src/lingtai/tools/avatar/glossary-zh.md
   - src/lingtai/tools/avatar/glossary-wen.md
@@ -42,8 +47,9 @@ independent life — its existence does not depend on yours.
 
 ## Components
 
-- `avatar/__init__.py` — validation, preparation, boot policy, ledger, rules,
-  schemas, and setup. The core class is `AvatarManager`.
+- `avatar/__init__.py` — static official `DECLARATION`, local manual child,
+  validation, preparation, boot policy, ledger, rules, schemas, and registrar
+  setup. The core class is `AvatarManager`.
 - `avatar/_launcher.py` — immutable launch request/receipt and the avatar-local
   opaque-handle Port.
 
@@ -86,23 +92,22 @@ unknown-action error string.
 
 ```
 avatar/__init__.py
-  ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict per-action inputs
-  │                                    (manual reuses the generic
-  │                                    tool_family.manual.MANUAL_INPUT_SCHEMA)
-  ├── _CHILD_SPECS                  — the one (action, schema) source both
-  │                                    family listings are built from
-  ├── _build_family() / _FAMILY     — import-time registry validation;
-  │                                    get_schema() composes from _FAMILY
-  ├── AvatarManager.__init__        — parent agent ref + per-instance ToolFamily
+  ├── _SPAWN/_RULES_INPUT_SCHEMA    — canonical strict operational inputs
+  ├── DECLARATION                   — static official identity, actions, manual,
+  │                                    and exact `(workdir, avatar_parent)` grant
+  ├── _CHILD_SPECS / _build_family  — declaration-derived public listing plus
+  │                                    the package-local reserved manual child
+  ├── _bind()                       — pure host composition → BoundToolPlugin
+  ├── AvatarManager.__init__        — narrow host + per-instance ToolFamily
   ├── handle()                      — envelope entry: captures root _reasoning,
   │                                    delegates to ToolFamily.handle(), then
   │                                    normalizes ACTION_REQUIRED back to
   │                                    avatar's pinned unknown-action error
-  ├── _dispatch_spawn/_rules/_manual — child handlers; strip nulls, thread
-  │                                    the mission brief to _spawn
+  ├── _dispatch_spawn/_rules        — operational child handlers; strip nulls,
+  │                                    thread the mission brief to _spawn
   ├── _strip_nulls()                — nullable-optional → absent
-  ├── _manual()                     — reads the packaged manual/SKILL.md body
-  │                                    and reports its host-local path
+  ├── _manual_payload()             — plugin-owned local `manual/SKILL.md`
+  │                                    result; no manager/host mutation
   │
   │  Spawn pipeline:
   ├── _spawn()                      — validates name, checks liveness, prepares working dir, launches process
@@ -123,6 +128,13 @@ avatar/__init__.py
 
 ## Key Invariants
 
+- **Declared least privilege:** `AvatarManager` receives a `ToolPluginHost`, not
+  an Agent. `workdir` supplies every local path; `avatar_parent` supplies only
+  the current parent identity, optional venv inheritance, and the already-made
+  rules authorization decision. The binder cannot mount itself.
+- **Local manual:** `manual` is the declaration-appended reserved child but
+  remains package-local: it returns `manual/SKILL.md` and performs no host or
+  manager I/O.
 - **Name validation:** Avatar names must match `^[\w-]+$` (Unicode-aware), max 64 chars, no dots or path separators. The name doubles as the working directory basename.
 - **Path scope:** The avatar's working directory must be a direct sibling of the parent's (same parent directory). Resolved path is checked against the network root to prevent escape.
 - **No identity inheritance:** Avatars get no name (`agent_name` is set to the avatar name), no admin privileges, no comment, no brief, no addons (IMAP/Telegram). The inherited `lingtai` seed is blanked; the first turn still arrives via a separate `.prompt` signal file.
@@ -146,7 +158,16 @@ avatar/__init__.py
 
 - **Parent:** `src/lingtai/tools/` (tool package).
 - **Siblings:** `daemon/`, `mcp/`, `knowledge/` (private durable memory), `skills/` (skill catalog), `bash/`.
-- **Kernel hooks:** `setup()` is called during capability initialization; `AvatarManager.handle()` is registered as the single `avatar` tool handler, internally dispatching `spawn`/`rules`/`manual` through its own `tool_family.ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean it advertises is actually honored by the single central summarizer. The daemon capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules mutation from emanations.
+- **Kernel hooks:** `setup()` is called during capability initialization and
+  routes `DECLARATION` through `register_agent_tool_plugins`; the kernel checks
+  the reserved `avatar` name, grants only `workdir`/`avatar_parent`, binds the
+  manager, and mounts the issued transaction. `AvatarManager` internally
+  dispatches `spawn`/`rules`/the declaration-owned local `manual` child through
+  `ToolFamily`. `avatar` is on the kernel's `_LTP_V2_MIGRATED_FAMILIES` allowlist
+  (`src/lingtai/kernel/tool_result_summary.py`), so the root `summarize` boolean
+  it advertises is actually honored by the single central summarizer. The daemon
+  capability blacklists `avatar` to prevent avatar-in-daemon recursion and rules
+  mutation from emanations.
 
 Platform process mechanics are in `adapters/avatar_launcher.py` and the
 POSIX reference adapter. Unsupported Windows selection fails loudly; a future

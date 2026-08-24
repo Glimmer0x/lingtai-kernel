@@ -49,7 +49,10 @@ v2 shape defined in `../CONTRACT.md`. It standardizes the wire envelope
 dispatch-validation boilerplate that would otherwise be duplicated by every
 hand-migrated family; it does not standardize implementations, handlers, or
 result types (`../CONTRACT.md` "Implementation independence" is binding on
-this package too — using it is optional, not mandatory).
+this package too — using it is optional, not mandatory). Official declared
+families use a runtime-bound registrar/host bridge and narrow ports; any direct
+per-call Agent family construction described below is legacy compatibility, not
+that generic dispatch route.
 
 ## Components
 
@@ -150,8 +153,8 @@ both children take the canonical strict-empty `input`. It follows the same
 division — the `manual` child from
 `build_manual_child(host.workdir, DECLARATION.manual)` is registered directly
 and unwrapped, and `mcp`'s own flat `mcp_manual` public shape is reconstructed
-post-dispatch by a Host-owned adapter. `mcp` is the one family recut onto the
-kernel-owned declared host-plugin contract
+post-dispatch by a Host-owned adapter. `mcp` is the current base reference slice
+recut onto the kernel-owned family-generic declared host-plugin contract
 (`src/lingtai/kernel/tool_plugin/ANATOMY.md`), so it never receives the `Agent`
 at all: the builder is handed the granted `WorkdirPort`, and the installed
 manual's destination name is read back out of the family's own declaration
@@ -194,25 +197,23 @@ it restores avatar's pinned unknown-action error string in place of the generic
 mission brief) to the `spawn` handler out-of-band, since `ToolFamily` correctly
 passes no envelope field to any child.
 
-`soul/__init__.py` is the seventh consumer and the first *intrinsic* one. It
-exercises a different composition shape than `web`: soul is a module with a
-`handle(agent, args)` entry point rather than a per-Agent manager object, so it
-composes `get_schema()` from a module-level schema-only `ToolFamily` (which also
-fails loudly at import time on a duplicate/reserved-name collision) and builds
-an agent-bound `ToolFamily` per call in `handle()`, both from the one canonical
-`_CHILD_SPECS` registry of (name, schema, handler-factory).
-Soul goes one step further than `web`'s dual listing: `_build_children(agent)`
-is the single place children are enumerated, called with `None` for the
-schema-only family and with the live agent per dispatch, so the drift class
-where a child is schema-advertised but dispatch-rejected cannot occur. Its
-`manual` child comes from `build_manual_child(agent, "soul-manual")`,
-registered directly and unwrapped, and `handle()` flattens that canonical
-result back to soul's pre-migration flat `status`/`manual`/`manual_path` shape
-after dispatch. Soul additionally drops
-the kernel-injected `_tc_id` before the envelope's closed-root check — that key
-is transport metadata `base_agent._dispatch_tool` adds to every *intrinsic*'s
-args (capabilities like `web` never see it), so a family migrating an intrinsic
-must strip it rather than widen `_ROOT_FIELDS`.
+`soul/__init__.py` is a declared-host-plugin consumer and the first
+*intrinsic* one in this composition account. Production binding is through
+`_bind(host)`: the five operational children receive only the granted
+`host.soul_runtime` (`SoulRuntimePort`), while the reserved `manual` child gets
+the granted `host.workdir` through `build_manual_child(host.workdir,
+DECLARATION.manual)`. The declaration-owned action registry and schemas are the
+single source for the schema-only and bound families; duplicate or reserved
+child names fail loudly rather than being resolved by order.
+
+Whole-Agent `handle(agent, args)` and `_coerce_runtime()` remain compatibility
+bridges at Soul's package root for kernel lifecycle and legacy callers only;
+they are not the production composition model. After dispatch, Soul's
+`_adapt_manual_result` intentionally restores the historical flat
+`status`/`manual`/`manual_path` result, while the bound operational
+implementation continues to consume only `SoulRuntimePort`. Soul also drops
+the kernel-injected `_tc_id` at this root compatibility boundary; it must not
+widen the shared envelope or leak transport metadata into a child.
 
 `skills/__init__.py` ([`../skills/ANATOMY.md`](../skills/ANATOMY.md)) is the
 ninth consumer and uses the same division with no shared code beyond this
@@ -261,7 +262,7 @@ verbatim; its only Host normalization is narrowing this package's generic
 `ACTION_REQUIRED` message to daemon's exact six actions.
 
 `context/__init__.py` ([`../context/ANATOMY.md`](../context/ANATOMY.md)) uses
-the module-level schema-only / per-call agent-bound composition shape from one
+the module-level schema-only plus legacy per-call agent-bound compatibility shape from one
 `_CHILD_SPECS` registry. It is the intrinsic family that genuinely **consumes**
 the kernel-injected `_tc_id` rather than dropping it: `molt` needs that wire id
 to locate and replay its own ToolCallBlock. `handle()` strips it from the closed

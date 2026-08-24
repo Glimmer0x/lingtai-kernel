@@ -4,15 +4,22 @@ tool: email
 contract_version: 2
 related_files:
   - src/lingtai/tools/email/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/tools/registry.py
+  - src/lingtai/kernel/base_agent/__init__.py
   - src/lingtai/tools/email/_family_schema.py
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/BEHAVIORS.md
+  - src/lingtai/tools/email/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
   - src/lingtai/kernel/tool_result_summary.py
   - tests/test_tool_family_email_migration.py
   - tests/test_tool_family_email_wire_parity.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. If behavior and this
   contract disagree, the code is the source of truth — fix the contract in the
@@ -34,7 +41,7 @@ this one tool. The implementation lives in `src/lingtai/tools/email/`; the code 
 source of truth.
 
 ## Routing Card
-Guarded by: [EM001](BEHAVIORS.md#behavior-em001)
+Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-em002)
 
 
 **Use this when:**
@@ -98,9 +105,11 @@ shape's schema and is **no longer the model-facing schema**; it is re-exported
 as `get_flat_schema`.
 
 Nullable-and-required is how an optional field is expressed (per
-`tools/CONTRACT.md` "Envelope"); `__init__.py` strips explicit `null`s back to
-*absent* before the manager runs, so `folder`/`n`/`filter` defaulting and
-`edit_contact`'s `if "name" in args` semantics are preserved exactly.
+`tools/CONTRACT.md` "Envelope"); the Email family boundary in `__init__.py`
+strips explicit `null`s back to *absent* before `EmailRuntimeRequest` is
+constructed and before the manager-facing port runs, so `folder`/`n`/`filter`
+defaulting and `edit_contact`'s `if "name" in args` semantics are preserved
+exactly.
 
 The tables below list each action's inputs. Under the envelope they are that
 action's `input` properties — e.g. `email(action='read', input={'email_id':
@@ -151,6 +160,59 @@ Envelope metadata never reaches an action implementation: `reasoning`,
 `_reasoning`, `summarize`, and the kernel-injected `_tc_id` (which
 `base_agent._dispatch_tool` adds to every intrinsic's args) are all stripped at
 this family's own boundary.
+
+## Declared host plugin
+
+`email` is an official declared host plugin under
+[`src/lingtai/kernel/tool_plugin/CONTRACT.md`](../../kernel/tool_plugin/CONTRACT.md).
+Its module-level `DECLARATION` is static: it derives its thirteen operational
+actions and per-action schemas from the existing family registry, appends the
+reserved `manual` only through the declaration, and names the existing package
+manual destination `email`.
+
+The Email package owns the manager-facing `EmailRuntimeRequest` value and
+`EmailRuntimePort.handle_email()` operation (`src/lingtai/tools/email/__init__.py`).
+Operational children receive one fixed action plus its validated input through
+that port; they never receive an Agent, a capability-name lookup, or a generic
+`dispatch(args)` vocabulary. Family normalization is `_strip_nulls()` before the
+request is constructed. `DECLARATION.requires` is exactly `("workdir",
+"email_runtime")`, and `_build_bound_family(host)` reads only those two grants.
+
+The real mailbox manager remains Agent-bound; it is not duplicated. Email is an
+injected `official_plugin` in `src/lingtai/tools/registry.py`, so
+`BaseAgent._boot_official_intrinsics()` invokes `email.boot(agent)` on
+construction and refresh. That boot creates/replaces `EmailManager` first, then
+calls `register_agent_tool_plugins(..., extra_ports_for=...)`. Its sole extra
+port is `AgentEmailRuntimeAdapter(lambda: getattr(agent, "_email_manager",
+None))`. The adapter owns no Agent object: it rejects an undeclared action,
+looks up the current manager at invocation time, and calls exactly once with
+`{"action": request.action, **dict(request.input)}`. It never captures
+`agent._intrinsics` and never recurses through the official handler. Thus a
+refresh replacement and any later manager replacement are observed by bound
+handlers without adding a universal dispatch seam. The deliberately minimal
+`DaemonEmailAgentShim` has no `official_tool_plugins` surface, so `boot()` gives
+that MCP server only the existing manager/hook runtime; it does not attempt an
+official mount and Daemon's explicit task-scoped `daemon_email` MCP route stays
+unchanged.
+
+There is no Email dynamic `setup()` function, `BUILTIN_TOOLS` row,
+`CORE_DEFAULTS` entry, capability-manager row, or manifest row. The mandatory
+injected official surface remains one schema and one canonical package manual
+when `capabilities={"email": None}` or `disable=["email"]`; neither opt-out
+form can reveal a generic fallback.
+
+The mounted official model-facing handler coexists with the retained same-name
+intrinsic lookup shim. Model dispatch uses the official handler; kernel hook
+lookup remains available through the shim, and `_mail` prefers the official
+handler with the shim as fallback. The module-level hook exports, public name,
+action order, closed LTP envelope, manual result, mailbox side effects, and error
+shapes are unchanged.
+
+`tests/test_email_official_tool_plugin.py` proves the production typed adapter,
+foreign-action rejection before manager invocation, normalization-before-request,
+one real-Agent mount, canonical package manual, one model-facing schema, no
+capability/manifest row for null or disabled input, and call-time observation of
+a manager replacement after refresh.
 
 ## State & storage
 
@@ -227,6 +289,8 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 
 | One model-facing `email` tool; children consume no tool slots | `tests/test_tool_family_email_wire_parity.py::test_email_is_exactly_one_model_facing_tool` | Boot an agent and count built schemas | A child leaking out as its own root would double the mail surface |
 | Cross-action smuggle rejected before side effects | `tests/test_tool_family_email_migration.py::test_send_fields_cannot_be_smuggled_through_a_read_call` | Call `read` with `address`/`message` in `input` | Mail could leave the agent via a read-shaped call |
+| Email manager requests use the typed domain port and reject foreign actions | `tests/test_email_official_tool_plugin.py::test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` | Bind the runtime adapter and inspect its request | A generic dispatcher leaks unrelated capability vocabulary |
+| Official Email mount creates no dynamic capability or persisted manifest row | `tests/test_email_official_tool_plugin.py::test_official_email_mount_keeps_real_agent_runtime_and_package_manual`, `::test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refresh` | Inspect `_capabilities` and `_build_manifest()` after construction and refresh | Avatar replay/identity state gains a false Email capability |
 
 Run before merging email changes:
 

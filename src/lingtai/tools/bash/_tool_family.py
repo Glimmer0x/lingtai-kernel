@@ -27,11 +27,16 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA as _MANUAL_INPUT_SCHEMA, build_manual_child
 from ._shell_dialect import ShellKind
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import ToolPluginHost
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_ASYNC_REMINDER_SECONDS = 1800.0
@@ -154,12 +159,19 @@ CANCEL_INPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
-# Sourced from the shared reserved-``manual`` builder rather than re-declared,
-# so the schema the wire advertises and the schema the dispatcher validates
-# against are the same object by construction and cannot drift apart.
-MANUAL_INPUT_SCHEMA: dict[str, Any] = dict(
-    build_manual_child(None, "shell").input_schema
-)
+# The reserved child's one strict-empty schema.  The static declaration below
+# holds this exact source, and every schema-only/dispatching family reads it
+# back from that declaration; no Shell-local manual spelling can drift.
+MANUAL_INPUT_SCHEMA: dict[str, Any] = _MANUAL_INPUT_SCHEMA
+
+# Shell's operational actions and schemas are declared once.  ``manual`` is
+# deliberately absent: ToolPluginDeclaration appends it from the shared manual
+# child and refuses a family that tries to claim the reserved slot itself.
+_DECLARED_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
+    "run": RUN_INPUT_SCHEMA,
+    "poll": POLL_INPUT_SCHEMA,
+    "cancel": CANCEL_INPUT_SCHEMA,
+}
 
 
 def get_description(
@@ -189,83 +201,28 @@ def get_description(
     )
 
 
-def _schema_only_family() -> ToolFamily:
-    # A throwaway ``ToolFamily`` composing only the model-facing schema — the
-    # fixed four-child registry (no duplicate/reserved-name collision) is
-    # proven once, at import time, exactly as ``web_search`` does. The real
-    # per-agent dispatcher below builds its own ``ToolFamily`` with handlers
-    # bound to a live ``ShellManager`` instance.
-    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
-        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-    return ToolFamily(
-        "shell",
-        [
-            ChildTool("run", RUN_INPUT_SCHEMA, _unused, title="run input"),
-            ChildTool("poll", POLL_INPUT_SCHEMA, _unused, title="poll input"),
-            ChildTool("cancel", CANCEL_INPUT_SCHEMA, _unused, title="cancel input"),
-            ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
-        ],
-    )
-
-
-_FAMILY = _schema_only_family()
-
-
-def get_schema(lang: str = "en") -> dict[str, Any]:
-    """Compose the action-separated public ``shell`` schema.
-
-    Generated purely from ``RUN_INPUT_SCHEMA``/``POLL_INPUT_SCHEMA``/
-    ``CANCEL_INPUT_SCHEMA``/``MANUAL_INPUT_SCHEMA`` by the generic
-    ``ToolFamily`` infra (root ``allOf`` correlation plus ``input.oneOf``
-    disclosure) — this is the schema registered for the public ``shell``
-    tool, and the only one the package defines. It is re-exported from
-    ``bash/__init__.py`` as that package's canonical ``get_schema``.
-    """
-    return _FAMILY.build_schema()
-
-
 class ShellFamilyDispatcher:
-    """Adapts the ``action``/``input`` envelope to ``ShellManager``'s legacy flat call shape.
+    """Adapt the public family envelope to ShellManager's retained flat engine.
 
-    Built per-agent, bound to one live ``ShellManager``. ``handle()`` is the
-    public ``shell`` tool's registered handler: ``ToolFamily.handle()``
-    validates the envelope and dispatches to exactly one of the four
-    ``ChildTool`` handlers below, each of which flattens its own validated
-    ``input`` mapping (injecting the matching ``action`` key, mirroring the
-    legacy dispatch contract in ``ShellManager.handle``) and calls
-    ``ShellManager.handle()`` unchanged. ``manual`` is registered directly,
-    unwrapped, from ``build_manual_child`` — the shared reserved-name
-    contract every LingTai family uses — so it returns the canonical
-    ``content``/``structuredContent`` shape. It is the family's sole manual
-    surface: ``ShellManager.handle`` has no ``action="manual"`` branch, so the
-    engine never serves documentation and ``manual`` performs no shell
-    operation.
+    The three execution children flatten only their selected, validated input
+    and delegate unchanged to ``ShellManager.handle``.  ``manual`` is composed
+    separately from the declaration's installed destination, so it never
+    reaches the execution engine or a whole Agent.
     """
 
-    def __init__(self, manager: Any, agent: Any) -> None:
+    def __init__(self, manager: Any, manual_source: Any) -> None:
         self._manager = manager
-        self._family = ToolFamily(
-            "shell",
-            [
-                ChildTool("run", RUN_INPUT_SCHEMA, self._dispatch_run, title="run input"),
-                ChildTool("poll", POLL_INPUT_SCHEMA, self._dispatch_poll, title="poll input"),
-                ChildTool("cancel", CANCEL_INPUT_SCHEMA, self._dispatch_cancel, title="cancel input"),
-                build_manual_child(agent, "shell"),
-            ],
-        )
+        self._family = _build_dispatching_family(self, manual_source)
+
+    @property
+    def manager(self) -> Any:
+        """The retained execution manager, for setup's compatibility return."""
+        return self._manager
 
     @staticmethod
     def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
-        # Strict schemas express optional fields as required nullable
-        # properties (see ``RUN_INPUT_SCHEMA``'s ``required`` note, and
-        # ``web``'s identical ``_strip_nulls``). Null means *absent* to
-        # ``ShellManager``, which then applies its own unchanged runtime
-        # default — dropping the key is what makes ``args.get("timeout", 30)``
-        # / ``args.get("working_dir") or self._working_dir`` behave exactly as
-        # they did for a legacy flat caller that simply omitted the field. A
-        # falsy-but-present value (``timeout: 0``, ``async: False``,
-        # ``working_dir: ""``) is preserved verbatim, never dropped.
+        # Required-but-nullable optional fields use null to mean omitted; retain
+        # false/zero/empty-string values exactly as the pre-plugin engine did.
         return {key: value for key, value in action_input.items() if value is not None}
 
     def _dispatch_run(self, action_input: Mapping[str, Any]) -> dict[str, Any]:
@@ -281,14 +238,115 @@ class ShellFamilyDispatcher:
         return self._manager.handle({"action": "cancel", "job_id": action_input.get("job_id", "")})
 
     def handle(self, args: Mapping[str, Any] | None) -> dict[str, Any]:
-        # ``ToolFamily.handle`` validates the envelope, strips/type-checks
-        # root ``summarize``, rejects unknown root fields and cross-action
-        # ``input`` keys, then returns the selected child's own raw canonical
-        # result verbatim — no double wrap, no Host envelope. The one Host
-        # normalization below narrows the generic dispatcher's action list to
-        # Shell's exact four; the generic canonical error shape
-        # (``status``/``error_code``/``message``) is left untouched.
         result = self._family.handle(args)
         if result.get("error_code") == "ACTION_REQUIRED":
-            result["message"] = "action must be one of run, poll, cancel, or manual"
+            actions = ", ".join(DECLARATION.public_actions[:-1])
+            result["message"] = f"action must be one of {actions}, or {DECLARATION.public_actions[-1]}"
         return result
+
+
+def _build_family() -> ToolFamily:
+    """Compose the import-time schema-only family from DECLARATION."""
+    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
+
+    children = [
+        ChildTool(action, DECLARATION.input_schemas[action], _unused, title=f"{action} input")
+        for action in DECLARATION.actions
+    ]
+    children.append(
+        ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
+    )
+    return ToolFamily(DECLARATION.name, children)
+
+
+def _build_dispatching_family(dispatcher: ShellFamilyDispatcher, manual_source: Any) -> ToolFamily:
+    """Build the granted family with dispatcher-owned handlers and one manual."""
+    return ToolFamily(
+        DECLARATION.name,
+        [
+            ChildTool("run", DECLARATION.input_schemas["run"], dispatcher._dispatch_run, title="run input"),
+            ChildTool("poll", DECLARATION.input_schemas["poll"], dispatcher._dispatch_poll, title="poll input"),
+            ChildTool("cancel", DECLARATION.input_schemas["cancel"], dispatcher._dispatch_cancel, title="cancel input"),
+            build_manual_child(manual_source, DECLARATION.manual),
+        ],
+    )
+
+
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Bind Shell against only its declared workdir/config/notification ports."""
+    from . import (
+        ShellManager,
+        ShellPolicy,
+        _DEFAULT_POLICY_FILE,
+        _POWERSHELL_POLICY_FILE,
+        _describe_host_os,
+        _resolve_shell_kind,
+        _select_shell_dialect,
+    )
+
+    values = host.configuration.values
+    kind = _resolve_shell_kind(ShellKind.coerce(values.get("shell_kind")))
+    dialect = _select_shell_dialect(kind)
+    policy_file = values.get("policy_file")
+    if values.get("yolo", False):
+        policy = ShellPolicy.yolo()
+    elif policy_file is not None:
+        policy = ShellPolicy.from_file(policy_file)
+    else:
+        default_policy = (
+            _POWERSHELL_POLICY_FILE if dialect.state_key() == "powershell" else _DEFAULT_POLICY_FILE
+        )
+        policy = ShellPolicy.from_file(str(default_policy))
+
+    manager = ShellManager(
+        policy=policy,
+        working_dir=str(host.workdir.path),
+        dialect=dialect,
+        shell_kind=kind,
+        notification_port=host.notifications,
+        rehydrate=False,
+    )
+    dispatcher = ShellFamilyDispatcher(manager, host.workdir)
+    description = get_description(
+        dialect=dialect.state_key(), host_os=_describe_host_os(), shell_kind=kind,
+    )
+    policy_summary = policy.describe()
+    if policy_summary:
+        description = f"{description}\n\n{policy_summary}"
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=dispatcher.handle,
+        description=description,
+        glossary_package=__package__,
+        activate=manager.activate,
+    )
+
+
+#: Static official Shell declaration.  The action inventory, strict schemas,
+#: installed manual destination, and required narrow ports are all set before an
+#: Agent exists; composition reads them back rather than restating them.
+DECLARATION = ToolPluginDeclaration(
+    name="shell",
+    actions=tuple(_DECLARED_INPUT_SCHEMAS),
+    input_schemas=_DECLARED_INPUT_SCHEMAS,
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="shell",
+    description=get_description(),
+    binder=_bind,
+    requires=("workdir", "notifications", "configuration"),
+    glossary_package=__package__,
+)
+
+
+def _schema_only_family() -> ToolFamily:
+    return _build_family()
+
+
+_FAMILY = _schema_only_family()
+
+
+def get_schema(lang: str = "en") -> dict[str, Any]:
+    """Compose Shell's sole public LTP-v2 schema from its declaration."""
+    return _FAMILY.build_schema()

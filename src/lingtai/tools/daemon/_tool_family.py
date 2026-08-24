@@ -64,15 +64,17 @@ DEFAULT_MAX_TURNS = 5000
 CHECK_LAST_MAX = 1000
 LIST_DEFAULT_LAST = 1000
 
-#: The canonical action order, model-facing enum order, and dispatch order.
-DAEMON_ACTIONS: tuple[str, ...] = (
+#: Daemon's operational actions.  The static host declaration appends the
+#: kernel-reserved ``manual`` action; this retained export keeps existing schema
+#: and migration callers on the same public inventory.
+DAEMON_DECLARED_ACTIONS: tuple[str, ...] = (
     "emanate",
     "list",
     "ask",
     "check",
     "reclaim",
-    "manual",
 )
+DAEMON_ACTIONS: tuple[str, ...] = (*DAEMON_DECLARED_ACTIONS, "manual")
 
 
 def _backend_option_env_schema() -> dict[str, Any]:
@@ -360,7 +362,15 @@ def _child_specs(backend_enum: list[str]) -> tuple[tuple[str, dict[str, Any]], .
     )
 
 
-def build_schema(backend_enum: list[str], lang: str = "en") -> dict[str, Any]:
+def declared_input_schemas(backend_enum: list[str]) -> dict[str, dict[str, Any]]:
+    """Daemon's operational input schemas, in declaration action order."""
+    specs = dict(_child_specs(backend_enum))
+    return {name: specs[name] for name in DAEMON_DECLARED_ACTIONS}
+
+
+def build_schema(
+    backend_enum: list[str], lang: str = "en", declaration: Any | None = None,
+) -> dict[str, Any]:
     """Compose the action-separated public ``daemon`` schema.
 
     Generated purely from the child registry by the generic ``ToolFamily``
@@ -374,11 +384,20 @@ def build_schema(backend_enum: list[str], lang: str = "en") -> dict[str, Any]:
     def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
         raise AssertionError("the schema-only ToolFamily never dispatches")
 
+    if declaration is None:
+        name = "daemon"
+        specs = _child_specs(backend_enum)
+    else:
+        name = declaration.name
+        declared = declared_input_schemas(backend_enum)
+        specs = tuple(
+            (action, declared[action]) for action in declaration.actions
+        ) + (("manual", declaration.manual_input_schema),)
     family = ToolFamily(
-        "daemon",
+        name,
         [
-            ChildTool(name, schema, _unused, title=f"{name} input")
-            for name, schema in _child_specs(backend_enum)
+            ChildTool(action, schema, _unused, title=f"{action} input")
+            for action, schema in specs
         ],
     )
     return family.build_schema()
@@ -407,18 +426,27 @@ class DaemonFamilyDispatcher:
     callers but is never the registered model-facing path.
     """
 
-    def __init__(self, manager: Any, agent: Any, backend_enum: list[str]) -> None:
+    def __init__(
+        self,
+        manager: Any,
+        manual_source: Any,
+        backend_enum: list[str],
+        declaration: Any | None = None,
+    ) -> None:
         self._manager = manager
-        specs = dict(_child_specs(backend_enum))
+        if declaration is None:
+            from . import DECLARATION
+            declaration = DECLARATION
+        specs = declared_input_schemas(backend_enum)
         self._family = ToolFamily(
-            "daemon",
+            declaration.name,
             [
                 ChildTool("emanate", specs["emanate"], self._dispatch_emanate, title="emanate input"),
                 ChildTool("list", specs["list"], self._dispatch_list, title="list input"),
                 ChildTool("ask", specs["ask"], self._dispatch_ask, title="ask input"),
                 ChildTool("check", specs["check"], self._dispatch_check, title="check input"),
                 ChildTool("reclaim", specs["reclaim"], self._dispatch_reclaim, title="reclaim input"),
-                build_manual_child(agent, "daemon"),
+                build_manual_child(manual_source, declaration.manual),
             ],
         )
 

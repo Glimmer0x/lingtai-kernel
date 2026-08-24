@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -199,19 +200,56 @@ __all__ = [
     "effective_policy",
     "record_dismissal",
     "run_checks",
+    "run_checks_nonblocking",
     "run_system_notifications",
     "upsert",
     "remove",
 ]
 
 
-def run_checks(agent) -> None:
-    """Run declared Nudge producers under one policy gate.
+class NudgeObservationOwner:
+    """Small per-agent single-flight owner for potentially unbounded probes.
 
-    The global switch is evaluated before producer observation gates. Goal
-    reminders are dispatched separately by :func:`run_system_notifications` and
-    are not part of this Nudge catalogue.
+    It has no durable queue: a due task is either running, replaces a same-kind
+    pending task, or is discarded as already represented.  This deliberately
+    prevents a slow filesystem observation from building an unbounded heartbeat
+    backlog.
     """
+
+    def __init__(self, agent) -> None:
+        self._agent = agent
+        self._lock = threading.Lock()
+        self._pending: dict[str, object] = {}
+        self._thread: threading.Thread | None = None
+
+    def schedule(self, kind: str, fn) -> bool:
+        with self._lock:
+            self._pending[kind] = fn
+            if self._thread is not None and self._thread.is_alive():
+                return False
+            self._thread = threading.Thread(
+                target=self._drain,
+                name="lingtai-nudge-observation",
+                daemon=True,
+            )
+            self._thread.start()
+            return True
+
+    def _drain(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._thread = None
+                    return
+                _, fn = self._pending.popitem()
+            try:
+                fn()
+            except Exception:
+                # Each producer runner records its own bounded diagnostic.
+                continue
+
+
+def _policy_for_checks(agent) -> NudgePolicy | None:
     policy = effective_policy()
     if policy.invalid_values:
         _safe_log(agent, "nudge_policy_invalid", values=list(policy.invalid_values))
@@ -219,14 +257,67 @@ def run_checks(agent) -> None:
         # Clear stale visible findings immediately, even when a producer's own
         # bounded probe gate would otherwise return without touching the store.
         _modify(agent, lambda entries: [])
-        return
+        return None
+    return policy
 
+
+def run_checks(agent) -> None:
+    """Synchronously run all declared checks for explicit/manual callers.
+
+    Heartbeat code uses :func:`run_checks_nonblocking`; retaining this direct
+    entry point makes tests and deliberate callers able to request a completed
+    observation rather than a scheduled one.
+    """
+    if _policy_for_checks(agent) is None:
+        return
     _run_one(agent, "kernel_version", kernel_version.check)
     _run_one(agent, "source_drift", source_drift.check)
     _run_one(agent, "init_config_shape", init_config.check)
     _run_one(agent, "folder_size", folder_size.check)
     _run_one(agent, "event_journal_line_count", event_journal_count.check)
 
+
+def _observation_owner(agent) -> NudgeObservationOwner:
+    owner = getattr(agent, "_nudge_observation_owner", None)
+    if isinstance(owner, NudgeObservationOwner):
+        return owner
+    owner = NudgeObservationOwner(agent)
+    try:
+        setattr(agent, "_nudge_observation_owner", owner)
+    except Exception:
+        pass
+    return owner
+
+
+def _observe_then_evaluate(agent, kind: str, module) -> None:
+    _run_one(agent, f"{kind}_observation", module.observe)
+    _run_one(agent, kind, module.evaluate)
+
+
+def run_checks_nonblocking(agent) -> None:
+    """Evaluate persisted facts now and coalesce expensive observations.
+
+    Only normal current-state/policy work stays on the heartbeat. Recursive
+    folder walks and journal scans are scheduled under one explicit owner, so
+    heartbeat liveness is independent of their storage latency.
+    """
+    if _policy_for_checks(agent) is None:
+        return
+    _run_one(agent, "kernel_version", kernel_version.check)
+    _run_one(agent, "source_drift", source_drift.check)
+    _run_one(agent, "init_config_shape", init_config.check)
+    _run_one(agent, "folder_size", folder_size.evaluate)
+    _run_one(agent, "event_journal_line_count", event_journal_count.evaluate)
+
+    owner = _observation_owner(agent)
+    for kind, module in (("folder_size", folder_size), ("event_journal_line_count", event_journal_count)):
+        try:
+            due = module.observation_due(agent)
+        except Exception as exc:
+            _safe_log(agent, "nudge_check_error", kind=f"{kind}_observation_due", error=str(exc)[:200])
+            continue
+        if due:
+            owner.schedule(kind, lambda kind=kind, module=module: _observe_then_evaluate(agent, kind, module))
 
 def run_system_notifications(agent) -> None:
     """Dispatch protected system reminders that are not Nudge findings."""

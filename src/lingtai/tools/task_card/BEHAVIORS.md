@@ -8,6 +8,8 @@ related_files:
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/__init__.py
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/kernel/tool_plugin/__init__.py
   - src/lingtai/mcp_servers/task_card/resident.py
   - tests/test_task_card_notifications.py
 maintenance: |
@@ -57,13 +59,15 @@ Pass when the suites pass and the ordering/idempotency observations hold. Fail o
 
 ### Steps
 1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_task_card_notifications.py` and capture the outcome.
-2. Inspect the recorded events for error, recovered, and refresh-limit operations; verify the exact source, explicit `system` channel, idempotency key, priority, and bounded `extra` fields, followed by one reminder submit and clear.
-3. Attempt to construct an event with a foreign `source`, pass a foreign `channel`/`extra` keyword to a typed operation, and submit malformed reminder turns; record that each fails before the host bridge.
+2. Inspect the recorded events for error, recovered, and refresh-limit operations, produced through the production `AgentTaskCardNotificationsAdapter` (the kernel `TaskCardNotificationsPort`); verify the exact source, explicit `system` channel, idempotency key, priority, and bounded `extra` fields, followed by one reminder submit and clear.
+3. Attempt to construct an event with a foreign `source`, pass a foreign `channel`/`extra` keyword to a typed operation, pass a foreign `source`/`channel`/`extra`/`priority` keyword to each native port operation, hand the family adapter a port that offers a generic `enqueue_system_notification`, and submit malformed reminder turns; record that each fails before publication.
+4. Run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_tool_plugin_declaration.py::test_official_task_card_manager_holds_only_the_native_notification_operations` and confirm the live bound manager holds only the typed view over a granted port whose public surface is exactly `clear_reminder`, `publish_error`, `publish_limit`, `publish_recovered`, `submit_reminder`.
 
 ### Expected evidence
 - [ ] Step 1: the family-owned typed notification suite passes.
-- [ ] Step 2: error/recovered/limit output matches the established producer wire forms, including recovered-on-`task_card.error` state parity and `task_card.limit` refresh identity.
-- [ ] Step 3: source/channel/foreign-field and malformed-reminder negatives fail closed; no generic `enqueue_system_notification` operation is visible on the retained family adapter.
+- [ ] Step 2: error/recovered/limit output matches the established producer wire forms, including recovered-on-`task_card.error` state parity and `task_card.limit` refresh identity, with the production adapter (not a test double) between the typed events and the recorded publisher.
+- [ ] Step 3: source/channel/foreign-field and malformed-reminder negatives fail closed at both the typed forms and the native operations; a generic-publisher port is refused; no `enqueue_system_notification` operation is visible on the granted port or the retained family adapter.
+- [ ] Step 4: `1 passed` — the live Agent grants exactly the five closed operations and the manager keeps no lifecycle port, host, or Agent.
 
 ### Pass / Fail
-Pass when the typed suite passes, all three event forms retain their exact wire parity, and every foreign-field/source/channel attempt fails before publication. Fail if a caller can choose a source/channel, inject arbitrary publisher metadata, or alter the established event identity.
+Pass when the typed suite passes, all three event forms retain their exact wire parity, and every foreign-field/source/channel attempt fails before publication at both boundaries. Fail if a caller can choose a source/channel, inject arbitrary publisher metadata, reach a generic publisher through the granted port, or alter the established event identity.

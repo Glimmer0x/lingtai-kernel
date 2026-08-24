@@ -328,85 +328,24 @@ class _CliDaemonAgent:
 
 
 class _ReadOnlyDaemonView:
-    """``list``/``check`` bound to the manager's own units, with no writes.
+    """Read-only CLI binding to ledger-driven ``DaemonManager`` handlers.
 
-    ``_handle_list`` and ``_handle_check`` read exactly two instance
-    attributes: ``_agent`` (for the working directory) and ``_emanations``
-    (empty — a CLI process tracks no in-flight run and both handlers already
-    fall back to the durable ``daemons/`` history).  Everything else they call
-    is forwarded to the unmodified ``DaemonManager``, so this view stays a
-    binding, never a second implementation.
-
-    Two write paths are neutralized here rather than inherited:
-
-    * ``DaemonManager.__init__``'s startup reconciliation (reaping stale
-      records, replaying pending terminal notifications) — sidestepped by not
-      constructing a manager at all.
-    * ``_load_or_rebuild_daemon_state``'s lazy repair, overridden below.
-
-    Between them, inspection is *categorically* read-only: no run directory is
-    created, repaired, reaped, or renotified, whatever shape the durable state
-    is in.
+    The CLI has no active registry and constructs no manager, so it cannot run
+    startup recovery.  Its inherited list handler tails dispatch membership and
+    reads only referenced state files; it never enumerates legacy directories,
+    reconstructs damaged state, or writes repair artifacts.
     """
 
     def __init__(self, agent: _CliDaemonAgent) -> None:
-        from lingtai.tools.daemon import (
-            DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
-            DaemonManager,
-        )
+        from lingtai.tools.daemon import DaemonManager
+        from lingtai.adapters.tool_plugin_host import AgentWorkdirAdapter, daemon_runtime_for_agent
 
         self._agent = agent
+        self._runtime = daemon_runtime_for_agent(agent, {})
+        self._workdir = AgentWorkdirAdapter(lambda: agent._working_dir)
         self._emanations: dict = {}
         self._manager_pool_size = 100
-        # Historical fixed cap for bounded ``.prompt`` reads during damaged-run
-        # reconstruction; inspection has no manager, so no resolved budget.
-        self._system_prompt_budget_chars = DAEMON_SYSTEM_PROMPT_BUDGET_CHARS
         self._manager_type = DaemonManager
-        #: Run directories whose ``daemon.json`` the engine would have rewritten
-        #: (missing, unparseable, or written by an older ``data_version``).
-        #: Reported, never repaired.
-        self.needs_rebuild: list[str] = []
-
-    def _load_or_rebuild_daemon_state(self, run_path: Path) -> dict | None:
-        """Load durable state; reconstruct in memory instead of repairing on disk.
-
-        The engine's version of this (``daemon/__init__.py``) rewrites
-        ``daemon.json`` when it is missing, unparseable, or stamped with an
-        older ``data_version``. That self-heal is right for the owning agent
-        and wrong for an inspection command run by a different process — a
-        `list` must not be able to rewrite a live agent's durable records, and
-        a CI job reading status must not mutate what it observes.
-
-        The reconstruction itself is the engine's own
-        ``_build_reconstructed_daemon_state`` (a pure function), so the rows
-        this returns are identical to the repaired ones; only the
-        ``_atomic_write_daemon_json`` call is dropped.  Affected runs are
-        recorded in :attr:`needs_rebuild` so the CLI can say so out loud
-        instead of silently presenting reconstructed data as durable truth.
-        """
-        daemon_json_path = run_path / "daemon.json"
-        existing: dict | None = None
-        reason: str | None = None
-        try:
-            loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing = loaded
-            else:
-                reason = "daemon_json_not_object"
-        except FileNotFoundError:
-            reason = "daemon_json_missing"
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            reason = "daemon_json_invalid"
-        except OSError:
-            return None
-        if reason is None and existing is not None:
-            if self._manager_type._has_current_daemon_data_version(existing):
-                return existing
-            reason = "daemon_json_data_version_mismatch"
-        self.needs_rebuild.append(run_path.name)
-        return self._manager_type._build_reconstructed_daemon_state(
-            self, run_path, existing, reason=reason or "daemon_json_rebuild",
-        )
 
     def __getattr__(self, name: str):
         manager = self.__dict__.get("_manager_type")
@@ -420,7 +359,6 @@ class _ReadOnlyDaemonView:
             if attr is not None:
                 return attr
         raise AttributeError(name)
-
 
 # --------------------------------------------------------------------------
 # Input loading and validation
@@ -969,23 +907,25 @@ def _handle_list(args) -> int:
     if result.get("status") == "error":
         raise CliDaemonError(str(result.get("message", "list failed")))
     _print_list_table(result)
-    _warn_needs_rebuild(view)
+    _print_list_warnings(result)
     return 0
 
 
-def _warn_needs_rebuild(view: _ReadOnlyDaemonView) -> None:
-    """Say out loud which records were shown from unrepaired reconstruction."""
-    if not view.needs_rebuild:
+def _print_list_warnings(result: dict) -> None:
+    """Render bounded ledger diagnostics without a CLI-side repair decision."""
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
         return
-    count = len(view.needs_rebuild)
-    names = ", ".join(sorted(view.needs_rebuild))
-    print(
-        f"note: {count} run director{'y has' if count == 1 else 'ies have'} a missing, "
-        f"unreadable, or outdated daemon.json ({names}). Shown from in-memory "
-        "reconstruction and NOT repaired on disk — this CLI is read-only. Run "
-        "daemon(action='list') as the owning agent to repair.",
-        file=sys.stderr,
-    )
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        code = warning.get("code")
+        checked = warning.get("checked")
+        manual = warning.get("manual")
+        if isinstance(code, str):
+            scope = checked.get("source") if isinstance(checked, dict) else "unknown"
+            suffix = f"; see {manual}" if isinstance(manual, str) else ""
+            print(f"warning: {code} (checked {scope}){suffix}", file=sys.stderr)
 
 
 def _handle_check(args) -> int:
@@ -993,7 +933,6 @@ def _handle_check(args) -> int:
     view = _ReadOnlyDaemonView(_CliDaemonAgent.for_inspection(agent_dir))
     result = view._handle_check(args.id)
     _emit_json(result)
-    _warn_needs_rebuild(view)
     return 0 if result.get("status") != "error" else 1
 
 

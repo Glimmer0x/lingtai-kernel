@@ -8,9 +8,12 @@ related_files:
   - src/lingtai/tools/file/CONTRACT.md
   - src/lingtai/tools/file/ANATOMY.md
   - src/lingtai/tools/file/__init__.py
+  - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/tools/file/_read.py
   - tests/test_read_continuation.py
   - tests/test_file_tool_family.py
+  - tests/test_file_tool_plugin_package.py
 maintenance: |
   LABT v2, migrated 2026-08 from tests/test_read_continuation.py (previously
   filed as C005 under src/lingtai/tools/telegram/BEHAVIORS.md; re-homed here so
@@ -25,7 +28,8 @@ maintenance: |
 LABT v2. F001 is a self-contained agent-executable behavioral test for the
 `file` tool's read continuation: pagination via `next_offset`, truncation caps,
 and long-line truncation. It guards the `read` clause of
-`src/lingtai/tools/file/CONTRACT.md` (frontmatter name `file-contract`).
+`src/lingtai/tools/file/CONTRACT.md` (frontmatter name `file-contract`); the
+implementation is the unified `_read.py` operation under the File package.
 
 ## Behavior F001 — File read continuation via next_offset pagination
 

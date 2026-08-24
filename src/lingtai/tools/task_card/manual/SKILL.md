@@ -67,15 +67,16 @@ manual cannot silently drift.
 
 The producer may emit only its own typed notification operations: an error
 (`TaskCardErrorNotification`), a recovery (`TaskCardRecoveredNotification`),
-or refresh exhaustion (`TaskCardLimitNotification`). The family adapter pins
-these to the system channel and the established wire sources:
-`task_card.error` carries both `error` and `recovered` states (the latter is
-distinguished by its `extra.state` and idempotency key), while
-`task_card.limit` carries refresh exhaustion. It also exposes only
-`submit_reminder(turns)` and `clear_reminder()` for absent/stale reminders.
-There is deliberately no `source`, `channel`, arbitrary `extra`, or generic
-keyword field in a typed operation, so Task Card code cannot publish a foreign
-source or another channel through this capability.
+or refresh exhaustion (`TaskCardLimitNotification`). The family adapter hands
+these to the host's five closed native operations, and the host pins them to
+the system channel and the established wire sources: `task_card.error` carries
+both `error` and `recovered` states (the latter is distinguished by its
+`extra.state` and idempotency key), while `task_card.limit` carries refresh
+exhaustion. The port also exposes only `submit_reminder(turns)` and
+`clear_reminder()` for absent/stale reminders. There is deliberately no
+`source`, `channel`, arbitrary `extra`, generic enqueue, or keyword field in
+either a typed event or a native operation, so Task Card code cannot publish a
+foreign source or another channel through this capability.
 
 ## Resident meta projection and the 2000-char cap
 

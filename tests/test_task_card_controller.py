@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from lingtai.adapters.tool_plugin_host import AgentTaskCardNotificationsAdapter
 from lingtai.kernel import notifications
 from lingtai.kernel.tool_plugin import ToolPluginHost
 from lingtai.tools.task_card import DECLARATION, TaskCardManager, get_description, get_schema
@@ -52,24 +53,27 @@ class _Lifecycle:
         self._agent.resume_errors = getattr(self._agent, "resume_errors", []) + [error]
 
 
-class _TaskCardNotifications:
-    def __init__(self, agent: _FakeAgent) -> None:
-        self._agent = agent
+def _task_card_notifications(agent: _FakeAgent) -> AgentTaskCardNotificationsAdapter:
+    """The production operation-native port over the fake agent's publisher.
 
-    def enqueue_system_notification(self, **kwargs) -> None:
-        self._agent._enqueue_system_notification(**kwargs)
+    The wire assertions below therefore exercise the real adapter's pinned
+    source/channel/priority/idempotency/extra projection, not a test double.
+    """
 
-    def submit_reminder(self, turns: int) -> None:
+    def _submit(turns: int) -> None:
         notifications.submit(
-            self._agent,
+            agent,
             "task_card",
             data={"source": "task_card.reminder", "turns": turns},
             header="Task Card reminder",
             instructions="Check whether the Task Card is absent or stale; update or issue one only if useful.",
         )
 
-    def clear_reminder(self) -> None:
-        notifications.clear(self._agent, "task_card")
+    return AgentTaskCardNotificationsAdapter(
+        agent._enqueue_system_notification,
+        _submit,
+        lambda: notifications.clear(agent, "task_card"),
+    )
 
 
 def _task_card_host(agent: _FakeAgent) -> ToolPluginHost:
@@ -79,7 +83,7 @@ def _task_card_host(agent: _FakeAgent) -> ToolPluginHost:
             "workdir": SimpleNamespace(path=agent._working_dir),
             "shutdown": agent._shutdown,
             "task_card_lifecycle": _Lifecycle(agent),
-            "task_card_notifications": _TaskCardNotifications(agent),
+            "task_card_notifications": _task_card_notifications(agent),
         },
     )
 

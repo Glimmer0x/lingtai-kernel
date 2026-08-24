@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/system/schema.py
   - src/lingtai/kernel/base_agent/CONTRACT.md
   - tests/test_karma.py
+  - tests/test_system_declared_plugin.py
   - tests/_workdir_lease_helpers.py
   - tests/_snapshot_helpers.py
   - tests/_lifecycle_clock_helpers.py
@@ -216,3 +217,27 @@ succeeds with only karma privilege.
 Pass when absence of heartbeat evidence is distinguished from an observed child exit as
 above. Fail if CPR calls a still-running child failed solely for missing confirmation, or
 if any observed exit is reported as `resuscitated`.
+
+
+## Behavior B008 — mounted and direct sleep preserve refusal/force parity
+
+- **id**: B008
+- **title**: pending attention refuses ordinary sleep but explicit force may sleep
+- **guards**: `system-contract` § [Single sleep use case](CONTRACT.md#single-sleep-use-case)
+- **supersedes**: `tests/test_karma.py::TestSelfSleepPendingNotificationsGuard::test_sleep_refused_when_notification_pending`, `tests/test_karma.py::TestSelfSleepPendingNotificationsGuard::test_sleep_force_true_overrides_pending_guard`
+- **runner**: an agent with a disposable working directory, exercised once through the registrar-mounted `system` handler and once through the compatibility `handle(agent, args)` entry point
+- **prerequisites**: write one disposable `.notification/email.json` payload after seeding an empty committed attention fingerprint; no real peer or operator directory
+- **estimate**: 1 min
+
+### Steps
+1. Call `system(action="sleep", input={"reason": "test", "force": false})` through each entry point and inspect the receipt/state.
+2. Repeat with `force: true`.
+3. Confirm only the forced cases transition to ASLEEP; clean the disposable directory.
+
+### Expected evidence
+- [ ] Both ordinary calls return the established `ok` refusal receipt and remain awake.
+- [ ] Both forced calls return the established sleep receipt and transition to ASLEEP.
+- [ ] No non-disposable path is read, written, or removed.
+
+### Pass / Fail
+Pass only when mounted and direct routes agree on refusal, force escape, receipt, and state transition. A route that reimplements or weakens the pending-attention guard fails.

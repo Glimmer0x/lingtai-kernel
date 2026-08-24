@@ -14,6 +14,7 @@ import ntpath
 import os
 import platform
 import posixpath
+import re
 import shutil
 import subprocess
 import sys
@@ -484,6 +485,73 @@ def collect_process(report: Report) -> None:
         sec.add("WARN", "no lingtai process found", "No `lingtai-agent run <agent-dir>` or `python -m lingtai run <agent-dir>` process was found. A fresh heartbeat would make this inconsistent.")
 
 
+def _daemon_tombstone_health(path: Path) -> tuple[bool, dict[str, Any]]:
+    """Validate only bounded daemon-control structure, never event bodies."""
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return False, {"error": type(exc).__name__}
+    if len(raw) > 65536:
+        return False, {"error": "oversize", "byte_size": len(raw)}
+    try:
+        value = json.loads(raw)
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise ValueError("version")
+        epoch = value.get("epoch")
+        cleared = value.get("cleared")
+        batch = value.get("batch_state")
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 0:
+            raise ValueError("epoch")
+        if not isinstance(cleared, dict):
+            raise ValueError("cleared")
+
+        daemon_id_re = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+        def valid_daemon_id(candidate: object) -> bool:
+            return isinstance(candidate, str) and daemon_id_re.fullmatch(candidate) is not None
+
+        def validate_batch(candidate: object) -> None:
+            if not isinstance(candidate, dict):
+                raise ValueError("batch_state")
+            count = candidate.get("count")
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+                or not isinstance(candidate.get("alarm_fired"), bool)
+            ):
+                raise ValueError("batch_state")
+
+        for filename, entry in cleared.items():
+            if (
+                not isinstance(filename, str)
+                or not filename.endswith(".json")
+                or not valid_daemon_id(filename[:-5])
+                or not isinstance(entry, dict)
+                or not isinstance(entry.get("raw_sha256"), str)
+                or len(entry["raw_sha256"]) != 64
+                or not isinstance(entry.get("event_keys"), list)
+                or any(not isinstance(key, str) for key in entry["event_keys"])
+            ):
+                raise ValueError("cleared")
+
+        validate_batch(batch)
+        pending = value.get("pending")
+        if pending is not None:
+            if (
+                not isinstance(pending, dict)
+                or not valid_daemon_id(pending.get("daemon_id"))
+                or not isinstance(pending.get("event_id"), str)
+                or not pending["event_id"]
+            ):
+                raise ValueError("pending")
+            validate_batch(pending.get("prior_batch_state"))
+            validate_batch(pending.get("batch_state"))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        return False, {"error": type(exc).__name__}
+    return True, {"epoch": epoch, "cleared_entry_count": len(cleared), "byte_size": len(raw)}
+
+
 def collect_notifications_logs_mail(report: Report) -> None:
     sec = report.section("notifications/logs/mail")
     notif_dir = report.agent_dir / ".notification"
@@ -495,6 +563,18 @@ def collect_notifications_logs_mail(report: Report) -> None:
                 info["channel"] = path.name
                 entries.append(info)
         sec.add("OK", "notification directory scanned", f"Found {len(entries)} notification file(s).", notifications=entries)
+        tombstone = notif_dir / "daemon" / ".tombstone"
+        if tombstone.exists():
+            valid, detail = _daemon_tombstone_health(tombstone)
+            if valid:
+                sec.add("OK", "daemon notification tombstone valid", "Daemon aggregate control state is structurally valid.", daemon_tombstone=detail)
+            else:
+                sec.add(
+                    "WARN",
+                    "daemon notification tombstone invalid",
+                    "Daemon notifications fail loud until an operator explicitly repairs or quarantines .notification/daemon/.tombstone; doctor never repairs it automatically.",
+                    daemon_tombstone=detail,
+                )
     else:
         sec.add("OK", "notification directory absent", "No .notification directory is present.")
 

@@ -170,10 +170,23 @@ def build_agent(data: dict, working_dir: Path) -> Agent:
             ensure_ascii=False,
         ),
         streaming=m.get("streaming", False),
+        _from_init_boot=True,
     )
+
+    # The private sentinel applies only to construction. Clear it before the
+    # established configured pass so its mandatory declared intrinsics boot
+    # normally, and an early return cannot leave suppression armed.
+    agent._from_init_boot = False
 
     # Full setup from init.json (capabilities, addons, config, covenant, etc.)
     agent._setup_from_init()
+    outcome = getattr(agent, "_last_init_read_outcome", None)
+    if outcome is not None and outcome.status is InitReadStatus.READ_FAILED:
+        print(
+            f"error: {json.dumps(outcome.to_payload(), ensure_ascii=False, default=str)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Restore molt count from previous run (if resuming)
     prev_manifest = working_dir / ".agent.json"

@@ -9,6 +9,8 @@ related_files:
   - src/lingtai/tools/bash/_tool_family.py
   - src/lingtai/tools/bash/CONTRACT.md
   - src/lingtai/tools/bash/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/tool_family/__init__.py
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/context/__init__.py
@@ -16,6 +18,7 @@ related_files:
   - src/lingtai/kernel/base_agent/turn.py
   - src/lingtai/kernel/llm/base.py
   - tests/test_shell_sandbox_containment.py
+  - tests/test_shell_tool_plugin_declaration.py
   - tests/contracts/llm_conversation_input/test_send_str.py
   - tests/test_context_ownership_redesign.py
   - tests/test_repeated_tool_error_continue.py

@@ -7,6 +7,12 @@ interception. Bundles voices into a synthetic pair for the main agent.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import SoulRuntimePort
+
+
 # Host-authored ``reasoning`` for the synthesized involuntary flow pair
 # (``build_consultation_pair``). The envelope requires ``reasoning``, but an
 # involuntary fire has no agent rationale to record — so this states the truth
@@ -37,13 +43,13 @@ _CONSULTATION_MAX_ROUNDS = 3
 _DIARY_CUE_TOKEN_CAP = 10_000
 
 
-def _send_with_timeout(agent, session, content: "str | list"):
+def _send_with_timeout(runtime: "SoulRuntimePort", session, content: "str | list"):
     """Send with timeout using a daemon thread. Returns response or None.
 
     Uses a daemon thread so it dies with the process — no orphaned threads.
     """
     import threading
-    timeout = agent._config.retry_timeout
+    timeout = runtime.config.retry_timeout
     result_box: list = []
     error_box: list = []
 
@@ -59,10 +65,10 @@ def _send_with_timeout(agent, session, content: "str | list"):
 
     if t.is_alive():
         # Timed out — thread is daemon, will die with process
-        agent._log("soul_whisper_error", error=f"LLM call timed out after {timeout}s")
+        runtime.log("soul_whisper_error", error=f"LLM call timed out after {timeout}s")
         return None
     if error_box:
-        agent._log("soul_whisper_error", error=str(error_box[0])[:200])
+        runtime.log("soul_whisper_error", error=str(error_box[0])[:200])
         return None
     return result_box[0] if result_box else None
 
@@ -124,7 +130,7 @@ def _iter_lines_reverse(path):
                     continue
 
 
-def _render_current_diary(agent) -> str:
+def _render_current_diary(runtime: "SoulRuntimePort") -> str:
     """Build the cue: time-anchored recent diary AND thinking entries,
     tail-capped.
 
@@ -148,7 +154,7 @@ def _render_current_diary(agent) -> str:
     from datetime import datetime
     from lingtai.kernel.token_counter import count_tokens
 
-    log_path = agent._working_dir / "logs" / "events.jsonl"
+    log_path = runtime.working_dir / "logs" / "events.jsonl"
     if not log_path.is_file():
         return ""
 
@@ -195,7 +201,7 @@ def _render_current_diary(agent) -> str:
     return header + "\n\n" + "\n\n".join(kept)
 
 
-def _write_soul_tokens(agent, response) -> None:
+def _write_soul_tokens(runtime: "SoulRuntimePort", response) -> None:
     """Append a soul-tagged token-ledger entry for a consultation or
     inquiry LLM call. Only the five safe codex-pool attribution fields are
     projected from ``usage.extra``. Best-effort — failures are silently
@@ -208,9 +214,9 @@ def _write_soul_tokens(agent, response) -> None:
             append_token_entry,
             safe_codex_pool_usage_extra,
         )
-        ledger_path = agent._working_dir / "logs" / "token_ledger.jsonl"
-        model = getattr(agent.service, "model", None)
-        endpoint = getattr(agent.service, "_base_url", None)
+        ledger_path = runtime.working_dir / "logs" / "token_ledger.jsonl"
+        model = getattr(runtime.service, "model", None)
+        endpoint = getattr(runtime.service, "_base_url", None)
         append_token_entry(
             ledger_path,
             input=u.input_tokens, output=u.output_tokens,
@@ -370,7 +376,7 @@ def _kind_for_source(source: str) -> str:
     return "past"
 
 
-def _build_consultation_cue(agent, kind: str, diary: str) -> str:
+def _build_consultation_cue(runtime: "SoulRuntimePort", kind: str, diary: str) -> str:
     """Localized cue prompt for a consultation voice.
 
     insights — current self stepping back to look at its own diary.
@@ -386,7 +392,7 @@ def _build_consultation_cue(agent, kind: str, diary: str) -> str:
         if kind == "insights"
         else "soul.consultation_cue_past"
     )
-    template = t(agent._config.language, key)
+    template = t(runtime.config.language, key)
     body = diary if diary else "(no diary yet)"
     try:
         return template.format(diary=body)
@@ -396,7 +402,7 @@ def _build_consultation_cue(agent, kind: str, diary: str) -> str:
         return f"{template}\n\n{body}"
 
 
-def _run_consultation(agent, iface, source: str) -> dict | None:
+def _run_consultation(runtime: "SoulRuntimePort", iface, source: str) -> dict | None:
     """Run one substrate+spark consultation against a seeded ChatInterface.
 
     The seeded interface is cloned verbatim. The present diary cue is sent as
@@ -411,13 +417,13 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
         return None
 
     window = None
-    if getattr(agent, "_chat", None) is not None:
+    if runtime.chat is not None:
         try:
-            window = agent._chat.context_window()
+            window = runtime.chat.context_window()
         except Exception:
             window = None
     if window is None:
-        window = int(getattr(agent._config, "context_limit", None) or 200_000)
+        window = int(getattr(runtime.config, "context_limit", None) or 200_000)
     target = max(1, int(window * 0.7))
     fitted = _fit_interface_to_window(iface, target)
     if not fitted.entries:
@@ -425,10 +431,10 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
 
     tool_schemas = None
     try:
-        tool_schemas = agent._session._build_tool_schemas_fn() or None
+        tool_schemas = runtime.session._build_tool_schemas_fn() or None
     except Exception as e:
         try:
-            agent._log("consultation_tool_schema_error", source=source, error=str(e)[:200])
+            runtime.log("consultation_tool_schema_error", source=source, error=str(e)[:200])
         except Exception:
             pass
         tool_schemas = None
@@ -436,32 +442,32 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
     kind = _kind_for_source(source)
     try:
         from .config import _build_soul_system_prompt
-        system_prompt = _build_soul_system_prompt(agent, kind=kind)
+        system_prompt = _build_soul_system_prompt(runtime, kind=kind)
     except Exception as e:
         try:
-            agent._log("consultation_prompt_resolution_failed", source=source, error=str(e)[:200])
+            runtime.log("consultation_prompt_resolution_failed", source=source, error=str(e)[:200])
         except Exception:
             pass
         return None
 
     try:
-        session = agent.service.create_session(
+        session = runtime.service.create_session(
             system_prompt=system_prompt,
             tools=tool_schemas,
-            model=agent._config.model or agent.service.model,
+            model=runtime.config.model or runtime.service.model,
             thinking="high",
             tracked=False,
             interface=fitted,
-            provider=agent._config.provider,
+            provider=runtime.config.provider,
         )
     except Exception as e:
         try:
-            agent._log("consultation_session_failed", source=source, error=str(e)[:200])
+            runtime.log("consultation_session_failed", source=source, error=str(e)[:200])
         except Exception:
             pass
         return None
 
-    diary = _render_current_diary(agent)
+    diary = _render_current_diary(runtime)
     if not diary:
         # No spark = no consultation. Avoid sending an empty user message —
         # the model has no trigger to react to.
@@ -474,12 +480,12 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
     next_input: "str | list[ToolResultBlock]" = spark
 
     for _round_idx in range(_CONSULTATION_MAX_ROUNDS):
-        response = _send_with_timeout(agent, session, next_input)
+        response = _send_with_timeout(runtime, session, next_input)
         if response is None:
             break
 
         try:
-            _write_soul_tokens(agent, response)
+            _write_soul_tokens(runtime, response)
         except Exception:
             pass
 
@@ -511,9 +517,9 @@ def _run_consultation(agent, iface, source: str) -> dict | None:
     return {"source": source, "blocks": blocks_collected}
 
 
-def _list_snapshot_paths(agent):
+def _list_snapshot_paths(runtime: "SoulRuntimePort"):
     """Return snapshot_*.json files under <workdir>/history/snapshots/."""
-    snapshots_dir = agent._working_dir / "history" / "snapshots"
+    snapshots_dir = runtime.working_dir / "history" / "snapshots"
     if not snapshots_dir.is_dir():
         return []
     try:
@@ -522,7 +528,7 @@ def _list_snapshot_paths(agent):
         return []
 
 
-def _run_consultation_batch(agent) -> list[dict]:
+def _run_consultation_batch(runtime: "SoulRuntimePort") -> list[dict]:
     """Run one full consultation fire: 1 insights + K past-snapshot
     consultations in parallel. Returns the list of surviving voices
     (failed/timed-out consultations are filtered out).
@@ -530,14 +536,14 @@ def _run_consultation_batch(agent) -> list[dict]:
     import random
     import threading
 
-    K = max(0, int(getattr(agent._config, "consultation_past_count", 2)))
+    K = max(0, int(getattr(runtime.config, "consultation_past_count", 2)))
 
     # Build work items.
     work: list[tuple[str, "ChatInterface"]] = []
     insights_iface = None
-    if getattr(agent, "_chat", None) is not None:
+    if runtime.chat is not None:
         try:
-            insights_iface = agent._chat.interface
+            insights_iface = runtime.chat.interface
             from lingtai.kernel.llm.interface import ChatInterface
             insights_iface = ChatInterface.from_dict(insights_iface.to_dict())
         except Exception:
@@ -546,14 +552,14 @@ def _run_consultation_batch(agent) -> list[dict]:
         work.append(("insights", insights_iface))
 
     # Sample K snapshot paths; load each.
-    paths = _list_snapshot_paths(agent)
+    paths = _list_snapshot_paths(runtime)
     if paths and K > 0:
         sampled = random.sample(paths, min(K, len(paths)))
         for path in sampled:
             iface = _load_snapshot_interface(path)
             if iface is None or not iface.entries:
                 try:
-                    agent._log("consultation_load_failed", path=str(path))
+                    runtime.log("consultation_load_failed", path=str(path))
                 except Exception:
                     pass
                 continue
@@ -569,10 +575,10 @@ def _run_consultation_batch(agent) -> list[dict]:
 
     def worker(idx: int, source: str, iface) -> None:
         try:
-            results[idx] = _run_consultation(agent, iface, source)
+            results[idx] = _run_consultation(runtime, iface, source)
         except Exception as e:
             try:
-                agent._log("consultation_thread_error",
+                runtime.log("consultation_thread_error",
                            source=source, error=str(e)[:200])
             except Exception:
                 pass
@@ -588,7 +594,7 @@ def _run_consultation_batch(agent) -> list[dict]:
         threads.append(t)
         t.start()
 
-    timeout = float(getattr(agent._config, "retry_timeout", 300.0)) * 2.0
+    timeout = float(getattr(runtime.config, "retry_timeout", 300.0)) * 2.0
     for t in threads:
         t.join(timeout=timeout)
 
@@ -596,7 +602,7 @@ def _run_consultation_batch(agent) -> list[dict]:
     return voices
 
 
-def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None):
+def build_consultation_pair(runtime: "SoulRuntimePort", voices: list[dict], tc_id: str | None = None):
     """Build a synthetic (ToolCallBlock, ToolResultBlock) pair carrying
     the bundled consultation voices. The result content includes an
     appendix_note framing the voices as advisory and ephemeral.
@@ -642,7 +648,7 @@ def build_consultation_pair(agent, voices: list[dict], tc_id: str | None = None)
         if v.get("voice")
     ]
     payload = {
-        "appendix_note": _t(agent._config.language, "soul.appendix_note"),
+        "appendix_note": _t(runtime.config.language, "soul.appendix_note"),
         "voices": rendered_voices,
     }
     result = ToolResultBlock(id=tc_id, name="soul", content=payload)
