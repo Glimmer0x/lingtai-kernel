@@ -25,9 +25,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from lingtai.kernel import notifications
 from lingtai.kernel._fsutil import atomic_write_json, read_json
@@ -97,6 +98,158 @@ _BUILTIN_CONFIG = _Config(
     _DEFAULT_REMINDER_TURNS,
     _MAX_BODY_CHARS,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCardErrorNotification:
+    """Producer-owned error event accepted by the notification adapter.
+
+    ``source``, ``channel``, and arbitrary publisher fields intentionally do
+    not exist here. The adapter supplies the fixed Task Card source and
+    system-channel policy, while the producer supplies the event body and
+    idempotency identity.
+    """
+
+    watch_id: str
+    body: str
+    code: str
+    retryable: bool | Literal["unknown"]
+    idempotency_key: str
+    last_valid_body_at: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCardRecoveredNotification:
+    """Producer-owned recovered event with a fixed Task Card source."""
+
+    watch_id: str
+    body: str
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class TaskCardLimitNotification:
+    """Producer-owned refresh-limit event with bounded extra fields."""
+
+    watch_id: str
+    body: str
+    idempotency_key: str
+    used: int
+    max_refreshes: int
+    last_valid_body_at: str | None = None
+
+
+class TaskCardNotificationsAdapter:
+    """Pin the legacy host publisher to Task Card's typed event forms.
+
+    The current candidate host still exposes a generic callback internally. It
+    is consumed exactly once here at the family boundary; the manager retains
+    this adapter and never retains the generic callback or its arbitrary
+    keyword vocabulary. The serialized integration packet can replace the
+    bridge with operation-native host methods without changing producer policy.
+    """
+
+    __slots__ = ("_enqueue", "_submit", "_clear")
+
+    def __init__(self, port: Any) -> None:
+        enqueue = getattr(port, "enqueue_system_notification", None)
+        submit = getattr(port, "submit_reminder", None)
+        clear = getattr(port, "clear_reminder", None)
+        if not callable(enqueue) or not callable(submit) or not callable(clear):
+            raise TypeError("Task Card notification port lacks its required operations")
+        self._enqueue = enqueue
+        self._submit = submit
+        self._clear = clear
+
+    def publish_error(self, event: TaskCardErrorNotification) -> None:
+        if not isinstance(event, TaskCardErrorNotification):
+            raise TypeError("publish_error requires TaskCardErrorNotification")
+        extra: dict[str, Any] = {
+            "watch_id": event.watch_id,
+            "state": "error",
+            "code": event.code,
+            "retryable": event.retryable,
+        }
+        if event.last_valid_body_at:
+            extra["last_valid_body_at"] = event.last_valid_body_at
+        self._enqueue(
+            source="task_card.error",
+            channel="system",
+            ref_id=event.watch_id,
+            body=event.body,
+            idempotency_key=event.idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="high",
+            extra=extra,
+        )
+
+    def publish_recovered(self, event: TaskCardRecoveredNotification) -> None:
+        if not isinstance(event, TaskCardRecoveredNotification):
+            raise TypeError("publish_recovered requires TaskCardRecoveredNotification")
+        self._enqueue(
+            # Preserve the established wire source: recovered is a state on
+            # the Task Card error stream, distinguished by extra.state and its
+            # recovered idempotency key.
+            source="task_card.error",
+            channel="system",
+            ref_id=event.watch_id,
+            body=event.body,
+            idempotency_key=event.idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="normal",
+            extra={
+                "watch_id": event.watch_id,
+                "state": "recovered",
+            },
+        )
+
+    def publish_limit(self, event: TaskCardLimitNotification) -> None:
+        if not isinstance(event, TaskCardLimitNotification):
+            raise TypeError("publish_limit requires TaskCardLimitNotification")
+        extra: dict[str, Any] = {
+            "watch_id": event.watch_id,
+            "state": "stopped",
+            "reason": "max_refreshes",
+            "used": event.used,
+            "max": event.max_refreshes,
+        }
+        if event.last_valid_body_at:
+            extra["last_valid_body_at"] = event.last_valid_body_at
+        self._enqueue(
+            source="task_card.limit",
+            channel="system",
+            ref_id=event.watch_id,
+            body=event.body,
+            idempotency_key=event.idempotency_key,
+            skip_if_idempotency_key_exists=True,
+            priority="normal",
+            extra=extra,
+        )
+
+    def submit_reminder(self, turns: int) -> None:
+        if type(turns) is not int or turns <= 0:
+            raise TypeError("Task Card reminder turns must be a positive integer")
+        self._submit(turns)
+
+    def clear_reminder(self) -> None:
+        self._clear()
+
+
+@dataclass(frozen=True, slots=True)
+class _TaskCardRuntime:
+    """Manager-only host view after the generic notification port is wrapped."""
+
+    workdir: Any
+    shutdown: Any
+    task_card_notifications: TaskCardNotificationsAdapter
+
+
+def _task_card_runtime(host: Any) -> _TaskCardRuntime:
+    return _TaskCardRuntime(
+        workdir=host.workdir,
+        shutdown=host.shutdown,
+        task_card_notifications=TaskCardNotificationsAdapter(host.task_card_notifications),
+    )
 
 
 def _utc_now_iso() -> str:
@@ -229,17 +382,17 @@ class TaskCardManager:
     """Own the intrinsic Task Card watch and atomic writer contract."""
 
     def __init__(self, host: "ToolPluginHost") -> None:
-        self._host = host
+        self._host = _task_card_runtime(host)
         self._lock = threading.RLock()
         self._counter = 0
         self._completed_text_turns = 0
         self._watch: _Watch | None = None
-        self._set_paths(host.workdir.path)
+        self._set_paths(self._host.workdir.path)
 
     def rebind(self, host: "ToolPluginHost") -> None:
         """Keep this current-Agent manager across refresh with fresh narrow ports."""
-        self._host = host
-        self._set_paths(host.workdir.path)
+        self._host = _task_card_runtime(host)
+        self._set_paths(self._host.workdir.path)
 
     def _set_paths(self, workdir: Path) -> None:
         self._taskcard_dir = Path(workdir) / _TASKCARD_DIR
@@ -725,40 +878,34 @@ class TaskCardManager:
         epoch: int,
         recovered: bool,
     ) -> None:
-        enqueue = self._host.task_card_notifications.enqueue_system_notification
-        if recovered:
-            body = f"Task Card watch {watch.watch_id} recovered."
-            extra: dict[str, Any] = {"watch_id": watch.watch_id, "state": "recovered"}
-            key = f"task_card.recovered:{watch.watch_id}:{epoch}"
-            priority = "normal"
-        else:
-            code = str((error or {}).get("code", "error"))
-            body = f"Task Card watch {watch.watch_id} failed: {(error or {}).get('message', code)}"
-            extra = {
-                "watch_id": watch.watch_id,
-                "state": "error",
-                "code": code,
-                "retryable": (error or {}).get("retryable", "unknown"),
-            }
-            if last_valid_at:
-                extra["last_valid_body_at"] = last_valid_at
-            key = f"task_card.error:{watch.watch_id}:{epoch}:{code}"
-            priority = "high"
         try:
-            enqueue(
-                source="task_card.error",
-                ref_id=watch.watch_id,
-                body=body,
-                idempotency_key=key,
-                skip_if_idempotency_key_exists=True,
-                priority=priority,
-                extra=extra,
-            )
+            if recovered:
+                self._host.task_card_notifications.publish_recovered(
+                    TaskCardRecoveredNotification(
+                        watch_id=watch.watch_id,
+                        body=f"Task Card watch {watch.watch_id} recovered.",
+                        idempotency_key=f"task_card.recovered:{watch.watch_id}:{epoch}",
+                    )
+                )
+            else:
+                code = str((error or {}).get("code", "error"))
+                self._host.task_card_notifications.publish_error(
+                    TaskCardErrorNotification(
+                        watch_id=watch.watch_id,
+                        body=(
+                            f"Task Card watch {watch.watch_id} failed: "
+                            f"{(error or {}).get('message', code)}"
+                        ),
+                        code=code,
+                        retryable=(error or {}).get("retryable", "unknown"),
+                        idempotency_key=f"task_card.error:{watch.watch_id}:{epoch}:{code}",
+                        last_valid_body_at=last_valid_at,
+                    )
+                )
         except Exception:
             pass
 
     def _emit_limit_event(self, watch: _Watch) -> None:
-        enqueue = self._host.task_card_notifications.enqueue_system_notification
         with watch.lock:
             if watch.limit_notified:
                 return
@@ -766,30 +913,22 @@ class TaskCardManager:
             used = watch.refreshes_used
             maximum = watch.max_refreshes
             last_valid_at = watch.last_valid_at
-        extra: dict[str, Any] = {
-            "watch_id": watch.watch_id,
-            "state": "stopped",
-            "reason": "max_refreshes",
-            "used": used,
-            "max": maximum,
-        }
-        if last_valid_at:
-            extra["last_valid_body_at"] = last_valid_at
         try:
-            enqueue(
-                source="task_card.limit",
-                ref_id=watch.watch_id,
-                body=(
-                    f"Task Card watch {watch.watch_id} reached its refresh limit. "
-                    "Refresh or reinspect the underlying task state, and start a new "
-                    "watch only if useful. If this work is still ongoing, start a new "
-                    "watch (task_card action='start') — do not let the card go dark "
-                    "mid-task."
-                ),
-                idempotency_key=f"task_card.limit:{watch.watch_id}:{maximum}",
-                skip_if_idempotency_key_exists=True,
-                priority="normal",
-                extra=extra,
+            self._host.task_card_notifications.publish_limit(
+                TaskCardLimitNotification(
+                    watch_id=watch.watch_id,
+                    body=(
+                        f"Task Card watch {watch.watch_id} reached its refresh limit. "
+                        "Refresh or reinspect the underlying task state, and start a new "
+                        "watch only if useful. If this work is still ongoing, start a new "
+                        "watch (task_card action='start') — do not let the card go dark "
+                        "mid-task."
+                    ),
+                    idempotency_key=f"task_card.limit:{watch.watch_id}:{maximum}",
+                    used=used,
+                    max_refreshes=maximum,
+                    last_valid_body_at=last_valid_at,
+                )
             )
         except Exception:
             pass

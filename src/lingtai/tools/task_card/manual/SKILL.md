@@ -63,6 +63,20 @@ it does not enter the watch manager or require a whole Agent. The declaration
 also fixes the public action inventory, so the schema, dispatch family, and
 manual cannot silently drift.
 
+## Typed notification boundary
+
+The producer may emit only its own typed notification operations: an error
+(`TaskCardErrorNotification`), a recovery (`TaskCardRecoveredNotification`),
+or refresh exhaustion (`TaskCardLimitNotification`). The family adapter pins
+these to the system channel and the established wire sources:
+`task_card.error` carries both `error` and `recovered` states (the latter is
+distinguished by its `extra.state` and idempotency key), while
+`task_card.limit` carries refresh exhaustion. It also exposes only
+`submit_reminder(turns)` and `clear_reminder()` for absent/stale reminders.
+There is deliberately no `source`, `channel`, arbitrary `extra`, or generic
+keyword field in a typed operation, so Task Card code cannot publish a foreign
+source or another channel through this capability.
+
 ## Resident meta projection and the 2000-char cap
 
 The card body is projected into the agent's own meta block as
@@ -147,8 +161,8 @@ Guidelines:
 - Keep one active watch per agent. A second `start` is refused until the first
   watch is stopped.
 - Restart a watch that expires mid-task. Exhausting `max_refreshes` retires the
-  watch and sends one `task_card.limit` notification; if the underlying work is
-  still ongoing, `start` a new watch rather than letting the card go dark.
+  watch and sends one typed `task_card.limit` notification; if the underlying
+  work is still ongoing, `start` a new watch rather than letting the card go dark.
 - Write the body you want projected. The producer is channel-neutral and does
   not own Telegram/Feishu/portal layout details.
 - Keep renderer output truthful and complete. Projection channels may compare

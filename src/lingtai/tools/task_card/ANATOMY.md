@@ -16,6 +16,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_task_card_controller.py
+  - tests/test_task_card_notifications.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_telegram_toolfamily_ltpv2.py
   - tests/test_telegram_task_card_programmable.py
@@ -47,16 +48,20 @@ capability with a filesystem delete. It does not own Telegram, Feishu, portals,
 chat IDs, retry policy against a transport, or any resident message state.
 It is the second declared official host-plugin slice: `DECLARATION` is static
 at import and `_bind` receives only `workdir`, `shutdown`,
-`task_card_lifecycle`, and `task_card_notifications` ports. The lifecycle port
-retains the real current-agent manager so existing stop, turn-reminder, and
-restart-resume hooks keep operating; no binder receives a whole Agent.
+`task_card_lifecycle`, and `task_card_notifications` ports. The family-local
+`TaskCardNotificationsAdapter` immediately narrows the notification port into
+typed error/recovered/limit and reminder operations; the retained manager sees
+that typed view rather than a generic publisher. The lifecycle port retains the
+real current-agent manager so existing stop, turn-reminder, and restart-resume
+hooks keep operating; no binder receives a whole Agent.
 Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 
 ## Components
 
 - `__init__.py` — the full capability owner: static `DECLARATION`,
   declaration-derived schema/description/manual family, one-watch lifecycle,
-  renderer execution, atomic file writes, error/limit notifications, persisted
+  renderer execution, atomic file writes, typed error/recovered/limit
+  notifications (`TaskCardNotificationsAdapter` and its event forms), persisted
   config loading/validation (`TaskCardManager._load_config`), the one-way
   legacy-config migration (`TaskCardManager._migrate_legacy_config`), and the
   `setup(agent)` composition call into the official registrar.
@@ -70,7 +75,8 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   reserves `task_card`, grants only the four declared ports, binds, resumes a
   persisted active watch (`TaskCardManager.resume_persisted_watch`), then mounts
   it, so the card survives `refresh`/molt/agent-stop restarts without a whole
-  Agent entering the manager.
+  Agent entering the manager. At bind time the family converts the retained
+  host notification bridge into its typed operation view before dispatch.
 - `lifecycle._stop` calls `shutdown_for_agent_stop()` so a stopping agent
   writes `inactive`, joins the watch thread best-effort, and re-persists the
   watch descriptor with its carried refresh budget for the next boot.
@@ -110,6 +116,9 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
 - In-memory only: one active watch, its thread, last valid body/timestamp, and
   deduped error/limit bookkeeping (the descriptor is the only cross-process
   watch state)
+- Notification operation view: producer-owned typed error/recovered/limit
+  events plus `submit_reminder(turns)`/`clear_reminder()`. Source and channel
+  are adapter-pinned; foreign publisher fields never enter this view.
 
 ## Notes
 
@@ -120,6 +129,9 @@ Normative promises live in [`CONTRACT.md`](CONTRACT.md).
   removed.
 - Missing, invalid, or inactive producer state is a consumer concern. This
   intrinsic capability only writes the artifact truthfully.
+- Notification policy stays in the producer, while the family adapter pins the
+  established `task_card.error`/`task_card.limit` wire forms to the system
+  channel and rejects foreign source/channel/extra-field injection.
 - The legacy-config migration is a one-time bootstrap, not an integration:
   it is gated on `taskcard/taskcard.json` not yet existing (never on its
   content), so this capability never carries an ongoing runtime dependence on

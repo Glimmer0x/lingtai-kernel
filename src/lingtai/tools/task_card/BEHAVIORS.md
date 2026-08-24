@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/mcp_servers/task_card/resident.py
+  - tests/test_task_card_notifications.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when a
@@ -19,7 +20,8 @@ maintenance: |
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/tools/task_card/CONTRACT.md` (start writes body then exact active,
-second start fails closed, stop/remove semantics, watch persistence). Pinned
+second start fails closed, stop/remove semantics, watch persistence, and the
+typed notification boundary). Pinned
 pytest commands must run from the repo root with the project's Python.
 
 ## Behavior TK001 — start writes the body atomically before exact active, and a second start fails closed
@@ -38,8 +40,30 @@ pytest commands must run from the repo root with the project's Python.
 
 ### Expected evidence
 - [ ] Step 1: the task-card controller and resident suites pass, pinning route/slot, old-first rotation, peer adoption, and failure-state transitions.
-- [ ] Step 2: the body file precedes the exact-`active` status write; the watch descriptor survives for restart resume; renderer failures preserve the last valid body and emit deduped `task_card.error`/`recovered` notifications.
+- [ ] Step 2: the body file precedes the exact-`active` status write; the watch descriptor survives for restart resume; renderer failures preserve the last valid body and emit deduped typed `task_card.error` error/recovered notifications.
 - [ ] Step 3: a second `start` fails closed (at most one active watch per agent); `remove` retires the watch first (writes `inactive`, joins the updater), then deletes the body; a repeated `remove` is idempotent and never an error.
 
 ### Pass / Fail
 Pass when the suites pass and the ordering/idempotency observations hold. Fail on `active` before the body write, on a second concurrent watch, or on a non-idempotent `remove`; record the evidence trail in the task report.
+
+## Behavior TK002 — typed Task Card notifications preserve wire parity and reject foreign fields
+
+- **id**: TK002
+- **title**: typed Task Card notifications preserve wire parity and reject foreign fields
+- **guards**: `intrinsic-task-card` § Notification boundary
+- **runner**: any LingTai agent with `shell` access to this repository
+- **prerequisites**: a clean checkout of `<repo>` and the family-owned notification test fixture
+- **estimate**: ≈ 10 minutes
+
+### Steps
+1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_task_card_notifications.py` and capture the outcome.
+2. Inspect the recorded events for error, recovered, and refresh-limit operations; verify the exact source, explicit `system` channel, idempotency key, priority, and bounded `extra` fields, followed by one reminder submit and clear.
+3. Attempt to construct an event with a foreign `source`, pass a foreign `channel`/`extra` keyword to a typed operation, and submit malformed reminder turns; record that each fails before the host bridge.
+
+### Expected evidence
+- [ ] Step 1: the family-owned typed notification suite passes.
+- [ ] Step 2: error/recovered/limit output matches the established producer wire forms, including recovered-on-`task_card.error` state parity and `task_card.limit` refresh identity.
+- [ ] Step 3: source/channel/foreign-field and malformed-reminder negatives fail closed; no generic `enqueue_system_notification` operation is visible on the retained family adapter.
+
+### Pass / Fail
+Pass when the typed suite passes, all three event forms retain their exact wire parity, and every foreign-field/source/channel attempt fails before publication. Fail if a caller can choose a source/channel, inject arbitrary publisher metadata, or alter the established event identity.
