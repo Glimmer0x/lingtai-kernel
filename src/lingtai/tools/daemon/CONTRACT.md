@@ -7,8 +7,8 @@ description: >
   daemon_common completion signaling, support-status honesty, run artifacts,
   terminal notifications, and compaction boundaries.
 status: active
-contract_version: 11
-last_changed_at: "2026-08-23"
+contract_version: 12
+last_changed_at: "2026-08-24"
 related_files:
   - src/lingtai/tools/daemon/ANATOMY.md
   - src/lingtai/tools/daemon/BEHAVIORS.md
@@ -27,6 +27,8 @@ related_files:
   - src/lingtai/services/mcp.py
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/notification_store/CONTRACT.md
+  - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/llm/service.py
   - src/lingtai/llm/interface_converters.py
   - src/lingtai/tools/daemon/process_port.py
@@ -492,10 +494,17 @@ surface through the per-run mini-channel
 `.notification/daemon/<daemon-id>.json`, rather than ordinary parent request
 text. `daemon` is a built-in notification channel; both the in-process manager
 and detached supervisor use the typed `NotificationStorePort.compare_update_channel`
-operation, and the production adapter routes each run id to its own file. The
-sibling `.notification/daemon.json` is a derived report containing only
-mini-file run/state statistics; it is excluded from aggregate snapshot,
-fingerprint, and dismissal. Existing root event facts may be retained only as
+operation, and the production adapter routes each run id through the narrow
+Daemon-only `owner` hot path to its own file. That append is unconditional and
+idempotent under its run/control resources; it does not scan the aggregate or
+rebuild the sibling report. The Store's durable
+`.notification/daemon/.tombstone` control record is the aggregate-clear,
+dismiss, and CAS linearization authority: it commits a visibility cut before
+best-effort mini-file compaction, so a crash cannot resurrect a cleared event.
+A corrupt control record fails loudly into Store/doctor repair visibility rather
+than blacking out daemon notices. The sibling `.notification/daemon.json` is a
+derived report containing only mini-file run/state statistics; it is excluded
+from aggregate snapshot, fingerprint, and dismissal. Existing root event facts may be retained only as
 report migration metadata and are never re-delivered; new event writes always
 route to the run's mini-file and never fall back to the root. The run directory
 may write a temporary `daemon.json.terminal_notification_claim` before publication to

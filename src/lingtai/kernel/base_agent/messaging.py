@@ -215,7 +215,12 @@ def _enqueue_system_notification(
     # production adapter recognizes the daemon payload's run-id marker and
     # writes the corresponding mini-channel; Core never probes an adapter-only
     # capability.
-    result = store.compare_update_channel(channel, UNCONDITIONAL, _mutator)
+    result = store.compare_update_channel(
+        channel,
+        UNCONDITIONAL,
+        _mutator,
+        owner=ref_id if channel == DAEMON_CHANNEL else None,
+    )
     applied_event_id = result.value if isinstance(result.value, str) else ""
     if not applied_event_id:
         return ""

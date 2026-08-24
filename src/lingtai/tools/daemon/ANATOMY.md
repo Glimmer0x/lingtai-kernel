@@ -15,6 +15,8 @@ related_files:
   - src/lingtai/kernel/meta_block.py
   - src/lingtai/kernel/llm/base.py
   - src/lingtai/kernel/base_agent/ANATOMY.md
+  - src/lingtai/kernel/notification_store/CONTRACT.md
+  - src/lingtai/adapters/posix/notification_store.py
   - src/lingtai/kernel/tool_executor.py
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/services/mcp.py
@@ -134,10 +136,14 @@ MiMo's hard-failure-on-compact-error divergence from Codex's non-fatal
 policy. Results are persisted in per-run daemon folders; **every** terminal outcome
 (done / failed / cancelled / timeout) is surfaced as a compact event in
 `.notification/daemon/<daemon-id>.json` — never as ordinary parent request text.
-The sibling `.notification/daemon.json` is a derived report of mini-file run/state
-statistics, excluded from delivery, fingerprinting, and dismissal; any retained
-legacy-root facts live only under report migration metadata. Same-run checkpoint,
-terminal, and follow-up events append without a fixed retention cap;
+The typed Store's daemon-only owner mutation is the append hot path: it takes the
+run/control scopes and does not scan the aggregate or rebuild a report. Durable
+`.notification/daemon/.tombstone` state serializes aggregate clear/dismiss/CAS
+and commits logical removal before later best-effort compaction. The sibling
+`.notification/daemon.json` is a non-authoritative derived report of mini-file
+run/state statistics, excluded from delivery, fingerprinting, and dismissal; any
+retained legacy-root facts live only under report migration metadata. Same-run
+checkpoint, terminal, and follow-up events append without a fixed retention cap;
 `daemon.json.terminal_notified` is written only after publication succeeds (or an
 idempotent retry observes the same published event), so a parent that dispatched
 a daemon can safely go idle and be woken when the run ends, without polling.
@@ -278,7 +284,7 @@ daemon/__init__.py
   ├── _handle_ask_opencode()        — OpenCode-family follow-up via `opencode run --session <opencode_session_id> --format json <message>` by default; callers such as oh-my-pi can pass `build_resume_cmd` to customize the resume argv (`omp --mode json --approval-mode yolo --session <oh_my_pi_session_id> <message>`). Symmetric with claude-code / codex ask: spawns, dispatches to `_ask_pool`, returns immediately. Returns a clear error if the backend-specific session id has not been captured yet.
   ├── _run_ask_opencode_stream()    — background worker for the opencode ask. Same defensive JSON-line parse as `_run_opencode_emanation`; clears `ask_in_flight` on exit; terminal-shaped events override intermediate text
   ├── _register_cli_proc()/_unregister_cli_proc()/_kill_cli_group()/_drain_all_cli_procs() — legacy direct-Popen CLI tracking predating the detached supervisor. `_register_cli_proc` (the only writer into `_cli_procs`/`_cli_proc_groups`) has no production caller left — every CLI backend now runs under its own detached supervisor, which owns exact-child ownership and deadline enforcement directly (`kernel/daemon_supervisor/CONTRACT.md`). `_drain_all_cli_procs` remains reachable from the live `_shutdown_runtime_resources` funnel (`_handle_reclaim`, agent stop, refresh) and always drains an empty list in production; it is kept as defensive teardown for any future non-detached direct-Popen caller, not removed as dead code.
-  └── _publish_daemon_notification() — publishes one compact event to the typed Store's `.notification/daemon/<daemon-id>.json` mini-channel (id, terminal status, task summary, run dir, result/error path, bounded preview) and stamps the channel's `data.daemon` batch state; terminal callers pass a stable idempotency key. Every event is typed by `kind` (`daemon/__init__.py:4845`), which defaults to `daemon_terminal`; a follow-up (`ask`) result reuses this same publisher with `kind="daemon_followup"` (`daemon/__init__.py:4954`), and the detached supervisor's equivalent takes the same argument (`daemon/supervisor_runtime.py:496`), so the parent's summary never reads a still-running run as terminal (`_is_terminal_daemon_event`, `kernel/base_agent/__init__.py:99`). The root `.notification/daemon.json` is only a derived run/state report and never enters the aggregate projection. Called directly by parent-process code paths (e.g. `_publish_followup_if_live`) that still run in this process; the detached supervisor's own terminal path uses its own equivalent in `supervisor_runtime.py`, not this method (`daemon/__init__.py:3762`)
+  └── _publish_daemon_notification() — publishes one compact event to the typed Store's `.notification/daemon/<daemon-id>.json` mini-channel (id, terminal status, task summary, run dir, result/error path, bounded preview) and stamps the channel's `data.daemon` batch state; terminal callers pass a stable idempotency key. Every event is typed by `kind` (`daemon/__init__.py:4845`), which defaults to `daemon_terminal`; a follow-up (`ask`) result reuses this same publisher with `kind="daemon_followup"` (`daemon/__init__.py:4954`), and the detached supervisor's equivalent takes the same argument (`daemon/supervisor_runtime.py:496`), so the parent's summary never reads a still-running run as terminal (`_is_terminal_daemon_event`, `kernel/base_agent/__init__.py:99`). The Store routes the mutation with the daemon-only owner/run hot path, records batch state through durable tombstone control, and does not rebuild the root report on append. The root `.notification/daemon.json` is only a derived run/state report and never enters the aggregate projection. Called directly by parent-process code paths (e.g. `_publish_followup_if_live`) that still run in this process; the detached supervisor's own terminal path uses its own equivalent in `supervisor_runtime.py`, not this method (`daemon/__init__.py:3762`)
 
 daemon/run_dir.py
   ├── DaemonRunDir.__init__         — creates folder on disk, writes versioned daemon.json (data_version + call_parameters) + .prompt
