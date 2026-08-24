@@ -4,12 +4,15 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.13.0
-last_changed_at: "2026-08-24T02:20:00Z"
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
+version: 1.14.0
+last_changed_at: "2026-08-24T08:45:00Z"
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
+- src/lingtai/kernel/base_agent/lifecycle.py
+- src/lingtai/tools/system/karma.py
+- src/lingtai/tools/system/schema.py
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
@@ -43,8 +46,9 @@ The router table is the routing authority; this list is the inventory.
   location: reference/substrate-manual/SKILL.md
   description: |
     Expanded substrate/runtime model: body/extensions, lifecycle states,
-    `system` actions, memory layers, MCP/addon ownership, preset tiers, and
-    (§11) `init.json` composition and the preset runtime model.
+    `system` actions (including last-resort `system.sleep(delay=...)` alarms),
+    memory layers, MCP/addon ownership, preset tiers, and (§11) `init.json`
+    composition and the preset runtime model.
 - name: procedures-manual
   location: reference/procedures-manual/SKILL.md
   description: |
@@ -118,7 +122,7 @@ The router table is the routing authority; this list is the inventory.
 
 | Need / keywords | Read |
 |---|---|
-| Expanded substrate; body/extensions; shell vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/STUCK/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
+| Expanded substrate; body/extensions; shell vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/STUCK/ASLEEP/SUSPENDED; `system.sleep(delay=...)` last-resort alarm; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
 | `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets")` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `context-manual` → `reference/summarize-manual/SKILL.md` |

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
 from ..config import HEARTBEAT_TICK_SECONDS, IDLE_SLEEP_TIMEOUT_SECONDS
@@ -89,6 +91,196 @@ def _active_stuck_threshold_s() -> float:
         return max(30.0, float(os.environ.get("LINGTAI_ACTIVE_STUCK_THRESHOLD_S", "600")))
     except (TypeError, ValueError):
         return 600.0
+
+
+# One root file is the complete sleep-alarm state: its text is the absolute
+# wall-clock deadline, with no sidecar, queue, or in-memory timer authority.
+_SLEEP_ALARM_FILE = ".alarm"
+_SLEEP_ALARM_SOURCE = "system.sleep_alarm"
+_SLEEP_ALARM_LOCK_CREATION = threading.Lock()
+
+
+def _sleep_alarm_path(agent) -> Path:
+    return agent._working_dir / _SLEEP_ALARM_FILE
+
+
+def _sleep_alarm_lock(agent):
+    """Return the capability-local lock shared by sleep calls and heartbeat.
+
+    BaseAgent installs the lock at construction. The guarded fallback keeps
+    partial test doubles safe without creating a second lifecycle abstraction.
+    """
+    lock = getattr(agent, "_sleep_alarm_lock", None)
+    if lock is not None:
+        return lock
+    with _SLEEP_ALARM_LOCK_CREATION:
+        lock = getattr(agent, "_sleep_alarm_lock", None)
+        if lock is None:
+            lock = agent._sleep_alarm_lock = threading.RLock()
+        return lock
+
+
+def _sleep_alarm_delay_decimal(delay: object) -> Decimal:
+    """Validate the public JSON-number delay without imposing a maximum."""
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)):
+        raise ValueError("delay must be a finite positive number of seconds")
+    if isinstance(delay, float) and not math.isfinite(delay):
+        raise ValueError("delay must be a finite positive number of seconds")
+    try:
+        # Constructing directly from int avoids a float conversion (and its
+        # artificial range); str(float) preserves the JSON-facing decimal form.
+        value = Decimal(delay) if isinstance(delay, int) else Decimal(str(delay))
+    except (InvalidOperation, ValueError):
+        raise ValueError("delay must be a finite positive number of seconds") from None
+    if not value.is_finite() or value <= 0:
+        raise ValueError("delay must be a finite positive number of seconds")
+    return value
+
+
+def _sleep_alarm_deadline_text(agent, delay_seconds: Decimal) -> str:
+    """Build a compact, parseable absolute wall-clock deadline string."""
+    try:
+        now = Decimal(str(agent._lifecycle_clock.wall_seconds()))
+    except (InvalidOperation, ValueError):
+        raise ValueError("lifecycle wall clock is not finite") from None
+    if not now.is_finite():
+        raise ValueError("lifecycle wall clock is not finite")
+
+    # Preserve a huge finite delay rather than forcing it through a binary float
+    # or a fixed maximum. The precision is just enough to retain both operands.
+    precision = max(
+        28,
+        max(now.adjusted(), delay_seconds.adjusted())
+        - min(now.as_tuple().exponent, delay_seconds.as_tuple().exponent)
+        + 1,
+    )
+    with localcontext() as context:
+        context.prec = precision
+        deadline = now + delay_seconds
+    if not deadline.is_finite():
+        raise ValueError("sleep alarm deadline is not finite")
+    return str(deadline)
+
+
+def _arm_sleep_alarm(agent, delay_seconds: Decimal) -> str:
+    """Atomically overwrite the one persisted alarm before ASLEEP transition."""
+    from .._fsutil import atomic_write_text
+
+    deadline_text = _sleep_alarm_deadline_text(agent, delay_seconds)
+    atomic_write_text(_sleep_alarm_path(agent), deadline_text, fsync=True)
+    return deadline_text
+
+
+def _sleep_alarm_ref_id(deadline_text: str) -> str:
+    """Stable producer identity derived solely from the persisted deadline."""
+    digest = hashlib.sha256(deadline_text.encode("utf-8")).hexdigest()
+    return f"sleep_alarm:{digest}"
+
+
+def _log_sleep_alarm_problem_once(agent, signature: str, error: str) -> None:
+    """Make a bad alarm visible once per distinct on-disk problem per process."""
+    if getattr(agent, "_sleep_alarm_problem_signature", None) == signature:
+        return
+    agent._sleep_alarm_problem_signature = signature
+    agent._log("sleep_alarm_malformed", error=error)
+
+
+def _read_sleep_alarm(agent) -> tuple[str, Decimal] | None:
+    """Read the single alarm file, retaining malformed state for visible retry."""
+    path = _sleep_alarm_path(agent)
+    try:
+        deadline_text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _log_sleep_alarm_problem_once(
+            agent,
+            f"unreadable:{type(exc).__name__}",
+            f"unreadable alarm file ({type(exc).__name__})",
+        )
+        return None
+    try:
+        deadline = Decimal(deadline_text)
+    except (InvalidOperation, ValueError):
+        deadline = None
+    if deadline is None or not deadline.is_finite():
+        raw_digest = hashlib.sha256(deadline_text.encode("utf-8")).hexdigest()
+        _log_sleep_alarm_problem_once(
+            agent,
+            f"malformed:{raw_digest}",
+            "alarm file must contain one finite absolute wall-clock value",
+        )
+        return None
+    agent._sleep_alarm_problem_signature = None
+    return deadline_text, deadline
+
+
+def _fire_sleep_alarm_if_due(agent) -> None:
+    """Publish one due alarm through the ordinary system-notification producer."""
+    with _sleep_alarm_lock(agent):
+        parsed = _read_sleep_alarm(agent)
+        if parsed is None:
+            return
+        deadline_text, deadline = parsed
+        try:
+            now = Decimal(str(agent._lifecycle_clock.wall_seconds()))
+        except (InvalidOperation, ValueError):
+            _log_sleep_alarm_problem_once(
+                agent,
+                "clock:not-finite",
+                "lifecycle wall clock is not finite",
+            )
+            return
+        if not now.is_finite():
+            _log_sleep_alarm_problem_once(
+                agent,
+                "clock:not-finite",
+                "lifecycle wall clock is not finite",
+            )
+            return
+        if now < deadline:
+            return
+
+        ref_id = _sleep_alarm_ref_id(deadline_text)
+        try:
+            from .messaging import _enqueue_system_notification
+
+            _enqueue_system_notification(
+                agent,
+                source=_SLEEP_ALARM_SOURCE,
+                ref_id=ref_id,
+                body=(
+                    "A system.sleep alarm is due. Inspect the async work that "
+                    "lacked a reliable completion notification."
+                ),
+                skip_if_ref_id_exists=True,
+                idempotency_key=ref_id,
+                skip_if_idempotency_key_exists=True,
+            )
+        except Exception as exc:
+            # Keep the file for a later heartbeat; the stable ref makes retries
+            # idempotent if the process died after the Store commit.
+            agent._log(
+                "sleep_alarm_publish_failed",
+                ref_id=ref_id,
+                error=str(exc)[:200],
+            )
+            return
+
+        try:
+            _sleep_alarm_path(agent).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            # The event is already published. Keeping the file is safe because
+            # its stable ref makes the next publication attempt a no-op.
+            agent._log(
+                "sleep_alarm_consume_failed",
+                ref_id=ref_id,
+                error=str(exc)[:200],
+            )
+            return
+        agent._log("sleep_alarm_fired", ref_id=ref_id)
 
 
 def _start(agent) -> None:
@@ -589,6 +781,13 @@ def _heartbeat_loop(agent) -> None:
                     f"[{agent.agent_name}] idle sleep timeout failed: "
                     f"{idle_sleep_err}"
                 )
+
+            # A due system.sleep alarm becomes an ordinary system event before
+            # this tick's existing notification sync performs any ASLEEP wake.
+            try:
+                _fire_sleep_alarm_if_due(agent)
+            except Exception as sleep_alarm_err:
+                agent._log("sleep_alarm_check_failed", error=str(sleep_alarm_err)[:200])
 
             # --- Notification sync ---
             # Poll the `.notification/` directory for changes.  The sync

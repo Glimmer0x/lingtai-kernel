@@ -771,6 +771,12 @@ class BaseAgent:
         self._llm_worker_refresh_requested: bool = False
         self._llm_worker_refresh_source: str | None = None
 
+        # system.sleep's persisted `.alarm` is shared by the tool handler and
+        # the heartbeat. This narrow lock makes arm/expiry last-writer-wins
+        # without widening notification or lifecycle state ownership.
+        self._sleep_alarm_lock: threading.RLock = threading.RLock()
+        self._sleep_alarm_problem_signature: str | None = None
+
         # Notification sync state (filesystem-as-protocol redesign).
         # _notification_fp: last-seen `.notification/` fingerprint for
         #   change-detection between heartbeat ticks.
