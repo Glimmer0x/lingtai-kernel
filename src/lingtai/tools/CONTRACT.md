@@ -417,12 +417,14 @@ form, not the required form of every official tool.
 
 External **Agent Plugins v1.0.0** filesystem packages (`plugin.json`,
 `skills/`, `mcp.json`; `src/lingtai/services/plugin_registry.py`) and raw
-third-party MCP schemas are a **separate standard, excluded** from this
-conversion contract: no first-party family may be recut into them under this
-section, and they are cited below only as the precedent for
-`**Registration is not activation**`. Selecting one form is still the point —
-this section introduces no generic manifest compiler, no
-plugin-admission engine, and no multi-form compatibility layer.
+third-party MCP schemas remain a **separate standard**, not an alternate
+model-facing declaration or transport route. The `mcp` source package is the
+narrow documented exception only for its owned manual: its static host-plugin
+`DECLARATION` remains the sole model-facing mount, while Agent uses the existing
+registry reader to validate and copy its one `skills/mcp-manual/` source. It
+neither calls external-plugin registration nor permits `mcp.json`; no first-party
+family is recut *into* the external standard. This section introduces no generic
+manifest compiler, plugin-admission engine, or multi-form compatibility layer.
 
 **One family slice, one declaration, retained form.** The unit of migration is one
 current model-facing family gaining one declaration that *wraps* it. The shared

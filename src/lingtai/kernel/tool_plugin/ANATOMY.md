@@ -11,7 +11,7 @@ related_files:
   - src/lingtai/tools/ANATOMY.md
   - src/lingtai/tools/mcp/ANATOMY.md
   - src/lingtai/tools/mcp/__init__.py
-  - src/lingtai/tools/mcp/manual/SKILL.md
+  - src/lingtai/tools/mcp/skills/mcp-manual/SKILL.md
   - src/lingtai/tools/avatar/ANATOMY.md
   - src/lingtai/tools/avatar/__init__.py
   - src/lingtai/tools/avatar/manual/SKILL.md

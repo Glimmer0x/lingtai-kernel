@@ -128,6 +128,15 @@ _WEB_SEARCH_MANUAL_FILES = (
 _GLOSSARY_LANGS = ("en", "zh", "wen")
 _BROWSER_MANUAL_FILES = ("lingtai/tools/browser/manual/SKILL.md",)
 
+_MCP_BUILTIN_PLUGIN_FILES = (
+    "lingtai/tools/mcp/plugin.json",
+    "lingtai/tools/mcp/skills/mcp-manual/SKILL.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/curated-addons.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md",
+    "lingtai/tools/mcp/skills/mcp-manual/reference/troubleshooting.md",
+    "lingtai/tools/mcp/skills/mcp-manual/scripts/find_readme.py",
+)
+
 
 def _build_wheel(dest: Path) -> Path:
     """Build a pure-Python wheel (Rust sidecar skipped) into ``dest``.
@@ -213,6 +222,11 @@ def test_wheel_ships_vision_manual(wheel_entries: set[str]):
 def test_wheel_ships_browser_manual(wheel_entries: set[str]):
     missing = [path for path in _BROWSER_MANUAL_FILES if path not in wheel_entries]
     assert not missing, "browser manual files missing from wheel: %r" % missing
+
+
+def test_wheel_ships_mcp_owned_plugin_manual(wheel_entries: set[str]):
+    missing = [path for path in _MCP_BUILTIN_PLUGIN_FILES if path not in wheel_entries]
+    assert not missing, "mcp built-in plugin files missing from wheel: %r" % missing
 
 
 def test_wheel_ships_complete_web_search_manual_bundle(wheel_entries: set[str]):
@@ -380,6 +394,11 @@ def sdist_entries(tmp_path_factory) -> set[str]:
     assert len(sdists) == 1, sdists
     with tarfile.open(sdists[0]) as tf:
         return {_logical(name) for name in tf.getnames()}
+
+
+def test_sdist_ships_mcp_owned_plugin_manual(sdist_entries: set[str]):
+    missing = [path for path in _MCP_BUILTIN_PLUGIN_FILES if path not in sdist_entries]
+    assert not missing, "mcp built-in plugin files missing from sdist: %r" % missing
 
 
 def test_sdist_ships_browser_manual(sdist_entries: set[str]):

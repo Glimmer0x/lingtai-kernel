@@ -129,6 +129,8 @@ exclude = [
     "i18n/*.json",
     "*/*.json",
     "*/manual/**/*",
+    # Built-in Agent Plugin packages own capability manuals under skills/.
+    "*/skills/**/*",
     # Shared future tool-call contract plus one
     # src/lingtai/tools/<tool>/CONTRACT.md per built-in tool. The runtime and
     # development graph use these invariants; omitting either entry silently
