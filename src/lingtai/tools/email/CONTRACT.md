@@ -8,6 +8,7 @@ related_files:
   - src/lingtai/tools/email/schema.py
   - src/lingtai/tools/email/manager.py
   - src/lingtai/tools/email/ANATOMY.md
+  - src/lingtai/tools/email/BEHAVIORS.md
   - src/lingtai/tools/email/manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
@@ -38,7 +39,7 @@ this one tool. The implementation lives in `src/lingtai/tools/email/`; the code 
 source of truth.
 
 ## Routing Card
-Guarded by: [EM001](BEHAVIORS.md#behavior-em001)
+Guarded by: [EM001](BEHAVIORS.md#behavior-em001), [EM002](BEHAVIORS.md#behavior-em002)
 
 
 **Use this when:**
@@ -102,9 +103,11 @@ shape's schema and is **no longer the model-facing schema**; it is re-exported
 as `get_flat_schema`.
 
 Nullable-and-required is how an optional field is expressed (per
-`tools/CONTRACT.md` "Envelope"); `__init__.py` strips explicit `null`s back to
-*absent* before the manager runs, so `folder`/`n`/`filter` defaulting and
-`edit_contact`'s `if "name" in args` semantics are preserved exactly.
+`tools/CONTRACT.md` "Envelope"); the Email family boundary in `__init__.py`
+strips explicit `null`s back to *absent* before `EmailRuntimeRequest` is
+constructed and before the manager-facing port runs, so `folder`/`n`/`filter`
+defaulting and `edit_contact`'s `if "name" in args` semantics are preserved
+exactly.
 
 The tables below list each action's inputs. Under the envelope they are that
 action's `input` properties — e.g. `email(action='read', input={'email_id':
@@ -165,23 +168,37 @@ actions and per-action schemas from the existing family registry, appends the
 reserved `manual` only through the declaration, and names the existing package
 manual destination `email`.
 
-The recut preserves the real Agent-bound mailbox manager rather than creating a
-shadow manager or passing the Agent to the plugin. `boot(agent)` still creates
-that manager and retains the module for the kernel's inbound-mail hook. Email is
-still mandatory: construction and refresh always retain its effective setup,
-even when `capabilities={"email": None}` or `disable=["email"]` is supplied.
-The host grants Email only `workdir` (to load its package-owned installed manual)
-and declaration-bound `intrinsic_dispatch` (to run Email's already-wired intrinsic
-handler). `_bind(host)` composes the public `ToolFamily` from those ports; the
-controlled official mount replaces the same-name intrinsic handler with the exact
-official handler, while the model inventory omits that retained internal alias.
-Those opt-out forms therefore never expose a generic reserved `email` fallback.
-The public name, action order, closed LTP envelope, manual result, mailbox side
-effects, and error shapes are unchanged.
+The Email package owns the manager-facing `EmailRuntimeRequest` value and
+`EmailRuntimePort.handle_email()` operation (`src/lingtai/tools/email/__init__.py`).
+Operational children receive one fixed action plus its validated input through
+that port; they never receive an Agent, a capability-name lookup, or a generic
+`dispatch(args)` vocabulary. `_EmailIntrinsicRuntimeAdapter` is a transitional
+outer adapter for this stale candidate worktree only: it translates the existing
+`intrinsic_dispatch` bridge into the Email request once. Serialized integration
+must change the declaration's `intrinsic_dispatch` requirement to
+`email_runtime`, bypass and delete this temporary adapter rather than retargeting
+its constructor, and supply the host-granted typed port directly, preserving the
+Email family code and its typed request unchanged.
 
-`tests/test_email_official_tool_plugin.py` proves a real `Agent` claims and
-mounts `email` once, retains the real manager behind the narrow port, publishes
-one model-facing schema, and serves the installed package manual.
+The recut preserves the real Agent-bound mailbox manager rather than creating a
+shadow manager. `boot(agent)` still creates that manager and retains the module
+for the kernel's inbound-mail hook. The transitional `setup(agent)` registers
+the official declaration and returns `CAPABILITY_UNAVAILABLE` so the stale
+dynamic-capability caller removes Email from `_capabilities` and the persisted
+`.agent.json` manifest. Thus `capabilities={"email": None}` and
+`disable=["email"]` cannot create a generic Email fallback or an Email manifest
+row. After serialized integration, Email boot/official registration must remain
+mandatory and the dynamic registry/default/opt-out workaround must be removed
+from its shared owners.
+
+The official mount swaps the same-name intrinsic handler while retaining the
+module-level hook exports. The public name, action order, closed LTP envelope,
+manual result, mailbox side effects, and error shapes are unchanged.
+
+`tests/test_email_official_tool_plugin.py` proves the typed request adapter, one
+real-Agent mount, retained manager, package manual, one model-facing schema, and
+absence of an Email dynamic-capability/manifest row during construction and
+refresh.
 
 ## State & storage
 
@@ -258,6 +275,8 @@ mailbox/contacts.json                 — contact book (list of {address,name,no
 
 | One model-facing `email` tool; children consume no tool slots | `tests/test_tool_family_email_wire_parity.py::test_email_is_exactly_one_model_facing_tool` | Boot an agent and count built schemas | A child leaking out as its own root would double the mail surface |
 | Cross-action smuggle rejected before side effects | `tests/test_tool_family_email_migration.py::test_send_fields_cannot_be_smuggled_through_a_read_call` | Call `read` with `address`/`message` in `input` | Mail could leave the agent via a read-shaped call |
+| Email manager requests use the typed domain port and reject foreign actions | `tests/test_email_official_tool_plugin.py::test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` | Bind the runtime adapter and inspect its request | A generic dispatcher leaks unrelated capability vocabulary |
+| Official Email mount creates no dynamic capability or persisted manifest row | `tests/test_email_official_tool_plugin.py::test_official_email_mount_keeps_real_agent_runtime_and_package_manual`, `::test_email_opt_out_forms_keep_one_official_surface_on_construction_and_refresh` | Inspect `_capabilities` and `_build_manifest()` after construction and refresh | Avatar replay/identity state gains a false Email capability |
 
 Run before merging email changes:
 

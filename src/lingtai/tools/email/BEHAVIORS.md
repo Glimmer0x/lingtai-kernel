@@ -9,6 +9,7 @@ related_files:
   - src/lingtai/tools/email/ANATOMY.md
   - src/lingtai/tools/email/__init__.py
   - src/lingtai/tools/email/manager.py
+  - tests/test_email_official_tool_plugin.py
 maintenance: |
   Created during the every-contract-needs-behaviors sweep. Keep this file
   reciprocal with CONTRACT.md and ANATOMY.md (tridirectional loop): when an
@@ -19,8 +20,9 @@ maintenance: |
 
 Self-contained agent behavior tasks guarding the observable behavior clauses of
 `src/lingtai/tools/email/CONTRACT.md` (closed LTP v2 envelope, validation
-before mailbox I/O, reserved `unread` rejection, exact receipts). Pinned pytest
-commands must run from the repo root with the project's Python.
+before mailbox I/O, reserved `unread` rejection, exact receipts, typed
+manager-facing runtime, and absence of dynamic Email capability state). Pinned
+pytest commands must run from the repo root with the project's Python.
 
 ## Behavior EM001 — envelope failures are rejected before any mailbox I/O, and send returns the exact sent receipt
 
@@ -43,3 +45,27 @@ commands must run from the repo root with the project's Python.
 
 ### Pass / Fail
 Pass when the suite passes and the before-I/O rejection and exact receipt hold. Fail on an envelope failure that touches the mailbox, on a direct `unread` that dispatches, or on a send receipt missing `status: "sent"`; record the evidence trail in the task report.
+
+## Behavior EM002 — official Email runtime is typed and does not persist a capability row
+
+- **id**: EM002
+- **title**: official Email runtime is typed and does not persist a capability row
+- **guards**: `email-contract` § Declared host plugin
+- **runner**: any LingTai agent with `shell` and `file` access to this repository
+- **prerequisites**: a clean checkout of `<repo>`; a scratch agent working directory `<scratch>`
+- **estimate**: ≈ 15 minutes
+
+### Steps
+1. From `<repo>`, run `PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider tests/test_email_official_tool_plugin.py`.
+2. Confirm `test_email_runtime_port_is_domain_specific_and_rejects_foreign_action` rejects a foreign action, and `test_email_bound_family_normalizes_before_typed_runtime_and_preserves_results` captures `EmailRuntimeRequest` values with top-level/nested nulls removed before direct typed-port manager parity for `check` and `edit_contact`.
+3. Confirm the construction and refresh cases inspect `agent._capabilities`, `agent._build_manifest()["capabilities"]`, and persisted `.agent.json`; none contains an `email` row, while exactly one official `email` schema and handler remain mounted.
+4. Call the mounted handler's `check` and `manual` actions and confirm the real mailbox manager and package-owned manual remain available.
+
+### Expected evidence
+- [ ] Step 1: the Email official-plugin suite passes.
+- [ ] Step 2: the family-facing boundary is `EmailRuntimePort.handle_email(EmailRuntimeRequest(...))`; top-level and nested nulls are absent before invocation, `check`/`edit_contact` results remain exact, a foreign capability action is rejected, and no generic `dispatch` method is exposed by the Email adapter.
+- [ ] Step 3: construction and refresh preserve the official surface without adding a dynamic capability or persisted `.agent.json` manifest row.
+- [ ] Step 4: `check` returns the empty-mailbox receipt and `manual` returns the installed `email-manual` body/path.
+
+### Pass / Fail
+Pass when all four steps hold and the official Email surface is mandatory by intrinsic/official registration rather than dynamic capability state. Fail on a generic/foreign operation reaching the manager, an Email capability/manifest row, a duplicate schema, a missing manager, or a non-package manual.

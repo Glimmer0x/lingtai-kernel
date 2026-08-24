@@ -37,7 +37,8 @@ tool is now request/response only.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol
 
 from lingtai.kernel.notifications import register_generic_dismiss_guard
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
@@ -57,6 +58,53 @@ register_generic_dismiss_guard(
         "or email(action='read', input={'email_id': [...]}, reasoning='refresh')"
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Email-owned runtime boundary
+# ---------------------------------------------------------------------------
+
+EmailInput = Mapping[str, object]
+EmailResult = dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class EmailRuntimeRequest:
+    """One validated Email action request crossing the manager boundary."""
+
+    action: str
+    input: EmailInput
+
+
+class EmailRuntimePort(Protocol):
+    """Capability-native port for the already-wired Email manager runtime."""
+
+    def handle_email(self, request: EmailRuntimeRequest) -> EmailResult:
+        """Execute one Email action without exposing an Agent or generic lookup."""
+
+
+class _EmailIntrinsicRuntimeAdapter:
+    """Temporary composition adapter for the retained intrinsic runtime seam.
+
+    The adapter translates the stale host bridge exactly once into Email's
+    domain request. Email's family composition below depends only on
+    :class:`EmailRuntimePort`; serialized integration replaces this bridge with
+    the host's typed ``email_runtime`` port without changing the family.
+    """
+
+    __slots__ = ("_dispatch",)
+
+    def __init__(self, dispatch: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self._dispatch = dispatch
+
+    def handle_email(self, request: EmailRuntimeRequest) -> EmailResult:
+        if request.action not in _EMAIL_DECLARED_ACTIONS:
+            raise ValueError(f"unsupported Email runtime action: {request.action!r}")
+        result = self._dispatch(
+            {"action": request.action, "input": dict(request.input)}
+        )
+        return result
+
 
 # --- Re-exports from sub-modules for backward compatibility ---
 
@@ -253,16 +301,26 @@ def _build_bound_family(host: "ToolPluginHost") -> ToolFamily:
     Email's filesystem manager is intentionally still Agent-bound: the kernel's
     mail arrival hooks and the manager's delivery/identity semantics share that
     live runtime. The official plugin does not receive that Agent. Instead each
-    operational child delegates through the declaration-bound
-    ``intrinsic_dispatch`` port, which contains only Email's already-wired
-    handler. The package-owned `manual` child reads through the separate
-    read-only workdir port, so manual loading never enters the manager.
+    operational child delegates through the Email-owned ``EmailRuntimePort``.
+    On this stale candidate the outer adapter obtains that port from the
+    declaration-bound ``intrinsic_dispatch`` bridge; serialized integration
+    supplies ``host.email_runtime`` directly. The package-owned `manual` child
+    reads through the separate read-only workdir port, so manual loading never
+    enters the manager.
     """
+
+    # The stale candidate host exposes a generic bridge. Keep that translation
+    # at this outer adapter while the Email family itself consumes only its
+    # manager-facing domain port. The serialized integration changes this one
+    # construction line to ``host.email_runtime``.
+    runtime: EmailRuntimePort = _EmailIntrinsicRuntimeAdapter(
+        host.intrinsic_dispatch.dispatch
+    )
 
     def _dispatch(action: str):
         def call(action_input: Mapping[str, Any]) -> dict:
-            return host.intrinsic_dispatch.dispatch(
-                {"action": action, "input": dict(action_input)}
+            return runtime.handle_email(
+                EmailRuntimeRequest(action=action, input=_strip_nulls(action_input))
             )
 
         return call
@@ -455,17 +513,17 @@ def boot(agent) -> None:
     agent._mailbox_tool = "email"
 
 
-def setup(agent: "BaseAgent", **_ignored) -> None:
-    """Promote the already-booted Email intrinsic through the official host path.
+def setup(agent: "BaseAgent", **_ignored) -> object:
+    """Bridge the stale capability caller to Email's official intrinsic mount.
 
-    The runtime stays the real Agent-bound manager created by :func:`boot`: it
-    owns mailbox identity, delivery threads, unread notifications, and the
-    kernel's inbound-mail hook. Registration captures only that same intrinsic
-    handler in the narrow `intrinsic_dispatch` port, mounts the declaration's
-    replacement model-facing surface, and the kernel mount seam replaces the
-    same-name intrinsic handler with that official handler while retaining the
-    module for kernel-facing hook exports.
+    ``boot(agent)`` owns the real :class:`EmailManager`; this function only
+    registers the declaration. Returning the registry's unavailable sentinel
+    makes the transitional capability caller remove Email from its dynamic
+    capability/manifest bookkeeping immediately. The serialized integration
+    removes that caller entirely, leaving this official boot path unchanged.
     """
     from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+    from lingtai.tools.registry import CAPABILITY_UNAVAILABLE
 
     register_agent_tool_plugins(agent, [DECLARATION])
+    return CAPABILITY_UNAVAILABLE

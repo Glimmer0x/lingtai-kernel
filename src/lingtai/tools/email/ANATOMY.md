@@ -42,14 +42,24 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
   - `_adapt_manual_result()` — Host/presentation-only flattening of the canonical ManualTool result to Email's pinned `{status, manual, manual_path}` public shape, strictly *after* dispatch.
   - `handle(agent, args)` — strips `_tc_id`, renders the reserved `unread` rejection before dispatch, delegates to the family, then adapts `manual` and restores Email's own unknown/absent-action results.
   - `boot(agent)` — idempotent boot hook wiring a fresh `EmailManager` onto the agent.
-
+  - `EmailRuntimeRequest` / `EmailRuntimePort` (`__init__.py:71-83`) — the
+    Email-owned manager-facing request and typed operation. The family grants
+    only this domain vocabulary; it does not expose an Agent or a generic
+    intrinsic lookup.
+  - `_EmailIntrinsicRuntimeAdapter` (`__init__.py:86-106`) — transitional
+    composition adapter that translates the stale candidate host bridge once;
+    serialized integration bypasses and deletes this temporary adapter, then
+    supplies the typed `email_runtime` host port directly.
   - `DECLARATION` / `_bind(host)` — static official-plugin declaration and
-    host-bound composition. Operational children use only the
-    declaration-bound intrinsic-dispatch port to preserve the real manager;
-    the reserved manual child uses only `host.workdir`. The official mount swaps
-    the same-name intrinsic handler while the module remains available to the
-    kernel hook resolver, so there is one model-facing `email` schema and no
-    replacement mailbox runtime.
+    host-bound composition. Operational children consume only
+    `EmailRuntimePort`; the reserved manual child uses only `host.workdir`.
+    The official mount swaps the same-name intrinsic handler while the module
+    remains available to the kernel hook resolver, so there is one
+    model-facing `email` schema and no replacement mailbox runtime.
+  - `setup(agent)` — transitional official-mount bridge. It returns the
+    unavailable sentinel after registration so the stale dynamic-capability
+    caller does not persist an Email capability row; serialized integration
+    removes that caller.
 
 - `_family_schema.py` — Canonical per-action data for the composed schema: `ACTION_ORDER` (the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and child registration order), one strict closed `input_schema` per action in `INPUT_SCHEMAS`, and `ACTION_ENUM_DESCRIPTION`. Holds no composition logic and imports `mode_field` from `primitives` and `MANUAL_INPUT_SCHEMA` from `tool_family.manual` rather than restating them.
 
@@ -79,7 +89,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 
 - **Inbound:** `handle()` is called by the tool dispatcher (via `base_agent._dispatch_tool`), which injects `_tc_id` into every intrinsic's args; `handle()` strips it at this family's own boundary. `boot()` is called during agent construction in `base_agent/__init__.py`.
 - **Inbound (kernel convenience API):** `base_agent/messaging.py:_mail` sends through this intrinsic and carries the LTP v2 envelope (`{"action": "send", "input": {...}}`).
-- **Outbound (generic composition):** `__init__.py` imports `ChildTool`/`ToolFamily` from `../tool_family/` and `build_manual_child`/`MANUAL_INPUT_SCHEMA` from `../tool_family/manual.py`. See `src/lingtai/tools/tool_family/ANATOMY.md`.
+- **Outbound (family composition):** `__init__.py` imports `ChildTool`/`ToolFamily` from `../tool_family/` and `build_manual_child`/`MANUAL_INPUT_SCHEMA` from `../tool_family/manual.py`. Action handlers depend on the local `EmailRuntimePort`; only `_EmailIntrinsicRuntimeAdapter` knows the stale host bridge. See `src/lingtai/tools/tool_family/ANATOMY.md`.
 - **Inbound (cross-module):** `_new_mailbox_id` is owned by the kernel mail service — defined at `src/lingtai/kernel/services/mail.py:29-44`. After the mail Ports & Adapters split it is imported explicitly by the POSIX mail adapter (`src/lingtai/adapters/posix/mail.py:29`) and consumed by its `send()` (`src/lingtai/adapters/posix/mail.py:118`), not by `kernel/services/mail.py` (which no longer defines a transport). The email package imports and re-exports it via `primitives.py:20` for back-compat with `lingtai.tools.email._new_mailbox_id` importers.
 - **Inbound (cross-module):** `EmailManager` is imported by `src/lingtai/__init__.py:19` for the wrapper re-export.
 - **Outbound:** Depends on `..i18n` (translations), `..message` (message construction), `..time_veil` (timestamp scrubbing), `..token_counter` (budget checks in `_check`).
@@ -93,6 +103,7 @@ Filesystem-based email system — mailbox I/O, composition, search, contacts, an
 - `_mailman` runs as a daemon thread per recipient. It waits until `deliver_at`, then dispatches. The outbox entry is written synchronously before the thread starts.
 - `_mailman` with `skip_sent=True` (used by `_send`) deletes the outbox entry instead of moving it to `sent/`, because `_send` writes the `sent/` entry itself.
 - The model-facing root is one closed LTP v2 envelope (`action`, `input`, `reasoning`, `summarize`) over 14 internal children — one per public action — composed by the generic `ToolFamily` infra from the single `_family_schema.ACTION_ORDER`/`INPUT_SCHEMAS` registry. Children consume no model tool slots, so `email` still advertises exactly one tool. Because both the advertised schema and dispatch are generated from that one registry, an action cannot be advertised without being dispatchable. Cross-action `input` keys are rejected before any mailbox I/O — the property that matters most for a side-effecting family.
+- The official manager-facing composition is domain-native: `EmailRuntimeRequest` is the only request shape accepted by `EmailRuntimePort`, and `_EmailIntrinsicRuntimeAdapter` is the only stale-host translation point. The official surface is not a dynamic capability and must not create an Email row in `_capabilities` or the persisted manifest.
 - `unread` is kernel-synthesized digest state, **not** a public child: it is absent from `ACTION_ORDER` and the `action` enum, and `handle()` renders its exact reserved-action rejection before the family dispatches.
 - `.notification/email.json` is a **live mirror** of the current unread set. Any action that mutates the read state — `_read`, `_dismiss`, `_archive`, `_delete` — calls `_rerender_unread_digest(agent)` (lazy import from `base_agent/messaging.py`) so the wire's notification updates on the next heartbeat sync. The earlier "snapshot at last arrival" semantics led to the unread email notification carrying mails the agent had already replied to indefinitely.
 - `_dismiss` is the lightweight "mark read without returning content" path — used when the agent already saw the body in `_meta.agent_meta.notifications.persistent.email` and just wants to clear the notification entry. Same effect on `read.json` and `.notification/email.json` as `_read`, but no email bodies in the response. Accepts a list (`email_id=[id1, id2, ...]`).
