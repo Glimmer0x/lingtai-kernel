@@ -835,7 +835,7 @@ def test_metadata_displays_lingtai_daemon_models_compactly_and_deterministically
     ]
 
 
-def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
+def test_daemon_snapshot_uses_ledger_tail_and_windows(tmp_path):
     import json as _json
     from datetime import datetime, timedelta, timezone
 
@@ -854,6 +854,8 @@ def test_daemon_snapshot_scans_daemons_dir_and_windows(tmp_path):
         ("em-4", {"state": "done", "backend": "codex", "finished_at": old, "tokens": {"input": 9999, "output": 9999, "cached": 9999, "calls": 99}}),
     ]:
         (daemons / name / "daemon.json").write_text(_json.dumps(state), encoding="utf-8")
+        from lingtai.kernel.daemon_dispatch import append_dispatch
+        append_dispatch(tmp_path, run_id=name, created_at="2026-08-20T00:00:00Z")
 
     mgr, _ = _integration_manager(tmp_path)
     snap = mgr._task_card_daemon_snapshot()
@@ -976,6 +978,9 @@ def test_daemon_real_schema_cli_ledger_not_shadowed_and_kernel_api_calls_use_tok
         "tokens": {"input": 9, "output": 4, "cached": 2, "calls": 4},
         "tool_call_count": 17,
     }), encoding="utf-8")
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+    append_dispatch(tmp_path, run_id="cli", created_at="2026-08-20T00:00:00Z")
+    append_dispatch(tmp_path, run_id="kernel", created_at="2026-08-20T00:00:01Z")
     mgr, _ = _integration_manager(tmp_path)
     snapshot = mgr._task_card_daemon_snapshot()
     assert snapshot["input_tokens"] == 109

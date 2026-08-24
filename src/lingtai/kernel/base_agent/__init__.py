@@ -910,6 +910,9 @@ class BaseAgent:
         # impossible, sequence is a bonus ordering signal for one process.
         self._session_stats_last_written_at: float | None = None
         self._session_stats_sequence: int = 0
+        # Created lazily by _write_session_stats_record so the explicit
+        # background owner is only present for agents that publish this record.
+        self._daemon_stats_snapshot = None
 
         # Heartbeat — always-on health monitor
         self._heartbeat: float = 0.0
@@ -2808,6 +2811,7 @@ class BaseAgent:
         logged and never interrupts the turn.
         """
         from ..session_stats import (
+            RecentDaemonSnapshot,
             build_agent_record,
             session_stats_refresh_seconds,
             should_refresh_agent_record,
@@ -2822,8 +2826,19 @@ class BaseAgent:
                 session_stats_refresh_seconds(),
             ):
                 return
+            snapshot_owner = getattr(self, "_daemon_stats_snapshot", None)
+            if snapshot_owner is None:
+                snapshot_owner = RecentDaemonSnapshot(self._working_dir)
+                self._daemon_stats_snapshot = snapshot_owner
+            # Never wait for the newest-1000 daemon reads: a blocked storage
+            # read must not delay the heartbeat's liveness publication.
+            snapshot_owner.schedule()
             self._session_stats_sequence += 1
-            record = build_agent_record(self, sequence=self._session_stats_sequence)
+            record = build_agent_record(
+                self,
+                sequence=self._session_stats_sequence,
+                daemon_summary=snapshot_owner.snapshot(),
+            )
             write_agent_record(self._working_dir, record)
             self._session_stats_last_written_at = wall_now
         except Exception as e:
