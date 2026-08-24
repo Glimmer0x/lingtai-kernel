@@ -9,7 +9,7 @@ Providers:
 MiniMax and Zhipu were retired from this factory 2026-07-28 (Jason authorized
 deletion, issue 11114): they are no longer built-in web search providers.
 Wire either through a third-party MCP server instead — see
-src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md.
+src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md.
 
 Factory:
     create_search_service(provider, api_key) — instantiate by provider name.

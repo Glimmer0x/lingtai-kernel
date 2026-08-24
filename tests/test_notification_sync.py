@@ -34,6 +34,8 @@ import pytest
 
 from tests._notification_store_helpers import fingerprint_notifications, snapshot_notifications, publish_test_payload, clear_test_payload, replace_ack_refs_for_test
 from tests._notification_store_helpers import notification_store_for, store_agent_for
+from tests._tool_plugin_helpers import dispatch_declared_tool
+from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +195,6 @@ def test_concurrent_publish_atomicity(tmp_path: Path) -> None:
 def test_check_action_returns_empty_when_nothing_published(
     tmp_path: Path,
 ) -> None:
-    from lingtai.tools.notification import handle
 
     @dataclass
     class _Stub:
@@ -203,7 +204,7 @@ def test_check_action_returns_empty_when_nothing_published(
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check", "input": {}, "reasoning": "test"})
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION, _Stub(), {"action": "check", "input": {}, "reasoning": "test"})
     # Voluntary call returns a placeholder dict — the live notification
     # payload (if any) is stamped on by the turn loop's meta-block hook,
     # never built by the handler itself. So even with nothing published,
@@ -216,7 +217,6 @@ def test_check_action_returns_empty_when_nothing_published(
 
 
 def test_check_action_returns_placeholder(tmp_path: Path) -> None:
-    from lingtai.tools.notification import handle
 
     publish_test_payload(tmp_path, "email", {"count": 5, "newest_received_at": "2026-05-05T00:00:00Z"})
     publish_test_payload(tmp_path, "soul", {"voices": [{"source": "warmth", "voice": "..."}]})
@@ -229,7 +229,7 @@ def test_check_action_returns_placeholder(tmp_path: Path) -> None:
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_Stub(), {"action": "check", "input": {}, "reasoning": "test"})
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION, _Stub(), {"action": "check", "input": {}, "reasoning": "test"})
     # Handler returns a placeholder only — channel keys MUST NOT appear
     # here. The canonical `notifications` payload is attached later by
     # `attach_active_notifications`, not by this handler. This guarantees
@@ -863,7 +863,6 @@ def test_synthesized_notification_call_args_survive_real_dispatch(
     injection_seq root field with "unsupported notification argument".
     """
     from lingtai.kernel.llm.interface import ToolCallBlock
-    from lingtai.tools.notification import handle
 
     publish_test_payload(tmp_path, "email", {"count": 1, "data": {"count": 1}})
     agent = _make_stub_agent_for_block_log(tmp_path)
@@ -882,7 +881,7 @@ def test_synthesized_notification_call_args_survive_real_dispatch(
         def _log(self, evt: str, **fields: Any) -> None:
             self._logs.append((evt, fields))
 
-    res = handle(_DispatchStub(), dict(call_block.args))
+    res = dispatch_declared_tool(NOTIFICATION_DECLARATION, _DispatchStub(), dict(call_block.args))
 
     assert res.get("error_code") != "INVALID_ARGUMENT"
     assert res.get("_notification_placeholder") is True

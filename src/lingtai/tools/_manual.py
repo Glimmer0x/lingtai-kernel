@@ -18,11 +18,14 @@ def _agent_working_dir(source):
     ``path``.
     """
     working_dir = getattr(source, "_working_dir", None)
-    if working_dir is not None:
+    if working_dir is not None and not callable(working_dir):
         return working_dir
     path = getattr(source, "path", None)
     if path is not None:
         return path
+    working_dir = getattr(source, "working_dir", None)
+    if working_dir is not None:
+        return working_dir
     raise AttributeError(
         f"cannot resolve an agent working directory from "
         f"{type(source).__name__}: it is neither a live Agent with "

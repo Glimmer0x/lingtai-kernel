@@ -43,25 +43,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA
+from .plugin import SYSTEM_DECLARED_ACTIONS
 
 # The canonical action order. This is the single source for the schema's
 # ``action`` enum order, the ``input.oneOf``/``allOf`` branch order, and the
 # child registration order in ``__init__.py`` — one list, not three. The order
 # is the pre-migration enum order, unchanged.
-ACTION_ORDER = (
-    "refresh",
-    "sleep",
-    "lull",
-    "interrupt",
-    "suspend",
-    "cpr",
-    "clear",
-    "nirvana",
-    "presets",
-    "name_set",
-    "name_nickname",
-    "manual",
-)
+ACTION_ORDER = (*SYSTEM_DECLARED_ACTIONS, "manual")
 
 # --- Shared field descriptions, carried over verbatim from the flat schema ---
 
@@ -140,8 +128,19 @@ _SLEEP_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "reason": {"type": ["string", "null"], "description": _REASON_DESCRIPTION},
         "force": {"type": ["boolean", "null"], "description": _FORCE_DESCRIPTION},
+        "delay": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "description": (
+                "Optional finite positive seconds until one ordinary system "
+                "notification alarm. Use only as a last-resort for async work "
+                "without a reliable completion notification, not as normal "
+                "waiting (use IDLE). An early wake does not cancel it; a later "
+                "sleep delay replaces it. Null omits it; no maximum is imposed."
+            ),
+        },
     },
-    "required": ["reason", "force"],
+    "required": ["reason", "force", "delay"],
     "additionalProperties": False,
 }
 
@@ -216,7 +215,10 @@ ACTION_ENUM_DESCRIPTION = (
     "system-manual.\n\n"
     "presets: list available presets with tags, connectivity, capabilities. "
     "See system-manual.\n\n"
-    "sleep: go to sleep until mail wakes you. Self only.\n\n"
+    "sleep: go to sleep until mail wakes you. Self only. Normal waiting uses "
+    "reliable completion notifications and IDLE; delay is only a last-resort "
+    "one-shot alarm for async work lacking one. An early wake does not cancel "
+    "it; a later delay replaces it.\n\n"
     "lull: put another agent to sleep (karma).\n\n"
     "suspend: freeze another agent (karma).\n\n"
     "cpr: resuscitate suspended agent (karma).\n\n"

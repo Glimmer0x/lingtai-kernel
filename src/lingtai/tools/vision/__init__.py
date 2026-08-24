@@ -30,13 +30,16 @@ children are ``analyze``/``check``/``list`` plus the family-owned reserved
 ``lingtai.tools.tool_family`` infrastructure. The public tool name and action
 values are unchanged; only the call envelope moved from flat arguments to
 ``action``/``input``/``reasoning``/``summarize``.
-Provider routing, credential/identity resolution, and every analyze/manual
-result shape are untouched by that migration.
+Provider routing, credential/identity resolution, and every action result
+shape are untouched by that migration.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
+
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration, ToolPluginDeclarationError
 
 from ..tool_family import ChildTool, ToolFamily
 from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
@@ -44,6 +47,7 @@ from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
 if TYPE_CHECKING:
     from lingtai.kernel.base_agent import BaseAgent
+    from lingtai.kernel.tool_plugin import ActiveProviderPort, ToolPluginHost, WorkdirPort
     from lingtai.services.vision import VisionService
 
 
@@ -256,80 +260,143 @@ _LIST_INPUT_SCHEMA: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class VisionConfiguration:
+    """The capability setup input supplied through the configuration port.
+
+    It contains exactly the public ``setup()`` arguments, never an Agent. The
+    static declaration owns its validation and interpretation at bind time;
+    keeping the value immutable makes a refresh bind from one coherent snapshot.
+    The kernel ``ConfigurationPort`` carries a copied mapping (the same shape
+    Shell earned); :meth:`port_values` and :meth:`from_port_values` are the
+    only translation between that mapping and this typed snapshot.
+    """
+
+    vision_service: Any | None
+    provider: str | None
+    api_key: str | None
+    api_key_env: str | None
+    kwargs: Mapping[str, Any]
+
+    _PORT_FIELDS = ("vision_service", "provider", "api_key", "api_key_env", "kwargs")
+
+    def port_values(self) -> dict[str, Any]:
+        """The mapping handed to the host's ``configuration`` port for this bind."""
+        return {
+            "vision_service": self.vision_service,
+            "provider": self.provider,
+            "api_key": self.api_key,
+            "api_key_env": self.api_key_env,
+            "kwargs": dict(self.kwargs),
+        }
+
+    @classmethod
+    def from_port_values(cls, values: Any) -> "VisionConfiguration":
+        """Rebuild the snapshot from the granted port; refuse any other shape."""
+        if not isinstance(values, Mapping) or set(values) != set(cls._PORT_FIELDS):
+            raise ToolPluginDeclarationError(
+                "vision requires a VisionConfiguration snapshot supplied by "
+                "capability setup through its configuration port"
+            )
+        kwargs = values["kwargs"]
+        if not isinstance(kwargs, Mapping):
+            raise ToolPluginDeclarationError(
+                "vision configuration kwargs must be a mapping"
+            )
+        return cls(
+            vision_service=values["vision_service"],
+            provider=values["provider"],
+            api_key=values["api_key"],
+            api_key_env=values["api_key_env"],
+            kwargs=dict(kwargs),
+        )
+
+
+_DESCRIPTION = (
+    "Analyze an image with the active preset. Use vision(action='analyze', "
+    "input={'image_path': '...', 'question': null}, reasoning='read the "
+    "image') for the direct request; the optional input preset field "
+    "borrows another allowed preset's vision service (e.g. 'codex-pool'). "
+    "Use vision(action='check', input={'preset': null}, reasoning='verify "
+    "the vision route') to resolve which preset's vision service actually "
+    "works without sending an image. A real request failure returns a "
+    "sanitized error and points to vision(action='manual', input={}, "
+    "reasoning='load vision guidance') for read-only alternatives. No "
+    "provider, model, credential, or MCP fallback is automatic."
+)
+
+
 def _build_family(
     analyze_handler: Any = _unused,
     check_handler: Any = _unused,
     list_handler: Any = _unused,
     manual_child: ChildTool | None = None,
 ) -> ToolFamily:
-    """Build vision's family from the one canonical child declaration.
+    """Build Vision's declared family from its one static declaration.
 
-    The single source of truth for vision's children: both the module-level
-    schema-only family (which composes the model-facing schema and proves at
-    import time that the registry has no duplicate or reserved-name collision)
-    and each ``VisionManager``'s dispatching family come from here, so child
-    names, schemas, titles, and order cannot drift between the wire surface
-    and the dispatcher. Defaults build the non-dispatching variant; the
-    manager passes its bound ``analyze``/``check``/``list`` handlers and the
-    real reserved ``manual`` child from ``build_manual_child``.
+    The module-level schema-only family and each host-bound dispatcher derive
+    their public name, operational schemas, and reserved manual slot from
+    :data:`DECLARATION`. This prevents the advertised action inventory from
+    drifting away from the declaration the kernel reserves.
     """
     return ToolFamily(
-        "vision",
+        DECLARATION.name,
         [
-            ChildTool("analyze", _ANALYZE_INPUT_SCHEMA, analyze_handler, title="analyze input"),
-            ChildTool("check", _CHECK_INPUT_SCHEMA, check_handler, title="check input"),
-            ChildTool("list", _LIST_INPUT_SCHEMA, list_handler, title="list input"),
+            ChildTool(
+                action,
+                DECLARATION.input_schemas[action],
+                handler,
+                title=f"{action} input",
+            )
+            for action, handler in (
+                ("analyze", analyze_handler),
+                ("check", check_handler),
+                ("list", list_handler),
+            )
+        ]
+        + [
             manual_child
-            or ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"),
+            or ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
         ],
     )
 
 
-_FAMILY = _build_family()
-
-
 def get_description(lang: str = "en") -> str:
-    return (
-        "Analyze an image with the active preset. Use vision(action='analyze', "
-        "input={'image_path': '...', 'question': null}, reasoning='read the "
-        "image') for the direct request; the optional input preset field "
-        "borrows another allowed preset's vision service (e.g. 'codex-pool'). "
-        "Use vision(action='check', input={'preset': null}, reasoning='verify "
-        "the vision route') to resolve which preset's vision service actually "
-        "works without sending an image. A real request failure returns a "
-        "sanitized error and points to vision(action='manual', input={}, "
-        "reasoning='load vision guidance') for read-only alternatives. No "
-        "provider, model, credential, or MCP fallback is automatic."
-    )
+    return _DESCRIPTION
 
 
 def get_schema(lang: str = "en") -> dict:
-    # Composed by the generic ToolFamily infra from ``_build_family``'s child
-    # declaration, never hand-assembled.
+    # Composed by generic ToolFamily infrastructure from the declaration-derived
+    # schema-only family, never hand-assembled.
     return _FAMILY.build_schema()
 
 
 class VisionManager:
-    """Handles vision tool calls via a VisionService."""
+    """Host-bound Vision dispatcher with no reference to the live Agent."""
 
     def __init__(
         self,
-        agent: "BaseAgent",
-        vision_service: VisionService | None,
+        workdir: "WorkdirPort",
+        active_provider: "ActiveProviderPort",
+        vision_service: "VisionService | None",
         manual_reason: str = "",
     ) -> None:
-        self._agent = agent
+        self._workdir = workdir
+        self._active_provider = active_provider
         self._vision_service = vision_service
         self._manual_reason = manual_reason
-        # Same canonical child declaration the module-level schema-only family
-        # uses, with this instance's bound analyze/check/list handlers and the
-        # real reserved ``manual`` child registered directly (unwrapped).
+        # The declaration-derived child registry gets only this dispatcher's
+        # handlers and the workdir-bound packaged manual child.
         self._family = _build_family(
             self._dispatch_analyze,
             self._dispatch_check,
             self._dispatch_list,
-            build_manual_child(agent, "vision"),
+            build_manual_child(workdir, DECLARATION.manual),
         )
+
+    def __call__(self, args: dict | None) -> dict:
+        """Make the manager itself the registrar-published handler."""
+        return self.handle(args)
 
     def _build_service_from_preset(self, preset_ref: str) -> tuple[Any, str]:
         """Borrow another preset's vision service for one call.
@@ -350,7 +417,7 @@ class VisionManager:
 
         from lingtai.kernel.presets import load_preset, resolve_allowed_presets
 
-        init_path = Path(self._agent._working_dir) / "init.json"
+        init_path = Path(self._workdir.path) / "init.json"
         if not init_path.is_file():
             return None, "No init.json is available to resolve manifest.preset.allowed.", {}
         try:
@@ -358,7 +425,7 @@ class VisionManager:
         except Exception:
             return None, "init.json could not be parsed while resolving preset.allowed.", {}
         manifest = init_data.get("manifest") or {}
-        allowed_paths = {str(p) for p in resolve_allowed_presets(manifest, self._agent._working_dir)}
+        allowed_paths = {str(p) for p in resolve_allowed_presets(manifest, self._workdir.path)}
         raw_allowed = set(manifest.get("preset", {}).get("allowed") or [])
         resolved_ref = str(Path(preset_ref).expanduser())
         if preset_ref not in raw_allowed and resolved_ref not in allowed_paths:
@@ -369,7 +436,7 @@ class VisionManager:
         try:
             preset = load_preset(
                 preset_ref,
-                working_dir=self._agent._working_dir,
+                working_dir=self._workdir.path,
                 # Read-only preset loading: no migration surface for a borrow.
                 run_migrations=lambda _path: None,
             )
@@ -404,7 +471,8 @@ class VisionManager:
         # ``_resolve_direct_service`` never receives it twice (TypeError).
         kwargs.pop("provider", None)
         service, service_reason = _resolve_direct_service(
-            self._agent,
+            self._workdir,
+            self._active_provider,
             provider,
             api_key=api_key,
             api_key_env=api_key_env,
@@ -460,7 +528,7 @@ class VisionManager:
 
         path = Path(image_path)
         if not path.is_absolute():
-            path = self._agent._working_dir / path
+            path = self._workdir.path / path
 
         if not path.is_file():
             return {"status": "error", "message": f"Image file not found: {path}"}
@@ -543,7 +611,7 @@ class VisionManager:
                 "status": "error",
                 "message": f"{reason} {_consent_guidance()}",
             }
-        active_service = getattr(self._agent, "service", None)
+        active_service = self._active_provider.service
         return {
             "status": "ok",
             "route": "default",
@@ -556,7 +624,7 @@ class VisionManager:
         import json as _json
         from lingtai.kernel.presets import load_preset, resolve_allowed_presets
 
-        active_service = getattr(self._agent, "service", None)
+        active_service = self._active_provider.service
         active_provider = getattr(active_service, "provider", None)
         active_model = getattr(active_service, "_model", None)
         default_endpoint = _vision_endpoint(active_provider)
@@ -569,13 +637,13 @@ class VisionManager:
             "responses_vision": _responses_vision(active_provider),
         }
         allowed: list[str] = []
-        init_path = Path(self._agent._working_dir) / "init.json"
+        init_path = Path(self._workdir.path) / "init.json"
         if init_path.is_file():
             try:
                 init_data = _json.loads(init_path.read_text(encoding="utf-8"))
                 manifest = init_data.get("manifest") or {}
                 allowed = sorted(
-                    {str(p) for p in resolve_allowed_presets(manifest, self._agent._working_dir)}
+                    {str(p) for p in resolve_allowed_presets(manifest, self._workdir.path)}
                     | {str(p) for p in (manifest.get("preset", {}).get("allowed") or [])}
                 )
             except Exception:
@@ -583,7 +651,7 @@ class VisionManager:
         presets: list[dict[str, Any]] = []
         for ref in allowed:
             try:
-                preset = load_preset(ref, working_dir=self._agent._working_dir, run_migrations=lambda _path: None)
+                preset = load_preset(ref, working_dir=self._workdir.path, run_migrations=lambda _path: None)
             except Exception:
                 continue
             pm = preset.get("manifest") or {}
@@ -650,9 +718,82 @@ class VisionManager:
 
 
 
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose Vision against only its granted ports; mount nothing.
+
+    Provider resolution retains the previous active-provider behavior, but all
+    Agent reads flow through ``workdir`` and ``active_provider``. Explicit
+    capability kwargs arrive as one opaque configuration port rather than by
+    reaching through the Agent. Construction creates no transport, process, or
+    prompt side effect; the kernel registrar alone activates and mounts.
+    """
+    configuration = VisionConfiguration.from_port_values(host.configuration.values)
+    vision_service = configuration.vision_service
+    provider = configuration.provider
+    manual_reason = ""
+    if vision_service is None and provider is None:
+        active_service = host.active_provider.service
+        active_name = getattr(active_service, "provider", "")
+        if isinstance(active_name, str) and active_name.strip():
+            provider = active_name
+    if vision_service is None and provider is not None:
+        vision_service, manual_reason = _resolve_direct_service(
+            host.workdir,
+            host.active_provider,
+            provider,
+            api_key=configuration.api_key,
+            api_key_env=configuration.api_key_env,
+            **dict(configuration.kwargs),
+        )
+    elif vision_service is None:
+        manual_reason = (
+            "No direct vision provider was configured; use vision(action='manual', "
+            "input={}, reasoning='no direct vision provider is configured')."
+        )
+    manager = VisionManager(
+        host.workdir,
+        host.active_provider,
+        vision_service=vision_service,
+        manual_reason=manual_reason,
+    )
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=manager,
+        description=DECLARATION.description,
+        glossary_package=DECLARATION.glossary_package,
+    )
+
+
+#: Static official declaration. The schema-only family below and every bound
+#: manager derive identity, action schemas, and installed manual destination
+#: from this one object; the kernel verifies their advertised actions at bind.
+DECLARATION = ToolPluginDeclaration(
+    name="vision",
+    actions=("analyze", "check", "list"),
+    input_schemas={
+        "analyze": _ANALYZE_INPUT_SCHEMA,
+        "check": _CHECK_INPUT_SCHEMA,
+        "list": _LIST_INPUT_SCHEMA,
+    },
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="vision",
+    description=_DESCRIPTION,
+    binder=_bind,
+    requires=("workdir", "active_provider", "configuration"),
+    glossary_package=__package__,
+)
+
+
+#: Import-time schema-only composition catches a malformed fixed child registry
+#: before an Agent exists. Runtime binding builds the same declaration-derived
+#: family with real handlers and its installed manual child.
+_FAMILY = _build_family()
+
 
 def _resolve_direct_service(
-    agent: "BaseAgent",
+    workdir: "WorkdirPort",
+    active_provider: "ActiveProviderPort",
     provider: str,
     api_key: str | None = None,
     api_key_env: str | None = None,
@@ -660,9 +801,9 @@ def _resolve_direct_service(
     identity_service: Any = None,
     **kwargs: Any,
 ) -> tuple["VisionService | None", str]:
-    """Resolve a direct VisionService from provider + kwargs (shared by setup and preset borrowing).
+    """Resolve a direct VisionService from provider + kwargs.
 
-    ``identity_service`` overrides the agent's active LLM service used for
+    ``identity_service`` overrides the active-provider port's service used for
     provider identity, model/base_url inheritance, and the Codex pool bucket.
     Preset borrowing passes a lightweight identity shim built from the borrowed
     preset's ``manifest.llm`` so the borrowed provider (e.g. ``codex-pool``)
@@ -674,7 +815,7 @@ def _resolve_direct_service(
         from lingtai.kernel.config_resolve import resolve_env
         api_key = resolve_env(api_key, api_key_env)
     provider_key = provider.lower()
-    active_service = identity_service if identity_service is not None else getattr(agent, "service", None)
+    active_service = identity_service if identity_service is not None else active_provider.service
     active_provider = getattr(active_service, "provider", "")
     active_provider_key = active_provider.lower() if isinstance(active_provider, str) else ""
     same_provider = _same_provider_identity(provider_key, active_provider_key)
@@ -717,7 +858,7 @@ def _resolve_direct_service(
             read_local_settings,
         )
         try:
-            local_settings = read_local_settings(agent)
+            local_settings = read_local_settings(workdir)
         except SettingsError as exc:
             manual_reason = (
                 f"Local vision settings are invalid: {exc}; fix "
@@ -1025,35 +1166,44 @@ def _resolve_direct_service(
 
 def setup(
     agent: "BaseAgent",
-    vision_service: VisionService | None = None,
+    vision_service: "VisionService | None" = None,
     provider: str | None = None,
     api_key: str | None = None,
     api_key_env: str | None = None,
     **kwargs: Any,
 ) -> VisionManager:
-    """Set up the vision capability on an agent.
+    """Register Vision through its declared host-plugin route.
 
-    ``vision`` is always registered. A direct route is built from
-    ``vision_service`` or ``provider`` + credential; when neither is supplied
-    the provider defaults to the active LLM's own Responses API (so the tool
-    is usable out of the box and fails explicitly if that route cannot see
-    images). Callers may also borrow another preset's vision service at call
-    time via the ``analyze`` ``preset`` option.
+    ``vision`` remains always registered. Its public capability kwargs are
+    carried as a configuration port; the binder resolves the default active
+    provider through its one narrow read port, then the registrar mounts the
+    resulting handler under the kernel-reserved ``vision`` name. No generic
+    ``Agent.add_tool`` path is available to this official family.
     """
-    manual_reason = ""
-    if vision_service is None:
-        if provider is None:
-            active_service = getattr(agent, "service", None)
-            active_provider = getattr(active_service, "provider", "")
-            if isinstance(active_provider, str) and active_provider.strip():
-                provider = active_provider
-    if vision_service is None and provider is not None:
-        vision_service, manual_reason = _resolve_direct_service(
-            agent, provider, api_key=api_key, api_key_env=api_key_env, **kwargs
-        )
-    elif vision_service is None:
-        manual_reason = "No direct vision provider was configured; use vision(action='manual', input={}, reasoning='no direct vision provider is configured')."
+    from lingtai.adapters.tool_plugin_host import (
+        StaticConfigurationAdapter,
+        register_agent_tool_plugins,
+    )
 
-    mgr = VisionManager(agent, vision_service=vision_service, manual_reason=manual_reason)
-    agent.add_tool("vision", schema=get_schema(), handler=mgr.handle, description=get_description(), glossary_package=__package__)
-    return mgr
+    configuration = StaticConfigurationAdapter(
+        VisionConfiguration(
+            vision_service=vision_service,
+            provider=provider,
+            api_key=api_key,
+            api_key_env=api_key_env,
+            kwargs=dict(kwargs),
+        ).port_values()
+    )
+    (bound,) = register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        # The snapshot is granted to this declaration alone, through the same
+        # setup-selected seam Shell uses; it is never added to the standard
+        # table for every family.
+        extra_ports_for=lambda declaration: (
+            {"configuration": configuration} if declaration is DECLARATION else {}
+        ),
+    )
+    if not isinstance(bound.handler, VisionManager):  # pragma: no cover - declaration invariant
+        raise ToolPluginDeclarationError("vision declaration bound a non-Vision handler")
+    return bound.handler

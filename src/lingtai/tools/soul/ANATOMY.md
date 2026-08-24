@@ -11,72 +11,106 @@ related_files:
   - src/lingtai/tools/soul/glossary-zh.md
   - src/lingtai/tools/soul/glossary-wen.md
   - src/lingtai/tools/soul/CONTRACT.md
+  - src/lingtai/tools/soul/manual/SKILL.md
+  - src/lingtai/kernel/tool_plugin/ANATOMY.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - src/lingtai/agent.py
+  - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_soul_migration.py
+  - tests/test_soul_runtime_port_ab.py
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/ANATOMY.md
-  - tests/test_tool_family_soul_migration.py
   - ENVIRONMENT_VARIABLES.md
 maintenance: |
-  Keep related_files as repo-relative paths to real files. Include neighboring
-  ANATOMY.md files so the anatomy graph stays connected rather than isolated;
-  anatomy links must be bidirectional. If you create a new ANATOMY.md, copy this
-  maintenance field. If you notice drift between this anatomy and the code,
-  report it. See lingtai-dev-guide for details.
-  Capability mentions in any document require explicit bidirectional
-  related_files mapping to the implementing code (see root ## Maintenance).
+  Keep related_files as repo-relative paths to real files. Keep this map
+  synchronized with Soul's structural composition and the paired contract.
+  The root package is the only whole-Agent compatibility bridge; the four
+  implementation consumers below receive SoulRuntimePort directly. Capability
+  mentions require explicit related_files links to implementing code.
 ---
 # intrinsics/soul
 
-> **Maintenance:** see the `lingtai-kernel-anatomy` skill. **Coding agents** update this file in the same commit as code changes. **LingTai agents** report drift as issues/mail/PR proposals; do not silently fix.
-
-Inner voice and soul-flow. One model-facing `soul` family root with six
-action-separated canonical children (LTP v2 — see `../CONTRACT.md` and
-`../tool_family/ANATOMY.md`): four soul-domain actions (`inquiry`,
-`config`, `voice`, `flow`), a `dismiss` alias for the generic
-notification-dismiss path, and the family-reserved `manual`. Each action owns
-one strict, closed `input` object; the model-facing schema and dispatch are
-both generated from that single child registry, so `inquiry` no longer
-advertises `delay_seconds` and `config` no longer advertises `prompt`. The
-public tool name, action values, semantics, receipts, and error strings are
-unchanged by that migration — only the argument shape moved from a flat root
-into `action` + per-action `input`. `flow` also fires on a wall-clock timer
-mechanically (IDLE-only: timer starts on IDLE transition, fires once,
-does not reschedule — next IDLE transition starts fresh). Voluntary `flow` calls return immediately with a success
-acknowledgement; the actual voices arrive shortly after by writing
-`.notification/soul.json`, which the kernel's notification sync picks
-up on the next heartbeat tick and surfaces inside the unified
-`notification(action="check")` wire pair (see root `ANATOMY.md`
-"Notifications"). A fire lock (`agent._soul_fire_lock`) gates
-concurrent fires so the timer path and a voluntary call never run
-simultaneously.
+Soul is the official declared-host-plugin family for the agent's inner voice.
+Its public root owns the LTP-v2 envelope and six action children (`inquiry`,
+`flow`, `config`, `voice`, `dismiss`, and reserved `manual`). Soul's domain
+implementation receives the least-privilege `SoulRuntimePort`; it does not
+receive a whole Agent.
 
 ## Components
 
-- `__init__.py` — public intrinsic surface, composed as one LTP v2 ToolFamily. `_CHILD_SPECS` (`__init__.py:176-188`) is the single registry of child name, canonical `input_schema` (`__init__.py:96-165`), and handler factory; `_build_children` (`__init__.py:190-205`) turns it plus the reserved `manual` child into the child list, and is the *only* place children are listed — the module-level `_FAMILY` (`__init__.py:208`, backing `get_schema` at `__init__.py:215-221`) and the per-call agent-bound family in `handle` both build from it, so a schema-advertised action can never be dispatch-rejected. Constructing `_FAMILY` at import time is also the duplicate/reserved-name collision check: a `manual` collision raises `ToolFamilyError` at import rather than shipping silently. `get_description` (`__init__.py:211-212`). `handle` (`__init__.py:371-401`) is the Host entry point: it drops the kernel-injected `_tc_id` (transport metadata `base_agent._dispatch_tool` adds to every intrinsic's args, not a public root field), delegates envelope validation and cross-action rejection to `ToolFamily.handle`, and owns exactly two post-dispatch presentation adaptations — `_adapt_manual_result` (`__init__.py:237-254`) flattening the reserved child's canonical result to soul's flat `status`/`manual`/`manual_path` shape, and restating the generic `ACTION_REQUIRED` error as soul's own `Unknown soul action: ...` string. `_strip_nulls` (`__init__.py:224-234`) turns the provider-required nullable optionals back into "absent" so the existing `config`/`voice` validators see exactly their pre-migration arguments. `_handle_flow` (`__init__.py:257-340`) serves `action='flow'`: the opt-in env gate returns a stable `{status: 'disabled'}` payload BEFORE the lock is touched or a thread spawned; otherwise it try-acquires `agent._soul_fire_lock` non-blocking, on collision returns `{"error": "soul flow ongoing, request rejected"}`, else releases the lock immediately and spawns a daemon thread running `_run_consultation_fire(agent)` (which re-acquires the lock under the same gate). No action and no input field anywhere in this family can enable flow; that gate is the operator's env var alone. `_handle_inquiry` (`__init__.py:343-359`) and `_handle_dismiss` (`__init__.py:362-368`) serve `inquiry` and `dismiss`; the latter routes through `notifications.dismiss_channel(agent, "soul", invoked_by="soul")` so the soul alias shares generic dismiss logging while preserving the narrative `soul_dismiss` event. `config`/`voice` dispatch unchanged into `config._handle_config`/`_handle_voice`. Re-exports constants and private helpers from `config` (`__init__.py:21-42`), the consultation pipeline from `consultation` (`__init__.py:44-60`), `soul_inquiry`/`_run_inquiry` from `inquiry` (`__init__.py:62`), and flow functions from `flow` (`__init__.py:64-78`).
-- `config.py` — config and voice handling. `_handle_config` (`config.py:27-112`) and `_handle_voice` (`config.py:115-220`) dispatch `action='config'` and `action='voice'`. `_build_soul_system_prompt` (`config.py:339-370`) resolves voice profiles to system prompts. `_persist_soul_config` (`config.py:223-262`) and `_persist_soul_voice` (`config.py:265-307`) write to `manifest.soul.*` in `init.json`. `_atomic_write_init` (`config.py:310-336`) is the shared atomic JSON write helper. Constants: `SOUL_DELAY_MIN_SECONDS = 30.0` (`config.py:11`), `CONSULTATION_PAST_COUNT_MIN = 0` (`config.py:14`), `CONSULTATION_PAST_COUNT_MAX = 5` (`config.py:15`), `SOUL_VOICE_BUILTINS` (`config.py:20`), `SOUL_VOICE_PROMPT_MAX = 4000` (`config.py:24`).
-- `consultation.py` — LLM call mechanics for past-self and current-self consultations. `_build_consultation_tool_refusal` (`consultation.py:11-24`) builds the dynamic `ToolResultBlock.content` sent after every intercepted consultation tool call: it confirms the recommendation was recorded and re-grounds with the **same resolved soul-flow voice prompt** used for the session. `_CONSULTATION_MAX_ROUNDS = 3` (`consultation.py:26`); `_DIARY_CUE_TOKEN_CAP = 10_000` (`consultation.py:27`); `_CUE_EVENT_TYPES = ("diary", "thinking")` (`consultation.py:60`) — both event types are mixed into the cue; `_CUE_EVENT_TYPES_BYTES` (`consultation.py:65`) — UTF-8 byte tokens for the substring fast-path; `_REVERSE_READ_CHUNK = 64 * 1024` (`consultation.py:70`). `_send_with_timeout` (`consultation.py:30-57`) wraps LLM calls with a daemon thread. `_iter_lines_reverse` (`consultation.py:73-114`) — tail-first byte-chunked line iterator over a JSONL file; relies on the append-only one-record-per-line invariant and on `\n`'s UTF-8 safety. `_render_current_diary` (`consultation.py:119-187`) builds the time-anchored cue from recent **diary AND thinking** entries; uses `_iter_lines_reverse` with the substring fast-path (`_CUE_EVENT_TYPES_BYTES`) to skip JSON parsing on non-cue lines, stops once `_DIARY_CUE_TOKEN_CAP` is reached. Cost is O(recent cue entries) not O(file size). `_write_soul_tokens` (`consultation.py:188-217`) appends soul-tagged token-ledger entries and copies only `safe_codex_pool_usage_extra`'s five non-secret pool-attribution scalars from `UsageMetadata.extra`. `_load_snapshot_interface` (`consultation.py:213-242`) loads a `ChatInterface` from a snapshot file. `_fit_interface_to_window` (`consultation.py:245-331`) tail-trims a `ChatInterface` to a token budget; both return paths route through `_heal_trailing_tool_calls` so callers always get a paired interface. `_heal_trailing_tool_calls` (`consultation.py:334-356`) closes any dangling tool_calls on the tail with synthesized aborts; without this the consultation's spark append (`add_user_message`) raises `PendingToolCallsError` when the snapshot was frozen mid-tool-flow (timeout, AED restart, daemon crash). `_kind_for_source` (`consultation.py:359-363`) maps source labels to prompt kinds (`"insights"` vs `"past"`). `_build_consultation_cue` (`consultation.py:366-390`) builds a localized cue from the `soul.consultation_cue_*` i18n templates; **not currently called from `_run_consultation`** — kept for tests/future re-wiring. `_run_consultation` (`consultation.py:393-493`) runs one substrate+spark consultation with refusal loop: it resolves `system_prompt` via `config._build_soul_system_prompt(agent, kind=_kind_for_source(source))`, so `soul(action="voice", set="custom")` affects actual flow consultations; then it sends the raw `_render_current_diary` output as the spark, intercepts tool calls for up to `_CONSULTATION_MAX_ROUNDS`, and uses `_build_consultation_tool_refusal(system_prompt)` for each synthetic refusal. `_list_snapshot_paths` (`consultation.py:496-504`) lists snapshot files. `_run_consultation_batch` (`consultation.py:507-578`) orchestrates parallel 1+K consultations (1 insights + K past-self). `build_consultation_pair` (`consultation.py:599-644`) builds the synthetic `(ToolCallBlock, ToolResultBlock)` pair sent back to present-self; its `ToolCallBlock.args` carry the **current** public soul envelope (`action='flow'`, strict empty `input`, and the Host-authored `INVOLUNTARY_FLOW_REASONING` at `consultation.py:15-21`) because that pair is replayed to the provider as a model-visible assistant tool_use block — a flat `{"action": "flow"}` there would teach a shape the closed schema now rejects.
-- `inquiry.py` — on-demand inquiry. `soul_inquiry` (`inquiry.py:9-61`) clones conversation (text+thinking only), sends question, returns answer. `_publish_human_inquiry_notification` (`inquiry.py:64-102`) publishes successful human-source `/btw` inquiry answers to `.notification/btw.json` so the main agent sees the mirrored conversation as clearly-provenanced side-channel context. `_run_inquiry` (`inquiry.py:105-120`) runs `soul_inquiry`, persists the result via `flow._persist_soul_entry`, and calls the `/btw` publisher only when `source == "human"`.
-- `flow.py` — soul-flow cadence and fire orchestration. This is the trunk of the soul package — both `inquiry.py` and the kernel hooks depend on it. `_start_soul_timer` (`flow.py:19-35`), `_cancel_soul_timer` (`flow.py:38-42`), `_soul_whisper` (`flow.py:45-86`), `_persist_soul_entry` (`flow.py:89-105`), `_append_soul_flow_record` (`flow.py:108-113`), `_flatten_v3_for_pair` (`flow.py:116-144`) — flattens consultation voice blocks into a `{source, voice, thinking}` payload; `ToolCallBlock`s become `Wanted to: <tool>(<args>)` lines appended to voice text (this is the channel through which past/insights tool-call recommendations reach present-self). `_soul_fire_allowed` (`flow.py:147-154`) — true only when state == IDLE. **`_shape_soul_voices` (`flow.py:161-177`)** — pure helper that takes the v2-flattened voices list and shapes the compact `data.voices` payload (omits empty `voice`/`thinking` fields). **`_run_consultation_fire` (`flow.py:180-368`)** — runs one consultation batch, writes per-voice records to `logs/soul_flow.jsonl`, then **submits the published payload via `system.publish_notification(workdir, "soul", header="soul flow", icon="🌊", data={fire_id, tc_id, voices})`**. When voices are empty, calls `clear_notification(workdir, "soul")` so the kernel sync strips any stale wire pair. Gates on `agent._soul_fire_lock` (try-acquire non-blocking, releases in `finally`) so timer-fired and voluntary calls can never run simultaneously. If the lock is held the call silently logs `consultation_skipped_inflight` and returns. After publish, calls `agent._wake_nap("soul_flow_fired")` to nudge sub-second sync latency — the kernel's notification sync owns the actual wake transition (ASLEEP→IDLE) and `MSG_TC_WAKE` post. `_rehydrate_appendix_tracking` (`flow.py:370-405`) — scans rehydrated chat history for an existing legacy `soul.flow` synthetic pair so the appendix-id tracker stays consistent across restarts; preserved for back-compat with chat histories that pre-date the `.notification/` redesign.
+- `__init__.py` — declaration, family schema/dispatch, and the explicit root
+  compatibility bridge. `_bind(host)` receives `host.workdir` and
+  `host.soul_runtime`; `_coerce_runtime()` is the only place that adapts a
+  legacy whole-Agent caller. Lifecycle and helper wrappers adapt once, then
+  call the structural consumers. `handle()` and the declaration binder keep
+  the public call shape and manual result compatibility.
+- `config.py` — config/voice validation, prompt resolution, and atomic
+  `manifest.soul` persistence. `_handle_config()` and `_handle_voice()` read
+  and mutate only the granted runtime's `config`, cadence, timer, logging, and
+  `working_dir` properties.
+- `flow.py` — opt-in gate, IDLE timer, fire lock, consultation-fire
+  orchestration, notification publication, append-only records, and appendix
+  rehydration. It accesses `shutdown`, `soul_timer`, `state`, `fire_lock`, and
+  notification operations through `SoulRuntimePort`.
+- `inquiry.py` — one-shot mirrored conversation and human `/btw` notification
+  publication. It uses runtime `chat`, `service`, `config`, and notification
+  operations through the port.
+- `consultation.py` — diary cue rendering, snapshot substrate loading,
+  bounded consultation batches, timeout/token accounting, refusal handling, and
+  synthesized flow-pair construction. Runtime access is through `chat`,
+  `session`, `service`, `config`, `working_dir`, and `log` on the port.
+- `manual/SKILL.md` — the local operational guide for the six-action envelope,
+  disabled-flow/config behavior, and valid nullable input shapes.
+- `tests/test_soul_runtime_port_ab.py` — focused proof that the four consumers
+  accept a structural port directly and that the root bridge preserves a real
+  Agent call.
 
 ## Connections
 
-- `flow.py` is the trunk: both `inquiry.py` (imports `_persist_soul_entry` from `.flow`) and the kernel hooks (`_start_soul_timer`, `_cancel_soul_timer`, `_run_consultation_fire`, `_rehydrate_appendix_tracking`) depend on it.
-- `__init__.py` imports from `config`, `inquiry`, `consultation`, and `flow` for dispatch and re-exports, and from `../tool_family` (`ChildTool`/`ToolFamily`) plus `../tool_family/manual.py` (`build_manual_child`) for schema composition, envelope dispatch, and the reserved `manual` child. It no longer imports `.._manual.load_installed_manual` directly — the manual child owns that read.
-- `inquiry.py` imports `_build_soul_system_prompt` from `config`, `_send_with_timeout` + `_write_soul_tokens` from `consultation`, and `_persist_soul_entry` from `flow`.
-- `flow.py` imports `_render_current_diary`, `_run_consultation_batch`, `build_consultation_pair` from `consultation` (sibling, within `flow._run_consultation_fire`).
-- `config.py` is a leaf. `consultation.py` lazily imports `config._build_soul_system_prompt` inside `_run_consultation` to resolve the active soul voice prompt without creating an import cycle at module load time.
-- All modules use `i18n.t()` for localized strings.
-- `consultation.py` — LLM call mechanics for past-self and current-self consultations. `_build_consultation_tool_refusal` (`consultation.py:11-24`) builds the dynamic `ToolResultBlock.content` sent after every intercepted consultation tool call: it confirms the recommendation was recorded and re-grounds with the **same resolved soul-flow voice prompt** used for the session. `_CONSULTATION_MAX_ROUNDS = 3` (`consultation.py:26`); `_DIARY_CUE_TOKEN_CAP = 10_000` (`consultation.py:27`); `_CUE_EVENT_TYPES = ("diary", "thinking")` (`consultation.py:60`) — both event types are mixed into the cue; `_CUE_EVENT_TYPES_BYTES` (`consultation.py:65`) — UTF-8 byte tokens for the substring fast-path; `_REVERSE_READ_CHUNK = 64 * 1024` (`consultation.py:70`). `_send_with_timeout` (`consultation.py:30-57`) wraps LLM calls with a daemon thread. `_iter_lines_reverse` (`consultation.py:73-114`) — tail-first byte-chunked line iterator over a JSONL file; relies on the append-only one-record-per-line invariant and on `\n`'s UTF-8 safety. `_render_current_diary` (`consultation.py:119-187`) builds the time-anchored cue from recent **diary AND thinking** entries; uses `_iter_lines_reverse` with the substring fast-path (`_CUE_EVENT_TYPES_BYTES`) to skip JSON parsing on non-cue lines, stops once `_DIARY_CUE_TOKEN_CAP` is reached. Cost is O(recent cue entries) not O(file size). `_write_soul_tokens` (`consultation.py:188-217`) appends soul-tagged token-ledger entries and copies only `safe_codex_pool_usage_extra`'s five non-secret pool-attribution scalars from `UsageMetadata.extra`. `_load_snapshot_interface` (`consultation.py:213-242`) loads a `ChatInterface` from a snapshot file. `_fit_interface_to_window` (`consultation.py:245-331`) tail-trims a `ChatInterface` to a token budget; both return paths route through `_heal_trailing_tool_calls` so callers always get a paired interface. `_heal_trailing_tool_calls` (`consultation.py:334-356`) closes any dangling tool_calls on the tail with synthesized aborts; without this the consultation's spark append (`add_user_message`) raises `PendingToolCallsError` when the snapshot was frozen mid-tool-flow (timeout, AED restart, daemon crash). `_kind_for_source` (`consultation.py:359-363`) maps source labels to prompt kinds (`"insights"` vs `"past"`). `_build_consultation_cue` (`consultation.py:366-390`) builds a localized cue from the `soul.consultation_cue_*` i18n templates; **not currently called from `_run_consultation`** — kept for tests/future re-wiring. `_run_consultation` (`consultation.py:393-493`) runs one substrate+spark consultation with refusal loop: it resolves `system_prompt` via `config._build_soul_system_prompt(agent, kind=_kind_for_source(source))`, so `soul(action="voice", set="custom")` affects actual flow consultations; then it sends the raw `_render_current_diary` output as the spark, intercepts tool calls for up to `_CONSULTATION_MAX_ROUNDS`, and uses `_build_consultation_tool_refusal(system_prompt)` for each synthetic refusal. `_list_snapshot_paths` (`consultation.py:496-504`) lists snapshot files. `_run_consultation_batch` (`consultation.py:507-578`) orchestrates parallel 1+K consultations (1 insights + K past-self). `build_consultation_pair` (`consultation.py:599-644`) builds the synthetic `(ToolCallBlock, ToolResultBlock)` pair sent back to present-self; its `ToolCallBlock.args` carry the **current** public soul envelope (`action='flow'`, strict empty `input`, and the Host-authored `INVOLUNTARY_FLOW_REASONING` at `consultation.py:15-21`) because that pair is replayed to the provider as a model-visible assistant tool_use block — a flat `{"action": "flow"}` there would teach a shape the closed schema now rejects.
-
-## State
-
-- `config.py` mutates `init.json` (manifest.soul.*) for cadence and voice config via `_atomic_write_init`.
-- `consultation.py` — LLM call mechanics for past-self and current-self consultations. `_build_consultation_tool_refusal` (`consultation.py:11-24`) builds the dynamic `ToolResultBlock.content` sent after every intercepted consultation tool call: it confirms the recommendation was recorded and re-grounds with the **same resolved soul-flow voice prompt** used for the session. `_CONSULTATION_MAX_ROUNDS = 3` (`consultation.py:26`); `_DIARY_CUE_TOKEN_CAP = 10_000` (`consultation.py:27`); `_CUE_EVENT_TYPES = ("diary", "thinking")` (`consultation.py:60`) — both event types are mixed into the cue; `_CUE_EVENT_TYPES_BYTES` (`consultation.py:65`) — UTF-8 byte tokens for the substring fast-path; `_REVERSE_READ_CHUNK = 64 * 1024` (`consultation.py:70`). `_send_with_timeout` (`consultation.py:30-57`) wraps LLM calls with a daemon thread. `_iter_lines_reverse` (`consultation.py:73-114`) — tail-first byte-chunked line iterator over a JSONL file; relies on the append-only one-record-per-line invariant and on `\n`'s UTF-8 safety. `_render_current_diary` (`consultation.py:119-187`) builds the time-anchored cue from recent **diary AND thinking** entries; uses `_iter_lines_reverse` with the substring fast-path (`_CUE_EVENT_TYPES_BYTES`) to skip JSON parsing on non-cue lines, stops once `_DIARY_CUE_TOKEN_CAP` is reached. Cost is O(recent cue entries) not O(file size). `_write_soul_tokens` (`consultation.py:188-217`) appends soul-tagged token-ledger entries and copies only `safe_codex_pool_usage_extra`'s five non-secret pool-attribution scalars from `UsageMetadata.extra`. `_load_snapshot_interface` (`consultation.py:213-242`) loads a `ChatInterface` from a snapshot file. `_fit_interface_to_window` (`consultation.py:245-331`) tail-trims a `ChatInterface` to a token budget; both return paths route through `_heal_trailing_tool_calls` so callers always get a paired interface. `_heal_trailing_tool_calls` (`consultation.py:334-356`) closes any dangling tool_calls on the tail with synthesized aborts; without this the consultation's spark append (`add_user_message`) raises `PendingToolCallsError` when the snapshot was frozen mid-tool-flow (timeout, AED restart, daemon crash). `_kind_for_source` (`consultation.py:359-363`) maps source labels to prompt kinds (`"insights"` vs `"past"`). `_build_consultation_cue` (`consultation.py:366-390`) builds a localized cue from the `soul.consultation_cue_*` i18n templates; **not currently called from `_run_consultation`** — kept for tests/future re-wiring. `_run_consultation` (`consultation.py:393-493`) runs one substrate+spark consultation with refusal loop: it resolves `system_prompt` via `config._build_soul_system_prompt(agent, kind=_kind_for_source(source))`, so `soul(action="voice", set="custom")` affects actual flow consultations; then it sends the raw `_render_current_diary` output as the spark, intercepts tool calls for up to `_CONSULTATION_MAX_ROUNDS`, and uses `_build_consultation_tool_refusal(system_prompt)` for each synthetic refusal. `_list_snapshot_paths` (`consultation.py:496-504`) lists snapshot files. `_run_consultation_batch` (`consultation.py:507-578`) orchestrates parallel 1+K consultations (1 insights + K past-self). `build_consultation_pair` (`consultation.py:599-644`) builds the synthetic `(ToolCallBlock, ToolResultBlock)` pair sent back to present-self; its `ToolCallBlock.args` carry the **current** public soul envelope (`action='flow'`, strict empty `input`, and the Host-authored `INVOLUNTARY_FLOW_REASONING` at `consultation.py:15-21`) because that pair is replayed to the provider as a model-visible assistant tool_use block — a flat `{"action": "flow"}` there would teach a shape the closed schema now rejects.
-- `flow.py` writes `logs/soul_flow.jsonl` (`flow.py:108-113`) and `logs/soul_inquiry.jsonl` (via `_persist_soul_entry`), and writes `.notification/soul.json` via `system.publish_notification` (or deletes it via `clear_notification` when a fire produces zero voices). `inquiry.py` also writes `.notification/btw.json` via `notifications.submit` for successful human-source `/btw` inquiries (`inquiry.py:64-102`), preserving the log-driven TUI insight flow while injecting the question/answer back to the main agent as side-channel context. Each fire fully replaces the prior `.notification/soul.json` content, so the kernel's `_sync_notifications` poll sees the fingerprint change and rewires the single-slot `notification(action="check")` pair on the next heartbeat tick. Single-slot semantics are now a property of the wire (one LIVE notification meta block per agent — older payloads may remain in history as historical traces; only the newest emission is current) rather than the producer — soul, btw, email, and system events all coexist as separate keys inside the same `_meta.agent_meta.notifications.attention` body. The soul notification carries a producer-side ``instructions`` field at the envelope level that frames every voice as the agent's OWN inner monologue (insights = current-self reflection, snapshot:* = past-self from before a molt) and explicitly tells the agent the human reaches them only through email, so a voice's narration of "human did X" must be verified against email before being acted on. Independently, the kernel attaches a compact `_meta.agent_meta.guidance.transient` ref/hook at the synthesized envelope level when the wire pair is injected; per-source payloads no longer repeat kernel safety prose. The producer `instructions` and kernel notification guidance are separate fields with separate purposes. The `/btw` notification similarly states that it is mirrored-self context, not a direct new instruction. These guards prevent regressions where the agent confuses side-channel commentary with actual user action. See root `ANATOMY.md` "Notifications" for the full picture.
-- `agent._soul_fire_lock` (`threading.Lock` initialized in `base_agent/__init__.py`) is the in-flight gate for soul-flow consultation fires. Held for the lifetime of one `_run_consultation_fire` invocation; tried non-blocking by both the timer path (`_soul_whisper`) and the voluntary path (`handle(action='flow')`). On contention the timer path silently skips (logs `consultation_skipped_inflight`); the voluntary path returns `{"error": "soul flow ongoing, request rejected"}` so the agent gets a clear signal rather than a silent no-op.
+- The declaration binder creates a `SoulRuntimePort` adapter in the host
+  composition layer; it never passes an Agent into `config.py`, `flow.py`,
+  `inquiry.py`, or `consultation.py`.
+- `__init__.py` dispatches `config`/`voice` to `config.py`, `inquiry` to
+  `inquiry.py`, and flow lifecycle work to `flow.py`. `flow.py` imports the
+  consultation batch and diary helpers; `inquiry.py` imports prompt, send,
+  token, and persistence helpers from sibling modules.
+- The root compatibility wrappers remain available for kernel lifecycle hooks
+  and focused legacy callers. Direct implementation-module calls are
+  structural-port calls and are intentionally not Agent adapters.
 
 ## Composition
 
-- **Parent:** `src/lingtai/tools/` (see `src/lingtai/tools/ANATOMY.md`).
-- **Siblings:** `system/`, `psyche/`, `email/` (all sub-packages in the parent folder; flat-file intrinsics are gone).
-- **Composed-onto infrastructure:** `src/lingtai/tools/tool_family/` (see [`../tool_family/ANATOMY.md`](../tool_family/ANATOMY.md)) owns the reusable schema-composition/dispatch boilerplate and the ManualTool builder this package's `__init__.py` builds its `ToolFamily` instances from; it has no knowledge of soul's cadence, voices, lock, or notification channel, which stay here. The shared [`../CONTRACT.md`](../CONTRACT.md) owns the LTP v2 public call shape; the paired [`CONTRACT.md`](CONTRACT.md) specializes it for soul's actions and evidence.
-- **Kernel hooks:** `base_agent/__init__.py` calls `_start_soul_timer`/`_cancel_soul_timer`/`_run_consultation_fire`/`_rehydrate_appendix_tracking` from `flow.py` and `_run_inquiry` from `inquiry.py` at lifecycle moments.
+- **Parent:** `src/lingtai/tools/` and its tool-family infrastructure.
+- **Host boundary:** `src/lingtai/adapters/tool_plugin_host.py` implements
+  `SoulRuntimePort` from narrow Agent-bound operations; `src/lingtai/agent.py`
+  registers the declaration.
+- **Kernel boundary:** `src/lingtai/kernel/tool_plugin/` owns the Port protocol.
+  The implementation package depends inward on that vocabulary.
+- **Siblings:** `notification`, `psyche`, `system`, and `email` remain separate
+  capabilities; Soul only publishes/dismisses its own notification channel.
+
+## State
+
+- `config.py` writes `init.json` under `manifest.soul` for cadence, voice, and
+  custom voice prompt.
+- `flow.py` appends `logs/soul_flow.jsonl` and may publish/clear the `soul`
+  notification through the port. `inquiry.py` persists inquiry entries through
+  the same Soul persistence operation and may publish `btw` for human source.
+- `history/snapshots/` is read as consultation substrate; no snapshot is
+  created by Soul.
+- `SoulRuntimePort.fire_lock`, `shutdown`, `idle_event`, and `soul_timer` are
+  ephemeral runtime state exposed by the adapter as narrow properties.
+
+## Notes
+
+- `flow` is disabled unless `LINGTAI_SOUL_FLOW_ENABLED` is truthy. A disabled
+  `flow` action returns `status: "disabled"` without a thread; a disabled
+  `config` action still saves valid knobs and returns `status: "ok"` plus
+  `soul_flow_enabled: false` and an explanatory note.
+- The model-facing call is always `action` + strict action-local `input` +
+  `reasoning`. Config sends both nullable knob keys and requires at least one
+  non-null value; synthesized flow pairs use the same envelope.
+- The root bridge is intentionally narrow and singular. Do not reintroduce
+  `agent_soul_runtime`, `AgentSoulRuntimeAdapter`, or whole-Agent fallback
+  logic into the four implementation consumers.

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -335,70 +337,27 @@ def test_write_session_stats_record_failure_is_logged_not_raised(tmp_path, monke
 
 
 # ---------------------------------------------------------------------------
-# Daemon self-record — schema / atomic write / redaction
+# Ledger-selected daemon aggregation / background snapshot
 # ---------------------------------------------------------------------------
 
 
-def test_daemon_record_schema_and_bounded_fields(tmp_path):
-    record = session_stats.build_daemon_record(_daemon_state())
-    assert record["schema"] == session_stats.DAEMON_RECORD_SCHEMA
-    assert record["schema_version"] == session_stats.DAEMON_RECORD_VERSION
-    assert record["run_id"] == "em-abcd"
-    assert record["state"] == "running"
-    assert record["tokens"] == {"input": 40, "output": 20, "thinking": 0, "cached": 5}
-    assert record["cli_tokens"]["calls"] == 0
+def _write_ledger_daemon(working_dir: Path, run_id: str, **overrides) -> None:
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+
+    run_dir = working_dir / "daemons" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    state = _daemon_state(run_id=run_id, **overrides)
+    (run_dir / "daemon.json").write_text(json.dumps(state), encoding="utf-8")
+    append_dispatch(working_dir, run_id=run_id, created_at="2026-08-20T00:00:00Z")
 
 
-def test_daemon_record_never_carries_task_text_or_errors(tmp_path):
-    state = _daemon_state(
-        task="do something with /secret/path and API_KEY=xyz",
-        error={"type": "RuntimeError", "message": "leaked /secret/path"},
-        call_parameters={"task": "..."},
-    )
-    record = session_stats.build_daemon_record(state)
-    dumped = json.dumps(record)
-    assert "secret" not in dumped
-    assert "error" not in record
-    assert "task" not in record
-    assert "call_parameters" not in record
-
-
-def test_write_daemon_record_is_atomic(tmp_path, monkeypatch):
-    replacements = []
-    real_replace = _fsutil.os.replace
-
-    def spy_replace(src, dst):
-        replacements.append((src, dst))
-        return real_replace(src, dst)
-
-    monkeypatch.setattr(_fsutil.os, "replace", spy_replace)
-
-    run_dir = tmp_path / "daemons" / "em-abcd"
-    run_dir.mkdir(parents=True)
-    path = session_stats.write_daemon_record(run_dir, _daemon_state())
-
-    assert path == run_dir / session_stats.DAEMON_RECORD_FILENAME
-    assert len(replacements) == 1
-    assert json.loads(path.read_text(encoding="utf-8"))["run_id"] == "em-abcd"
-
-
-# ---------------------------------------------------------------------------
-# aggregate_daemon_records — bounded, newest-first, present-only
-# ---------------------------------------------------------------------------
-
-
-def _write_daemon_record_at(daemons_dir: Path, run_id: str, **overrides) -> None:
-    run_dir = daemons_dir / run_id
-    run_dir.mkdir(parents=True)
-    session_stats.write_daemon_record(run_dir, _daemon_state(run_id=run_id, **overrides))
-
-
-def test_aggregate_daemon_records_empty_when_no_daemons_dir(tmp_path):
+def test_aggregate_daemon_records_empty_ledger_is_honest_and_diagnostic(tmp_path):
     agg = session_stats.aggregate_daemon_records(tmp_path)
-    assert agg == {
-        "present": 0, "scanned": 0, "limit": session_stats.DEFAULT_DAEMON_LIMIT,
-        "counts_by_state": {}, "usage": session_stats._empty_daemon_usage_totals(),
-    }
+    assert agg["source"] == "dispatch_ledger"
+    assert agg["present"] == 0
+    assert agg["scanned"] == 0
+    assert agg["checked"]["source"] == "tail"
+    assert [warning["code"] for warning in agg["warnings"]] == ["dispatch_ledger_empty"]
 
 
 def test_aggregate_daemon_records_none_working_dir_is_honest_zero():
@@ -407,16 +366,13 @@ def test_aggregate_daemon_records_none_working_dir_is_honest_zero():
     assert agg["scanned"] == 0
 
 
-def test_aggregate_daemon_records_ignores_daemons_without_self_record(tmp_path):
-    daemons_dir = tmp_path / "daemons"
-    daemons_dir.mkdir()
-    # A daemon that only has daemon.json (legacy / not yet turned) — must be
-    # ignored entirely, never backfilled or shown as a zero entry.
-    legacy = daemons_dir / "em-legacy"
-    legacy.mkdir()
-    (legacy / "daemon.json").write_text(json.dumps({"run_id": "em-legacy", "state": "running"}))
-
-    _write_daemon_record_at(daemons_dir, "em-fresh", state="done")
+def test_aggregate_uses_only_ledger_selected_daemon_json(tmp_path):
+    # Legacy or foreign directories are intentionally invisible without a
+    # ledger record; no fallback directory scan/backfill is permitted.
+    legacy = tmp_path / "daemons" / "em-legacy"
+    legacy.mkdir(parents=True)
+    (legacy / "daemon.json").write_text(json.dumps(_daemon_state(run_id="em-legacy", state="failed")))
+    _write_ledger_daemon(tmp_path, "em-fresh", state="done")
 
     agg = session_stats.aggregate_daemon_records(tmp_path)
     assert agg["present"] == 1
@@ -424,16 +380,14 @@ def test_aggregate_daemon_records_ignores_daemons_without_self_record(tmp_path):
     assert agg["counts_by_state"] == {"done": 1}
 
 
-def test_aggregate_daemon_records_sums_usage_across_present_records(tmp_path):
-    daemons_dir = tmp_path / "daemons"
-    daemons_dir.mkdir()
-    _write_daemon_record_at(
-        daemons_dir, "em-1", state="running",
+def test_aggregate_sums_usage_across_ledger_selected_states(tmp_path):
+    _write_ledger_daemon(
+        tmp_path, "em-1", state="running",
         tokens={"input": 10, "output": 5, "thinking": 0, "cached": 0},
         cli_tokens={"input": 0, "output": 0, "thinking": 0, "cached": 0, "calls": 0},
     )
-    _write_daemon_record_at(
-        daemons_dir, "em-2", state="done",
+    _write_ledger_daemon(
+        tmp_path, "em-2", state="done",
         tokens={"input": 0, "output": 0, "thinking": 0, "cached": 0},
         cli_tokens={"input": 20, "output": 8, "thinking": 0, "cached": 2, "calls": 3},
     )
@@ -448,34 +402,49 @@ def test_aggregate_daemon_records_sums_usage_across_present_records(tmp_path):
     }
 
 
-def test_aggregate_daemon_records_bounded_to_limit_newest_first(tmp_path, monkeypatch):
-    import time as time_module
-
-    daemons_dir = tmp_path / "daemons"
-    daemons_dir.mkdir()
+def test_aggregate_tails_ledger_append_order_without_directory_sort(tmp_path):
     for i in range(5):
-        _write_daemon_record_at(daemons_dir, f"em-{i}")
-        # Force distinct mtimes so newest-first ordering is deterministic
-        # across fast filesystems with coarse mtime resolution.
-        path = daemons_dir / f"em-{i}" / session_stats.DAEMON_RECORD_FILENAME
-        stamp = time_module.time() + i
-        import os as os_module
-        os_module.utime(path, (stamp, stamp))
+        _write_ledger_daemon(tmp_path, f"em-{i}", state=f"state-{i}")
 
     agg = session_stats.aggregate_daemon_records(tmp_path, limit=2)
-    assert agg["present"] == 5
+    assert agg["present"] == 2
     assert agg["scanned"] == 2
+    assert agg["checked"]["sequence_from"] == 4
+    assert agg["checked"]["sequence_to"] == 5
+    assert agg["counts_by_state"] == {"state-3": 1, "state-4": 1}
 
 
-def test_aggregate_daemon_records_skips_corrupt_record(tmp_path):
-    daemons_dir = tmp_path / "daemons"
-    daemons_dir.mkdir()
-    bad = daemons_dir / "em-bad"
-    bad.mkdir()
-    (bad / session_stats.DAEMON_RECORD_FILENAME).write_text("not json")
-
-    _write_daemon_record_at(daemons_dir, "em-good")
+def test_aggregate_reports_missing_or_corrupt_selected_state(tmp_path):
+    _write_ledger_daemon(tmp_path, "em-good")
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+    append_dispatch(tmp_path, run_id="em-missing", created_at="2026-08-20T00:00:00Z")
 
     agg = session_stats.aggregate_daemon_records(tmp_path)
     assert agg["present"] == 2
     assert agg["scanned"] == 1
+    assert [warning["code"] for warning in agg["warnings"]] == ["dispatch_ledger_daemon_state_unreadable"]
+
+
+def test_recent_daemon_snapshot_single_flight_and_nonblocking(tmp_path, monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_aggregate(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return {"present": 1, "scanned": 1, "limit": 1000, "counts_by_state": {}, "usage": {}}
+
+    monkeypatch.setattr(session_stats, "aggregate_daemon_records", slow_aggregate)
+    owner = session_stats.RecentDaemonSnapshot(tmp_path)
+    started = time.monotonic()
+    assert owner.schedule() is True
+    assert owner.schedule() is False
+    assert time.monotonic() - started < 0.2
+    assert entered.wait(1)
+    assert owner.snapshot()["refreshing"] is True
+    release.set()
+    deadline = time.monotonic() + 1
+    while owner.snapshot()["refreshing"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert owner.snapshot()["present"] == 1
+    assert owner.snapshot()["refreshing"] is False

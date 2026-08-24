@@ -24,7 +24,7 @@ Three deliberate absences define this module as much as its exports:
   grantable at all — an official plugin cannot mount itself.
 
 See the sibling ``CONTRACT.md`` for the normative rules and ``ANATOMY.md`` for
-where the production adapter and the first declaration live.
+where the production adapter and declared families live.
 """
 
 from __future__ import annotations
@@ -44,9 +44,26 @@ __all__ = [
     "OfficialToolNameCollisionError",
     "HostPortError",
     "WorkdirPort",
-    "RuntimePort",
-    "ProviderIdentityPort",
     "PromptSectionPort",
+    "FileGrepMatch",
+    "FileTraversalStats",
+    "FileIOPort",
+    "ContextRuntimePort",
+    "AvatarParentPort",
+    "DaemonRuntimePort",
+    "PluginCatalogState",
+    "PluginCatalogPort",
+    "NotificationStatePort",
+    "NotificationPort",
+    "ConfigurationPort",
+    "ActiveProviderPort",
+    "ProviderIdentityPort",
+    "SoulRuntimePort",
+    "SystemRuntimePort",
+    "IdentityPort",
+    "ShutdownPort",
+    "TaskCardLifecyclePort",
+    "TaskCardNotificationsPort",
     "ToolMountPort",
     "ToolPluginHost",
     "BoundToolPlugin",
@@ -66,19 +83,51 @@ MANUAL_ACTION = "manual"
 
 #: Every host port an official declaration may name in ``requires``.
 #:
-#: Earned, not enumerated: each name below is consumed by a real vertical slice
-#: (``mcp`` or ``web``). Root ``CONTRACT.md`` rules 10-11 forbid a speculative
-#: port taxonomy, so a later family adds the port it actually needs together with
-#: its own slice.
+#: Earned, not enumerated: each name below is consumed by a real vertical
+#: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
+#: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
+#: ``system``, ``task_card``, ``vision``, or ``web``). Plugin
+#: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
+#: ``workdir`` plus its explicit setup ``configuration`` and durable
+#: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
+#: vocabulary plus the durable naming ``identity`` port; Task Card consumes
+#: ``workdir`` plus its one-predicate ``shutdown`` observation, its
+#: current-Agent ``task_card_lifecycle`` manager slot, and the closed
+#: operation-native ``task_card_notifications`` port; Vision consumes
+#: ``workdir`` plus its read-through ``active_provider`` identity and the same
+#: setup-selected ``configuration`` port Shell earned; Web consumes ``workdir``
+#: plus its Web-owned typed ``web_runtime`` composition value (browser
+#: transport, immutable engine specs, default provenance — granted by its own
+#: setup, like Email's ``email_runtime``) and the narrow read-only
+#: ``provider_identity`` label that gates its explicit Anthropic/Gemini opt-in.
+#: Root ``CONTRACT.md`` rules 10-11
+#: forbid a speculative port taxonomy, so a
+#: later family adds the port it actually needs together with its own slice.
 #:
 #: ``tool_mount`` is deliberately absent and MUST stay absent: mounting is the
 #: host's own act, performed by :func:`register_official_tool_plugins` after the
 #: name checks pass. A declaration that could mount could self-register.
 GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "workdir",
-    "runtime",
-    "provider_identity",
     "prompt_section",
+    "avatar_parent",
+    "context_runtime",
+    "daemon_runtime",
+    "email_runtime",
+    "file_io",
+    "plugin_catalog",
+    "notification_state",
+    "notifications",
+    "configuration",
+    "soul_runtime",
+    "system_runtime",
+    "identity",
+    "shutdown",
+    "task_card_lifecycle",
+    "task_card_notifications",
+    "active_provider",
+    "web_runtime",
+    "provider_identity",
 )
 
 
@@ -90,7 +139,10 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: a name is a reviewed kernel change, which is the point: it is a list, not a
 #: discovery mechanism, and it holds names only — never a module path, an
 #: import, or any knowledge of what the family does.
-OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = ("mcp", "web")
+OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
+    "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
+    "shell", "soul", "system", "task_card", "vision", "web",
+)
 
 
 # Opaque capability used only by the production host adapter's private
@@ -164,35 +216,6 @@ class WorkdirPort(Protocol):
         """The agent working directory."""
 
 
-class RuntimePort(Protocol):
-    """One explicit setup-time value for a declared plugin.
-
-    A nontrivial capability can need per-agent composition inputs (for example,
-    a preselected browser transport and search-service specs) while its
-    declaration must remain static and its binder must never receive the live
-    Agent. The Composition Root supplies that one value for this registration;
-    the port grants no Agent method, filesystem access, or implicit config
-    lookup. The value's type and validation stay owned by the consuming family.
-    """
-
-    @property
-    def value(self) -> Any:
-        """The explicitly supplied per-registration runtime value."""
-
-
-class ProviderIdentityPort(Protocol):
-    """Read the current canonical LLM provider identity, if one exists.
-
-    This is intentionally only the bounded provider label used by a capability
-    authorization gate. It grants neither the provider service, credentials,
-    model configuration, nor a mutable Agent/service reference.
-    """
-
-    @property
-    def provider(self) -> str | None:
-        """The current canonical provider name, or ``None`` when unavailable."""
-
-
 class PromptSectionPort(Protocol):
     """Write this plugin's own protected system-prompt section.
 
@@ -204,6 +227,561 @@ class PromptSectionPort(Protocol):
 
     def write_protected_section(self, body: str) -> None:
         """Replace this plugin's protected prompt section with *body*."""
+
+
+class FileGrepMatch(Protocol):
+    """The three immutable match fields File consumes from bounded grep."""
+
+    path: str
+    line_number: int
+    line: str
+
+
+class FileTraversalStats(Protocol):
+    """The bounded traversal facts File surfaces for partial glob/grep results."""
+
+    visited: int
+    elapsed_ms: int
+    truncated_reason: str | None
+    files_skipped_size: int
+    files_skipped_binary: int
+    dirs_pruned: int
+
+
+class FileIOPort(Protocol):
+    """The File family's narrow runtime file-operation capability.
+
+    This is deliberately not ``Agent._file_io`` exposed as an attribute and is
+    not a generic filesystem or dispatch port. It is the exact vocabulary the
+    official ``file`` family consumes: UTF-8 text read/write, bounded glob/grep,
+    the latest traversal facts those searches report, and the active result-size
+    ceiling used by its paged reader. Path rooting remains the separate
+    :class:`WorkdirPort` capability.
+    """
+
+    def read(self, path: str) -> str:
+        """Read one UTF-8 text file."""
+
+    def write(self, path: str, content: str) -> None:
+        """Create or overwrite one UTF-8 text file."""
+
+    def glob(self, pattern: str, root: str | None = None) -> list[str]:
+        """Return sorted paths matching *pattern* below *root*."""
+
+    def grep(
+        self,
+        pattern: str,
+        path: str | None = None,
+        max_results: int = 50,
+        *,
+        glob_filter: str | None = None,
+    ) -> list[FileGrepMatch]:
+        """Return concrete text matches from the bounded search service."""
+
+    @property
+    def last_traversal(self) -> FileTraversalStats | None:
+        """The latest glob/grep traversal facts, if the service reports them."""
+
+    @property
+    def max_result_chars(self) -> int | None:
+        """The live executor result limit, if it exposes a positive integer."""
+
+
+class ContextRuntimePort(Protocol):
+    """Run the Context family's live lifecycle operations.
+
+    This is intentionally a capability-shaped operation port rather than the
+    Agent or a bag of its private state. ``molt`` preserves the live chat
+    selection/wipe/replay transaction; ``summarize`` preserves record-only
+    history compaction; ``rebuild`` preserves full prompt composition before
+    summary application and provider replay. Context receives no other live
+    Agent authority through this port.
+    """
+
+    def molt(self, args: dict) -> dict:
+        """Run one agent-initiated Context molt with validated action arguments."""
+
+    def summarize(self, args: dict) -> dict:
+        """Record Context summaries without reconstructing provider context."""
+
+    def rebuild(self, args: dict) -> dict:
+        """Reconstruct prompt/context, then apply summaries and provider replay."""
+
+
+class AvatarParentPort(Protocol):
+    """The parent facts Avatar needs to spawn and control its own subtree.
+
+    This is deliberately Avatar-specific rather than a second whole-Agent
+    facade: spawning needs the parent identity and inherited runtime location,
+    while rules control needs only the already-decided authorization bit.  It
+    grants no mutable administration surface, no generic configuration, and no
+    tool mounting capability.
+    """
+
+    @property
+    def parent_name(self) -> str:
+        """The parent identity to put in the newborn's first prompt."""
+
+    @property
+    def venv_path(self) -> str | None:
+        """Optional parent runtime location inherited by a newborn avatar."""
+
+    def has_rule_privilege(self) -> bool:
+        """Whether this parent may distribute rules through its avatar subtree."""
+
+
+class DaemonRuntimePort(Protocol):
+    """Daemon's capability-native view of the current agent runtime.
+
+    Daemon needs more than a directory: it inherits the parent model service,
+    the currently mounted regular tool surface, selected preset loading, one
+    notification route, compact runtime settings, and event logging.  Those
+    facts are exposed as named operations rather than as a whole ``Agent``.
+    The port deliberately owns no model-facing mount operation; that remains
+    registrar-only through :class:`ToolMountPort`.
+    """
+
+    @property
+    def service(self) -> Any:
+        """The parent service whose effective model configuration Daemon inherits."""
+
+    @property
+    def tool_schemas(self) -> tuple[Any, ...]:
+        """Current parent dynamic schemas, in their host order."""
+
+    @property
+    def tool_handlers(self) -> Mapping[str, Callable[[dict], dict]]:
+        """Current parent dynamic dispatch handlers by public tool name."""
+
+    @property
+    def mcp_tool_names(self) -> frozenset[str]:
+        """Names occupied by parent MCP tools, which Daemon never auto-inherits."""
+
+    @property
+    def language(self) -> str:
+        """Resolved parent prompt language."""
+
+    @property
+    def max_aed_attempts(self) -> int:
+        """Resolved parent empty-response retry limit."""
+
+    @property
+    def tool_call_guard(self) -> Any:
+        """The parent guard supplied to daemon-local tool execution, if any."""
+
+    @property
+    def manager_options(self) -> Mapping[str, Any]:
+        """Resolved construction options for this daemon manager binding."""
+
+    def setup_preset_capability(
+        self, name: str, kwargs: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Callable[[dict], dict]]]:
+        """Build one preset capability's isolated tool surface without mounting it."""
+
+    def read_preset_from_init(self) -> Mapping[str, Any]:
+        """Read the raw selected-preset policy block, or return an empty mapping."""
+
+    def load_preset(self, name: str) -> dict:
+        """Load one parent-authorized preset through the host's canonical route."""
+
+    def enqueue_daemon_notification(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        idempotency_key: str | None,
+        skip_if_idempotency_key_exists: bool,
+        extra: Mapping[str, Any],
+        channel: str,
+    ) -> None:
+        """Publish one parent-facing Daemon notification through the host."""
+
+    def has_active_task_card_watch(self) -> bool:
+        """Whether the host has a live Task Card watch for Daemon presentation."""
+
+    def attach_daemon_manager(self, manager: Any) -> None:
+        """Retain this binding's manager for the capability setup return value."""
+
+    def now_iso(self) -> str:
+        """Render the host-configured current timestamp for a daemon prompt."""
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        """Record one Daemon lifecycle event through the host journal."""
+
+
+@dataclass(frozen=True)
+class PluginCatalogState:
+    """Read-only facts the official ``plugin`` family presents.
+
+    This is intentionally a projection, not an Agent Plugins implementation:
+    the host owns registration, the service owns manifest/component validation,
+    and the family merely needs the latest boot snapshot plus the three path/
+    availability inputs that define discovery.  The state has no mutation,
+    lifecycle, launch, or filesystem operation.
+    """
+
+    registration: Mapping[str, Any]
+    configured_paths: tuple[str, ...]
+    skill_paths: tuple[str, ...]
+    skills_enabled: bool
+
+
+class PluginCatalogPort(Protocol):
+    """Read the current Agent Plugins catalog presentation inputs.
+
+    The official ``plugin`` family needs exactly this one read-only projection to
+    preserve its pre-declaration behavior: the registration snapshot produced at
+    boot, its own configured discovery paths, inherited skill paths, and whether
+    the skills catalog is enabled.  It cannot register, prune, launch, or alter
+    any of those facts through this port.
+    """
+
+    def read_state(self) -> PluginCatalogState:
+        """Return the current detached catalog presentation state."""
+
+
+class NotificationStatePort(Protocol):
+    """Notification Core operations bound to one live agent's real state.
+
+    The notification family may ask Core to manipulate notification-owned
+    mirrors and hook registration, but it never receives the Agent, its Store,
+    delivery fingerprints, or producer state directly. The host adapter binds
+    each operation to the real agent before the plugin is composed, preserving
+    Core's allowlist, producer-guard, stale-version, acknowledgement, timer,
+    and Store semantics rather than recreating a parallel local state machine.
+    """
+
+    def dismiss(
+        self,
+        channel: str,
+        *,
+        force: bool,
+        reason: str | None,
+        event_id: str | None = None,
+        ref_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask Notification Core to clear one permitted mirror target."""
+
+    def delay(self, channel: str, seconds: int) -> dict[str, Any]:
+        """Apply consumer-only delay policy without mutating producer state."""
+
+    def add_hook(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        """Add one hook manifest through Notification Core and its Store."""
+
+    def drop_hook(self, name: str) -> dict[str, Any]:
+        """Drop one hook manifest through Notification Core and its Store."""
+
+    def edit_hook(self, name: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Edit one hook manifest through Notification Core and its Store."""
+
+    def list_hooks(self) -> list[dict[str, Any]] | dict[str, Any]:
+        """Read hook manifests through Notification Core and its Store."""
+
+    def log(self, event_type: str, **fields: Any) -> None:
+        """Record a bounded notification action diagnostic."""
+
+
+class NotificationPort(Protocol):
+    """Publish a bounded durable notification without reaching the Agent.
+
+    The Shell slice needs exactly two already-existing notification operations:
+    an idempotent append to the durable system-event stream for its async
+    watchdog, and a latest-channel completion publication.  The port carries no
+    prompt, tool, lifecycle, or arbitrary filesystem operation; an adapter owns
+    the Agent/store details and preserves those existing notification semantics.
+    It is deliberately distinct from :class:`NotificationStatePort`, which grants
+    the ``notification`` family Core's mirror/hook administration instead.
+    """
+
+    def publish_system(
+        self,
+        *,
+        source: str,
+        ref_id: str,
+        body: str,
+        skip_if_ref_id_exists: bool = False,
+    ) -> bool:
+        """Append one durable system event; return whether publication completed."""
+
+    def publish_channel(
+        self,
+        channel: str,
+        payload: Mapping[str, Any],
+        *,
+        ref_id: str,
+    ) -> bool:
+        """Publish one idempotent latest-channel payload for *channel*."""
+
+
+class ConfigurationPort(Protocol):
+    """Read the immutable capability configuration selected by composition.
+
+    A declaration is static, while capability setup supplies its policy and
+    platform overrides at boot.  This port exposes only that explicit copied
+    mapping; it is not an Agent configuration API and does not permit writes.
+    Shell and Vision each consume it for their own setup snapshot; the kernel
+    gives the mapping no schema — the consuming family owns its interpretation.
+    """
+
+    @property
+    def values(self) -> Mapping[str, Any]:
+        """The static, copied configuration mapping for this plugin binding."""
+
+
+class ActiveProviderPort(Protocol):
+    """Read the current provider service selected by the host.
+
+    The service is intentionally opaque to the kernel: a family that genuinely
+    shares its active provider may inspect its provider/model/credential route,
+    but receives neither the Agent nor a generic route to another capability.
+    The adapter reads through on every access so refresh cannot leave a plugin
+    with a stale provider identity. Vision is the one consumer today.
+    """
+
+    @property
+    def service(self) -> Any:
+        """The current active provider service, or ``None`` when absent."""
+
+
+class ProviderIdentityPort(Protocol):
+    """Read only the current canonical LLM provider *label*, if one exists.
+
+    Deliberately narrower than :class:`ActiveProviderPort`: Web needs one
+    truthful string to decide whether an explicit Anthropic/Gemini opt-in is
+    eligible, and nothing else. The port grants neither the provider service,
+    its credentials or model configuration, the Agent, nor any provider
+    registry; the adapter reads the label through on every access so a refresh
+    never leaves a stale identity. Web is the one consumer today.
+    """
+
+    @property
+    def provider(self) -> str | None:
+        """The current canonical provider name, or ``None`` when unavailable."""
+
+
+class SoulRuntimePort(Protocol):
+    """Soul's bounded live-self and soul-flow runtime surface.
+
+    This port exists because Soul's public actions are real self-state
+    operations, not signposts: they inspect the current conversation, mutate
+    only ``manifest.soul``-backed cadence/voice state, use the existing
+    consultation lock/timer, and publish or dismiss Soul's own notification.
+    The explicit members below are the complete vocabulary the Soul package
+    consumes; it receives neither the live Agent nor a generic attribute
+    escape hatch. The production adapter owns translations to the Agent's
+    private storage and kernel notification helpers.
+    """
+
+    @property
+    def working_dir(self) -> Path: ...
+
+    @property
+    def config(self) -> Any: ...
+
+    @property
+    def service(self) -> Any: ...
+
+    @property
+    def chat(self) -> Any: ...
+
+    @property
+    def session(self) -> Any: ...
+
+    @property
+    def agent_name(self) -> str: ...
+
+    @property
+    def state(self) -> Any: ...
+
+    @property
+    def idle_event(self) -> Any: ...
+
+    @property
+    def shutdown(self) -> Any: ...
+
+    @property
+    def soul_delay(self) -> float: ...
+
+    @soul_delay.setter
+    def soul_delay(self, value: float) -> None: ...
+
+    @property
+    def soul_timer(self) -> Any: ...
+
+    @soul_timer.setter
+    def soul_timer(self, value: Any) -> None: ...
+
+    @property
+    def fire_lock(self) -> Any: ...
+
+    @property
+    def notification_store(self) -> Any: ...
+
+    @property
+    def notification_fingerprint(self) -> Any: ...
+
+    @property
+    def appendix_ids_by_source(self) -> dict[str, str]: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def restart_soul_timer(self) -> None: ...
+
+    def run_consultation_fire(self) -> None: ...
+
+    def sync_notifications(self) -> None: ...
+
+    def wake_nap(self, reason: str) -> None: ...
+
+    def persist_soul_entry(
+        self, result: dict, mode: str = "flow", source: str = "agent"
+    ) -> None: ...
+
+    def append_soul_flow_record(self, record: dict) -> None: ...
+
+    def publish_notification(self, channel: str, **kwargs: Any) -> None: ...
+
+    def clear_notification(self, channel: str) -> None: ...
+
+    def dismiss_notification(self, channel: str, *, invoked_by: str) -> dict: ...
+
+
+class SystemRuntimePort(Protocol):
+    """The System family's bounded runtime/lifecycle vocabulary.
+
+    This is intentionally not an Agent-shaped object.  It supplies exactly the
+    existing lifecycle, preset, audit, authority, and self-sleep operations
+    System already needs; the adapter composes each operation from a narrow
+    Agent callback.  Agent identity is deliberately absent and lives on
+    :class:`IdentityPort` instead.
+
+    The four sleep members are evidence/effects only: the sleep *policy*
+    (fingerprint comparison, refusal/force, receipts, audit events) is owned by
+    ``lingtai.tools.system.karma.sleep_use_case``, which this port never
+    duplicates.  ``sleep_alarm_lock``/``arm_sleep_alarm`` carry the persisted
+    one-shot ``sleep(delay=...)`` alarm effect so arming and the ASLEEP
+    transition stay under the host's one heartbeat-shared lock.
+    """
+
+    @property
+    def admin(self) -> Mapping[str, Any]: ...
+
+    @property
+    def language(self) -> str: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def token_usage(self) -> Mapping[str, Any]: ...
+
+    def load_preset(self, name: str) -> dict: ...
+
+    def activate_preset(self, name: str) -> None: ...
+
+    def activate_default_preset(self) -> None: ...
+
+    def retry_failed_mcps(self) -> Mapping[str, Any]: ...
+
+    def perform_refresh(self) -> None: ...
+
+    def resuscitate(self, address: str) -> Any: ...
+
+    def sleep_attention_fingerprints(
+        self,
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]: ...
+
+    def transition_to_asleep(self) -> None: ...
+
+    def sleep_alarm_lock(self) -> Any: ...
+
+    def arm_sleep_alarm(self, delay_seconds: Any) -> str: ...
+
+
+class IdentityPort(Protocol):
+    """The System family's live, durable naming operations only."""
+
+    @property
+    def name(self) -> str | None: ...
+
+    def set_name(self, name: str) -> None: ...
+
+    def set_nickname(self, nickname: str) -> None: ...
+
+
+class ShutdownPort(Protocol):
+    """Observe whether this Agent is stopping.
+
+    A Task Card watch polls this one predicate between renderer runs so an
+    agent stop ends its thread promptly.  It grants no lifecycle transition,
+    join, or event mutation.
+    """
+
+    def is_set(self) -> bool:
+        """Return true after the current Agent has begun shutdown."""
+
+
+class TaskCardLifecyclePort(Protocol):
+    """Retain the one Task Card manager for this current Agent.
+
+    The public producer needs exactly one persistent in-process owner across
+    refreshes so the BaseAgent lifecycle can stop/re-persist the real watch.
+    This is intentionally not a generic state bag: it only reads or replaces
+    this family's manager and records its one boot-resume diagnostic.
+    """
+
+    def current_manager(self) -> Any | None:
+        """Return this Agent's existing Task Card manager, if any."""
+
+    def retain_manager(self, manager: Any) -> None:
+        """Make *manager* the current Agent's Task Card lifecycle owner."""
+
+    def report_resume_failure(self, error: str) -> None:
+        """Record a bounded diagnostic when persisted-watch resume fails."""
+
+
+class TaskCardNotificationsPort(Protocol):
+    """Emit only the Task Card producer's established current-Agent notices.
+
+    Five closed, operation-native methods and nothing else: there is no
+    generic ``enqueue``, no ``**kwargs``, and no ``source``/``channel``/
+    ``extra`` argument.  The production adapter pins the established
+    ``task_card.error``/``task_card.limit`` sources, the ``system`` channel,
+    priority, idempotency skip, and the bounded ``extra`` projection
+    internally, so a holder of this port can neither publish a foreign source
+    nor address another channel.  The kernel imports nothing from the family;
+    the signatures are scalar so the dependency direction stays inward.
+    """
+
+    def publish_error(
+        self,
+        watch_id: str,
+        body: str,
+        code: str,
+        retryable: bool | str,
+        idempotency_key: str,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        """Queue one deduplicated ``task_card.error`` event in state ``error``."""
+
+    def publish_recovered(self, watch_id: str, body: str, idempotency_key: str) -> None:
+        """Queue one deduplicated ``task_card.error`` event in state ``recovered``."""
+
+    def publish_limit(
+        self,
+        watch_id: str,
+        body: str,
+        idempotency_key: str,
+        used: int,
+        max_refreshes: int,
+        last_valid_body_at: str | None = None,
+    ) -> None:
+        """Queue one deduplicated ``task_card.limit`` refresh-exhaustion event."""
+
+    def submit_reminder(self, turns: int) -> None:
+        """Publish the producer's absent/stale Task Card reminder."""
+
+    def clear_reminder(self) -> None:
+        """Clear the producer's current Task Card reminder."""
 
 
 class ToolMountPort(Protocol):

@@ -45,15 +45,17 @@ def test_registry_has_one_canonical_public_shell_identity():
 
 def test_setup_registers_shell_and_advertises_selected_dialect(tmp_path):
     agent = MagicMock()
-    agent._working_dir = Path(tmp_path)
+    agent.official_tool_plugins = {}
+    agent.working_dir = Path(tmp_path)
     manager = setup(agent, yolo=True)
     assert isinstance(manager, ShellManager)
-    assert agent.add_tool.call_args.args[0] == "shell"
-    description = agent.add_tool.call_args.kwargs["description"]
+    transaction = agent._mount_official_tool.call_args.args[0]
+    assert transaction.plugin.name == "shell"
+    description = transaction.plugin.description
     expected_dialect = "powershell" if os.name == "nt" else "posix"
     assert f"Active shell dialect: {expected_dialect}" in description
     assert f"Host OS: {shell_adapter.describe_host_os()}" in description
-    properties = agent.add_tool.call_args.kwargs["schema"]["properties"]
+    properties = transaction.plugin.schema["properties"]
     assert "dialect" not in properties
     assert "host_os" not in properties
 

@@ -1,19 +1,20 @@
 """Web-owned composition-port and manual-contract regressions.
 
-These tests stay beside the Web family while shared host and manual fixtures
-are reserved for serialized integration.  They prove the local typed boundary,
-its negative setup cases, and the real Agent bind path.
+These tests stay beside the Web family and prove the typed ``web_runtime``
+boundary, its fail-closed negative cases, and the real Agent bind path through
+the declaration-scoped ``extra_ports_for`` seam.
 """
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.kernel.tool_plugin import HostPortError, ToolPluginHost
 from tests._service_helpers import make_gemini_mock_service
 from lingtai.tools.web_search import (
+    DECLARATION,
     WebComposition,
     WebCompositionPort,
     _EngineSpec,
@@ -45,11 +46,14 @@ def _composition(tmp_path: Path) -> WebComposition:
     )
 
 
-def _host(tmp_path: Path, value: object) -> SimpleNamespace:
-    return SimpleNamespace(
-        workdir=_Workdir(tmp_path),
-        provider_identity=_ProviderIdentity(),
-        runtime=SimpleNamespace(value=value),
+def _host(tmp_path: Path, **ports: object) -> ToolPluginHost:
+    return ToolPluginHost(
+        "web",
+        {
+            "workdir": _Workdir(tmp_path),
+            "provider_identity": _ProviderIdentity(),
+            **ports,
+        },
     )
 
 
@@ -59,23 +63,72 @@ def test_web_composition_port_is_narrow_and_publishes_one_manager(tmp_path):
     assert value.specs["duckduckgo"].provider == "duckduckgo"
     assert value.manager is None
 
-    bound = _bind(_host(tmp_path, value))
+    bound = _bind(_host(tmp_path, web_runtime=value))
     assert bound.name == "web"
     assert value.manager is not None
+    assert bound.handler == value.manager.handle
+    assert not hasattr(value, "agent")
+    assert not hasattr(value, "service")
 
 
-def test_web_bind_missing_host_port_fails_loudly(tmp_path):
-    host = SimpleNamespace(
-        workdir=_Workdir(tmp_path),
-        provider_identity=_ProviderIdentity(),
-    )
-    with pytest.raises(TypeError, match="granted WebCompositionPort"):
-        _bind(host)
+def test_web_declaration_requires_exactly_its_three_ports():
+    assert DECLARATION.requires == ("workdir", "web_runtime", "provider_identity")
+    assert DECLARATION.public_actions == ("search", "browse", "manual")
+
+
+def test_web_bind_missing_host_port_fails_closed(tmp_path):
+    with pytest.raises(HostPortError, match="web_runtime"):
+        _bind(_host(tmp_path))
+
+
+def test_web_bind_refuses_a_legacy_runtime_carrier(tmp_path):
+    """There is no fallback to any other carrier than the typed ``web_runtime``."""
+    class _Carrier:
+        def __init__(self, value: object) -> None:
+            self.value = value
+
+    with pytest.raises(HostPortError, match="web_runtime"):
+        _bind(_host(tmp_path, runtime=_Carrier(_composition(tmp_path))))
 
 
 def test_web_bind_wrong_host_port_fails_typed_contract(tmp_path):
-    with pytest.raises(TypeError, match="typed WebCompositionPort"):
-        _bind(_host(tmp_path, object()))
+    with pytest.raises(HostPortError, match="typed WebComposition"):
+        _bind(_host(tmp_path, web_runtime=object()))
+
+
+def test_web_grant_without_setup_composition_fails_before_bind(tmp_path):
+    """The standard table never carries ``web_runtime``; only ``setup`` grants it."""
+    from lingtai.adapters.tool_plugin_host import agent_host_ports
+
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="web-composition-port-grant",
+        working_dir=tmp_path / "agent",
+        capabilities={},
+    )
+    try:
+        table = agent_host_ports(agent, "web")
+        assert "web_runtime" not in table
+        assert table["provider_identity"].provider == agent.service.provider
+        with pytest.raises(HostPortError):
+            ToolPluginHost.grant(DECLARATION, table)
+    finally:
+        agent.stop(timeout=1.0)
+
+
+def test_web_composition_publishes_one_manager_only(tmp_path):
+    value = _composition(tmp_path)
+    bound = _bind(_host(tmp_path, web_runtime=value))
+    first = value.manager
+    assert first is not None
+    assert bound.handler == first.handle
+    # Re-publishing the same manager is idempotent; a different one is refused.
+    value.publish_manager(first)
+    from lingtai.kernel.tool_plugin import ToolPluginError
+
+    with pytest.raises(ToolPluginError):
+        _bind(_host(tmp_path, web_runtime=value))
+    assert value.manager is first
 
 
 def test_web_real_agent_bind_returns_manager_and_preserves_manual_surface(tmp_path):
@@ -91,7 +144,8 @@ def test_web_real_agent_bind_returns_manager_and_preserves_manual_surface(tmp_pa
         (manual_dir / "SKILL.md").write_text("# Web manual\n", encoding="utf-8")
         manager = setup(agent, browser_port=_BrowserPort())
         assert manager._family.has_manual()
-        assert agent.official_tool_plugins["web"].name == "web"
+        assert agent.official_tool_plugins["web"] is DECLARATION
+        assert agent._tool_handlers["web"] == manager.handle
         result = manager.handle(
             {"action": "manual", "input": {}, "reasoning": "load guidance"}
         )

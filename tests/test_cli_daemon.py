@@ -848,11 +848,10 @@ def _seed_run_dir(agent_dir: Path, *, handle: str = "em-1",
                   task: str = "seeded task", state: str = "done") -> Path:
     """Create a well-formed daemon run directory through ``DaemonRunDir``.
 
-    Written by the real writer rather than by hand, so ``list``'s legitimate
-    lazy repair of malformed/legacy records never fires and a byte-comparison
-    can isolate the writes this CLI must not perform.  The record is left
-    owned by a dead parent PID with its terminal notification unpublished —
-    exactly the two things ``DaemonManager.__init__`` reconciles.
+    Written by the real writer and then explicitly appended to the dispatch
+    ledger, so read-only list/check exercise only accepted new-format
+    membership. The record is deliberately left with a dead owner: marker-only
+    startup recovery must not scan it without a recovery marker.
     """
     from lingtai.tools.daemon.run_dir import DaemonRunDir
 
@@ -872,6 +871,8 @@ def _seed_run_dir(agent_dir: Path, *, handle: str = "em-1",
     )
     if state != "running":
         run_dir.update_state(state=state, finished_at="2026-08-13T10:11:10Z")
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+    append_dispatch(agent_dir, run_id=run_dir.run_id, created_at=run_dir.state_snapshot()["started_at"])
     return run_dir.path
 
 
@@ -949,12 +950,8 @@ def test_list_and_check_write_nothing(tmp_path, monkeypatch, capsys, argv):
     assert not (agent_dir / ".notification").exists()
 
 
-def test_a_full_manager_would_have_rewritten_that_record(tmp_path):
-    """Positive control: the reconciliation the read-only view skips is real.
-
-    Without this, ``test_list_and_check_write_nothing`` could pass simply
-    because nothing ever reconciles stale records.
-    """
+def test_full_manager_does_not_scan_unmarked_legacy_record(tmp_path):
+    """Marker-only recovery preserves an unmarked run byte-for-byte at startup."""
     from lingtai.tools.daemon import DaemonManager
     from lingtai.cli_daemon import _CliDaemonAgent
 
@@ -964,9 +961,7 @@ def test_a_full_manager_would_have_rewritten_that_record(tmp_path):
 
     DaemonManager(_CliDaemonAgent.for_dispatch(agent_dir))
 
-    after = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    assert (run_path / "daemon.json").read_bytes() != before
-    assert after["state"] == "failed"
+    assert (run_path / "daemon.json").read_bytes() == before
 
 
 def test_check_prints_a_snapshot(tmp_path, monkeypatch, capsys):
@@ -1034,57 +1029,57 @@ def test_inspection_never_repairs_damaged_durable_state(tmp_path, monkeypatch, c
 
 
 @pytest.mark.parametrize("kind", ["missing", "unparseable", "stale_version"])
-def test_list_still_shows_a_damaged_run_and_says_it_needs_rebuild(tmp_path, monkeypatch,
-                                                                  capsys, kind):
-    """Not repairing must not mean silently dropping the row, or lying about it."""
+def test_list_reports_selected_damaged_state_without_repair(tmp_path, monkeypatch, capsys, kind):
+    """Ledger-selected unreadable state is a warning, never reconstruction."""
     agent_dir = _write_agent_dir(tmp_path)
     run_path = _seed_run_dir(agent_dir)
     _damage(run_path, kind)
+    before = (run_path / "daemon.json").read_bytes() if (run_path / "daemon.json").exists() else None
 
     assert _run_cli(monkeypatch, ["daemon", "list", "--agent-dir", str(agent_dir)]) == 0
     captured = capsys.readouterr()
-
-    assert run_path.name.split("-2026")[0] in captured.out  # the row is still listed
-    assert "NOT repaired on disk" in captured.err
-    assert "read-only" in captured.err
+    if kind in {"missing", "unparseable"}:
+        assert "no daemon runs" in captured.out
+        assert "dispatch_ledger_daemon_state_unreadable" in captured.err
+    else:
+        assert "em-1" in captured.out
+    daemon_json = run_path / "daemon.json"
+    assert daemon_json.exists() is (before is not None)
+    if before is not None:
+        assert daemon_json.read_bytes() == before
 
 
 @pytest.mark.parametrize("kind", ["missing", "unparseable", "stale_version"])
-def test_a_full_manager_would_have_repaired_the_damaged_record(tmp_path, kind):
-    """Positive control for the lazy-repair path the read-only view overrides."""
+def test_full_manager_does_not_repair_damaged_unmarked_or_ledger_state(tmp_path, kind):
+    """The cutover intentionally removes automatic list/startup repair."""
     from lingtai.tools.daemon import DaemonManager
     from lingtai.cli_daemon import _CliDaemonAgent
 
     agent_dir = _write_agent_dir(tmp_path)
     run_path = _seed_run_dir(agent_dir)
     _damage(run_path, kind)
+    daemon_json = run_path / "daemon.json"
+    existed = daemon_json.exists()
+    before = daemon_json.read_bytes() if existed else None
 
     manager = DaemonManager(_CliDaemonAgent.for_dispatch(agent_dir))
     manager._handle_list()
 
-    from lingtai.tools.daemon.run_dir import DaemonRunDir
+    assert daemon_json.exists() is existed
+    if existed:
+        assert daemon_json.read_bytes() == before
 
-    repaired = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    assert repaired["data_version"] == DaemonRunDir.DATA_VERSION
-    assert repaired["migration"]["source"] == "daemon_list_best_effort"
-
-
-def test_read_only_view_records_which_runs_need_rebuild(tmp_path):
-    """The needs-rebuild set is what the CLI reports instead of repairing."""
+def test_read_only_view_reads_only_ledger_selected_states(tmp_path):
     from lingtai.cli_daemon import _CliDaemonAgent, _ReadOnlyDaemonView
 
     agent_dir = _write_agent_dir(tmp_path)
     healthy = _seed_run_dir(agent_dir, handle="em-1")
-    damaged = _seed_run_dir(agent_dir, handle="em-2")
-    _damage(damaged, "stale_version")
+    stale = _seed_run_dir(agent_dir, handle="em-2")
+    _damage(stale, "stale_version")
 
     view = _ReadOnlyDaemonView(_CliDaemonAgent.for_inspection(agent_dir))
     result = view._handle_list()
-
-    assert view.needs_rebuild == [damaged.name]
-    assert healthy.name not in view.needs_rebuild
-    # Both runs are still reported, the damaged one from reconstruction.
-    assert {e["run_id"] for e in result["emanations"]} == {healthy.name, damaged.name}
+    assert {e["run_id"] for e in result["emanations"]} == {healthy.name, stale.name}
 
 
 # ---------------------------------------------------------------------------

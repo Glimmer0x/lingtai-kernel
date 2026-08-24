@@ -16,7 +16,7 @@ maintenance: |
 **名相对照**
 
 - `vision`：观象之器——以 LLM 之视觉能力析图。支 JPEG、PNG 与 WebP。可对图发任何问——述其内容、识其文字、解其图表、辨其物象、评其风格与气韵。结合绘相可先生图再析之。
-- `action`：所择子 Tool 之名，`analyze` 直析，`manual` 惟返只读指引
+- `action`：所择子 Tool 之名，`analyze` 直析，`check` 察路由，`list` 列可用路由，`manual` 惟返只读指引
 - `input`：所择 action 自有之严输
 - `image_path`：`analyze` 之输中图像之路径
 - `question`：`analyze` 之输中关于图像之问，`null` 则用默问

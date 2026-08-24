@@ -4,11 +4,13 @@ description: >
   Use this manual when the vision capability has no usable provider route or
   reports a direct setup/request failure and needs safe, provider-neutral
   troubleshooting guidance.
-last_changed_at: 2026-08-09T00:00:00Z
+last_changed_at: 2026-08-24T00:00:00Z
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
   - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/tools/vision/BEHAVIORS.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
 maintenance: |
   Keep this manual provider-neutral and read-only. It must not import, name, or
   link to a TUI package, credential, endpoint secret, or automatic MCP action.
@@ -16,72 +18,81 @@ maintenance: |
 # Vision manual
 
 This is the provider-neutral fallback for `vision`. It contains guidance only;
-it does not discover, install, start, or invoke a backend.
+it does not discover, install, start, or invoke a backend. The static official
+Vision declaration owns this package as its `manual="vision"` destination, so
+the registrar-bound `manual` action reads this installed `SKILL.md` and not a
+host-global or another family's skill.
 
 ## Call shape
 
-`vision` is one action-separated tool with these actions:
+`vision` is one action-separated tool with four strict actions:
 
 - `vision(action="analyze", input={"image_path": "...", "question": null},
-  reasoning="...")` — the direct image request. `question` is optional: send
-  `null` to use the default "Describe what you see in this image." The optional
-  `preset` input field borrows another allowed preset's vision service for this
-  one call (e.g. `"preset": "codex-pool"`); it must be a path listed in
-  `manifest.preset.allowed`.
+  reasoning="...")` — the direct image request. `image_path` and nullable
+  `question` are required fields; `null` selects the default prompt
+  `Describe what you see in this image.`. The optional nullable `preset` field
+  explicitly borrows one allowed preset's vision service for this call.
 - `vision(action="check", input={"preset": null}, reasoning="...")` — resolve
-  which vision route actually works without sending an image. With a `preset`
-  value it borrows that preset's service and reports the resolved
-  provider/model; with `null` it checks the default route. It constructs the
-  service but never makes a provider call, so it costs nothing and cannot fail
-  on image content.
+  the default route without an image. The `preset` field is required and must
+  be `null` or an allowed preset reference. A non-null value resolves the
+  borrowed provider/model and constructs its service, but never calls a
+  provider or sends image data.
 - `vision(action="list", input={}, reasoning="...")` — mechanically enumerate
-  the available vision routes without any provider call. It reports the default
-  route (active provider/model, whether it supports vision, its endpoint
-  classification, and whether it is a Responses-API vision model) plus every
-  preset listed in `manifest.preset.allowed` that declares a vision capability
-  (its provider/model, endpoint classification, and whether the model is valid
-  for the Responses API vision endpoint). It never constructs a service or
-  reads a credential.
+  the active route and vision-capable presets in `manifest.preset.allowed`.
+  It reads route declarations only: it constructs no provider service and
+  reads no credential.
 - `vision(action="manual", input={}, reasoning="...")` — this guidance. Its
-  input is strictly empty and it performs no analyze operation.
+  input is strictly empty; it reads the installed manual body/path and performs
+  no config, credential, provider, image, or analyze operation.
 
-`reasoning` is required on every action and is recorded in your diary; it never
-becomes part of the image request. Optional `summarize` is a root presentation
-control, not action input. An unknown action, or an input field belonging to the
-other action, is rejected before anything is sent to a provider.
+`reasoning` is required on every action and is invocation metadata; it never
+becomes part of child input. Optional `summarize` is a root presentation
+control. An unknown action, root field, or cross-action input field is rejected
+before provider, credential, image, or manual-child work.
 
 ## Route behavior and failures
 
-`vision` is always registered. With no explicit `provider`, `analyze` defaults
-its route to the active LLM's own Responses API (model, endpoint, and
-credential inherited from the current provider). For OpenRouter and custom
-OpenAI-compatible presets, `analyze` first tries the current endpoint, model,
-and credential. It does not reject the route merely because downstream image
-support cannot be known in advance. A call may instead borrow another allowed
-preset's vision service with the `preset` input option; that preset must be
-listed in `manifest.preset.allowed`, and its own provider/model/credential
-identity (e.g. a `codex-pool` preset selecting its OAuth pool) is used for that
-one call. Any direct setup or request failure returns a sanitized vision tool
-result that reports the failure type and points here for explicit alternatives;
-it never exposes exception contents.
+`vision` is always registered. With no explicit provider or `preset`, the default
+route follows the active provider's own compatible identity (model, endpoint,
+wire, and credential) or an explicitly configured Vision service. Missing or
+unsupported identity fails closed to manual guidance. There is no hidden model,
+legacy credential, provider switch, or automatic MCP/provider fallback.
 
-### Borrow flow
+An explicit `preset` request is different from fallback. The reference must be
+listed in `manifest.preset.allowed`; Vision then loads that preset read-only and
+uses the allowed preset's own `manifest.llm` and `manifest.capabilities.vision`
+identity. That can include resolving the allowed preset's own `api_key` or
+`api_key_env`, or selecting its own Codex OAuth-pool identity, in order to build
+the requested borrowed service. Borrowing is therefore authorized credential
+routing for one call: it does not switch the active preset, lend the active
+preset's model/credential to the borrowed route, or silently choose another
+preset after a failure. An unlisted, unreadable, or incomplete preset fails
+closed with sanitized guidance.
+
+A direct setup or request failure reports the failure type and points here for
+explicit alternatives; it never exposes exception contents. A mention of MCP,
+a local server, another preset, or the Claude CLI is an instruction for a later
+explicit operator/agent action, not an automatic fallback or invocation.
+
+## Borrow flow
 
 To use another already-authorized preset's vision service for one image request:
 
-1. Run `vision(action="list", input={}, reasoning="...")` first to see which
-   allowed presets declare vision and which of those are Responses-API vision
-   models.
-2. Optionally run `vision(action="check", input={"preset": "<allowed preset>"},
-   reasoning="...")` to resolve the borrowed route and its provider/model
-   without sending an image.
-3. Then run `vision(action="analyze",
-   input={"image_path": "...", "preset": "<allowed preset>"},
-   reasoning="...")` to send one image request through that preset's service.
+1. Run `vision(action="list", input={}, reasoning="...")` to see which allowed
+   preset declarations advertise vision and their endpoint classification.
+2. Run `vision(action="check", input={"preset": "<allowed preset>"},
+   reasoning="...")` to resolve that preset's provider/model without sending
+   an image. Route construction may resolve that preset's own credential.
+3. Run `vision(action="analyze",
+   input={"image_path": "...", "question": null,
+   "preset": "<allowed preset>"}, reasoning="...")` to send one image request
+   through the explicitly selected service.
 
-The preset must be listed in `manifest.preset.allowed`; borrowing never
-silently switches the active preset, reads another preset's secret, or
-auto-invokes MCP.
+The allowed list is the authorization boundary. Borrowing never silently
+switches the active preset and never auto-invokes MCP or another provider. If
+the selected route fails, inspect the returned manual guidance and ask the
+operator before changing configuration, preset authorization, or installing a
+backend.
 
 ## Claude backend: use the Claude CLI for vision
 
@@ -105,15 +116,10 @@ analysis is returned as plain text on stdout — ideal for scripting.
 - Supported image formats include JPEG, PNG, and GIF (GIF uses the first
   frame). The CLI uses its own authentication (claude.ai subscription, API
   key, or a configured provider) and its own cost model.
-- The CLI may also accept the image as a positional argument or via paste in
-  interactive mode; print mode with the path in the prompt is the scriptable
-  route.
 
 ### Progressive disclosure to the official docs
 
-For the latest authoritative explanation of image input, supported formats,
-output formats, and model support, progressively read the Claude Code CLI
-documentation on the official website:
+For authoritative details, progressively read the Claude Code CLI documentation:
 
 - CLI reference: <https://code.claude.com/docs/en/cli-reference>
 - Image workflows: <https://code.claude.com/docs/en/common-workflows>
@@ -124,22 +130,22 @@ operator/agent action with the CLI's own auth and cost model.
 ## Stay on the active preset
 
 Inspect the identity already shown in the prompt: the current provider, model,
-and sanitized endpoint. The default route follows the active LLM; do not
+and sanitized endpoint. The default route follows that active LLM; do not
 substitute another provider, model, credential, endpoint, or wire protocol, and
 never silently switch or auto-invoke an MCP. If the active route cannot see
-images, the call fails explicitly; borrow another preset's vision service only
-when it is already authorized in `manifest.preset.allowed`. Retry only after the
-operator has corrected the active preset.
+images, the call fails explicitly. Use a borrowed route only by naming an
+already-authorized preset in the `preset` field; its own credential may be
+resolved for that explicit request.
 
 ## Find the current preset's method
 
-Use the `skills` capability's catalog to search your own installed skills for a
-manual matching that provider/model or preset. Read the matching manual before
-trying its documented method or official-page pointer. If no matching manual is
+Use the `skills` capability's catalog to search installed skills for a manual
+matching that provider/model or preset. Read the matching manual before trying
+its documented method or official-page pointer. If no matching manual is
 present, report that no discoverable vision method is available.
 
-An optional MCP or other skill may be described by that preset manual, but it
-is always an explicit operator/agent action. This manual never auto-loads or
+An optional MCP or other skill may be described by that preset manual, but it is
+always an explicit operator/agent action. This manual never auto-loads or
 auto-invokes MCP.
 
 ## Safety

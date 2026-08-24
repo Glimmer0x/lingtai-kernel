@@ -46,9 +46,11 @@ build its schema composition and envelope dispatch on the generic
 using it changed no observable promise in this file. `web` is also an official
 static declared host plugin: its `DECLARATION` owns the same public name,
 `search`/`browse` action schemas, and installed `web` manual destination; its
-binder receives only workdir, explicit setup runtime, and canonical provider
-identity ports. Registration, mounting, and name reservation stay kernel-owned
-in `lingtai.kernel.tool_plugin`; no Web code receives or retains the whole Agent.
+binder receives only `workdir`, the Web-owned typed `web_runtime` composition
+value, and the narrow `provider_identity` label (`requires=("workdir",
+"web_runtime", "provider_identity")`). Registration, mounting, and name
+reservation stay kernel-owned in `lingtai.kernel.tool_plugin`; no Web code
+receives or retains the whole Agent.
 
 ## Behavior
 
@@ -97,9 +99,19 @@ only `WorkdirPort` (settings, artifacts, and installed manual), the typed
 `WebCompositionPort` (browser transport, immutable engine specs, default
 provenance, and one manager-publication operation), and `ProviderIdentityPort`
 (the one canonical label needed for Anthropic/Gemini eligibility); it never
-receives the Agent or its LLM service/credentials. The candidate still carries
-this value through the stale shared runtime carrier until serialized integration
-grants `web_runtime` through `extra_ports_for`.
+receives the Agent or its LLM service/credentials. `WebCompositionPort` is the
+Protocol behind the kernel grant name `web_runtime` (family-owned, like Email's
+`email_runtime`): `setup()` composes one `WebComposition` and grants it to the
+`web` declaration alone through `extra_ports_for`; it is never built in the
+standard host table. `_bind()` MUST fail closed — raising the kernel's
+`HostPortError`, which the Composition Root cannot absorb as
+`capability_skipped` — unless `host.web_runtime` is granted and is a typed
+`WebComposition`; there is no fallback to another carrier, no default browser
+transport, and no default engine set constructed at bind. `setup()` publishes
+the bound `WebManager` back through the composition exactly once and returns it,
+so the public setup/manager compatibility is unchanged. `ProviderIdentityPort`
+is read-only and read through on every access; it exposes only a string label
+(or `None`), never the service, credentials, model configuration, or Agent.
 
 ## Provider ownership and routing
 
@@ -117,7 +129,7 @@ removed with them, so an unrecognized `"minimax"`/`"zhipu"` name now raises
 the factory's own documented `ValueError` like any other unknown provider,
 never an uncaught `ModuleNotFoundError`. Wire either provider through a
 third-party MCP server instead — see
-`src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md`, the
+`src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md`, the
 skill-owned procedure route. Naming either via `provider=`, `default_engine=`,
 or `engines={}` at `web` composition time raises `RetiredProviderError` — a
 composition-time, actionable failure, never a silent DuckDuckGo substitution

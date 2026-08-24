@@ -215,7 +215,12 @@ def _enqueue_system_notification(
     # production adapter recognizes the daemon payload's run-id marker and
     # writes the corresponding mini-channel; Core never probes an adapter-only
     # capability.
-    result = store.compare_update_channel(channel, UNCONDITIONAL, _mutator)
+    result = store.compare_update_channel(
+        channel,
+        UNCONDITIONAL,
+        _mutator,
+        owner=ref_id if channel == DAEMON_CHANNEL else None,
+    )
     applied_event_id = result.value if isinstance(result.value, str) else ""
     if not applied_event_id:
         return ""
@@ -279,7 +284,11 @@ def _mail(agent, address: str, message: str, subject: str = "") -> dict:
     ``send``'s own strict ``input`` object. The returned result is the
     unchanged ``{"status": "sent", ...}`` send result.
     """
-    return agent._intrinsics["email"]({
+    # Email's public surface is an official host plugin. Its intrinsic runtime
+    # remains available while the host binds it, so retain that fallback for a
+    # bare BaseAgent; a composed Agent dispatches through the official handler.
+    handler = agent._tool_handlers.get("email") or agent._intrinsics["email"]
+    return handler({
         "action": "send",
         "input": {"address": address, "message": message, "subject": subject},
     })

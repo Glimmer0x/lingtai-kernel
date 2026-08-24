@@ -324,7 +324,7 @@ handling, dismiss the transient hook with
 `notification.dismiss_channel("mcp.feishu")`; the persistent block is context
 history, not unread state. Generic mirror-vs-canonical-state and dismiss-safety
 rules live in
-[`notification-manual`](../../intrinsic_skills/notification-manual/SKILL.md).
+[`notification-manual`](../../tools/notification/manual/SKILL.md).
 
 ## SIDE EFFECTS & ERROR SURFACING
 

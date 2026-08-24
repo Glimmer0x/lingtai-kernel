@@ -42,6 +42,13 @@ its own protected ``mcp`` section). Nothing about the public tool — name,
 including the tool-specific ``mcp_manual`` body key — changed with it.
 
 Usage: ``Agent(capabilities=["mcp"])`` or via init.json.
+
+The source package is also an Agent Plugins v1.0.0 *documentation package*: its
+``plugin.json`` and sole owned ``skills/mcp-manual/`` skill are validated by the
+existing plugin-registry reader when Agent installs intrinsic manuals. That
+packaging does not select, register, or activate an external plugin and never
+creates an ``mcp_registry.jsonl`` record; the static declaration above remains
+the only route that mounts this model-facing tool.
 """
 from __future__ import annotations
 

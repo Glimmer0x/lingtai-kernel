@@ -88,6 +88,23 @@ def test_load_init_validation_error(tmp_path):
         load_init(tmp_path)
 
 
+def test_build_agent_fails_when_second_init_read_is_corrupt(tmp_path, capsys):
+    from lingtai.cli import build_agent, load_init
+
+    _write_init(tmp_path)
+    data = load_init(tmp_path)
+    capsys.readouterr()
+    (tmp_path / "init.json").write_text("{corrupt json")
+
+    with pytest.raises(SystemExit) as raised:
+        build_agent(data, tmp_path)
+
+    assert raised.value.code == 1
+    error = capsys.readouterr().err
+    assert error.startswith("error: ")
+    assert json.loads(error.removeprefix("error: "))["read_result"] == "READ_FAILED"
+
+
 @patch("lingtai.cli.LLMService")
 @patch("lingtai.cli.Agent")
 @patch("lingtai.cli.PosixFilesystemMailAdapter")
@@ -95,6 +112,11 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     from lingtai.cli import load_init, build_agent
     _write_init(tmp_path)
     data = load_init(tmp_path)
+
+    def assert_construction_sentinel_cleared():
+        assert mock_agent.return_value._from_init_boot is False
+
+    mock_agent.return_value._setup_from_init.side_effect = assert_construction_sentinel_cleared
     build_agent(data, tmp_path)
 
     mock_llm.assert_called_once()
@@ -111,6 +133,7 @@ def test_build_agent_constructs_correctly(mock_mail, mock_agent, mock_llm, tmp_p
     assert call_kwargs.kwargs["admin"] == {"karma": True}
     assert call_kwargs.kwargs["working_dir"] == tmp_path
     assert call_kwargs.kwargs["streaming"] is False
+    assert call_kwargs.kwargs["_from_init_boot"] is True
     # covenant, memory, capabilities, addons no longer passed to constructor —
     # they are loaded by _setup_from_init() from init.json
     assert "covenant" not in call_kwargs.kwargs

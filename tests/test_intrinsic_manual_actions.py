@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 
 from lingtai.tools import daemon as daemon_tool
 from lingtai.tools import file as file_tool
@@ -13,6 +14,7 @@ from lingtai.tools import vision as vision_tool
 from lingtai.tools import web_search as web_tool
 from lingtai.tools import bash as shell_tool
 from lingtai.tools import task_card as task_card_tool
+from tests.test_task_card_controller import _FakeAgent, _task_card_host
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +26,102 @@ class _StubAgent:
 
     def add_tool(self, name: str, *, handler=None, **_kwargs) -> None:
         self.handlers[name] = handler
+
+
+class _OfficialHostStub(_StubAgent):
+    """The smallest controlled host that satisfies the strict official registrar.
+
+    ``vision`` mounts only through ``register_agent_tool_plugins``, whose kernel
+    registrar anchors, records, mounts, and claims through BaseAgent's narrow
+    hooks. This stub reuses the real BaseAgent hook implementations over its
+    own private maps (the same pattern as the production Daemon preset
+    collector) and repeats the canonical declaration/bind identity checks in
+    its one-use mount, so no registrar check is weakened. It adds no Agent
+    surface beyond ``working_dir``, a ``service`` read (``None``: no active
+    provider, so the default route is manual-only), and the stub ``add_tool``.
+    """
+
+    def __init__(self, working_dir: Path):
+        super().__init__(working_dir)
+        self.service = None
+        self._official_tool_plugins: dict[str, object] = {}
+        self._official_tool_declarations: dict[str, object] = {}
+        self._official_tool_bindings: dict[str, object] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def _authorize_official_tool_declaration(self, declaration) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._authorize_official_tool_declaration(self, declaration)
+
+    def _record_official_tool_binding(self, declaration, plugin) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._record_official_tool_binding(self, declaration, plugin)
+
+    def _claim_official_tool(self, transaction) -> None:
+        from lingtai.kernel.base_agent import BaseAgent
+
+        BaseAgent._claim_official_tool(self, transaction)
+
+    def _mount_official_tool(self, transaction) -> None:
+        from lingtai.kernel.tool_plugin import (
+            OFFICIAL_TOOL_PLUGIN_NAMES,
+            _OfficialMountTransaction,
+        )
+
+        if not isinstance(transaction, _OfficialMountTransaction):
+            raise PermissionError(
+                "official tool mounting requires a registrar transaction"
+            )
+        declaration = transaction.declaration
+        plugin = transaction.plugin
+        name = declaration.name
+        if (
+            name not in OFFICIAL_TOOL_PLUGIN_NAMES
+            or plugin.name != name
+            or self._official_tool_declarations.get(name) is not declaration
+            or self._official_tool_bindings.get(name) is not plugin
+        ):
+            raise PermissionError(
+                "official mount transaction is not the canonical declaration/bind result"
+            )
+        live = self._official_tool_plugins.get(name)
+        if live is not None and live is not declaration:
+            raise PermissionError("official mount transaction is not for the live claim")
+        transaction.consume()
+        self.add_tool(name, handler=plugin.handler, schema=plugin.schema)
+        transaction.mark_mounted(self)
+
+
+def _bound_file_handler(agent: _StubAgent):
+    """Bind File to port-shaped doubles; this stub is intentionally not Agent."""
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+
+    file_io = agent._file_io
+    return file_tool.DECLARATION.bind(
+        ToolPluginHost(
+            "file",
+            {
+                "workdir": SimpleNamespace(path=agent._working_dir),
+                "file_io": SimpleNamespace(
+                    read=file_io.read,
+                    write=file_io.write,
+                    glob=file_io.glob,
+                    grep=file_io.grep,
+                    last_traversal=getattr(file_io, "last_traversal", None),
+                    max_result_chars=None,
+                ),
+            },
+        )
+    ).handler
 
 
 def _install_manual(workdir: Path, skill_name: str) -> tuple[str, Path]:
@@ -60,17 +158,38 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         )
     }
 
-    # The five old file roots are gone; the one ``file`` family owns a single
-    # ``manual`` action returning ``file-manual``.
-    file_tool.setup(agent)
+    # The five old file roots are gone; bind the one ``file`` declaration to
+    # only the two ports its family requires. This manual-only test deliberately
+    # has no whole-Agent route through File setup.
+    from lingtai.kernel.tool_plugin import ToolPluginHost
+
+    file_handler = file_tool.DECLARATION.bind(
+        ToolPluginHost(
+            "file",
+            {"workdir": SimpleNamespace(path=tmp_path), "file_io": object()},
+        )
+    ).handler
 
     shell_manager = shell_tool.ShellManager.__new__(shell_tool.ShellManager)
     shell_manager._agent = agent
     daemon_manager = daemon_tool.DaemonManager.__new__(daemon_tool.DaemonManager)
-    daemon_manager._agent = agent
-    web_manager = web_tool.setup(agent)
-    vision_manager = vision_tool.setup(agent)
-    task_card_manager = task_card_tool.setup(agent)
+    daemon_manager._workdir = SimpleNamespace(path=tmp_path)
+    # ``web`` is a declared official family too: its ``setup`` composes the
+    # typed WebComposition, grants it through the strict kernel registrar, and
+    # returns the manager that registrar bound and mounted.
+    web_host = _OfficialHostStub(tmp_path)
+    web_manager = web_tool.setup(web_host)
+    assert web_host.official_tool_plugins["web"] is web_tool.DECLARATION
+    assert web_host.handlers["web"] == web_manager.handle
+    # ``vision`` is a declared official family: ``setup`` runs through the
+    # strict kernel registrar, so it takes the controlled official host rather
+    # than the bare stub. The registrar must have claimed and mounted the one
+    # canonical declaration/manager before the manual assertion below runs.
+    vision_host = _OfficialHostStub(tmp_path)
+    vision_manager = vision_tool.setup(vision_host)
+    assert vision_host.official_tool_plugins["vision"] is vision_tool.DECLARATION
+    assert vision_host.handlers["vision"] is vision_manager
+    task_card_manager = task_card_tool.TaskCardManager(_task_card_host(_FakeAgent(tmp_path)))
 
     # ``shell`` is a migrated LTP v2 family: its ``manual`` is the reserved
     # family child dispatched through the registered envelope handler, not an
@@ -97,7 +216,7 @@ def test_manual_actions_return_their_installed_skills(tmp_path: Path) -> None:
         "task_card": ("task_card", lambda: task_card_manager.handle(
             {"action": "manual", "input": {}, "reasoning": "load task card guidance"}
         )),
-        "file": ("file-manual", lambda: agent.handlers["file"](
+        "file": ("file-manual", lambda: file_handler(
             {"action": "manual", "input": {}, "reasoning": "load file guidance"}
         )),
     }
@@ -191,7 +310,7 @@ def test_manual_schemas_preserve_runtime_checks_for_ordinary_file_calls(
 
     agent = _StubAgent(tmp_path)
     agent._file_io = _ActionFileIO(tmp_path)
-    file_tool.setup(agent)
+    agent.handlers["file"] = _bound_file_handler(agent)
 
     def call(action, **input_):
         return agent.handlers["file"](
@@ -347,7 +466,7 @@ def test_file_action_modes_require_explicit_action_and_fail_loudly(tmp_path: Pat
     assert "after the manual result" in description.lower()
     assert "error loop" in description
 
-    file_tool.setup(agent)
+    agent.handlers["file"] = _bound_file_handler(agent)
 
     def call(action, **input_):
         return agent.handlers["file"](
@@ -379,7 +498,7 @@ def test_file_manual_bodies_explain_one_time_manual_guidance() -> None:
     asserted. The guidance that still matters is: manual is a one-time lookup,
     ordinary work resumes after it, and repeating it is an error loop.
     """
-    file_body = Path("src/lingtai/intrinsic_skills/file-manual/SKILL.md").read_text(encoding="utf-8")
+    file_body = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(encoding="utf-8")
     read_body = Path("src/lingtai/intrinsic_skills/read-manual/SKILL.md").read_text(encoding="utf-8")
     for body in (file_body, read_body):
         assert "ordinary" in body

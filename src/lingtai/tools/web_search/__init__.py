@@ -11,7 +11,12 @@ import os
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
-from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+from lingtai.kernel.tool_plugin import (
+    BoundToolPlugin,
+    HostPortError,
+    ToolPluginDeclaration,
+    ToolPluginDeclarationError,
+)
 
 from .._manual import load_installed_manual
 from ..browser.core import BrowserEngine
@@ -37,7 +42,7 @@ if TYPE_CHECKING:
     from ..browser.port import BrowserPort
 
 # MiniMax and Zhipu are no longer built-in `web` providers (see
-# src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md for the
+# src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md for the
 # skill-owned MCP route). Anthropic and Gemini are explicit opt-in only,
 # gated on canonical backend identity — never an implicit built-in default.
 PROVIDERS = {
@@ -210,8 +215,13 @@ def _deferred_bind(host: "ToolPluginHost") -> BoundToolPlugin:
 
 
 #: Static declaration of the official public ``web`` tool.  The deferred binder
-#: keeps this import-time declaration independent of the per-Agent runtime that
-#: ``setup`` supplies through the narrow ``runtime`` host port.
+#: keeps this import-time declaration independent of the per-Agent
+#: :class:`WebComposition` that ``setup`` grants to this declaration alone as
+#: the Web-owned ``web_runtime`` host port (through ``extra_ports_for``, the
+#: same declaration-scoped seam Email, File, Shell, and Vision use).
+#: ``provider_identity`` is the narrow read-only canonical provider label that
+#: gates the explicit Anthropic/Gemini opt-in; ``workdir`` roots settings,
+#: artifacts, and the installed manual.
 DECLARATION = ToolPluginDeclaration(
     name="web",
     actions=tuple(name for name, _schema, _title in _CHILD_SPECS),
@@ -220,7 +230,7 @@ DECLARATION = ToolPluginDeclaration(
     manual="web",
     description=get_description(),
     binder=_deferred_bind,
-    requires=("workdir", "runtime", "provider_identity"),
+    requires=("workdir", "web_runtime", "provider_identity"),
     glossary_package=__package__,
 )
 
@@ -866,7 +876,7 @@ def _specs_from_kwargs(
         raise RetiredProviderError(
             f"provider {(default_engine or provider)!r} is retired from built-in web search admission; "
             "wire it as a third-party MCP server instead (see "
-            "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+            "src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md)"
         )
     if default_engine in _BACKEND_GATED_ENGINES or provider in _BACKEND_GATED_ENGINES:
         # Anthropic/Gemini are active, fully-admitted canonical providers —
@@ -893,7 +903,7 @@ def _specs_from_kwargs(
                 raise RetiredProviderError(
                     f"provider {explicit_provider!r} is retired from built-in web search admission; "
                     "wire it as a third-party MCP server instead (see "
-                    "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+                    "src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md)"
                 )
             if explicit_provider not in PROVIDERS["providers"]:
                 # Retain the pre-existing legacy_fallback_from behavior for a
@@ -964,10 +974,14 @@ def _specs_from_kwargs(
 class WebCompositionPort(Protocol):
     """The narrow, Web-owned setup boundary for one official bind.
 
-    The serialized host seam grants this value to Web. It names only the
+    This is the Protocol behind the ``web_runtime`` grant name: like Email's
+    ``email_runtime``, the kernel reserves only the name, and the family owns
+    the vocabulary. ``setup`` grants one :class:`WebComposition` value to the
+    ``web`` declaration alone through ``extra_ports_for``; it names only the
     browser transport and immutable engine composition Web consumes, plus the
-    one publication operation needed to retain setup -> WebManager compatibility.
-    It never exposes an Agent or provider credentials.
+    one publication operation needed to retain setup -> WebManager
+    compatibility. It never exposes an Agent, an LLM service, or provider
+    credentials, and it is never built in the standard host table.
     """
 
     @property
@@ -1001,35 +1015,45 @@ class WebComposition:
 
     def publish_manager(self, manager: WebManager) -> None:
         if self.manager is not None and self.manager is not manager:
-            raise RuntimeError("web composition manager was published twice")
+            raise ToolPluginDeclarationError(
+                "web composition manager was published twice"
+            )
         self.manager = manager
 
 
-# Kept only for candidate-local compatibility; the domain name is WebComposition.
-_WebRuntime = WebComposition
-
-
 def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
-    """Compose Web against only its granted host ports; mount nothing."""
+    """Compose Web against only its granted host ports; mount nothing.
+
+    Fail closed: the bind refuses to proceed unless the host granted
+    ``web_runtime`` *and* that grant is the typed :class:`WebComposition`
+    value ``setup`` composed. There is no fallback to any other carrier, no
+    default browser transport, and no default engine set constructed here —
+    a missing or mistyped grant is a wiring defect, raised as a
+    ``ToolPluginError`` so the Composition Root's capability loop cannot
+    absorb it as ``capability_skipped``.
+    """
     try:
-        runtime = host.web_runtime  # type: ignore[attr-defined]
-    except AttributeError:
-        try:
-            runtime = host.runtime.value
-        except AttributeError as exc:
-            raise TypeError("web plugin requires a granted WebCompositionPort") from exc
-    if not isinstance(runtime, _WebRuntime):
-        raise TypeError("web plugin requires a typed WebCompositionPort")
+        composition = host.web_runtime
+    except AttributeError as exc:
+        raise HostPortError(
+            "web plugin requires the granted 'web_runtime' host port carrying "
+            "its typed WebComposition; none was granted"
+        ) from exc
+    if not isinstance(composition, WebComposition):
+        raise HostPortError(
+            "web plugin requires host port 'web_runtime' to carry a typed "
+            f"WebComposition, not {type(composition).__name__}"
+        )
     manager = WebManager(
         host.workdir,
         host.provider_identity,
-        runtime.browser_port,
-        specs=runtime.specs,
-        default_engine=runtime.default_engine,
-        default_source=runtime.default_source,
-        legacy_fallback_from=runtime.legacy_fallback_from,
+        composition.browser_port,
+        specs=composition.specs,
+        default_engine=composition.default_engine,
+        default_source=composition.default_source,
+        legacy_fallback_from=composition.legacy_fallback_from,
     )
-    runtime.publish_manager(manager)
+    composition.publish_manager(manager)
     return BoundToolPlugin(
         name=DECLARATION.name,
         schema=get_schema(),
@@ -1045,11 +1069,17 @@ def setup(
     default_engine: str | None = None, engines: Mapping[str, Any] | None = None,
     browser_port: "BrowserPort | None" = None, **kwargs: Any,
 ) -> WebManager:
-    """Compose Web's explicit runtime, then mount its static declaration.
+    """Compose Web's explicit composition, then mount its static declaration.
 
     This is capability composition only: provider/browser wiring remains the
-    exact existing lazy setup semantics, while the host owns registration,
-    activation (none for Web), and mounting through the official namespace.
+    exact existing lazy setup semantics (the ``BrowserPort`` plus immutable
+    engine specs and default provenance become one :class:`WebComposition`),
+    while the host owns registration, activation (none for Web), and mounting
+    through the official namespace. The composition value is granted as the
+    ``web_runtime`` port to this declaration alone through ``extra_ports_for``
+    — never added to the standard table for every family — and the bound
+    ``WebManager`` is published back through it exactly once, so callers keep
+    receiving the manager as before.
     """
     if browser_port is None:
         from lingtai.adapters.browser_transport import VettedHttpTransport
@@ -1059,7 +1089,7 @@ def setup(
         api_key_env=api_key_env, model=model, default_engine=default_engine,
         engines=engines, kwargs=kwargs,
     )
-    runtime = _WebRuntime(
+    composition = WebComposition(
         browser_port=browser_port,
         specs=specs,
         default_engine=chosen,
@@ -1071,8 +1101,10 @@ def setup(
     register_agent_tool_plugins(
         agent,
         [DECLARATION],
-        runtimes={DECLARATION.name: runtime},
+        extra_ports_for=lambda declaration: (
+            {"web_runtime": composition} if declaration is DECLARATION else {}
+        ),
     )
-    if runtime.manager is None:  # defensive: registrar must have bound Web.
-        raise RuntimeError("web official plugin did not produce a manager")
-    return runtime.manager
+    if composition.manager is None:  # pragma: no cover - declaration invariant
+        raise ToolPluginDeclarationError("web official plugin did not publish a manager")
+    return composition.manager
