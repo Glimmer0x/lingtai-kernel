@@ -1,20 +1,24 @@
 """Focused behavioral coverage for official declared host-plugin mounts.
 
-The shared primitive has three real vertical proofs: ``mcp`` demonstrates the
+The shared primitive has several real vertical proofs: ``mcp`` demonstrates the
 small presentation-only slice, ``notification`` demonstrates a Core-backed
 state slice bound only to a narrow port, ``daemon`` demonstrates a manager-owning
 slice that consumes its current-agent model/tool/preset/notification semantics
-through the capability-native runtime port, and ``plugin`` demonstrates a slice
-whose only earned port is a detached read-only projection. All are mounted only
-through the registrar's controlled host path.
+through the capability-native runtime port, ``plugin`` demonstrates a slice
+whose only earned port is a detached read-only projection, and ``vision``
+demonstrates a slice that reads the live active provider through one
+read-through port plus a setup-selected configuration snapshot. All are mounted
+only through the registrar's controlled host path.
 """
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
 from lingtai.agent import Agent
+from lingtai.services.vision import VisionService
 from tests._service_helpers import make_gemini_mock_service
 
 
@@ -75,17 +79,17 @@ def task_card_agent(tmp_path):
         agent.stop(timeout=1.0)
 
 
-def test_all_twelve_official_families_mount_exactly_once_together(tmp_path):
+def test_all_thirteen_official_families_mount_exactly_once_together(tmp_path):
     """The cumulative composition keeps every landed family and no duplicate."""
     from lingtai.kernel.tool_plugin import OFFICIAL_TOOL_PLUGIN_NAMES
 
     assert OFFICIAL_TOOL_PLUGIN_NAMES == (
         "mcp", "avatar", "context", "daemon", "email", "file", "plugin",
-        "notification", "shell", "soul", "system", "task_card",
+        "notification", "shell", "soul", "system", "task_card", "vision",
     )
     agent = Agent(
         service=make_gemini_mock_service(),
-        agent_name="all-twelve-official-plugins",
+        agent_name="all-thirteen-official-plugins",
         working_dir=tmp_path / "agent",
         capabilities={
             "mcp": {},
@@ -97,6 +101,7 @@ def test_all_twelve_official_families_mount_exactly_once_together(tmp_path):
             "notification": {},
             "shell": {"yolo": True},
             "task_card": {},
+            "vision": {"vision_service": MagicMock(spec=VisionService)},
         },
     )
     try:
@@ -127,6 +132,50 @@ def test_official_mcp_mount_uses_controlled_host_and_real_dispatch(mcp_agent):
     assert manual["status"] == "ok"
     assert manual["mcp_manual"]
     assert manual["manual_path"].endswith("capabilities/mcp/SKILL.md")
+
+
+def test_official_vision_mount_keeps_active_provider_and_packaged_manual(tmp_path):
+    """The thirteenth declared slice binds only its narrow ports and stays a real tool."""
+    from lingtai.adapters.tool_plugin_host import (
+        AgentActiveProviderAdapter,
+        agent_host_ports,
+    )
+    from lingtai.kernel.tool_plugin import HostPortError, ToolPluginHost
+    from lingtai.tools.vision import DECLARATION, VisionManager
+
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="vision-tool-plugin-declaration",
+        working_dir=tmp_path / "agent",
+        capabilities={"vision": {"vision_service": MagicMock(spec=VisionService)}},
+    )
+    try:
+        assert DECLARATION.requires == ("workdir", "active_provider", "configuration")
+        assert agent.official_tool_plugins["vision"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("vision") == 1
+
+        handler = agent._tool_handlers["vision"]
+        assert isinstance(handler, VisionManager)
+        assert not hasattr(handler, "_agent")
+        manual = handler({"action": "manual", "input": {}, "reasoning": "guidance"})
+        assert manual["status"] == "ok"
+        assert manual["action"] == "manual"
+        assert manual["manual"]
+        assert manual["manual_path"].endswith("capabilities/vision/SKILL.md")
+
+        # The standard table builds only Vision's live read-through provider
+        # port. The setup snapshot is granted through ``extra_ports_for`` by
+        # ``setup`` alone, so a bare standard grant fails loudly rather than
+        # binding a half-configured Vision; MCP never sees the provider port.
+        table = agent_host_ports(agent, "vision")
+        assert isinstance(table["active_provider"], AgentActiveProviderAdapter)
+        assert table["active_provider"].service is agent.service
+        assert "configuration" not in table
+        with pytest.raises(HostPortError):
+            ToolPluginHost.grant(DECLARATION, table)
+        assert "active_provider" not in agent_host_ports(agent, "mcp")
+    finally:
+        agent.stop(timeout=1.0)
 
 
 def test_official_task_card_mount_keeps_the_current_agent_lifecycle(task_card_agent):

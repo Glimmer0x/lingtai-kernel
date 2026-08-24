@@ -49,6 +49,9 @@ related_files:
   - src/lingtai/tools/task_card/ANATOMY.md
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/task_card/manual/SKILL.md
+  - src/lingtai/tools/vision/ANATOMY.md
+  - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/kernel/notifications.py
   - src/lingtai/tools/tool_family/ANATOMY.md
   - src/lingtai/tools/_manual.py
@@ -67,12 +70,14 @@ related_files:
   - tests/test_system_declared_plugin.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
+  - tests/test_tool_family_vision_migration.py
+  - tests/test_intrinsic_manual_actions.py
 maintenance: |
   Keep related_files repo-relative, duplicate-free, and linked to real files.
   Keep this component's ANATOMY.md, CONTRACT.md, and BEHAVIORS.md reciprocal and
   keep parent/child anatomy links bidirectional (src/lingtai/kernel/ANATOMY.md
   upward; src/lingtai/tools/ANATOMY.md and the MCP, Avatar, Context, Daemon,
-  Email, File, Plugin, and Task Card owner Anatomies across to the declaring side). Code is the
+  Email, File, Plugin, Task Card, and Vision owner Anatomies across to the declaring side). Code is the
   structural source of truth: update
   upward; src/lingtai/tools/ANATOMY.md, src/lingtai/tools/mcp/ANATOMY.md, and
   src/lingtai/tools/daemon/ANATOMY.md, src/lingtai/tools/email/ANATOMY.md, and
@@ -104,7 +109,7 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   - errors `ToolPluginError` and its four subclasses
     (`ToolPluginDeclarationError`, `UnreservedToolPluginNameError`,
     `DuplicateToolPluginNameError`, `HostPortError`);
-  - the seventeen kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
+  - the eighteen kernel host Port Protocols `WorkdirPort`, `PromptSectionPort`,
     `FileIOPort`, `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
     read-only `PluginCatalogPort` (with detached `PluginCatalogState`),
     `NotificationStatePort`, Shell's narrow durable `NotificationPort` and
@@ -115,6 +120,9 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
     `TaskCardNotificationsPort` (five scalar-signature methods — `publish_error`,
     `publish_recovered`, `publish_limit`, `submit_reminder`, `clear_reminder` —
     with no generic enqueue, `**kwargs`, source, channel, or extra argument),
+    Vision's read-through `ActiveProviderPort` (one `service` read of the
+    current active provider; Vision also consumes Shell's `ConfigurationPort`
+    for its setup snapshot),
     and host-only `ToolMountPort`, plus File's
     structural `FileGrepMatch`/`FileTraversalStats` result Protocols;
     `email_runtime` is also grantable but its Protocol remains Email-owned;
@@ -153,14 +161,18 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   closed notification operations — the Agent's generic system-event publisher
   is held privately behind them and pinned to the established
   `task_card.error`/`task_card.limit` sources, `system` channel, priority,
-  idempotency skip, and bounded `extra` projection (guarded by TK002).
+  idempotency skip, and bounded `extra` projection (guarded by TK002), and
+  `AgentActiveProviderAdapter` for Vision's one read-through `service` view of
+  `Agent.service`, built in the standard table only for the `vision`
+  declaration (Vision's `configuration` snapshot reuses
+  `StaticConfigurationAdapter` through `extra_ports_for`).
   No adapter exposes an Agent or generic dispatcher; `agent_host_ports` and
   `register_agent_tool_plugins` construct the private registrar mount seam.
 - `src/lingtai/tools/mcp/__init__.py` — the current base reference slice.
   Its static declaration binds the per-host family and protected prompt
   section; Avatar, Context, Daemon, Email, File, Plugin, and Notification
   are separately accepted vertical slices. The later-family target register
-  remains limited to `vision` and `web`; it is
+  remains limited to `web`; it is
   not an admission path.
 - `src/lingtai/tools/avatar/__init__.py` — separately landed vertical evidence,
   not a C candidate claim. Its static `DECLARATION` binds `AvatarManager` to
@@ -263,6 +275,24 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   `taskcard/status` + `taskcard/taskcard.md` artifact that transports project.
   `setup(agent)` is composition wiring through the registrar; the package
   manual installs at `capabilities/task_card/SKILL.md`.
+- `src/lingtai/tools/vision/__init__.py` is the thirteenth accepted vertical
+  slice, the channel-neutral image-understanding family. Its static
+  `DECLARATION` owns the public `analyze | check | list | manual` family (one
+  strict input schema per action) and binds `VisionManager` to exactly
+  `workdir`, the live read-through `active_provider`, and one `configuration`
+  snapshot. `_bind` rebuilds the immutable `VisionConfiguration` from the
+  granted port's copied mapping (`VisionConfiguration.from_port_values`),
+  resolves the default route from the active provider only, and returns the
+  mountable manager; `setup(agent, ...)` hands
+  `StaticConfigurationAdapter(VisionConfiguration(...).port_values())` to the
+  `vision` declaration alone through `extra_ports_for` and calls the
+  registrar. `check` constructs/resolves the selected route without any image
+  or provider request, `list` enumerates only authorized preset declarations,
+  `manual` reads only the installed package manual, and an explicitly allowed
+  `preset` resolves only that preset's own credential for the one requested
+  call — never switching the active preset, borrowing active secrets, or
+  falling back to another provider/MCP. The package manual installs at
+  `capabilities/vision/SKILL.md`.
 
 ## Connections
 
@@ -297,6 +327,11 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   hook, and Daemon's `has_active_task_card_watch` probe keep operating on the
   same retained manager across refresh; the notification port's adapter holds
   `Agent._enqueue_system_notification` privately and never exposes it.
+- `lingtai.tools.vision` imports `lingtai.kernel.tool_plugin`; its `_bind`
+  sees a `ToolPluginHost`, never an Agent. The `active_provider` adapter's one
+  closure reads `Agent.service` on every access, so a refreshed provider is
+  seen without a stale identity; the `configuration` port is the same
+  `StaticConfigurationAdapter` seam Shell uses, granted only to `vision`.
 - `lingtai.adapters.tool_plugin_host` imports `lingtai.kernel.tool_plugin`
   (`Adapter -> Port <- Core`) and reaches the Agent only through the public
   `working_dir`, `update_system_prompt`, and the read-only
@@ -314,11 +349,12 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
   provenance, not an absolute defense against deliberate private-state mutation.
 - `lingtai.tools.mcp.setup()`, `lingtai.tools.avatar.setup()`,
   `lingtai.tools.context.setup()`, `lingtai.tools.daemon.setup()`,
-  `lingtai.tools.file.setup()`, `lingtai.tools.plugin.setup()`, and
-  `lingtai.tools.task_card.setup()` call
+  `lingtai.tools.file.setup()`, `lingtai.tools.plugin.setup()`,
+  `lingtai.tools.task_card.setup()`, and `lingtai.tools.vision.setup()` call
   `lingtai.adapters.tool_plugin_host.register_agent_tool_plugins` through the
   ordinary capability boot loop. Daemon and File add their capability-native
-  ports through `extra_ports_for`; Plugin needs no factory because its
+  ports through `extra_ports_for`, and Vision adds its setup-selected
+  `configuration` snapshot the same way; Plugin needs no factory because its
   read-only `plugin_catalog` projection is built in the standard table and is
   still granted only to a declaration that names it; Task Card's three ports
   are likewise built in the standard table (`agent_task_card_ports`) only for
@@ -348,7 +384,8 @@ is in [`BEHAVIORS.md`](BEHAVIORS.md).
 `import lingtai.tools.mcp`, `import lingtai.tools.avatar`,
 `import lingtai.tools.context`, `import lingtai.tools.daemon`,
 `import lingtai.tools.email`, `import lingtai.tools.file`,
-`import lingtai.tools.plugin`, or `import lingtai.tools.task_card` →
+`import lingtai.tools.plugin`, `import lingtai.tools.task_card`, or
+`import lingtai.tools.vision` →
 `import lingtai.tools.email`, or `import lingtai.tools.notification` →
 `ToolPluginDeclaration.__post_init__` validates
 its declared shape, with no Agent in existence.
@@ -441,9 +478,13 @@ component does not own.
   reviewed contract change), build its module-level `DECLARATION`, and route
   its approved composition hook through `register_agent_tool_plugins`; do not
   infer that every official family must be a dynamic `setup()` capability.
-  The twelve actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
-  `file`, `plugin`, `notification`, `shell`, `soul`, `system`, and `task_card`;
+  The thirteen actual slices are `mcp`, `avatar`, `context`, `daemon`, `email`,
+  `file`, `plugin`, `notification`, `shell`, `soul`, `system`, `task_card`, and
+  `vision`;
   Notification demonstrates an always-on injected family rather than a
-  later-family target or normal opt-in capability, and Task Card demonstrates a
+  later-family target or normal opt-in capability, Task Card demonstrates a
   manager-owning dynamic family whose one manager is retained on the Agent
-  through a family-specific lifecycle port and rebound on every refresh.
+  through a family-specific lifecycle port and rebound on every refresh, and
+  Vision demonstrates a dynamic family that reads the live active provider
+  through one read-through port and receives its setup input as a
+  configuration snapshot rather than an Agent.

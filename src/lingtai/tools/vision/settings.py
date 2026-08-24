@@ -20,7 +20,10 @@ import json
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import WorkdirPort
 
 MAX_SETTINGS_BYTES = 64 * 1024
 
@@ -52,9 +55,9 @@ class LocalVisionSettings:
     error: str | None = None
 
 
-def settings_path(agent: Any) -> Path:
+def settings_path(workdir: "WorkdirPort") -> Path:
     """Return the one fixed, family-owned local vision settings path."""
-    return Path(agent._working_dir) / "settings" / "vision.json"
+    return workdir.path / "settings" / "vision.json"
 
 
 def _default_snapshot() -> LocalVisionSettings:
@@ -160,14 +163,14 @@ def _validate(doc: dict[str, Any]) -> LocalVisionSettings:
     )
 
 
-def read_local_settings(agent: Any) -> LocalVisionSettings:
+def read_local_settings(workdir: "WorkdirPort") -> LocalVisionSettings:
     """Read and validate the shared ``settings/vision.json`` snapshot.
 
     A missing file returns the deterministic default snapshot (no error). A
     present-but-invalid file raises ``SettingsError`` so setup can surface
     guided manual guidance instead of silently falling back.
     """
-    path = settings_path(agent)
+    path = settings_path(workdir)
     try:
         raw, source = _read_stable(path)
     except SettingsError:

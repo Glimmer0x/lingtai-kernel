@@ -30,6 +30,8 @@ related_files:
   - src/lingtai/tools/skills/CONTRACT.md
   - src/lingtai/tools/skills/__init__.py
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/tools/vision/__init__.py
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/tools/notification/CONTRACT.md
   - src/lingtai/tools/system/CONTRACT.md
@@ -69,7 +71,7 @@ maintenance: |
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
   `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-  `soul`, `system`, and `task_card` are the declared families
+  `soul`, `system`, `task_card`, and `vision` are the declared families
   today, in that official order; do not widen that claim without another
   family's evidence.
 ---
@@ -296,8 +298,8 @@ Guarded by: [LP002](BEHAVIORS.md#behavior-lp002)
 host, identifier, and migration vocabulary that every official model-facing tool
 family shares. The accepted declared evidence is exactly `mcp`, `avatar`,
 `context`, `daemon`, `email`, `file`, `plugin`, `notification`, `shell`,
-`soul`, `system`, and `task_card`, in that
-order. `mcp` is the base reference; the remaining eleven are accepted vertical
+`soul`, `system`, `task_card`, and `vision`, in that
+order. `mcp` is the base reference; the remaining twelve are accepted vertical
 slices with their narrow earned ports. Email retains its call-time manager port,
 File retains `workdir`/`file_io`, Plugin retains its protected prompt section and
 read-only `plugin_catalog` projection, and always-on Notification retains
@@ -308,9 +310,13 @@ read-only `plugin_catalog` projection, and always-on Notification retains
 current-Agent `task_card_lifecycle` manager slot, and the closed
 operation-native `task_card_notifications` port (five scalar operations, no
 generic publisher), keeping one manager across refresh and its channel-neutral
-`taskcard/` artifact ownership. The remaining target
-register is only `vision` and `web`; it is not
-proof that their candidate slices merged and is never a generic dispatch or
+`taskcard/` artifact ownership, and Vision retains `workdir` plus its live
+read-through `active_provider` and one setup-selected `configuration`
+snapshot, keeping its `analyze | check | list | manual` surface, active-provider
+default routing, allowed-preset own-credential borrowing, and no automatic
+provider/credential/MCP fallback. The remaining target
+register is only `web`; it is not
+proof that its candidate slice merged and is never a generic dispatch or
 admission path. Every other registry family remains an explicit future migration
 unit and none ships as an MCP plugin package today.
 
@@ -435,11 +441,11 @@ register is family-generic rather than MCP-only.
 - Adopting this section makes no family declared. Blanket conformance claims
   are prohibited: a family is declared only once its own vertical slice lands.
   `mcp` is the current base reference; Avatar, Context, Daemon, Email, File,
-  Plugin, Notification, Shell, Soul, System, and Task Card are accepted vertical
-  evidence here.
+  Plugin, Notification, Shell, Soul, System, Task Card, and Vision are accepted
+  vertical evidence here.
   The remaining target
-  register names only `vision` and `web`; those
-  names are targets, not a claim that candidate slices have merged.
+  register names only `web`; that
+  name is a target, not a claim that its candidate slice has merged.
 
 **Authority: manager, declaration, host stay separate.**
 
@@ -622,7 +628,16 @@ non-goal for third-party-versus-third-party mounts.
   across refresh, post-bind persisted-watch resume, the package-owned manual,
   exact error/recovered/limit and reminder wire parity through the production
   five-operation notification adapter, and foreign source/channel/field
-  refusal. The remaining target register names only `vision` and `web`.
+  refusal. Vision's declaration binds only
+  `workdir`/`active_provider`/`configuration`; its focused suites
+  (`tests/test_tool_family_vision_migration.py`,
+  `tests/test_vision_capability.py`, `tests/test_inherit_fallback.py`, the
+  Vision case in `tests/test_tool_plugin_declaration.py`, and the strict
+  controlled-host manual proof in `tests/test_intrinsic_manual_actions.py`)
+  prove the four-action schema/dispatch surface, active-provider default
+  routing, allowed-preset own-credential borrowing with no automatic
+  provider/MCP fallback, `check`/`list`/`manual` no-request boundaries, and the
+  package-owned manual. The remaining target register names only `web`.
   Avatar, Context, and Daemon retain
   their independently accepted declarations and focused coverage. The shared
   test seam is `tests/_tool_plugin_helpers.py`; each other family still needs its
@@ -649,7 +664,7 @@ non-goal for third-party-versus-third-party mounts.
   `workdir`/`notification_state`; `tests/test_tool_plugin_declaration.py` and
   its Notification Core tests prove the one mount, canonical installed manual,
   placeholder check, and Core-backed dismiss behavior. The remaining target
-  register names only `vision` and `web`.
+  register names only `web`.
   Avatar, Context, and Daemon retain their independently accepted declarations
   and focused coverage. The shared test seam is
   `tests/_tool_plugin_helpers.py`;
@@ -757,12 +772,16 @@ owner. Those five capability names are now unknown and fail loudly; `file`
 surfaces no settings file at either level and says so in its manual (see
 `src/lingtai/tools/file/CONTRACT.md`).
 
-`vision` (`analyze | manual`) is the fifth: it keeps its public tool name and
-both public action values while moving to the same root envelope, with
-`analyze` owning the direct current-preset image request and `manual` the
-family-owned reserved child (see `src/lingtai/tools/vision/CONTRACT.md`). It
-owns no settings file, so the two-level settings addressing rules do not apply
-to it.
+`vision` (`analyze | check | list | manual`) is the fifth: it keeps its public
+tool name and action values while moving to the same root envelope, with
+`analyze` owning the direct image request (default route: the active provider
+only; an explicitly allowed `preset` borrows only that preset's own route for
+the one call), `check` resolving the selected route without any image/provider
+request, `list` enumerating only authorized preset declarations, and `manual`
+the family-owned reserved child (see `src/lingtai/tools/vision/CONTRACT.md`).
+Its only settings surface is the fixed workdir-relative `settings/vision.json`
+endpoint file for the generic `local` provider; the two-level settings
+addressing rules do not apply to it.
 
 `avatar` (`spawn | rules | manual`) is the sixth family migrated, keeping its
 public name and action values unchanged (see

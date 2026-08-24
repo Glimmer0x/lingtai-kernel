@@ -1,7 +1,7 @@
 """Focused acceptance for the action-separated public ``vision`` family.
 
-``vision`` keeps its public tool name and both public action values
-(``analyze``/``manual``) while moving to the LTP v2 envelope
+``vision`` keeps its public tool name and four public action values
+(``analyze``/``check``/``list``/``manual``) while moving to the LTP v2 envelope
 (``action``/``input``/``reasoning``/``summarize``) composed and dispatched by
 the generic ``lingtai.tools.tool_family`` infrastructure. These tests pin the
 migration's own promises: exactly one public model root, both child schemas and
@@ -13,6 +13,7 @@ wrapping of the manual child's canonical result.
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,14 +24,71 @@ from lingtai.tools.vision import VisionManager, get_schema, setup
 
 
 class _StubAgent:
-    """Minimal agent surface: a working dir plus one recorded ``add_tool``."""
+    """Minimal controlled host for the Vision declaration tests."""
 
     def __init__(self, working_dir: Path):
         self._working_dir = working_dir
+        self.service = None
         self.tools: dict[str, dict] = {}
+        self._official_tool_plugins: dict[str, object] = {}
+
+    @property
+    def working_dir(self) -> Path:
+        return self._working_dir
+
+    @property
+    def official_tool_plugins(self):
+        return MappingProxyType(self._official_tool_plugins)
+
+    def update_system_prompt(self, *_args, **_kwargs) -> None:
+        return None
+
+    def _authorize_official_tool_declaration(self, _declaration) -> None:
+        return None
+
+    def _record_official_tool_binding(self, _declaration, _plugin) -> None:
+        return None
+
+    def _mount_official_tool(self, transaction) -> None:
+        transaction.consume()
+        plugin = transaction.plugin
+        self.add_tool(
+            plugin.name,
+            schema=plugin.schema,
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(self)
+
+    def _claim_official_tool(self, transaction) -> None:
+        self._official_tool_plugins[transaction.declaration.name] = transaction.declaration
 
     def add_tool(self, name: str, **kwargs) -> None:
         self.tools[name] = kwargs
+
+
+class _Workdir:
+    def __init__(self, path: Path):
+        self.path = path
+
+
+class _ActiveProvider:
+    def __init__(self, agent: _StubAgent):
+        self._agent = agent
+
+    @property
+    def service(self):
+        return self._agent.service
+
+
+def _bound_manager(agent: _StubAgent, service=None, manual_reason: str = "") -> VisionManager:
+    return VisionManager(
+        _Workdir(agent.working_dir),
+        _ActiveProvider(agent),
+        vision_service=service,
+        manual_reason=manual_reason,
+    )
 
 
 def _install_manual(workdir: Path) -> tuple[str, Path]:
@@ -51,7 +109,7 @@ def _never_called_service() -> MagicMock:
 
 
 def _manager(tmp_path: Path, service=None) -> VisionManager:
-    return VisionManager(_StubAgent(tmp_path), vision_service=service)
+    return _bound_manager(_StubAgent(tmp_path), service=service)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +409,7 @@ def test_analyze_without_a_direct_route_returns_the_setup_manual_reason(tmp_path
         "No direct vision provider was configured; use vision(action='manual', "
         "input={}, reasoning='no direct vision provider is configured')."
     )
-    mgr = VisionManager(_StubAgent(tmp_path), vision_service=None, manual_reason=reason)
+    mgr = _bound_manager(_StubAgent(tmp_path), service=None, manual_reason=reason)
     result = mgr.handle(
         {"action": "analyze", "input": {"image_path": "x.png", "question": None}, "reasoning": "r"}
     )
@@ -722,7 +780,7 @@ def test_preset_borrow_resolves_the_listed_presets_own_identity(tmp_path):
     identity = kwargs["identity_service"]
     # ``provider`` is consumed positionally; the capability's provider copy is
     # dropped before the call (regression: duplicate keyword -> TypeError).
-    assert mock_resolve.call_args.args[1] == "codex-pool"
+    assert mock_resolve.call_args.args[2] == "codex-pool"
     assert "provider" not in kwargs
     assert identity.provider == "codex-pool"
     assert identity._model == "gpt-5.6"
@@ -811,7 +869,7 @@ def test_check_default_route_reports_ok_without_image(tmp_path):
     agent.service = MagicMock()
     agent.service.provider = "codex-pool"
     agent.service.model = "gpt-5.6"
-    mgr = VisionManager(agent, vision_service=svc)
+    mgr = _bound_manager(agent, service=svc)
 
     result = mgr.handle(
         {"action": "check", "input": {"preset": None}, "reasoning": "which vision works"}
@@ -830,7 +888,7 @@ def test_check_no_default_route_returns_manual_reason(tmp_path):
         "No direct vision provider was configured; use vision(action='manual', "
         "input={}, reasoning='no direct vision provider is configured')."
     )
-    mgr = VisionManager(_StubAgent(tmp_path), vision_service=None, manual_reason=reason)
+    mgr = _bound_manager(_StubAgent(tmp_path), service=None, manual_reason=reason)
     result = mgr.handle(
         {"action": "check", "input": {"preset": None}, "reasoning": "r"}
     )
@@ -1024,7 +1082,7 @@ def test_list_action_enumerates_default_route_and_vision_capable_presets(tmp_pat
     agent.service = MagicMock()
     agent.service.provider = "codex"
     agent.service._model = "gpt-5.5"
-    mgr = VisionManager(agent, vision_service=None)
+    mgr = _bound_manager(agent, service=None)
 
     with patch("lingtai.services.vision.create_vision_service") as mock_factory:
         result = mgr.handle(
@@ -1078,3 +1136,178 @@ def test_vision_endpoint_classification(
 
     assert _vision_endpoint(provider) == expected_endpoint
     assert _responses_vision(provider) is expected_responses
+
+
+# ---------------------------------------------------------------------------
+# Owner evidence: explicit preset credentials, no automatic fallback, and ports
+# ---------------------------------------------------------------------------
+
+
+def _write_credential_preset_fixture(tmp_path: Path) -> None:
+    """Write one allowed preset whose own credential is resolved for a borrow.
+
+    The fixture carries only an environment-variable *name*. The test supplies
+    a disposable sentinel through pytest's environment monkeypatch and never
+    writes or prints a real credential.
+    """
+    preset_dir = tmp_path / "presets"
+    preset_dir.mkdir(parents=True, exist_ok=True)
+    (preset_dir / "borrowed-openai.json").write_text(
+        """{
+          "name": "borrowed-openai",
+          "description": {"summary": "fixture with an explicitly allowed key route"},
+          "manifest": {
+            "llm": {
+              "provider": "openai",
+              "model": "borrowed-vision-model",
+              "base_url": "https://borrowed.example/v1"
+            },
+            "capabilities": {
+              "vision": {
+                "provider": "openai",
+                "api_key_env": "VISION_ALLOWED_PRESET_KEY"
+              }
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    (tmp_path / "init.json").write_text(
+        '{"manifest": {"preset": {"allowed": ["presets/borrowed-openai.json"]}}}',
+        encoding="utf-8",
+    )
+
+
+def test_allowed_preset_resolves_its_own_credential_not_active_preset(
+    tmp_path, monkeypatch
+):
+    """An explicit allowed borrow uses that preset's env credential identity.
+
+    This is intentionally a family-local resolver test: the serialized host
+    fixture remains prohibited in the parallel lane, while the Vision-side
+    contract is proved end to end through the real preset loader/resolver.
+    """
+    _write_credential_preset_fixture(tmp_path)
+    monkeypatch.setenv("VISION_ALLOWED_PRESET_KEY", "allowed-key-sentinel")
+
+    active = MagicMock()
+    active.provider = "openai"
+    active._model = "active-text-model"
+    active._base_url = "https://active.example/v1"
+    active.api_key = "active-key-sentinel"
+    agent = _StubAgent(tmp_path)
+    agent.service = active
+    mgr = _bound_manager(agent, service=_never_called_service())
+
+    borrowed = MagicMock(spec=VisionService)
+    with patch(
+        "lingtai.services.vision.openai.OpenAIVisionService",
+        return_value=borrowed,
+    ) as factory:
+        service, reason, identity = mgr._build_service_from_preset(
+            "presets/borrowed-openai.json"
+        )
+
+    assert service is borrowed
+    assert reason == ""
+    assert identity == {
+        "provider": "openai",
+        "model": "borrowed-vision-model",
+        "base_url": "https://borrowed.example/v1",
+    }
+    assert factory.call_args.kwargs == {
+        "api_key": "allowed-key-sentinel",
+        "model": "borrowed-vision-model",
+        "base_url": "https://borrowed.example/v1",
+        "wire_api": "chat_completions",
+    }
+    # The active preset's credential is not used for this explicitly selected
+    # borrow; the test never exposes it to the provider factory.
+    assert factory.call_args.kwargs["api_key"] != active.api_key
+
+
+def test_default_request_failure_does_not_auto_borrow_or_invoke_fallback(tmp_path):
+    """A failed default request returns guidance without a hidden fallback."""
+    service = MagicMock(spec=VisionService)
+    service.analyze_image.side_effect = RuntimeError("provider unavailable")
+    image = tmp_path / "photo.png"
+    image.write_bytes(b"fake")
+    mgr = _manager(tmp_path, service)
+
+    with patch.object(mgr, "_build_service_from_preset") as borrow, patch(
+        "lingtai.services.vision.create_vision_service"
+    ) as factory:
+        result = mgr.handle(
+            {
+                "action": "analyze",
+                "input": {"image_path": str(image), "question": None},
+                "reasoning": "prove no automatic fallback",
+            }
+        )
+
+    borrow.assert_not_called()
+    factory.assert_not_called()
+    service.analyze_image.assert_called_once()
+    assert result["status"] == "error"
+    assert "Alternative vision may be available" in result["message"]
+    assert "MCP" in result["message"]
+    # The MCP/provider alternative is guidance only; this manager has no
+    # capability-install or MCP invocation side effect.
+
+
+class _ExplodingActiveProvider:
+    @property
+    def service(self):
+        raise AssertionError("manual must not read active_provider.service")
+
+
+def test_manual_does_not_read_provider_or_configuration_route(tmp_path):
+    """Manual can load its installed body with an unreadable provider port."""
+    body, path = _install_manual(tmp_path)
+    mgr = VisionManager(
+        _Workdir(tmp_path),
+        _ExplodingActiveProvider(),
+        vision_service=None,
+        manual_reason="route should not be inspected",
+    )
+
+    result = mgr.handle(
+        {"action": "manual", "input": {}, "reasoning": "load only the manual"}
+    )
+    assert result == {
+        "status": "ok",
+        "action": "manual",
+        "manual": body,
+        "manual_path": str(path),
+    }
+
+
+def test_vision_owner_docs_cover_all_actions_and_truthful_preset_boundary():
+    """Owner docs/LABTs cannot regress to the old analyze/manual contract."""
+    root = Path("src/lingtai/tools/vision")
+    anatomy = (root / "ANATOMY.md").read_text(encoding="utf-8")
+    contract = (root / "CONTRACT.md").read_text(encoding="utf-8")
+    behaviors = (root / "BEHAVIORS.md").read_text(encoding="utf-8")
+    manual = (root / "manual" / "SKILL.md").read_text(encoding="utf-8")
+
+    for action in ("analyze", "check", "list", "manual"):
+        assert action in anatomy
+        assert action in contract
+        assert action in manual
+    assert "two canonical child input schemas" not in anatomy
+    assert "both children's" not in contract
+    assert "preset" in contract
+    assert "allowed preset's own" in manual
+    assert "reads another preset's secret" not in manual
+    assert "auto-invokes MCP" in manual
+    for labt in ("VN001", "VN002", "VN003", "VN004", "VN005", "VN006"):
+        assert labt in behaviors
+        assert f"{labt}](BEHAVIORS.md#behavior-{labt.lower()}" in contract or labt in contract
+
+
+def test_vision_declaration_requires_only_family_narrow_ports():
+    """The local declaration records the shared integration port requirement."""
+    from lingtai.tools.vision import DECLARATION
+
+    assert DECLARATION.requires == ("workdir", "active_provider", "configuration")

@@ -44,6 +44,7 @@ from lingtai.kernel.tool_plugin import (
 
 __all__ = [
     "AgentWorkdirAdapter",
+    "AgentActiveProviderAdapter",
     "AgentPromptSectionAdapter",
     "AgentFileIOAdapter",
     "AgentContextRuntimeAdapter",
@@ -83,6 +84,25 @@ class AgentWorkdirAdapter:
 
     @property
     def path(self) -> Path:
+        return self._read()
+
+
+class AgentActiveProviderAdapter:
+    """``ActiveProviderPort`` over the Agent's current provider service.
+
+    This is a read-only route to the one active service. It deliberately does
+    not expose the Agent, its capability map, tool surface, or provider
+    registry; Vision consumes exactly this active-provider identity to retain
+    its direct-route semantics.
+    """
+
+    __slots__ = ("_read",)
+
+    def __init__(self, read: Callable[[], Any]) -> None:
+        self._read = read
+
+    @property
+    def service(self) -> Any:
         return self._read()
 
 
@@ -1481,7 +1501,10 @@ def agent_host_ports(
     durable naming ``identity`` port. Task Card receives its ``shutdown``
     predicate, current-Agent ``task_card_lifecycle`` slot, and closed
     ``task_card_notifications`` operations from ``agent_task_card_ports``.
-    The registrar grants just ``requires``, never this whole map.
+    Vision receives its read-through ``active_provider`` identity here; its
+    setup-selected ``configuration`` snapshot arrives through ``extra_ports``
+    exactly as Shell's does. The registrar grants just ``requires``, never this
+    whole map.
     """
     ports = {"workdir": AgentWorkdirAdapter(lambda: agent.working_dir)}
     # Construct only the declaration's earned standard adapter. Lightweight Core
@@ -1540,6 +1563,12 @@ def agent_host_ports(
         )
     elif plugin_name == "task_card":
         ports.update(agent_task_card_ports(agent))
+    elif plugin_name == "vision":
+        # Live read-through to the one active provider service, never the
+        # Agent, its capability map, or its provider registry.
+        ports["active_provider"] = AgentActiveProviderAdapter(
+            lambda: getattr(agent, "service", None)
+        )
     if extra_ports:
         ports.update(extra_ports)
     return ports
@@ -1563,9 +1592,9 @@ def register_agent_tool_plugins(
     unmounting is not a capability this component owns.
 
     ``extra_ports`` remains the current Context compatibility seam. Daemon,
-    Email, File, and Shell use ``extra_ports_for`` so each can earn its runtime
-    or setup-selected port; Notification and Shell receive their dedicated
-    Agent-derived ports in ``agent_host_ports``,
+    Email, File, Shell, and Vision use ``extra_ports_for`` so each can earn its
+    runtime or setup-selected port; Notification, Shell, and Vision receive
+    their dedicated Agent-derived ports in ``agent_host_ports``,
     without granting them to every declaration. Both maps are merged per
     declaration; conflicting keys from the factory intentionally win only for
     that declaration.

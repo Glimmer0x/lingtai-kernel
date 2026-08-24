@@ -17,8 +17,9 @@ from lingtai.services.vision import VisionService, create_vision_service
 def analyze(image_path: str = "", question=None) -> dict:
     """Build one LTP v2 ``analyze`` envelope for the public ``vision`` family.
 
-    ``vision`` is action-separated (``analyze``/``manual``): the model sends
-    ``action`` + strict per-action ``input`` + required ``reasoning``. Optional
+    ``vision`` is action-separated (``analyze``/``check``/``list``/``manual``):
+    the model sends ``action`` + strict per-action ``input`` + required
+    ``reasoning``. Optional
     ``question`` is a required nullable branch property, so absent is ``None``.
     """
     return {
@@ -41,11 +42,32 @@ def make_mock_service():
 
 
 def make_mock_agent(tmp_path, svc=None):
+    """Build a recording host that exercises the official mount route."""
     agent = MagicMock()
     agent.service = svc or make_mock_service()
     agent._config = MagicMock()
     agent._config.language = "en"
     agent._working_dir = tmp_path
+    agent.working_dir = tmp_path
+    agent.official_tool_plugins = {}
+
+    def mount(transaction):
+        transaction.consume()
+        plugin = transaction.plugin
+        agent.add_tool(
+            plugin.name,
+            schema=plugin.schema,
+            handler=plugin.handler,
+            description=plugin.description,
+            glossary_package=plugin.glossary_package,
+        )
+        transaction.mark_mounted(agent)
+
+    def claim(transaction):
+        agent.official_tool_plugins[transaction.declaration.name] = transaction.declaration
+
+    agent._mount_official_tool.side_effect = mount
+    agent._claim_official_tool.side_effect = claim
     return agent
 
 

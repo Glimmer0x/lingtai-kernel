@@ -61,13 +61,16 @@ The model-visible notification projection for LICC events is governed by `src/li
 - `src/lingtai/services/mcp_licc.py` — LICC v1 client (the **producer** half). One public function, `push_inbox_event(sender, subject, body, *, metadata=None, wake=True, received_at=None, agent_dir=None, mcp_name=None, event_id=None) -> bool`, that an out-of-process MCP imports to drop one event into `<agent_dir>/.mcp_inbox/<mcp_name>/<event_id>.json`. Lightweight by design — importing it starts no threads and re-exports the contract constants (`LICC_VERSION`, `INBOX_DIRNAME`, `TMP_SUFFIX`, `EVENT_SUFFIX`) straight from `src/lingtai/services/mcp_inbox.py` so producer and consumer never drift. `agent_dir`/`mcp_name` default to env vars `LINGTAI_AGENT_DIR`/`LINGTAI_MCP_NAME` (kernel-injected per MCP); explicit params override for tests/advanced callers. Writes atomically: serialize → `<event_id>.json.tmp` → `flush`+`os.fsync` → `os.replace` onto the final `.json` (the poller ignores `.tmp`, so half-writes are never observed). `event_id` defaults to a fresh `uuid4().hex` (guarantees per-call uniqueness); explicit `mcp_name`/`event_id` path components are validated before use. The payload is checked with `validate_event` before writing, so the canonical producer does not intentionally emit dead-letterable events. Best-effort/silent: missing/invalid target, unsafe path component, invalid payload, or filesystem/serialization error → `False` (never raises into the MCP), with a terse, content-free log that never echoes `body`/`subject`/`metadata`.
 - **Declared host-plugin route** — `mcp` is the current base reference slice
 under the kernel-owned declared host-plugin contract; the shared-C integration
-register retains `vision` and `web` as remaining targets without claiming those
-candidate slices have merged. Avatar, Context, Daemon, Email, File, Plugin,
-Notification, Shell, Soul, System, and Task Card are separately landed
+register retains `web` as the remaining target without claiming that
+candidate slice has merged. Avatar, Context, Daemon, Email, File, Plugin,
+Notification, Shell, Soul, System, Task Card, and Vision are separately landed
 vertical evidence, rather than evidence that any remaining C target merged
 (Task Card's static `DECLARATION` in `src/lingtai/tools/task_card/__init__.py`
 requires only `workdir`, `shutdown`, `task_card_lifecycle`, and the closed
-operation-native `task_card_notifications` port):
+operation-native `task_card_notifications` port; Vision's static `DECLARATION`
+in `src/lingtai/tools/vision/__init__.py` requires only `workdir`, the live
+read-through `active_provider`, and one setup-selected `configuration`
+snapshot):
 Avatar has its own declaration and earned `avatar_parent` port; Context's static
 `DECLARATION` in `src/lingtai/tools/context/__init__.py` requires only `workdir`
 and the earned `context_runtime` port; Daemon's static `DECLARATION` in

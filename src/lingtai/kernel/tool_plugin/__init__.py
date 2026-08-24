@@ -24,7 +24,7 @@ Three deliberate absences define this module as much as its exports:
   grantable at all — an official plugin cannot mount itself.
 
 See the sibling ``CONTRACT.md`` for the normative rules and ``ANATOMY.md`` for
-where the production adapter and the first declaration live.
+where the production adapter and declared families live.
 """
 
 from __future__ import annotations
@@ -56,6 +56,7 @@ __all__ = [
     "NotificationStatePort",
     "NotificationPort",
     "ConfigurationPort",
+    "ActiveProviderPort",
     "SoulRuntimePort",
     "SystemRuntimePort",
     "IdentityPort",
@@ -84,14 +85,16 @@ MANUAL_ACTION = "manual"
 #: Earned, not enumerated: each name below is consumed by a real vertical
 #: slice this component ships with (``mcp``, ``avatar``, ``context``, ``daemon``,
 #: ``email``, ``file``, ``plugin``, ``notification``, ``shell``, ``soul``,
-#: ``system``, or ``task_card``). Plugin
+#: ``system``, ``task_card``, or ``vision``). Plugin
 #: consumes only the read-only ``plugin_catalog`` projection; Shell consumes
 #: ``workdir`` plus its explicit setup ``configuration`` and durable
 #: ``notifications`` ports; System consumes its ``system_runtime`` lifecycle
 #: vocabulary plus the durable naming ``identity`` port; Task Card consumes
 #: ``workdir`` plus its one-predicate ``shutdown`` observation, its
 #: current-Agent ``task_card_lifecycle`` manager slot, and the closed
-#: operation-native ``task_card_notifications`` port. Root ``CONTRACT.md``
+#: operation-native ``task_card_notifications`` port; Vision consumes
+#: ``workdir`` plus its read-through ``active_provider`` identity and the same
+#: setup-selected ``configuration`` port Shell earned. Root ``CONTRACT.md``
 #: rules 10-11
 #: forbid a speculative port taxonomy, so a
 #: later family adds the port it actually needs together with its own slice.
@@ -117,6 +120,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
     "shutdown",
     "task_card_lifecycle",
     "task_card_notifications",
+    "active_provider",
 )
 
 
@@ -130,7 +134,7 @@ GRANTABLE_HOST_PORTS: tuple[str, ...] = (
 #: import, or any knowledge of what the family does.
 OFFICIAL_TOOL_PLUGIN_NAMES: tuple[str, ...] = (
     "mcp", "avatar", "context", "daemon", "email", "file", "plugin", "notification",
-    "shell", "soul", "system", "task_card",
+    "shell", "soul", "system", "task_card", "vision",
 )
 
 
@@ -509,11 +513,28 @@ class ConfigurationPort(Protocol):
     A declaration is static, while capability setup supplies its policy and
     platform overrides at boot.  This port exposes only that explicit copied
     mapping; it is not an Agent configuration API and does not permit writes.
+    Shell and Vision each consume it for their own setup snapshot; the kernel
+    gives the mapping no schema — the consuming family owns its interpretation.
     """
 
     @property
     def values(self) -> Mapping[str, Any]:
         """The static, copied configuration mapping for this plugin binding."""
+
+
+class ActiveProviderPort(Protocol):
+    """Read the current provider service selected by the host.
+
+    The service is intentionally opaque to the kernel: a family that genuinely
+    shares its active provider may inspect its provider/model/credential route,
+    but receives neither the Agent nor a generic route to another capability.
+    The adapter reads through on every access so refresh cannot leave a plugin
+    with a stale provider identity. Vision is the one consumer today.
+    """
+
+    @property
+    def service(self) -> Any:
+        """The current active provider service, or ``None`` when absent."""
 
 
 class SoulRuntimePort(Protocol):

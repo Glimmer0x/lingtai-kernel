@@ -80,7 +80,7 @@ maintenance: |
   standard kept only as the registration-versus-activation precedent. They are
   not a claim that every shared-C target has merged: `mcp` is the base reference,
   while the separately landed `avatar`, Context, Daemon, Email, File, Plugin,
-  Notification, Shell, Soul, System, and Task Card
+  Notification, Shell, Soul, System, Task Card, and Vision
   vertical slices are actual declared evidence; only the remaining target names
   stay candidates. The normative rules — including the selected form,
   while the separately landed `avatar`, Context, Daemon, Email, and Notification
@@ -123,8 +123,10 @@ capability names and lazy adapters.
   standalone source is only an excluded redirect marker
   (`src/lingtai/tools/file/ANATOMY.md`).
 - `vision/` — public `vision` composition owner: one action-separated family
-  with canonical `analyze`/`manual` children over the existing direct
-  provider routing (`src/lingtai/tools/vision/ANATOMY.md`).
+  with canonical `analyze`/`check`/`list`/`manual` children over the existing
+  direct provider routing, declared as the thirteenth official host-plugin
+  slice against `workdir`/`active_provider`/`configuration`
+  (`src/lingtai/tools/vision/ANATOMY.md`).
 - `browser/` — internal static browse Core/Port used by `web`
   (`src/lingtai/tools/browser/ANATOMY.md`).
 - `tool_family/` — generic, optional ToolFamily/ChildTool schema-composition
@@ -254,15 +256,16 @@ polling, and projection stay outside this package.
 
 The form the paired Contract's `### Tool-to-MCP Plugin Contract` selects is the
 kernel-owned declared host-plugin contract. `mcp` is the base reference; Avatar,
-Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System, and
-Task Card are accepted vertical
+Context, Daemon, Email, File, Plugin, Notification, Shell, Soul, System,
+Task Card, and Vision are accepted vertical
 evidence. They bind respectively their narrow earned ports: `avatar_parent`,
 `context_runtime`, `daemon_runtime`, `email_runtime`, `file_io`,
 `prompt_section`/`plugin_catalog`, `notification_state`,
 `notifications`/`configuration`, `soul_runtime`,
-`system_runtime`/`identity`, and
-`shutdown`/`task_card_lifecycle`/`task_card_notifications` (all also retain
-`workdir`). The remaining candidate targets are only `vision` and `web`; the
+`system_runtime`/`identity`,
+`shutdown`/`task_card_lifecycle`/`task_card_notifications`, and
+`active_provider`/`configuration` (all also retain
+`workdir`). The remaining candidate target is only `web`; the
 list is not a generic dispatch or admission mechanism.
 These are the roles it separates, and where each one lives. `src/lingtai/kernel/tool_plugin/ANATOMY.md` is the
 selected form's own component: the static `ToolPluginDeclaration`, the
@@ -312,7 +315,17 @@ retained `TaskCardManager` against `workdir`, `shutdown`,
 rebound across refresh, the persisted watch resumes only after a successful
 bind, the family-local `TaskCardNotificationsAdapter` consumes only the five
 native notification operations, and the producer stays channel-neutral (it
-writes the `taskcard/` artifact and never calls Telegram/Feishu). Every landed
+writes the `taskcard/` artifact and never calls Telegram/Feishu).
+`src/lingtai/tools/vision/__init__.py` is the thirteenth slice: its
+`DECLARATION` owns the public `analyze | check | list | manual` family and
+binds `VisionManager` against `workdir`, the live read-through
+`active_provider`, and one `configuration` snapshot (`VisionConfiguration`,
+carried as the same `StaticConfigurationAdapter` mapping Shell uses and granted
+to `vision` alone through `extra_ports_for`); default routing uses only the
+active provider, an explicitly allowed `preset` resolves only that preset's own
+credential for the one requested call, `check`/`list`/`manual` make no
+image/provider request, and no provider/credential/MCP fallback is automatic.
+Every landed
 family retains its public name, actions, inputs, and result shapes. Candidate-local families may still boot through legacy
 `setup(agent)` paths until their own vertical slice lands; that compatibility
 fact is not a generic registrar/bridge dispatch model.

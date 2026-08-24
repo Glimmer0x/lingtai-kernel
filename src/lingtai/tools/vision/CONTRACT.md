@@ -1,150 +1,185 @@
 ---
 name: vision-contract
 tool: vision
-contract_version: 1
+contract_version: 2
 related_files:
   - src/lingtai/tools/vision/__init__.py
   - src/lingtai/tools/vision/ANATOMY.md
+  - src/lingtai/tools/vision/BEHAVIORS.md
   - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/tools/CONTRACT.md
   - src/lingtai/tools/tool_family/CONTRACT.md
+  - src/lingtai/kernel/tool_plugin/CONTRACT.md
+  - src/lingtai/adapters/tool_plugin_host.py
+  - tests/test_tool_plugin_declaration.py
+  - tests/test_tool_family_vision_migration.py
+  - tests/test_vision_capability.py
+  - tests/test_inherit_fallback.py
 maintenance: |
-  Keep this contract aligned with the vision tool and its tests. Bump the
-  version only for a repository-policy-required breaking contract change.
-  vision's schema composition and envelope dispatch build on the generic
-  tool_family package; keep that link current when either side's boundary
-  changes.
+  Keep this contract aligned with the Vision declaration, owner Anatomy,
+  Behaviors/LABTs, installed manual, and family-specific tests. Bump the version
+  only for a repository-policy-required breaking contract change. Vision's
+  schema composition and envelope dispatch build on the generic tool_family
+  package; keep that link current when either boundary changes.
 ---
 # Vision capability contract
 
-`vision` analyzes one image through the active preset's current compatible route.
-If direct setup is absent, unsupported, or fails, setup still registers the tool
-and preserves a read-only `action="manual"` route. It never changes provider or
-automatically invokes MCP.
+`vision` is an always-registered, action-separated capability. It has one public
+root and four canonical children: `analyze`, `check`, `list`, and the reserved
+family-owned `manual`. Direct provider setup, unsupported routes, and request
+failures fail closed with sanitized guidance; the capability never changes the
+active preset or automatically invokes another provider or MCP.
 
-## Scope and registry
+## Scope and declaration
+
 Guarded by: [VN001](BEHAVIORS.md#behavior-vn001)
 
+The static `DECLARATION` owns the three operational actions and their input
+schemas; the generic manual builder contributes the final reserved `manual`
+child. The public root is the strict Tool Protocol v2 envelope:
 
-`vision` is one action-separated family in the LingTai Tool Protocol v2 shape
-defined in `src/lingtai/tools/CONTRACT.md`, built on the generic
-`src/lingtai/tools/tool_family/` infrastructure (`ToolFamily`/`ChildTool` plus
-the reusable ManualTool builder). The public tool name stays `vision` and the
-public action values stay exactly `analyze` and `manual`; adopting the shared
-infrastructure changed no provider route, identity rule, or result shape in this
-file. Exactly one public model-facing `vision` root is registered; the two
-canonical children are not separate tools and consume no model tool slots.
+```text
+action + input + reasoning + optional summarize
+required: action, input, reasoning
+additionalProperties: false
+```
 
-The model shape is the strict envelope `action` + `input` + `reasoning` +
-optional `summarize`, with `required: [action, input, reasoning]` and
-`additionalProperties: false`. The root exposes both children's exact input
-schemas before invocation (`input.oneOf`, one titled branch per action) and
-correlates each `action` const with that child's own `input` at the root
-(`allOf`/`if`/`then`), on both the Chat Completions and Responses wires.
-`reasoning` is required Host InvocationContext/audit metadata and `summarize` is
-Host presentation control; neither ever reaches child input. Child canonical
-name equals public action value equals dispatch key — there is no mapping layer.
+`reasoning` is invocation/audit metadata and `summarize` is host presentation
+control. Neither is child input. The root exposes one strict input branch per
+child and correlates each action const with that action's input before handler
+I/O. Unknown actions, unknown root fields, non-object input, and cross-action
+fields fail before image, provider, credential, or manual-child work.
 
-`analyze` owns a strict closed input of `image_path` (string) and `question`
-(nullable string; null means absent and applies the unchanged default prompt
-`Describe what you see in this image.`), both required as branch properties per
-the strict-object convention. `manual` is the family-owned reserved child with
-strict empty input. Analyze resolves relative `image_path` values against the
-agent working directory. Unknown actions and invalid or cross-action `input`
-fail at dispatch, before any handler runs and therefore before any provider I/O,
-credential read, or image read.
+The exact child schemas are:
 
-`PROVIDERS["providers"]` is exactly: `gemini`, `anthropic`, `openai`,
-`openrouter`, `custom`, `deepseek`, `minimax`, `mimo`, `glm`, `zhipu`, `grok`,
-`qwen`, `kimi`, `codex`, `codex-pool`, `codex_pool`, `claude-p`, `claude-code`,
-and `claude_code`. The local mlx-vlm pseudo-provider remains available only through
-explicit `add_capability(..., provider="local")` opt-in and is intentionally not
-advertised to wizards/check-caps. Claude Code returns explicit "use the Claude
-CLI for vision" guidance (`claude -p "Analyze this image: <path>"` plus the
-manual reference); Codex aliases use native Codex Responses; MiniMax uses the
-Anthropic route. OpenRouter and custom
-deliberately try the current OpenAI-compatible model/endpoint/credential without
-preflighting image support; other compatible aliases use the current
-OpenAI/Anthropic identity. A real request failure is returned as a sanitized
-vision tool error that points to
-`vision(action="manual", input={}, reasoning="...")` for explicit
-alternatives, without silently switching model/provider or invoking MCP.
+- `analyze`: strict object; required `image_path: string` and
+  `question: string | null`; optional `preset: string | null`; no other fields.
+  Null `question` applies `Describe what you see in this image.`. A non-null
+  `preset` is an explicit one-call borrow request.
+- `check`: strict object; required `preset: string | null`; no other fields.
+  `null` checks the default route. A string resolves an explicitly authorized
+  borrowed route without sending an image.
+- `list`: strict empty object (`properties: {}`, `required: []`,
+  `additionalProperties: false`).
+- `manual`: the generic strict empty manual input schema and the installed
+  Vision manual body/path result.
 
-## Current identity and wires
+The child names, declaration schemas, schema-only family, and bound family must
+remain one source of truth. There is exactly one public model-facing `vision`
+root; children do not consume separate tool slots.
 
-Direct routes inherit identity only from the same current provider (including the
-explicit GLM/Zhipu and codex-pool spelling pairs); a different provider must supply
-its own model and credential. Missing identity fails closed to `manual` instead of
-using a service default model, a default OAuth path, or an SDK environment key.
-Codex provider spelling (`codex`, `codex-pool`, `codex_pool`) is only a
-Codex-family compatibility gate: all three resolve to the one native Codex service,
-and the spelling never selects the fixed/direct vs weighted/pool route. Within an
-active Codex-family service, the route follows the active provider-default bucket
-exactly as the canonical Codex factory does — it is the fixed/direct route iff the
-active bucket carries a nonblank `codex_auth_path` (whose trimmed value is used as
-the `token_path`), otherwise the weighted/pool route, which passes the exact pool-selected
-credential reference (the selected candidate's token path) to the native Codex
-vision service and never borrows the direct auth path. This holds regardless of the
-requested spelling: an active `codex-pool`/`codex_pool` service that configures a
-`codex_auth_path` is a direct route even when a pool path is also present, and an
-active direct `codex` service stays direct even for an explicit `codex-pool`
-request. Codex vision may inherit only the same active Codex-family service's model
-and endpoint; a Codex request over an unrelated provider fails closed on the missing
-current model without borrowing that provider's model, endpoint, or credential. When
-no `base_url` is resolved, the native Codex service uses its existing official
-default Codex endpoint (`https://chatgpt.com/backend-api/codex`) rather than failing
-closed on base. A pool route that yields no selected candidate fails closed to
-`manual` without manufacturing a direct or legacy-default identity.
-OpenAI preserves current default headers, endpoint, model, and `wire_api`.
-A missing, blank/whitespace-only, or `auto` selector means automatic selection:
-the current route uses Responses only when it explicitly prefers Responses and
-has no custom base URL; otherwise it uses Chat Completions. Unknown nonblank or
-non-string selectors remain manual-only. Responses sends `max_output_tokens`.
-MiniMax→Anthropic preserves active headers. MiMo accepts only API key/model/base
-URL/max tokens: blank/auto resolves to its current Chat Completions route, which
-constructs without headers/wire kwargs, while an active unsupported wire remains
-manual-only.
+## Ports and composition
 
-## Tool behavior
+Guarded by: [VN006](BEHAVIORS.md#behavior-vn006)
 
-Analyze success is exactly `{status: "ok", analysis: text}`. Manual success is
-`{status: "ok", action: "manual", manual: body, manual_path: path}`, where
-`body` is the full installed capability manual and `path` is its host-local
-location; a missing installed manual is `degraded` with an empty body and the
-loader's error. Manual performs no analyze operation, constructs no provider,
-and reads no credential, even when the configured direct route is broken or
-absent. The `manual` child's canonical result is adapted once by the Host into
-that flat public shape after dispatch; it is never nested inside another action
-result and is never double wrapped.
+The binder receives only these granted host ports:
 
-Missing image, empty response, setup failure, and request failure are structured
-errors pointing to the full accepted envelope
-`vision(action="manual", input={}, reasoning="...")` — every taught pointer
-carries `input` and a contextual `reasoning`, because the bare shorthand is
-rejected by the registered schema and the dispatcher. Envelope failures
-(unknown action,
-non-object `input`, unknown root field, non-boolean `summarize`, unknown or
-cross-action `input` field) return the same `{status: "error", message: ...}`
-shape. Exception messages are never returned; failures may include only the
-provider and exception type.
+- `workdir` — the read-only granted working-directory path, used for relative
+  images, preset files, local settings, and the installed manual.
+- `active_provider` — a live read-through of the current service identity. It is
+  consulted at bind/route time; Vision does not snapshot an Agent or retain one.
+- `configuration` — one immutable `VisionConfiguration` snapshot containing the
+  public setup arguments (`vision_service`, provider, `api_key`, `api_key_env`,
+  and opaque provider kwargs). It travels as the kernel `ConfigurationPort`'s
+  copied `values` mapping (`VisionConfiguration.port_values()` on the way in,
+  `VisionConfiguration.from_port_values()` at bind; any other mapping shape is
+  refused with `ToolPluginDeclarationError`). It is not an Agent and is
+  interpreted only by the Vision binder.
 
-## Invariants and tests
+`setup` creates that configuration and delegates `DECLARATION` to the official
+registrar. The registrar owns claim/authorization/mount lifecycle; `_bind`
+creates the `VisionManager` and returns the one public plugin. The serialized
+host/registry/port implementation and its shared fixture are integration-owned;
+this family contract only specifies the Vision-side requirements above.
 
-- `setup` always registers exactly one public `vision` tool:
-  `tests/test_vision_capability.py`, `tests/test_tool_family_vision_migration.py`.
-- Both child schemas and handlers, invalid/cross-action rejection before
-  provider I/O, manual-without-provider-call, exact success/failure shapes, and
-  Chat/Responses wire parity with no double wrap:
+## Routing and preset authorization
+
+Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
+[VN003](BEHAVIORS.md#behavior-vn003), and
+[VN006](BEHAVIORS.md#behavior-vn006)
+
+Without a `preset`, direct routing uses the configured Vision service or the
+active provider's own compatible identity. Provider/model/base URL/credential
+identity is inherited only from that same active provider (including the
+supported GLM/Zhipu and Codex-family aliases). `PROVIDERS["fallback_on_inherit"]`
+is `None`: an unsupported or failed active route remains a manual/error result;
+Vision does not silently switch to a different provider, legacy credential, or
+MCP route.
+
+With a non-null `preset`, Vision first requires the reference to be present in
+`manifest.preset.allowed` and then loads it read-only. The borrowed route uses
+the allowed preset's own `manifest.llm` and `manifest.capabilities.vision`
+identity: its provider/model/base URL and, where declared, its own
+`api_key`/`api_key_env` or Codex OAuth-pool identity. Resolving that explicitly
+allowed preset credential is an intentional consequence of the caller's borrow
+request; it is not an active-preset switch and is not an automatic fallback.
+An unlisted, unreadable, or incomplete preset fails closed with a sanitized
+manual pointer. A direct request failure likewise offers alternatives only as
+explicit instructions; it does not invoke them.
+
+`check` may construct the selected service so it can report provider/model, but
+never sends an image or calls `analyze_image`. `list` mechanically reports the
+active provider/model and classifies only the allowed preset definitions; it
+constructs no provider service and reads no credential. `manual` reads only the
+installed manual child; it constructs no service, reads no credential/configured
+route, and performs no provider or image operation.
+
+## Provider and wire boundaries
+
+Codex spellings (`codex`, `codex-pool`, `codex_pool`) are one family gate; spelling
+does not choose direct versus pool. The active Codex default bucket chooses the
+route: a nonblank trimmed `codex_auth_path` is direct, otherwise the active
+Codex pool selects its current OAuth identity. An unrelated active provider may
+not lend its model, endpoint, or credential to a Codex request. Claude-family
+vision is manual-only guidance to the explicit Claude CLI. OpenAI-compatible
+routes preserve their current endpoint/model/wire, and unsupported wires remain
+manual-only. Local vision requires an explicit model and uses its operator-owned
+settings/manifest values; no hidden model or credential default is invented.
+
+## Results, errors, and state
+
+Guarded by: [VN002](BEHAVIORS.md#behavior-vn002),
+[VN003](BEHAVIORS.md#behavior-vn003),
+[VN004](BEHAVIORS.md#behavior-vn004), and
+[VN005](BEHAVIORS.md#behavior-vn005)
+
+- `analyze` success is exactly `{"status": "ok", "analysis": text}`.
+  Missing image, empty response, setup failure, request failure, and denied
+  preset are structured errors. Provider exception contents, credentials, and
+  unsanitized endpoints never appear in a result.
+- `check` success is exactly `{"status": "ok", "route": route,
+  "provider": provider, "model": model}`. It reports the default or explicitly
+  borrowed route and never performs an image request.
+- `list` success is `{"status": "ok", "default": default,
+  "presets": presets, "count": count}`. Each preset entry is derived only from
+  an allowed preset declaration and contains route identity/classification, not
+  credentials.
+- `manual` success is exactly `{"status": "ok", "action": "manual",
+  "manual": body, "manual_path": path}`. A missing installed manual is
+  `degraded` with an empty body, truthful host-local path, and loader error.
+  The canonical manual child result is flattened once by the host; it is never
+  nested or double-wrapped.
+
+## Invariants and evidence
+
+- [VN001](BEHAVIORS.md#behavior-vn001) guards the four-action declaration,
+  strict branches, action/input correlation, and pre-handler rejection:
   `tests/test_tool_family_vision_migration.py`.
-- The installed manual body/path round-trip alongside every other manual-owning
-  tool: `tests/test_intrinsic_manual_actions.py`.
-- Endpoint identity is sanitized by `sanitize_endpoint` and drops userinfo,
-  query, fragment, malformed ports, and non-URLs: `tests/test_agent_preset_manifest.py`.
-- Provider construction and exact OpenAI Responses shape are covered in
+- [VN002](BEHAVIORS.md#behavior-vn002) guards analyze success/failure shapes,
+  image-path handling, same-provider identity, and no automatic fallback:
+  `tests/test_tool_family_vision_migration.py` and
   `tests/test_vision_capability.py`.
-- Manual guidance is provider-neutral and kernel/TUI-independent in
-  `manual/SKILL.md`.
+- [VN003](BEHAVIORS.md#behavior-vn003) guards default/borrowed checks, denied
+  preset references, and no image/provider call: the migration test file.
+- [VN004](BEHAVIORS.md#behavior-vn004) guards mechanical list enumeration and
+  no service/credential construction: the migration test file.
+- [VN005](BEHAVIORS.md#behavior-vn005) guards installed manual body/path,
+  degraded loading, no config/provider reads, and single host adaptation: the
+  migration test file.
+- [VN006](BEHAVIORS.md#behavior-vn006) guards the active-provider/configuration
+  port seam and allowed-preset credential identity: declaration and migration
+  tests, plus serialized shared-host tests at integration time.
 
-Run `python -m pytest tests/test_vision_capability.py tests/test_vision_services.py
-tests/test_tool_family_vision_migration.py tests/test_intrinsic_manual_actions.py -q`
-and the glossary validator before merging.
+Run the focused Vision capability, service, migration, preset-routing, and
+manual-contract tests with bytecode and pytest cache disabled; run the shared
+manual fixture and declaration tests only after the serialized host integration.

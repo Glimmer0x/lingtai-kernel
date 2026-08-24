@@ -47,6 +47,9 @@ related_files:
   - src/lingtai/tools/task_card/__init__.py
   - src/lingtai/tools/task_card/CONTRACT.md
   - src/lingtai/tools/task_card/manual/SKILL.md
+  - src/lingtai/tools/vision/__init__.py
+  - src/lingtai/tools/vision/CONTRACT.md
+  - src/lingtai/tools/vision/manual/SKILL.md
   - src/lingtai/agent.py
   - tests/test_tool_plugin_declaration.py
   - tests/test_tool_family_avatar_migration.py
@@ -60,6 +63,8 @@ related_files:
   - tests/test_system_declared_plugin.py
   - tests/test_task_card_controller.py
   - tests/test_task_card_notifications.py
+  - tests/test_tool_family_vision_migration.py
+  - tests/test_intrinsic_manual_actions.py
 maintenance: |
   This component contract is governed by the root CONTRACT.md and owns the
   declared host-plugin contract every official model-facing tool family follows.
@@ -100,7 +105,8 @@ It owns exactly four things:
    `AvatarParentPort`, `ContextRuntimePort`, `DaemonRuntimePort`,
    read-only `PluginCatalogPort`, Shell's `NotificationPort` and
    `ConfigurationPort`, Task Card's `ShutdownPort`, `TaskCardLifecyclePort`,
-   and closed operation-native `TaskCardNotificationsPort`, `ToolMountPort`),
+   and closed operation-native `TaskCardNotificationsPort`, Vision's
+   read-through `ActiveProviderPort`, `ToolMountPort`),
    File's structural match/traversal result Protocols, and Email's family-owned
    `EmailRuntimePort`, through which a plugin receives only its
    capability-native view of the live Agent body, plus the `ToolPluginHost`
@@ -155,11 +161,18 @@ Coding agents and LingTai agents MUST observe the following.
 - **Do not claim blanket conformance.** A family conforms only once its own
   vertical slice lands with its own evidence. Today `mcp`, `avatar`, `context`,
   `daemon`, `email`, `file`, `plugin`, `notification`, `shell`, `soul`,
-  `system`, and `task_card` are declared, in that official order;
+  `system`, `task_card`, and `vision` are declared, in that official order;
   every remaining target stays outside this contract. Task Card is a
   channel-neutral intrinsic dynamic capability: its one `TaskCardManager` is
   retained on the current Agent through `TaskCardLifecyclePort` and rebound on
   every refresh, and its persisted watch resumes only after a successful bind.
+  Vision is a channel-neutral dynamic capability whose public surface is
+  exactly `analyze | check | list | manual`: it binds `workdir`, the live
+  read-through `active_provider`, and one `configuration` snapshot; default
+  routing uses only the active provider, an explicitly allowed preset resolves
+  only that preset's own route/credential for the one requested `check`/
+  `analyze` call, and no provider/credential/MCP fallback is ever automatic
+  (see `src/lingtai/tools/vision/CONTRACT.md`).
   `daemon`, `email`, and `notification` are declared; every remaining target
   stays outside this contract. Notification is a mandatory injected official
   family: its declaration remains mounted once through the existing official
@@ -199,21 +212,22 @@ capability.
 | `EmailRuntimePort` (Email-owned) | `handle_email(EmailRuntimeRequest) -> EmailResult` | Email-only manager boundary. The host `AgentEmailRuntimeAdapter` rejects foreign declared actions, reads the current `agent._email_manager` at call time, and invokes it once with already-normalized `{'action': request.action, **dict(request.input)}`; it neither captures `_intrinsics` nor recurses through an official handler. |
 | `PluginCatalogPort` | `read_state() -> PluginCatalogState` | Return a detached read-only projection of Agent Plugins registration/discovery facts: boot snapshot, configured plugin paths, inherited skill paths, and skills availability. It cannot validate, register, prune, launch, write, or mount. |
 | `NotificationPort` | `publish_system(...) -> bool`; `publish_channel(channel, payload, ref_id=...) -> bool` | Publish an idempotent durable system event or a latest-channel payload without reaching an Agent/store. Shell uses exactly these two operations for its existing async watchdog and completion wake semantics. It is distinct from `NotificationStatePort`, which grants Notification Core's mirror/hook administration. |
-| `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override today); no Agent configuration lookup or write operation. |
+| `ConfigurationPort` | `values -> Mapping[str, Any]` | Immutable copied values explicitly selected by capability setup for this one bind (Shell policy and dialect override, and Vision's `VisionConfiguration` snapshot fields, today); no Agent configuration lookup or write operation. |
 | `SoulRuntimePort` | bounded self-state, consultation, cadence, and Soul-notification operations | Soul's explicit live-self vocabulary; no Agent, generic attribute escape hatch, tool mount, or unrelated capability API. |
 | `SystemRuntimePort` | Read/query `admin`, `language`, `token_usage()`, `load_preset()`; act through `log()`, preset activation, `retry_failed_mcps()`, `perform_refresh()`, `resuscitate()`; sleep evidence/effects via `sleep_attention_fingerprints()`, `transition_to_asleep()`, `sleep_alarm_lock()`, `arm_sleep_alarm()` | System's bounded runtime/lifecycle vocabulary. The four sleep members are translation-only evidence/effects: the one sleep policy (fingerprint comparison, refusal/force, receipts, audit) lives in `lingtai.tools.system.karma.sleep_use_case`, never in this port or its adapter. Identity is deliberately absent. |
 | `IdentityPort` | Read `name`; durably write `set_name()` and `set_nickname()` | System's separate naming vocabulary. The current name is read-only through the port; its two explicit writes may update durable identity, but cannot mutate address, workdir, or general runtime state. |
 | `ShutdownPort` | `is_set() -> bool` | Observe only whether the current Agent is stopping, so a Task Card watch thread ends promptly. It grants no lifecycle transition, join, or event mutation. |
 | `TaskCardLifecyclePort` | `current_manager()`, `retain_manager(manager)`, `report_resume_failure(error)` | The one current-Agent Task Card manager slot and its bounded resume diagnostic. It preserves the existing agent-stop, completed-work reminder, and Daemon `has_active_task_card_watch` hooks over the same retained manager without becoming a generic state bag. |
 | `TaskCardNotificationsPort` | `publish_error(watch_id, body, code, retryable, idempotency_key, last_valid_body_at=None)`, `publish_recovered(watch_id, body, idempotency_key)`, `publish_limit(watch_id, body, idempotency_key, used, max_refreshes, last_valid_body_at=None)`, `submit_reminder(turns)`, `clear_reminder()` | Exactly the Task Card producer's established error/recovered/limit and absent-or-stale reminder operations, as five closed scalar-signature methods. There is no generic enqueue, `**kwargs`, `source`, `channel`, `priority`, or `extra` argument: the production adapter pins the `task_card.error`/`task_card.limit` sources, the `system` channel, priority, idempotency skip, and the bounded `extra` projection internally, and holds the Agent's generic publisher privately. A holder cannot publish a foreign source or address another channel (guarded by Task Card's [TK002](../../tools/task_card/BEHAVIORS.md#behavior-tk002)). |
+| `ActiveProviderPort` | `service -> Any` | Read only the current active provider service, read through on every access so a refresh never leaves a stale provider identity. The consuming family (Vision today) may inspect that one service's provider/model/credential route but receives neither the Agent, its capability map, nor a generic provider/capability lookup (guarded by Vision's [VN006](../../tools/vision/BEHAVIORS.md#behavior-vn006)). |
 | `ToolMountPort` | `mount_tool(transaction) -> None` | Publish the registrar-created one-use transaction carrying one declaration and its exact `BoundToolPlugin` on the live model-facing tool surface. **Host-only** — it is absent from `GRANTABLE_HOST_PORTS` and is held solely by the registrar. |
 
 `GRANTABLE_HOST_PORTS` is the closed set a declaration may name. It contains
 `workdir`, `prompt_section`, `avatar_parent`, `context_runtime`,
 `daemon_runtime`, `email_runtime`, `file_io`, `plugin_catalog`,
 `notification_state`, `notifications`, `configuration`, `soul_runtime`,
-`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`, and
-`task_card_notifications`: `mcp`
+`system_runtime`, `identity`, `shutdown`, `task_card_lifecycle`,
+`task_card_notifications`, and `active_provider`: `mcp`
 consumes the first two as its base reference; Avatar, Context, and Daemon
 consume their respective narrow runtime ports; Email consumes `workdir` plus its
 Email-owned `email_runtime`; File consumes exactly `workdir` plus kernel-owned
@@ -223,9 +237,13 @@ read-only `plugin_catalog` projection; Shell consumes `workdir` plus
 semantics; Soul consumes `workdir` plus its explicit `soul_runtime`
 live-self operations vocabulary; System consumes `workdir` plus its
 `system_runtime` lifecycle vocabulary and the durable naming `identity`
-port; and Task Card consumes `workdir` plus `shutdown`,
+port; Task Card consumes `workdir` plus `shutdown`,
 `task_card_lifecycle`, and `task_card_notifications`, built in the standard
-table only for the `task_card` declaration. Family-specific runtime ports are
+table only for the `task_card` declaration; and Vision consumes `workdir` plus
+its read-through `active_provider` (built in the standard table only for the
+`vision` declaration) and the same setup-selected `configuration` port Shell
+earned, carrying one `VisionConfiguration` snapshot through `extra_ports_for`
+— never the Agent, and never a generic provider lookup. Family-specific runtime ports are
 composed only for their declaration through `extra_ports` or `extra_ports_for`,
 so they do not expand another declaration's grant; a port built in the standard
 table, such as `avatar_parent` or `plugin_catalog`, is likewise reachable only
@@ -285,8 +303,13 @@ Agent, Store, producer state, fingerprint, generic handler, or `ToolMountPort`.
 `AgentNotificationAdapter` translates only the canonical system-event method
 and a store reader into Shell's two durable publication operations, preserving
 the pre-plugin compare-and-update semantics, while `StaticConfigurationAdapter`
-carries only copied setup values and is granted to Shell alone through
-`extra_ports_for`.
+carries only copied setup values and is granted through `extra_ports_for` to
+the one declaration whose `setup` selected them — Shell's policy/dialect
+values, or Vision's `VisionConfiguration.port_values()` snapshot.
+`AgentActiveProviderAdapter` is built in the standard table only for the
+`vision` declaration: it holds one read closure over `Agent.service` and
+exposes nothing else — no capability map, tool surface, provider registry, or
+mount authority.
 Daemon's host runtime continues to omit the parent `email` official surface, so
 its separately accepted explicit task-scoped daemon-email MCP route is not
 silently widened by Email's parent declaration.
@@ -460,8 +483,9 @@ preserve Notification Core delay/timer and Store behavior:
 - ordering — `bind` alone activates and mounts nothing;
   `activate` runs before `mount`;
 - idempotent re-registration (the refresh path);
-- the live slice — boot claims `mcp` and mounts exactly one `mcp` tool, a
-  post-seal mount raises, a foreign declaration cannot take the live name, and
+- the live slices — boot claims and mounts exactly one `mcp` and one `vision`
+  tool; a post-seal mount raises, a foreign declaration cannot take either live
+  name, and
   neither a foreign `BoundToolPlugin` nor a directly constructed transaction
   can replace the official handler/schema/claim; the prompt-section port writes
   only this plugin's protected section;
@@ -493,6 +517,16 @@ preserve Notification Core delay/timer and Store behavior:
   error/recovered/limit wire parity plus reminder submit/clear through the
   production adapter (`tests/test_tool_plugin_declaration.py`,
   `tests/test_task_card_controller.py`).
+- Vision's static `DECLARATION`, exact
+  `workdir`/`active_provider`/`configuration` grant, one mount on a real
+  Agent with the `active_provider` port reading the live `Agent.service` and
+  the `configuration` snapshot absent from the standard table (a bare standard
+  grant fails with `HostPortError`), the package-owned
+  `capabilities/vision/SKILL.md` manual, the strict controlled-host manual
+  proof in `tests/test_intrinsic_manual_actions.py`, and the family-local
+  provider/preset/credential boundaries (VN001–VN006:
+  `tests/test_tool_family_vision_migration.py`,
+  `tests/test_vision_capability.py`, `tests/test_inherit_fallback.py`).
 
 Also decisive for a change here:
 `tests/test_mcp_capability.py`, `tests/test_tool_family_mcp_migration_parity.py`,
