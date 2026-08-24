@@ -10,12 +10,14 @@ the host-owned official registrar.
 """
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
+from .._manual import load_installed_manual
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA
 from . import _edit, _glob, _grep, _read, _write
 
 if TYPE_CHECKING:
@@ -126,6 +128,75 @@ if tuple(_DECLARED_SCHEMAS_BY_ACTION) != _DECLARED_ACTIONS:
 
 _OPERATION_MODULES = (_read, _write, _edit, _glob, _grep)
 
+# ``file-manual`` is the established public installation/result path. The package
+# manual under ``tools/file/manual`` is the only body owner; ``file`` is accepted
+# only as a transitional fallback while a stale worktree still uses the new
+# candidate installer mapping. The fallback is intentionally read-only and is
+# removed from the integration path once the shared installer maps File's package
+# manual to the legacy destination.
+_LEGACY_MANUAL_SKILL = "file-manual"
+_TRANSITIONAL_MANUAL_SKILL = "file"
+_REDIRECT_MARKER = "redirect: src/lingtai/tools/file/manual/SKILL.md"
+
+
+def _load_file_manual(source: Any) -> dict[str, Any]:
+    """Load File's one authoritative manual with explicit path compatibility.
+
+    Integrated agents install the package-owned body at ``file-manual`` so the
+    public path remains stable. A candidate worktree may still install it at
+    ``file`` until the serialized Agent installer delta lands; accepting that
+    path here keeps local File tests and refreshes usable without making the
+    legacy intrinsic source a second body owner. A retained redirect marker is
+    never returned as the operational manual.
+    """
+    legacy = load_installed_manual(source, _LEGACY_MANUAL_SKILL)
+    if legacy.get("status") == "ok" and _REDIRECT_MARKER not in legacy.get("manual", ""):
+        return legacy
+
+    transitional = load_installed_manual(source, _TRANSITIONAL_MANUAL_SKILL)
+    if transitional.get("status") == "ok":
+        return transitional
+
+    if legacy.get("status") == "ok":
+        # The old standalone source was accidentally installed without the
+        # package body. Fail with a truthful degraded result rather than
+        # presenting a redirect marker as executable File guidance.
+        return {
+            "status": "degraded",
+            "manual": "",
+            "manual_path": legacy.get("manual_path", ""),
+            "error": (
+                "file-manual compatibility redirect found, but the authoritative "
+                "package manual is not installed"
+            ),
+        }
+    return legacy
+
+
+def _to_manual_result(loaded: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the canonical reserved-child result without a generic re-wrap."""
+    result: dict[str, Any] = {
+        "status": loaded.get("status", "ok"),
+        "content": [{"type": "text", "text": loaded.get("manual", "")}],
+        "structuredContent": {"manual_path": loaded.get("manual_path", "")},
+    }
+    if "error" in loaded:
+        result["error"] = loaded["error"]
+    return result
+
+
+def _build_manual_child(source: Any) -> ChildTool:
+    """Build File's manual child with its legacy-path compatibility route."""
+    def handler(_input: Mapping[str, Any]) -> dict[str, Any]:
+        return _to_manual_result(_load_file_manual(source))
+
+    return ChildTool(
+        name="manual",
+        input_schema=copy.deepcopy(MANUAL_INPUT_SCHEMA),
+        handler=handler,
+        title="manual input",
+    )
+
 
 def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
     raise AssertionError("the module-level schema-only ToolFamily never dispatches")
@@ -179,7 +250,7 @@ def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
             )
         )
     else:
-        children.append(build_manual_child(host.workdir, DECLARATION.manual))
+        children.append(_build_manual_child(host.workdir))
     return ToolFamily(DECLARATION.name, children)
 
 
@@ -242,10 +313,11 @@ DECLARATION = ToolPluginDeclaration(
     actions=_DECLARED_ACTIONS,
     input_schemas=_DECLARED_SCHEMAS_BY_ACTION,
     manual_input_schema=MANUAL_INPUT_SCHEMA,
-    # The packaged ``manual/SKILL.md`` is installed at capabilities/file. Its
-    # frontmatter remains ``name: file-manual`` as the manual's user-facing
-    # skill identity, but it is not a competing installed destination.
-    manual="file",
+    # The package-owned manual is installed at the established legacy
+    # ``capabilities/file-manual`` path by the serialized installer delta.
+    # ``_load_file_manual`` accepts ``capabilities/file`` only as a transitional
+    # fallback for this stale candidate worktree.
+    manual=_LEGACY_MANUAL_SKILL,
     description=get_description(),
     binder=_bind,
     requires=("workdir", "file_io"),

@@ -1,9 +1,9 @@
 ---
 name: file-manual
-description: "Operational guide for LingTai's built-in `file` tool: read, write, edit, glob, manual; the UTF-8 policy and how to handle non-UTF-8 text via explicit bash/Python/iconv; safe write/edit discipline; search workflows. Points to `read-manual` for read pagination and truncation depth."
-version: 0.3.0
+description: "Operational guide for LingTai's built-in `file` tool: read, write, edit, glob, grep, manual; the UTF-8 policy and how to handle non-UTF-8 text via explicit bash/Python/iconv; safe write/edit discipline; search workflows. Points to `read-manual` for read pagination and truncation depth."
+version: 0.3.1
 tags: [files, read, write, edit, grep, glob, encoding, utf-8]
-last_changed_at: "2026-08-07T00:00:00Z"
+last_changed_at: "2026-08-24T00:00:00Z"
 related_files:
 - src/lingtai/tools/file/__init__.py
 - src/lingtai/tools/file/CONTRACT.md
@@ -13,6 +13,7 @@ related_files:
 - src/lingtai/tools/file/_glob.py
 - src/lingtai/tools/file/_grep.py
 - src/lingtai/intrinsic_skills/read-manual/SKILL.md
+- src/lingtai/intrinsic_skills/file-manual/SKILL.md
 maintenance: |
   Tracks the tool/capability behavior it teaches; update when that tool's behavior changes.
 ---

@@ -5,6 +5,8 @@ contract_version: 4
 related_files:
   - src/lingtai/tools/file/__init__.py
   - src/lingtai/tools/file/manual/SKILL.md
+  - src/lingtai/tools/file/BEHAVIORS.md
+  - src/lingtai/intrinsic_skills/file-manual/SKILL.md
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - src/lingtai/tools/file/_read.py
@@ -22,9 +24,10 @@ related_files:
   - tests/test_file_tool_family.py
   - tests/test_file_tool_plugin_package.py
 maintenance: |
-  Keep related_files as repo-relative paths to real files. If behavior and this
-  contract disagree, the code is the source of truth — fix the contract in the
-  same change and bump contract_version on breaking contract edits. This is the
+  Keep related_files as repo-relative paths to real files. Contract is normative
+  for interface and behavior; if verified implementation drifts, repair the code
+  or obtain an authorized contract change rather than weakening this promise.
+  Bump contract_version on breaking contract edits. This is the
   sole contract for the file surface: it owns the family envelope, the action
   set, the risk posture, the manual promise, AND every per-action input, output,
   cap, and error string. The five pre-migration per-operation contracts were
@@ -36,8 +39,9 @@ maintenance: |
 `file` is the one public model-facing tool for reading, writing, editing, and
 searching the working tree. It is an LTP v2 family (`../CONTRACT.md`) composed
 from six canonical children through the generic `ToolFamily` infrastructure.
-The implementation lives in `src/lingtai/tools/file/__init__.py`; the code is
-the source of truth. `DECLARATION` is a static official host-plugin declaration:
+The implementation lives in `src/lingtai/tools/file/__init__.py`; Anatomy follows
+its verified structure, while this Contract is normative for the interface and
+behavior. `DECLARATION` is a static official host-plugin declaration:
 the kernel reserves `file`, the production host grants only `workdir` and
 `file_io`, and the registrar — not this package — mounts the bound family.
 `FileIOPort` carries precisely File's text read/write/search and runtime-cap
@@ -128,7 +132,8 @@ Envelope-level failures are the generic typed `ACTION_REQUIRED` /
 
 Folded in from the five pre-migration per-operation contracts when their
 packages were deleted. Each operation is one self-contained module under
-`src/lingtai/tools/file/`; the code is the source of truth. All errors are
+`src/lingtai/tools/file/`; its implementation must conform to this normative
+contract. All errors are
 plain dicts, never exceptions, so `ToolExecutor`'s `status == "error"` predicate
 catches every one of them.
 
@@ -254,13 +259,16 @@ likewise stays false so exact procedure is not summarized away.
 
 ## Manual
 
-The family owns exactly one manual: `action="manual"` returns the packaged
-`tools/file/manual/SKILL.md`, installed at `capabilities/file/SKILL.md` (its
-frontmatter remains `name: file-manual`). It performs no target file operation
-and touches no path other than the manual's own, and its input is strict empty.
-The result is the canonical child shape — full body at `content[0].text`, the
-host-local path at `structuredContent.manual_path` — returned without double
-wrapping.
+The family owns exactly one manual body: `action="manual"` returns the
+package-owned `tools/file/manual/SKILL.md`, whose frontmatter remains
+`name: file-manual`. The serialized installer preserves the established public
+result/install path at `capabilities/file-manual/SKILL.md`; the File-local loader
+accepts `capabilities/file/SKILL.md` only as a read-only transition fallback for
+stale candidate worktrees. The retained `intrinsic_skills/file-manual/SKILL.md`
+is an explicit redirect marker, never a second body owner. The action performs no
+target file operation and takes strict empty input. Its canonical child result
+carries the full body at `content[0].text` and the host-local path at
+`structuredContent.manual_path`, without double wrapping.
 
 `read-manual` remains a **nested parent-owned reference** that `file-manual`
 points at for read pagination and truncation depth. It is not a second
@@ -283,9 +291,9 @@ cap's runtime ceiling is observed through that port, never stored.
 | Root is the closed four-field LTP v2 envelope | `file/__init__.py` (`get_schema`) | `tests/test_file_tool_family.py::test_schema_root_is_closed_action_input_reasoning_summarize` |
 | Action const correlates to that child's input schema | `file/__init__.py` (`get_schema`) | `tests/test_file_tool_family.py::test_root_allof_correlates_each_action_to_its_input` |
 | Cross-action input is rejected before handler I/O | `tool_family/__init__.py` (`handle`) | `tests/test_file_tool_family.py::test_cross_action_input_is_rejected_before_io` |
-| `manual` performs no target I/O and returns body + path | `tool_family/manual.py` | `tests/test_file_tool_family.py::test_manual_performs_no_target_io` |
-| Read continuation/`line_truncated` survive migration | `read/__init__.py` (`_apply_cap`) | `tests/test_file_tool_family.py::test_read_continuation_through_family` |
-| Write/edit receipts are returned verbatim | `file/__init__.py` (`handle`) | `tests/test_file_tool_family.py::test_write_and_edit_receipts_are_verbatim` |
+| `manual` performs no target I/O and returns body + path | `file/__init__.py` (`_load_file_manual`, `_build_manual_child`) | `tests/test_file_tool_family.py::test_manual_performs_no_target_io` |
+| Read continuation/`line_truncated` survive migration | `file/_read.py` (`_apply_cap`) | `tests/test_file_tool_family.py::test_read_continuation_through_family` |
+| Write/edit receipts are returned verbatim | `file/_write.py`, `file/_edit.py` | `tests/test_file_tool_family.py::test_write_and_edit_receipts_are_verbatim` |
 | Chat and Responses wires keep the correlation | `llm/openai/adapter.py` | `tests/test_file_tool_family.py::test_chat_and_responses_wire_parity` |
 | `summarize` is honored and never reaches a handler | `kernel/tool_result_summary.py` | `tests/test_file_tool_family.py::test_summarize_is_recognized_and_stripped` |
 
@@ -313,8 +321,9 @@ python -m pytest tests/test_file_tool_family.py tests/test_layers_file.py \
   and `get_description()` are language-independent; the optional `lang`
   argument is accepted for source compatibility but ignored.
 - **Glossary resources:** this package owns `glossary-en.md`, `glossary-zh.md`,
-  and `glossary-wen.md` for the public family surface. The five retained
-  operation packages keep their own glossaries for their internal identifiers.
+  and `glossary-wen.md` for the public family surface. The five operation modules
+  are implementation children of this package and have no separate package or
+  glossary owners.
 - **Update triggers:** changing an action value, property name, or the envelope
   requires reviewing all three glossary files in the same PR.
 - **Validation:** `python -m lingtai.tools.glossary_validator --check`.
