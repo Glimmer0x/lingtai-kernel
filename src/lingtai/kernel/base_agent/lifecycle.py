@@ -555,12 +555,12 @@ def _heartbeat_loop(agent) -> None:
             # when something needs the agent's attention (e.g. a newer lingtai
             # wheel is installed on disk than the version this process imported).
             # Each check throttles itself; the dispatcher only guards against
-            # checks that *raise* -- latency inside a check is latency between
-            # heartbeat writes. Invariant: checks must never block on the network;
-            # long work is handed to a background thread (see
-            # `nudge/kernel_version.py`). See `nudge/ANATOMY.md`.
+            # checks that *raise*. The heartbeat evaluates persisted facts only;
+            # tree/history observations are single-flight background work, so
+            # their storage latency cannot delay liveness writes. See
+            # `nudge/ANATOMY.md`.
             try:
-                from ..nudge import run_checks as _run_nudge_checks
+                from ..nudge import run_checks_nonblocking as _run_nudge_checks
                 _run_nudge_checks(agent)
             except Exception as nudge_err:
                 from ..logging import get_logger

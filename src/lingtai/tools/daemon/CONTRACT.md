@@ -753,7 +753,6 @@ All paths are relative to the parent agent working directory (`<parent>/`):
 ```text
 <parent>/daemons/<handle>-<YYYYMMDD-HHMMSS>-<hash6>/   # one dir per run (run_id)
   daemon.json                  # identity/live status + checkpoint sequence/latest/pending count
-  session_stats.json           # compact redacted self-record (kernel.session_stats), refreshed every turn
   .prompt                      # system prompt verbatim
   .heartbeat                   # mtime-touched on activity
   history/chat_history.jsonl   # session transcript
@@ -761,6 +760,8 @@ All paths are relative to the parent agent working directory (`<parent>/`):
   logs/events.jsonl            # tool_call / tool_result / cli_output / cli_usage / daemon_checkpoint / daemon_*
   result.txt                   # full terminal result when available
 
+<parent>/daemons/.dispatch-ledger.jsonl    # append-only accepted dispatch membership/order
+<parent>/daemons/.dispatch-recovery/       # only unresolved running / pending-terminal markers
 <parent>/logs/token_ledger.jsonl   # ALSO receives each daemon token row, tagged
                                     # source="daemon" + em_id + run_id (dual-ledger)
 ```
@@ -768,18 +769,21 @@ All paths are relative to the parent agent working directory (`<parent>/`):
 Token accounting is dual-ledger: every daemon call appends to the daemon's own
 `logs/token_ledger.jsonl` and to the parent's `logs/token_ledger.jsonl`, both
 rows tagged `source="daemon"` so `sum_token_ledger(scope="main_agent")`
-excludes daemon spend while `scope="all"` includes it. On daemon-manager startup,
-stale `running`/`active` `daemon.json` records whose `parent_pid` is dead are
-reaped to `failed`.
+excludes daemon spend while `scope="all"` includes it.
 
-`session_stats.json` is a distinct, smaller artifact governed by
-[`kernel/session_stats/CONTRACT.md`](../../kernel/session_stats/CONTRACT.md):
-a bounded, redacted subset of `daemon.json` (identity/lifecycle/usage only —
-never task text, tool arguments, or error messages) written atomically every
-time `daemon.json` itself is rewritten. It is the only file the owning agent's
-Agent Record aggregation reads from a daemon run directory; `daemon.json`
-remains the full internal working state for `daemon(check)`/`daemon(list)`
-and is never scanned by that aggregation.
+After preflight and initial `daemon.json` durability, an accepted run MUST append
+exactly one `{schema, sequence, run_id, created_at}` dispatch record under the
+agent-scoped lock before launch. Append order is canonical; `created_at` is never
+an ordering key. A malformed tail refuses a new launch without repair/truncation.
+`daemon.json` remains status truth. Default `daemon(list)` reads only the newest
+1000 ledger records and their referenced run files, returning scoped advisory
+warnings for empty/invalid/gapped/duplicate ledger records and unreadable state.
+Explicit search/filter/history may stream more ledger records; neither path
+backfills or scans legacy directories. Startup recovery reads only unresolved
+marker files, not lifetime history; legacy directories without markers are a
+cutover limit. The Agent Record's bounded daemon summary is an asynchronous
+ledger-selected snapshot governed by `kernel/session_stats/CONTRACT.md`; no
+per-run `session_stats.json` is written.
 
 ## Process and Terminal Boundaries
 

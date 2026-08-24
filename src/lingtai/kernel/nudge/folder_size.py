@@ -22,31 +22,56 @@ LIMIT_ENV = "LINGTAI_NUDGE_FOLDER_SIZE_GB"
 _BYTES_PER_GB = 1_000_000_000
 
 
-def check(agent) -> None:
-    """Evaluate the folder-size nudge on every heartbeat (walk max once/day)."""
+def observation_due(agent) -> bool:
+    """Whether the daily recursive walk needs a background observation."""
+    persistent = _load_persistent_state(agent)
+    folder_state = persistent.get(_KIND)
+    return not isinstance(folder_state, dict) or folder_state.get("last_check_date") != _today_utc()
+
+
+def observe(agent) -> bool:
+    """Perform the potentially unbounded walk and persist only its facts.
+
+    The heartbeat never calls this function.  ``NudgeObservationOwner`` runs
+    it single-flight in the background, while direct ``check`` remains useful
+    for explicit/manual callers and focused tests.
+    """
     persistent = _load_persistent_state(agent)
     folder_state = persistent.setdefault(_KIND, {})
+    if folder_state.get("last_check_date") == _today_utc():
+        return False
 
     limit_gb, invalid = _read_limit_gb()
     if invalid:
         _safe_log(agent, "folder_size_limit_invalid", value=invalid)
+    try:
+        total_bytes = _dir_size(Path(agent._working_dir))
+    except Exception as e:  # pragma: no cover - defensive
+        _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
+        return False
+    folder_state.update({
+        "last_check_date": _today_utc(),
+        "size_bytes": total_bytes,
+        "limit_gb": limit_gb,
+    })
+    _save_persistent_state(agent, persistent)
+    return True
 
-    if folder_state.get("last_check_date") != _today_utc():
-        try:
-            total_bytes = _dir_size(Path(agent._working_dir))
-        except Exception as e:  # pragma: no cover - defensive
-            _safe_log(agent, "folder_size_probe_error", error=str(e)[:200])
-            return
-        folder_state.update({"last_check_date": _today_utc(), "size_bytes": total_bytes, "limit_gb": limit_gb})
-        _save_persistent_state(agent, persistent)
 
-    if "size_bytes" not in folder_state:
+def evaluate(agent) -> None:
+    """Cheaply re-evaluate the last persisted observation every heartbeat."""
+    persistent = _load_persistent_state(agent)
+    folder_state = persistent.get(_KIND)
+    if not isinstance(folder_state, dict) or "size_bytes" not in folder_state:
         return
 
+    limit_gb, invalid = _read_limit_gb()
+    if invalid:
+        _safe_log(agent, "folder_size_limit_invalid", value=invalid)
     from . import remove, upsert
 
     total_bytes = folder_state["size_bytes"]
-    if total_bytes <= limit_gb * _BYTES_PER_GB:
+    if not isinstance(total_bytes, int) or total_bytes < 0 or total_bytes <= limit_gb * _BYTES_PER_GB:
         remove(agent, _KIND)
         return
 
@@ -73,6 +98,11 @@ def check(agent) -> None:
         },
     )
 
+
+def check(agent) -> None:
+    """Synchronously observe then evaluate for explicit/manual callers."""
+    observe(agent)
+    evaluate(agent)
 
 def _read_limit_gb(environ: Mapping[str, str] | None = None) -> tuple[float, str | None]:
     """Read GB threshold; invalid/non-finite/missing fall back to ``5``."""
@@ -152,4 +182,4 @@ def _safe_log(agent, event: str, **fields: Any) -> None:
         return
 
 
-__all__ = ["DEFAULT_LIMIT_GB", "LIMIT_ENV", "check"]
+__all__ = ["DEFAULT_LIMIT_GB", "LIMIT_ENV", "check", "evaluate", "observation_due", "observe"]

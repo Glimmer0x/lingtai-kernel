@@ -209,3 +209,29 @@ def test_reprobe_next_day_clears(over_agent, tmp_path):
 def test_today_utc_format():
     v = _today_utc()
     assert len(v) == 10 and v[4] == "-" and v[7] == "-"
+
+
+def test_nonblocking_dispatch_coalesces_blocked_folder_observation(over_agent, tmp_path, monkeypatch):
+    """A slow tree walk must not hold the heartbeat-facing nudge dispatch."""
+    import threading
+    import time
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_observe(agent):
+        entered.set()
+        assert release.wait(2)
+        return False
+
+    monkeypatch.setattr(folder_size, "observe", slow_observe)
+    started = time.monotonic()
+    nudge_mod.run_checks_nonblocking(over_agent)
+    assert time.monotonic() - started < 0.2
+    assert entered.wait(1)
+    # A second heartbeat does not queue a second tree walk while the first is
+    # in flight; it returns on its normal cheap evaluation path.
+    started = time.monotonic()
+    nudge_mod.run_checks_nonblocking(over_agent)
+    assert time.monotonic() - started < 0.2
+    release.set()

@@ -21,69 +21,92 @@ _STATE_FILE = Path(".notification") / ".nudge_state.json"
 _CHUNK_BYTES = 1024 * 1024
 
 
-def check(agent) -> None:
-    """Evaluate a direct count at most once per UTC day for an unchanged file.
-
-    Every heartbeat opens the exact active path with a non-following,
-    non-blocking descriptor and only fstats it. A whole-file read is due on a
-    new UTC date, a file identity change, or a shrink. Missing, linked,
-    non-regular, or unreadable paths are quiet no-findings.
-    """
-    from . import remove, upsert
-
+def observation_due(agent) -> bool:
+    """Return whether an inexpensive metadata check found a fresh count due."""
     events_path = Path(agent._working_dir) / "logs" / "events.jsonl"
     opened = _open_regular_event_file(events_path)
+    state_root = _load_persistent_state(agent)
+    state = state_root.get(_KIND)
+    if not isinstance(state, dict):
+        state = {}
     if opened is None:
-        remove(agent, _KIND)
-        return
-
+        return state.get("available") is not False
     fd, source_stat = opened
     try:
-        state_root = _load_persistent_state(agent)
-        state = state_root.setdefault(_KIND, {})
         identity = [source_stat.st_dev, source_stat.st_ino]
-        today = _today_utc()
         previous_size = state.get("size_bytes")
-        needs_count = (
-            state.get("last_check_date") != today
+        return (
+            state.get("available") is not True
+            or state.get("last_check_date") != _today_utc()
             or state.get("file_identity") != identity
             or not isinstance(previous_size, int)
             or source_stat.st_size < previous_size
         )
-
-        if needs_count:
-            try:
-                record_count = _count_newline_records(fd)
-            except OSError:
-                state.update(
-                    {
-                        "last_check_date": today,
-                        "file_identity": identity,
-                        "size_bytes": source_stat.st_size,
-                        "record_count": None,
-                    }
-                )
-                _save_persistent_state(agent, state_root)
-                remove(agent, _KIND)
-                return
-            state.update(
-                {
-                    "last_check_date": today,
-                    "file_identity": identity,
-                    "size_bytes": source_stat.st_size,
-                    "record_count": record_count,
-                }
-            )
-            _save_persistent_state(agent, state_root)
-
-        record_count = state.get("record_count")
     finally:
         os.close(fd)
 
+
+def observe(agent) -> bool:
+    """Read/counter the event journal when due, outside the heartbeat thread."""
+    events_path = Path(agent._working_dir) / "logs" / "events.jsonl"
+    opened = _open_regular_event_file(events_path)
+    state_root = _load_persistent_state(agent)
+    state = state_root.setdefault(_KIND, {})
+    if opened is None:
+        if state.get("available") is not False:
+            state.clear()
+            state["available"] = False
+            _save_persistent_state(agent, state_root)
+        return False
+
+    fd, source_stat = opened
+    try:
+        identity = [source_stat.st_dev, source_stat.st_ino]
+        today = _today_utc()
+        previous_size = state.get("size_bytes")
+        needs_count = (
+            state.get("available") is not True
+            or state.get("last_check_date") != today
+            or state.get("file_identity") != identity
+            or not isinstance(previous_size, int)
+            or source_stat.st_size < previous_size
+        )
+        if not needs_count:
+            return False
+        try:
+            record_count = _count_newline_records(fd)
+        except OSError:
+            record_count = None
+        state.update(
+            {
+                "available": True,
+                "last_check_date": today,
+                "file_identity": identity,
+                "size_bytes": source_stat.st_size,
+                "record_count": record_count,
+            }
+        )
+        _save_persistent_state(agent, state_root)
+        return record_count is not None
+    finally:
+        os.close(fd)
+
+
+def evaluate(agent) -> None:
+    """Render the last persisted observation without opening or reading history."""
+    from . import remove, upsert
+
+    state_root = _load_persistent_state(agent)
+    state = state_root.get(_KIND)
+    if not isinstance(state, dict) or state.get("available") is not True:
+        remove(agent, _KIND)
+        return
+    record_count = state.get("record_count")
     if not isinstance(record_count, int) or record_count < _THRESHOLD_RECORDS:
         remove(agent, _KIND)
         return
 
+    events_path = Path(agent._working_dir) / "logs" / "events.jsonl"
     upsert(
         agent,
         _KIND,
@@ -104,6 +127,11 @@ def check(agent) -> None:
         },
     )
 
+
+def check(agent) -> None:
+    """Synchronously observe then evaluate for explicit/manual callers."""
+    observe(agent)
+    evaluate(agent)
 
 def _open_regular_event_file(path: Path) -> tuple[int, os.stat_result] | None:
     """Open exactly ``path`` without link-following, or return quiet unknown."""
@@ -161,4 +189,4 @@ def _save_persistent_state(agent, state: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-__all__ = ["check"]
+__all__ = ["check", "evaluate", "observation_due", "observe"]

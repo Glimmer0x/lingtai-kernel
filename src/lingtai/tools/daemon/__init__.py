@@ -69,6 +69,7 @@ from lingtai.adapters.posix.process_identity import (
     process_identity_matches,
 )
 from .run_dir import DaemonRunDir
+from . import dispatch_ledger
 from .system_prompt import (
     DAEMON_SYSTEM_PROMPT_BUDGET_CHARS,
     build_daemon_system_prompt,
@@ -1762,8 +1763,9 @@ class DaemonManager:
             max_workers=max(1, self._manager_pool_size),
             thread_name_prefix="daemon-cli-ask",
         )
-        self._reap_dead_parent_daemon_records()
-        self._reconcile_terminal_notifications()
+        # New dispatches maintain only unresolved marker files.  Construction
+        # inspects that bounded set and never enumerates lifetime run folders.
+        self._recover_unresolved_markers()
 
     @staticmethod
     def _env_nonnegative_int(name: str, default: int) -> int:
@@ -1787,99 +1789,65 @@ class DaemonManager:
             return default
         return value if value > 0 else default
 
-    def _reap_dead_parent_daemon_records(self) -> None:
-        """Mark stale running daemon.json records failed after a restart.
-
-        A record's ``owner`` field decides which process identity is
-        authoritative for liveness:
-
-        - ``"parent"`` (default / every legacy in-process run): reaped when
-          the recorded ``parent_pid`` is dead — a fresh manager after
-          refresh/restart cannot resume an in-process worker thread that
-          belonged to the old interpreter.
-        - ``"supervisor"``: a detached run is, by design, still alive and
-          still executing after the launching agent process is gone — its
-          ``parent_pid`` being dead is expected and must NOT be treated as
-          orphaning. Liveness is instead checked against the run's own
-          recorded ``supervisor_pid``: only a dead supervisor with no
-          terminal state is a genuinely lost run (crashed without committing
-          terminal truth — see the parent contract's "exact supervisor
-          identity plus durable state" classification requirement).
-        - ``"manager"``: high-concurrency queued/active work is owned by the
-          resident central manager, not by the launching parent interpreter.
-          A refreshed parent must recognize a live manager pidfile or per-run
-          manager identity and leave the record alone.
-        """
-        daemons_dir = self._workdir.path / "daemons"
-        if not daemons_dir.is_dir():
-            return
-
-        current_pid = os.getpid()
-        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+    def _recover_unresolved_markers(self) -> None:
+        """Recover only new-format unresolved marker files, never legacy history."""
+        for kind, run_id, _marker in dispatch_ledger.recovery_markers(self._workdir.path):
+            daemon_json_path = self._workdir.path / "daemons" / run_id / "daemon.json"
             try:
                 state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
             if not isinstance(state, dict):
                 continue
+            if kind == "running":
+                if state.get("state") in {"done", "failed", "cancelled", "timeout"}:
+                    dispatch_ledger.clear_marker(self._workdir.path, "running", run_id)
+                    if state.get("terminal_notified") is False:
+                        dispatch_ledger.mark_pending_terminal_notification(self._workdir.path, run_id)
+                    continue
+                self._reap_daemon_state_path(daemon_json_path, state)
+            elif kind == "pending-terminal":
+                self._reconcile_terminal_notification_path(daemon_json_path, state)
 
-            daemon_state = state.get("state")
-            if not isinstance(daemon_state, str):
-                continue
-            if daemon_state.lower() not in {"running", "active"}:
-                continue
-            if state.get("finished_at") not in (None, ""):
-                continue
+    def _reap_dead_parent_daemon_records(self) -> None:
+        """Compatibility entry point: recover bounded markers only."""
+        self._recover_unresolved_markers()
 
-            owner = state.get("owner", "parent")
-            if owner == "supervisor":
-                supervisor_pid = state.get("supervisor_pid")
-                if not isinstance(supervisor_pid, int) or isinstance(supervisor_pid, bool):
-                    # No pid recorded yet — the supervisor is still in its
-                    # startup handshake window; do not reap.
-                    continue
-                supervisor_identity = state.get("supervisor_start_identity")
-                if self._pid_identity_matches(supervisor_pid, supervisor_identity):
-                    continue
-                reap_reason = (
-                    "Reaped running daemon record because recorded "
-                    f"supervisor_pid {supervisor_pid} is no longer alive with "
-                    "no terminal state committed (crashed without committing "
-                    "terminal truth)."
-                )
-            elif owner == "manager":
-                if self._manager_owner_alive(state):
-                    continue
-                manager_pid = state.get("manager_pid")
-                if isinstance(manager_pid, int) and not isinstance(manager_pid, bool):
-                    subject = f"manager_pid {manager_pid}"
-                else:
-                    subject = "central daemon manager"
-                reap_reason = (
-                    "Reaped running daemon record because recorded "
-                    f"{subject} is no longer alive with no terminal state "
-                    "committed."
-                )
-            else:
-                parent_pid = state.get("parent_pid")
-                if not isinstance(parent_pid, int) or isinstance(parent_pid, bool):
-                    continue
-                if parent_pid == current_pid:
-                    continue
-                if self._pid_alive(parent_pid):
-                    continue
-                reap_reason = (
-                    "Reaped running daemon record because recorded parent_pid "
-                    f"{parent_pid} is no longer alive after daemon manager startup."
-                )
-
-            try:
-                orphaned = type("DaemonOrphaned", (RuntimeError,), {})
-                DaemonRunDir.attach(daemon_json_path.parent).mark_failed(
-                    orphaned(reap_reason)
-                )
-            except (OSError, ValueError, json.JSONDecodeError):
-                continue
+    def _reap_daemon_state_path(self, daemon_json_path: Path, state: dict) -> None:
+        """Apply the established stale-owner classification to one marker run."""
+        daemon_state = state.get("state")
+        if not isinstance(daemon_state, str) or daemon_state.lower() not in {"running", "active"}:
+            return
+        if state.get("finished_at") not in (None, ""):
+            return
+        current_pid = os.getpid()
+        owner = state.get("owner", "parent")
+        if owner == "supervisor":
+            supervisor_pid = state.get("supervisor_pid")
+            if not isinstance(supervisor_pid, int) or isinstance(supervisor_pid, bool):
+                return
+            if self._pid_identity_matches(supervisor_pid, state.get("supervisor_start_identity")):
+                return
+            reap_reason = (
+                "Reaped running daemon record because recorded "
+                f"supervisor_pid {supervisor_pid} is no longer alive with no terminal state committed."
+            )
+        elif owner == "manager":
+            if self._manager_owner_alive(state):
+                return
+            manager_pid = state.get("manager_pid")
+            subject = f"manager_pid {manager_pid}" if isinstance(manager_pid, int) and not isinstance(manager_pid, bool) else "central daemon manager"
+            reap_reason = f"Reaped running daemon record because recorded {subject} is no longer alive with no terminal state committed."
+        else:
+            parent_pid = state.get("parent_pid")
+            if not isinstance(parent_pid, int) or isinstance(parent_pid, bool) or parent_pid == current_pid or self._pid_alive(parent_pid):
+                return
+            reap_reason = f"Reaped running daemon record because recorded parent_pid {parent_pid} is no longer alive after daemon manager startup."
+        try:
+            orphaned = type("DaemonOrphaned", (RuntimeError,), {})
+            DaemonRunDir.attach(daemon_json_path.parent).mark_failed(orphaned(reap_reason))
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -1938,41 +1906,36 @@ class DaemonManager:
         return process_identity_matches(pid, expected)
 
     def _reconcile_terminal_notifications(self) -> None:
-        """Retry terminal daemon notifications that lack a published receipt."""
-        daemons_dir = self._workdir.path / "daemons"
-        if not daemons_dir.is_dir():
-            return
-        for daemon_json_path in daemons_dir.glob("*/daemon.json"):
+        """Compatibility entry point: retry only bounded pending markers."""
+        for kind, run_id, _marker in dispatch_ledger.recovery_markers(self._workdir.path):
+            if kind != "pending-terminal":
+                continue
+            path = self._workdir.path / "daemons" / run_id / "daemon.json"
             try:
-                state = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            if not isinstance(state, dict):
-                continue
-            status = state.get("state")
-            if status not in {"done", "failed", "cancelled", "timeout"}:
-                continue
-            # Only explicit new-schema receipts are replay candidates. Older
-            # terminal daemon.json records had no terminal_notified key; treating
-            # them as retryable would replay historical completions on upgrade.
-            if state.get("terminal_notified") is not False:
-                continue
-            run_id = str(state.get("run_id") or daemon_json_path.parent.name)
-            key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
-            text = self._terminal_notification_text_from_state(
-                state, daemon_json_path.parent,
+            if isinstance(state, dict):
+                self._reconcile_terminal_notification_path(path, state)
+
+    def _reconcile_terminal_notification_path(self, daemon_json_path: Path, state: dict) -> None:
+        """Retry one explicitly pending new-format terminal receipt."""
+        status = state.get("state")
+        if status not in {"done", "failed", "cancelled", "timeout"}:
+            return
+        if state.get("terminal_notified") is not False:
+            dispatch_ledger.clear_marker(self._workdir.path, "pending-terminal", str(state.get("run_id") or daemon_json_path.parent.name))
+            return
+        run_id = str(state.get("run_id") or daemon_json_path.parent.name)
+        key = DaemonRunDir.terminal_notification_idempotency_key(run_id)
+        text = self._terminal_notification_text_from_state(state, daemon_json_path.parent)
+        if self._publish_daemon_notification(
+            run_id, status=status, text=text, run_state=state,
+            run_path=daemon_json_path.parent, idempotency_key=key,
+        ):
+            DaemonRunDir.mark_terminal_notification_published_on_disk(
+                daemon_json_path, idempotency_key=key,
             )
-            if self._publish_daemon_notification(
-                run_id,
-                status=status,
-                text=text,
-                run_state=state,
-                run_path=daemon_json_path.parent,
-                idempotency_key=key,
-            ):
-                DaemonRunDir.mark_terminal_notification_published_on_disk(
-                    daemon_json_path, idempotency_key=key,
-                )
 
     def _terminal_notification_text_from_state(
         self, state: dict, run_path: Path
@@ -5518,6 +5481,7 @@ class DaemonManager:
 
             self._close_task_mcp_clients(task_mcp_clients)  # none connected in this branch
             try:
+                self._commit_dispatch(run_dir)
                 self._spawn_detached_lingtai_run(
                     run_dir,
                     task=spec["task"],
@@ -5552,6 +5516,19 @@ class DaemonManager:
         return {"status": "dispatched", "count": len(tasks), "ids": ids,
                 "group_id": group_id,
                 "handoff": self._emanate_handoff(len(tasks), requested_timeout)}
+
+    def _commit_dispatch(self, run_dir: DaemonRunDir) -> None:
+        """Commit a newly accepted run before any detached execution starts."""
+        state = run_dir.state_snapshot()
+        created_at = state.get("started_at")
+        if not isinstance(created_at, str) or not created_at:
+            raise dispatch_ledger.DispatchLedgerError("initial daemon state lacks started_at")
+        record = dispatch_ledger.append_dispatch(
+            self._workdir.path, run_id=run_dir.run_id, created_at=created_at
+        )
+        # The recovery marker follows the durable ledger commit and precedes
+        # launch.  Its failure is loud, so no accepted run starts untracked.
+        run_dir.enable_dispatch_tracking(record.sequence)
 
     def _emanate_handoff(self, count: int, requested_timeout_s: float | None) -> str:
         """Async handoff line, plus a Task Card nudge for fleet-scale dispatch.
@@ -5826,6 +5803,7 @@ class DaemonManager:
             # boundary.  The parent writes a complete, redacted manifest and
             # retains only the durable run-dir facade.
             try:
+                self._commit_dispatch(run_dir)
                 from lingtai.kernel.daemon_supervisor import DaemonSupervisorRequest
                 from lingtai.kernel.daemon_supervisor.manifest import build_manifest, manifest_path_for, write_manifest
                 from .supervisor_runtime import select_daemon_supervisor_adapter
@@ -6081,168 +6059,81 @@ class DaemonManager:
         preview = text[:200]
         return preview, str(result_path)
 
-    def _build_reconstructed_daemon_state(
+    def _handle_list_from_ledger(
         self,
-        run_path: Path,
-        existing_state: dict | None,
         *,
-        reason: str,
+        query: str,
+        wanted_status: str,
+        include_done: bool,
+        limit_int: int,
     ) -> dict:
-        old = dict(existing_state or {})
-        run_id = str(old.get("run_id") or run_path.name)
-        handle = str(old.get("handle") or self._handle_from_run_id(run_id) or run_id)
-        events = self._read_daemon_events_tail(run_path)
-        inferred_state, inferred_finished_at, inferred_error = self._infer_terminal_state_from_events(events)
-        result_preview, result_path = self._result_preview_from_file(run_path)
-        task = old.get("task")
-        call_params = old.get("call_parameters") if isinstance(old.get("call_parameters"), dict) else {}
-        if not isinstance(task, str) or not task:
-            task = call_params.get("task") if isinstance(call_params.get("task"), str) else None
-        if not task:
-            task = self._infer_task_from_prompt(run_path) or ""
-        tools = old.get("tools")
-        if not isinstance(tools, list):
-            tools = call_params.get("tools") if isinstance(call_params.get("tools"), list) else []
-        daemon_state = old.get("state") if isinstance(old.get("state"), str) else None
-        if inferred_state and daemon_state in (None, "", "running", "active", "unknown"):
-            daemon_state = inferred_state
-        if result_path and daemon_state in (None, "", "running", "active", "unknown"):
-            daemon_state = "done"
-        if not daemon_state:
-            daemon_state = "unknown"
-        started_at = old.get("started_at") if isinstance(old.get("started_at"), str) else None
-        if not started_at:
-            started_at = self._started_at_from_run_id(run_id)
-        if not started_at:
-            try:
-                started_at = self._utc_iso_from_timestamp(run_path.stat().st_mtime)
-            except OSError:
-                started_at = DaemonRunDir._now_iso()
-        finished_at = old.get("finished_at") if isinstance(old.get("finished_at"), str) else None
-        if not finished_at and daemon_state in {"done", "failed", "cancelled", "timeout"}:
-            finished_at = inferred_finished_at
-            if not finished_at:
-                terminal_path = Path(result_path) if result_path else (run_path / "logs" / "events.jsonl")
-                try:
-                    finished_at = self._utc_iso_from_timestamp(terminal_path.stat().st_mtime)
-                except OSError:
-                    finished_at = DaemonRunDir._now_iso()
-        if not isinstance(call_params, dict):
-            call_params = {}
-        if task and not call_params.get("task"):
-            call_params["task"] = task
-        if tools and not call_params.get("tools"):
-            call_params["tools"] = tools
-        state = {
-            "data_version": DaemonRunDir.DATA_VERSION,
-            "handle": handle,
-            "run_id": run_id,
-            "group_id": old.get("group_id"),
-            "parent_addr": old.get("parent_addr"),
-            "parent_pid": old.get("parent_pid"),
-            "task": task,
-            "tools": tools,
-            "call_parameters": call_params,
-            "model": old.get("model") or old.get("preset_model") or "unknown",
-            "max_turns": old.get("max_turns"),
-            "timeout_s": old.get("timeout_s"),
-            "state": daemon_state,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "elapsed_s": old.get("elapsed_s") if old.get("elapsed_s") is not None else 0.0,
-            "turn": old.get("turn") if old.get("turn") is not None else 0,
-            "current_tool": old.get("current_tool"),
-            "tool_call_count": old.get("tool_call_count") if old.get("tool_call_count") is not None else 0,
-            "tokens": old.get("tokens") if isinstance(old.get("tokens"), dict) else {"input": 0, "output": 0, "thinking": 0, "cached": 0},
-            "result_preview": old.get("result_preview") or result_preview,
-            "result_path": old.get("result_path") or result_path,
-            "last_output": old.get("last_output"),
-            "last_output_at": old.get("last_output_at"),
-            "error": old.get("error") or inferred_error,
-            "preset_name": old.get("preset_name"),
-            "preset_provider": old.get("preset_provider"),
-            "preset_model": old.get("preset_model"),
-            "backend": old.get("backend") or "unknown",
-            "claude_session_id": old.get("claude_session_id"),
-            "codex_session_id": old.get("codex_session_id"),
-            "opencode_session_id": old.get("opencode_session_id"),
-            "mimocode_session_id": old.get("mimocode_session_id"),
-            "oh_my_pi_session_id": old.get("oh_my_pi_session_id"),
-            "kimicode_session_id": old.get("kimicode_session_id"),
-            "cursor_session_id": old.get("cursor_session_id"),
-            "migration": {
-                "reason": reason,
-                "rebuilt_at": DaemonRunDir._now_iso(),
-                "source": "daemon_list_best_effort",
-            },
-        }
-        # Preserve fields added by specific backends or future versions (for
-        # example backend_options/backend_argv/session ids) while still
-        # normalizing the fields list relies on above.  data_version itself is
-        # deliberately overwritten to the current version.
-        for key, value in old.items():
-            if key != "data_version" and key not in state:
-                state[key] = value
-        return state
-
-    @staticmethod
-    def _has_current_daemon_data_version(state: dict) -> bool:
-        version = state.get("data_version")
-        return (
-            isinstance(version, int)
-            and not isinstance(version, bool)
-            and version == DaemonRunDir.DATA_VERSION
+        """Build list from append-order ledger, never historical directories."""
+        # Filters/search are explicit queries and may stream the ledger.  The
+        # ordinary list reads an EOF tail only; created_at is never re-sorted.
+        full_history = bool(query or (wanted_status and wanted_status != "all") or not include_done)
+        _ledger, rows, warnings = dispatch_ledger.read_recent_daemon_states(
+            self._workdir.path,
+            limit=limit_int,
+            full_history=full_history,
         )
+        entries: list[dict] = []
+        known_run_ids: set[str] = set()
+        for record, run_path, state in reversed(rows):
+            known_run_ids.add(record.run_id)
+            info = self._daemon_list_entry_from_state(state, run_path)
+            entries.append(info)
 
-    def _load_or_rebuild_daemon_state(self, run_path: Path) -> dict | None:
-        daemon_json_path = run_path / "daemon.json"
-        # A fresh manager may see a detached live run as history.  Re-check and
-        # repair under the same fixed lock as every RunDir writer so a terminal
-        # owner cannot commit between this read and the recovery replacement.
-        try:
-            with DaemonRunDir.state_file_lock(run_path):
-                existing: dict | None = None
-                reason: str | None = None
-                try:
-                    loaded = json.loads(daemon_json_path.read_text(encoding="utf-8"))
-                    if isinstance(loaded, dict):
-                        existing = loaded
-                    else:
-                        reason = "daemon_json_not_object"
-                except FileNotFoundError:
-                    reason = "daemon_json_missing"
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    reason = "daemon_json_invalid"
-                if reason is None and existing is not None:
-                    if self._has_current_daemon_data_version(existing):
-                        return existing
-                    reason = "daemon_json_data_version_mismatch"
-                rebuilt = self._build_reconstructed_daemon_state(
-                    run_path, existing, reason=reason or "daemon_json_rebuild"
-                )
-                self._atomic_write_daemon_json(daemon_json_path, rebuilt)
-                return rebuilt
-        except OSError:
-            return None
+        # Overlay current in-memory ownership without reconstructing old disk
+        # history. This preserves active facade truth during supervisor startup.
+        for em_id, entry in self._emanations.items():
+            run_dir = entry.get("run_dir")
+            if run_dir is None:
+                # A live legacy in-memory worker has no durable run directory
+                # to add to the ledger yet. It is still current registry truth,
+                # not history reconstruction, and remains visible until its
+                # normal run-dir path takes over.
+                future = entry.get("future")
+                done = bool(future is not None and future.done())
+                failed = bool(done and future is not None and future.exception() is not None)
+                entries.insert(0, {
+                    "id": em_id,
+                    "run_id": em_id,
+                    "status": "failed" if failed else ("done" if done else "running"),
+                    "task": entry.get("task", ""),
+                    "elapsed_s": max(0.0, time.time() - float(entry.get("start_time", time.time()))),
+                    "turn": 0,
+                    "current_tool": None,
+                })
+                continue
+            if run_dir.run_id in known_run_ids:
+                continue
+            try:
+                state = self._read_run_dir_state_from_disk(run_dir) if entry.get("detached", False) else run_dir.state_snapshot()
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            state.setdefault("handle", em_id)
+            entries.insert(0, self._daemon_list_entry_from_state(state, run_dir.path))
 
-    def _iter_daemon_history_states(self, skip_run_ids: set[str] | None = None) -> list[tuple[Path, dict]]:
-        daemons_dir = self._workdir.path / "daemons"
-        if not daemons_dir.is_dir():
-            return []
-        skip_run_ids = skip_run_ids or set()
-        rows: list[tuple[Path, dict]] = []
-        for run_path in daemons_dir.iterdir():
-            # Active runs are represented by their live DaemonRunDir object above.
-            # Do not lazy-rebuild their daemon.json here: an active writer thread
-            # may be updating it concurrently, and the live state is fresher.
-            if run_path.name in skip_run_ids:
-                continue
-            if not self._looks_like_daemon_run_dir(run_path):
-                continue
-            state = self._load_or_rebuild_daemon_state(run_path)
-            if isinstance(state, dict):
-                rows.append((run_path, state))
-        return rows
+        total_before_filter = len(entries)
+        if wanted_status and wanted_status != "all":
+            entries = [item for item in entries if str(item.get("status", "")).lower() == wanted_status]
+        if not include_done:
+            entries = [item for item in entries if str(item.get("status", "")).lower() not in {"done", "failed", "cancelled", "timeout"}]
+        if query:
+            entries = [item for item in entries if query in self._list_search_blob(item)]
+        total_matches = len(entries)
+        selected = entries[:limit_int]
+        return {
+            "emanations": selected,
+            "running": sum(1 for item in entries if item.get("status") in {"running", "active"}),
+            "manager_pool_size": self._manager_pool_size,
+            "history_included": include_done,
+            "index": "dispatch_ledger",
+            "total_before_filter": total_before_filter,
+            "total_matches": total_matches,
+            "showing": len(selected),
+            "warnings": warnings,
+        }
 
     def _handle_list_without_query(
         self,
@@ -6251,115 +6142,9 @@ class DaemonManager:
         include_done: bool,
         limit_int: int,
     ) -> dict:
-        """List without a text query while bounding entry reads.
-
-        Historical ``daemon.json`` records still have to be inspected to learn
-        their timestamps because the current persistence layout has no separate
-        chronological index.  We nevertheless keep only record/state rows until
-        the existing status sort has selected the newest ``limit_int`` rows; for
-        current-version records, expensive list-entry materialization (notably
-        ``.prompt`` preview reads) happens only for rows that can be returned.
-        Missing, corrupt, or stale records still take the documented candidate-
-        wide migration/rebuild path so their index can be repaired.
-        """
-        rows: list[tuple[str, str, object]] = []
-        running = 0
-        total_before_filter = 0
-        active_run_ids: set[str] = set()
-
-        def add_row(sort_key: str, status: object, kind: str, payload: object) -> None:
-            nonlocal total_before_filter
-            total_before_filter += 1
-            if wanted_status and wanted_status != "all":
-                if str(status or "").lower() != wanted_status:
-                    return
-            rows.append((sort_key, kind, payload))
-
-        for em_id, entry in self._emanations.items():
-            elapsed = time.time() - entry["start_time"]
-            future = entry.get("future")
-            exc = None
-            detached = future is None
-            if detached:
-                active_status = None
-            elif future.done():
-                exc = future.exception()
-                active_status = "failed" if exc else "done"
-            else:
-                active_status = "running"
-                running += 1
-
-            run_dir = entry.get("run_dir")
-            if run_dir is not None:
-                state = (
-                    self._read_run_dir_state_from_disk(run_dir)
-                    if detached else run_dir.state_snapshot()
-                )
-                state.setdefault("handle", em_id)
-                active_run_ids.add(run_dir.run_id)
-                status = active_status or state.get("state") or "unknown"
-                if detached and status == "running":
-                    running += 1
-                add_row(
-                    str(state.get("started_at") or state.get("run_id") or ""),
-                    status,
-                    "state",
-                    (state, run_dir.path, active_status,
-                     round(elapsed) if not detached else None, exc),
-                )
-            else:
-                info = {
-                    "id": em_id,
-                    "task": self._truncate_list_string(entry.get("task", ""), 120),
-                    "status": active_status,
-                    "elapsed_s": round(elapsed),
-                }
-                if exc:
-                    info["error"] = str(exc)
-                add_row("", active_status, "info", info)
-
-        if include_done:
-            for run_path, state in self._iter_daemon_history_states(
-                skip_run_ids=active_run_ids,
-            ):
-                status = state.get("state") or "unknown"
-                if status == "running":
-                    running += 1
-                add_row(
-                    str(state.get("started_at") or state.get("run_id") or ""),
-                    status,
-                    "state",
-                    (state, run_path, None, None, None),
-                )
-
-        rows.sort(key=lambda row: row[0], reverse=True)
-        selected = rows[:limit_int]
-        emanations: list[dict] = []
-        for _, kind, payload in selected:
-            if kind == "info":
-                emanations.append(payload)  # type: ignore[arg-type]
-                continue
-            state, run_path, active_status, active_elapsed, active_error = payload  # type: ignore[misc]
-            emanations.append(
-                self._daemon_list_entry_from_state(
-                    state,
-                    run_path,
-                    active_status=active_status,
-                    active_elapsed=active_elapsed,
-                    active_error=active_error,
-                )
-            )
-
-        return {
-            "emanations": emanations,
-            "running": running,
-            "manager_pool_size": self._manager_pool_size,
-            "history_included": include_done,
-            "index": "daemon_run_dirs",
-            "total_before_filter": total_before_filter,
-            "total_matches": len(rows),
-            "showing": len(emanations),
-        }
+        return self._handle_list_from_ledger(
+            query="", wanted_status=wanted_status, include_done=include_done, limit_int=limit_int
+        )
 
     def _handle_list(
         self,
@@ -6373,102 +6158,13 @@ class DaemonManager:
         except (TypeError, ValueError):
             return {"status": "error", "message": f"last must be a positive integer (got {limit!r})"}
         if limit_int < 1:
-            return {"status": "error", "message": f"last must be ≥ 1 (got {limit_int})"}
-
-        query = (contains or "").strip().lower()
-        wanted_status = (status_filter or "all").strip().lower()
-        include_done = include_done is not False
-
-        if not query:
-            return self._handle_list_without_query(
-                wanted_status=wanted_status,
-                include_done=include_done,
-                limit_int=limit_int,
-            )
-
-        emanations: list[dict] = []
-        running = 0
-        active_run_ids: set[str] = set()
-
-        for em_id, entry in self._emanations.items():
-            elapsed = time.time() - entry["start_time"]
-            future = entry.get("future")
-            exc = None
-            detached = future is None
-            if detached:
-                # No in-process future to poll — the run's own daemon.json
-                # ``state`` (read below via run_dir.state_snapshot()) is the
-                # ONLY source of truth for a detached run's status; do not
-                # pass an active_status override that would shadow it (a
-                # detached run may already be terminal even though this
-                # facade entry is still registered).
-                status = None
-            elif future.done():
-                exc = future.exception()
-                status = "failed" if exc else "done"
-            else:
-                status = "running"
-                running += 1
-            run_dir = entry.get("run_dir")
-            if run_dir is not None:
-                # A detached run's daemon.json is written by a DIFFERENT
-                # process (the supervisor); this facade's run_dir object
-                # never observes those writes in its own memory, so it must
-                # re-read from disk. In-process entries keep the cheap
-                # in-memory snapshot (the run loop's own thread wrote it).
-                state = (
-                    self._read_run_dir_state_from_disk(run_dir)
-                    if detached else run_dir.state_snapshot()
-                )
-                state.setdefault("handle", em_id)
-                active_run_ids.add(run_dir.run_id)
-                info = self._daemon_list_entry_from_state(
-                    state, run_dir.path, active_status=status,
-                    active_elapsed=round(elapsed) if not detached else None,
-                    active_error=exc,
-                )
-                if detached and info.get("status") == "running":
-                    running += 1
-            else:
-                info = {
-                    "id": em_id,
-                    "task": self._truncate_list_string(entry.get("task", ""), 120),
-                    "status": status,
-                    "elapsed_s": round(elapsed),
-                }
-                if exc:
-                    info["error"] = str(exc)
-            emanations.append(info)
-
-        if include_done:
-            for run_path, state in self._iter_daemon_history_states(skip_run_ids=active_run_ids):
-                info = self._daemon_list_entry_from_state(state, run_path)
-                if info.get("status") == "running":
-                    running += 1
-                emanations.append(info)
-
-        total_before_filter = len(emanations)
-        if wanted_status and wanted_status != "all":
-            emanations = [e for e in emanations if str(e.get("status", "")).lower() == wanted_status]
-        if query:
-            emanations = [e for e in emanations if query in self._list_search_blob(e)]
-
-        def _sort_key(item: dict) -> str:
-            return str(item.get("started_at") or item.get("run_id") or "")
-        emanations.sort(key=_sort_key, reverse=True)
-        total_matches = len(emanations)
-        if limit_int is not None:
-            emanations = emanations[:limit_int]
-        return {
-            "emanations": emanations,
-            "running": running,
-            "manager_pool_size": self._manager_pool_size,
-            "history_included": include_done,
-            "index": "daemon_run_dirs",
-            "total_before_filter": total_before_filter,
-            "total_matches": total_matches,
-            "showing": len(emanations),
-        }
+            return {"status": "error", "message": f"last must be >= 1 (got {limit_int})"}
+        return self._handle_list_from_ledger(
+            query=(contains or "").strip().lower(),
+            wanted_status=(status_filter or "all").strip().lower(),
+            include_done=include_done is not False,
+            limit_int=limit_int,
+        )
 
     def _durable_detached_entry(self, em_id: str) -> dict | None:
         """Hydrate a control facade from exact durable run identity.
