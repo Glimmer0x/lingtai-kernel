@@ -89,6 +89,21 @@ the registrar-mounted bound handler. `tests/test_system_declared_plugin.py`
 pins the static declaration, single official mount, identity port behavior, and
 manual path.
 
+### Single sleep use case
+
+`karma.py::sleep_use_case` is the sole System semantic owner for self-sleep:
+it reads attention fingerprints, applies the pending-notification refusal and
+explicit `force` escape hatch, emits the refusal/force/sleep audit events,
+returns the localized receipt, and performs the ASLEEP transition through the
+narrow `SystemSleepPort` (`karma.py:24-86`). `_DirectSleepPort` is only the
+legacy direct-entry translation (`karma.py:89-126`). On this pre-serialized
+head, the mounted host still exposes its historical callback so the packet
+remains runnable; serialized integration MUST add the same evidence/effects
+operations to the shared `SystemRuntimePort`, invoke `sleep_use_case`, and
+remove the adapter's duplicated policy. Mounted and direct refusal/force parity
+is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
+`tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity`.
+
 ## Routing Card
 
 **Use this when:**
@@ -253,7 +268,7 @@ drive it are `context`'s.
 | Claim | Source | Test |
 |---|---|---|
 | `system` is a wired intrinsic | `src/lingtai/tools/system/__init__.py` | `tests/test_system.py::test_system_in_all_intrinsics`, `tests/test_system.py::test_system_wired_in_agent` |
-| `sleep` transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:_sleep` | `tests/test_system.py::test_system_self_sleep` |
+| `sleep` applies one pending-attention/refusal/force use case and transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:sleep_use_case` | `tests/test_system.py::test_system_self_sleep`, `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity` |
 | Unknown/legacy actions return the unknown-action error | `src/lingtai/tools/system/__init__.py:handle` | `tests/test_system.py::test_system_rejects_unknown_and_retired_actions` |
 | `refresh` with an unauthorized preset is refused | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` |
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |

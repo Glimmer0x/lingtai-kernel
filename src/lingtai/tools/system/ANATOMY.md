@@ -44,8 +44,12 @@ and binds only a `workdir`, `system_runtime`, and `identity` host façade. The
 normal mounted path is `_bind(host)`: it creates `_SystemHandlerHost(host)` from
 the granted ports, passes that bridge plus `host.workdir` to `_build_family()`,
 and captures the resulting family in the registrar-mounted
-`BoundToolPlugin.handler`; no Agent enters that family. The runtime adapter in
-`adapters/tool_plugin_host.py` is composed from narrow Agent callbacks;
+`BoundToolPlugin.handler`; no Agent enters that family. `karma.py::sleep_use_case`
+owns the pending-attention/refusal/force policy, receipt, audit events, and
+ASLEEP transition through a narrow `SystemSleepPort`. The runtime adapter in
+`adapters/tool_plugin_host.py` is currently a reviewed-head compatibility
+callback; serialized integration must expose that same evidence/effects port and
+invoke this use case rather than repeating the policy.
 `Agent._setup_declared_intrinsic_tool_plugins()` uses the kernel registrar to
 claim/mount System once. The retained direct `handle(agent, args)` path is
 compatibility-only: it passes the Agent-like subject directly to
@@ -82,15 +86,21 @@ of declaration, mount, identity, mounted runtime sleep, and packaged manual.
   - `_presets()` (`preset.py:202-282`) — list available presets with LLM connectivity probing.
 
 - `karma.py` — Karma-gated lifecycle actions.
-  - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:13-14`) — gate mapping sets.
-  - `_check_karma_gate()` (`karma.py:15-33`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
-  - `_sleep()` (`src/lingtai/tools/system/karma.py:36-92`) — compares the injected Store fingerprint with the delivered `_notification_fp`; a divergent current mirror refuses non-force sleep, and `force=True` bypasses the guard.
-  - `_lull()` (`karma.py:94-107`) — put another agent to sleep.
-  - `_suspend()` (`karma.py:109-121`) — suspend another agent.
-  - `_cpr()` (`karma.py:124-137`) — resuscitate a suspended agent.
-  - `_interrupt()` (`karma.py:140-151`) — interrupt a running agent's current turn.
-  - `_clear()` (`karma.py:154-174`) — force a full molt on another agent.
-  - `_nirvana()` (`karma.py:177-198`) — permanently destroy an agent's working directory.
+  - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:20-21`) — gate mapping sets.
+  - `_check_karma_gate()` (`karma.py:155-172`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
+  - `SystemSleepPort` / `sleep_use_case()` (`karma.py:24-86`) — the single
+  System-owned pending-attention/refusal/force decision, receipt, audit, and
+  ASLEEP transition; `_DirectSleepPort` (`karma.py:89-126`) is compatibility
+  translation only.
+  - `_sleep()` (`karma.py:175-198`) — selects the SystemSleepPort use case for
+  direct/port-capable callers and retains the reviewed-head runtime callback
+  only until serialized host integration.
+  - `_lull()` (`karma.py:201-212`) — put another agent to sleep.
+  - `_suspend()` (`karma.py:215-226`) — suspend another agent.
+  - `_cpr()` (`karma.py:229-247`) — resuscitate a suspended agent.
+  - `_interrupt()` (`karma.py:250-261`) — interrupt a running agent's current turn.
+  - `_clear()` (`karma.py:264-286`) — force a full molt on another agent.
+  - `_nirvana()` (`karma.py:289-309`) — permanently destroy an agent's working directory.
 
 - *(removed)* `notification.py` — the agent-facing generic dismiss submodule was **deleted**. Its `_dismiss` verb (and the voluntary notification-read fast path) moved to the standalone `notification` tool (sibling package `tools/notification/`), whose atomic actions `dismiss_channel`/`dismiss_event`/`dismiss_ref` delegate to the kernel-root `notifications.dismiss_channel`. There are **no** `system` compatibility aliases. `system/__init__.py` no longer imports or re-exports `_dismiss`.
   - Producer-side notification submission still lives in `notifications.py` at the kernel root and is re-exported by this package's `__init__.py` as `publish_notification` / `clear_notification`. See root `ANATOMY.md` "Notifications" for the full architecture and dismissal taxonomy.
@@ -107,11 +117,11 @@ of declaration, mount, identity, mounted runtime sleep, and packaged manual.
   - Both delegate to the BaseAgent identity Port (`kernel/base_agent/identity.py`), which updates live in-memory identity, writes `.agent.json` via `_build_manifest`, and rewrites the protected prompt `identity` section. Neither is init/config editing, and neither touches the agent's address or working directory — the physical rename is the operator migration workflow in `system-manual`.
 
 - `schema.py` — Schema **data** only. It deliberately defines no `get_schema()`: the model-facing schema is composed from the data below by `__init__.py`, next to the child registry it is generated from.
-  - `ACTION_ORDER` (`schema.py:51-65`) — the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and the child registration order. Exactly `("refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "name_set", "name_nickname", "manual")` — every lifecycle/preset action keeps its pre-migration position; `summarize` was removed (it left for `context`) and the two name actions were appended before the reserved `manual`. No `notification`/`dismiss`.
-  - `INPUT_SCHEMAS` (`schema.py:192-211`) — each action's own strict closed `input_schema`. The surviving pre-migration flat sibling fields live in the actions that actually read them: `reason` (refresh/sleep and the six address verbs), `address` (the six address verbs), `preset`/`revert_preset` (refresh), and `content` (the two name actions); `presets` and `manual` take the canonical strict-empty input. `items`/`rebuild` are declared by **no** action here — they left with the summarize action and are now `context`'s. Optional fields use the provider-compatible nullable representation, which `__init__.py::_strip_nulls` reverses before the handlers run. `manual` references the exported `tool_family.manual.MANUAL_INPUT_SCHEMA` literal rather than restating it, so the schema-only and dispatching families cannot drift.
-  - `_address_input_schema()` (`schema.py:102-121`) — generates the identical two-field shape the six address-taking verbs share, returning a fresh dict per call so no two children share a mutable schema container.
-  - `ACTION_ENUM_DESCRIPTION` (`schema.py:213-238`) — the per-action prose the model reads to choose an action, carried over from the pre-migration flat enum description with argument references restated in their `input` shape.
-  - `get_description()` (`schema.py:240-263`) — the tool registration prose: the three privilege classes, the envelope call shape, the notification-tool and `context`-hygiene pointers, and the root-`summarize` guidance profile.
+  - `ACTION_ORDER` (`schema.py:48-52`) — the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and the child registration order. Exactly `("refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "name_set", "name_nickname", "manual")` — every lifecycle/preset action keeps its pre-migration position; `summarize` was removed (it left for `context`) and the two name actions were appended before the reserved `manual`. No `notification`/`dismiss`.
+  - `INPUT_SCHEMAS` (`schema.py:180-195`) — each action's own strict closed `input_schema`. The surviving pre-migration flat sibling fields live in the actions that actually read them: `reason` (refresh/sleep and the six address verbs), `address` (the six address verbs), `preset`/`revert_preset` (refresh), and `content` (the two name actions); `presets` and `manual` take the canonical strict-empty input. `items`/`rebuild` are declared by **no** action here — they left with the summarize action and are now `context`'s. Optional fields use the provider-compatible nullable representation, which `__init__.py::_strip_nulls` reverses before the handlers run. `manual` references the exported `tool_family.manual.MANUAL_INPUT_SCHEMA` literal rather than restating it, so the schema-only and dispatching families cannot drift.
+  - `_address_input_schema()` (`schema.py:90-109`) — generates the identical two-field shape the six address-taking verbs share, returning a fresh dict per call so no two children share a mutable schema container.
+  - `ACTION_ENUM_DESCRIPTION` (`schema.py:201-225`) — the per-action prose the model reads to choose an action, carried over from the pre-migration flat enum description with argument references restated in their `input` shape.
+  - `get_description()` (`schema.py:228-254`) — the tool registration prose: the three privilege classes, the envelope call shape, the notification-tool and `context`-hygiene pointers, and the root-`summarize` guidance profile.
   - Two fields are **not** a straight carry-over of the pre-migration *schema*: `sleep.force` was always read by `karma._sleep` (the kernel#112 escape hatch) but never advertised, and a strict child input must declare every key its handler accepts or dispatch would reject a call that succeeds today — declaring it surfaces existing behavior rather than adding any. `notification_threshold_chars` stays absent at both envelope levels (threshold is config-only via init.json + refresh); the private `summarize._summarize` engine's loud runtime-mutation refusal is retained as the inner layer for direct in-process callers that bypass the envelope.
 
 ## Connections

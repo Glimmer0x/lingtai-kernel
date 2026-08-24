@@ -28,6 +28,7 @@ from .karma import (
     _lull,
     _nirvana,
     _sleep,
+    sleep_use_case,
     _suspend,
 )
 from .name import _name_nickname, _name_set
@@ -123,9 +124,18 @@ class _SystemHandlerHost:
         return self._runtime.resuscitate(address)
 
     def _system_sleep(self, args: Mapping[str, Any]) -> dict:
-        return self._runtime.sleep(
-            str(args.get("reason", "")), force=bool(args.get("force", False))
-        )
+        reason = str(args.get("reason", ""))
+        force = bool(args.get("force", False))
+        # The final host seam will expose SystemSleepPort evidence/effects on
+        # SystemRuntimePort. Keep the reviewed-head callback as a compatibility
+        # fallback so this local packet remains runnable before serialized
+        # kernel/adapter reconciliation.
+        if all(
+            callable(getattr(self._runtime, name, None))
+            for name in ("sleep_attention_fingerprints", "transition_to_asleep")
+        ) and callable(getattr(self._runtime, "log", None)):
+            return sleep_use_case(self._runtime, reason=reason, force=force)
+        return self._runtime.sleep(reason, force=force)
 
     def set_name(self, name: str) -> None:
         self._identity.set_name(name)

@@ -4,8 +4,8 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.12.0
-last_changed_at: "2026-08-09T00:00:00Z"
+version: 1.13.0
+last_changed_at: "2026-08-23T18:47:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
@@ -14,6 +14,10 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
+- src/lingtai/tools/system/CONTRACT.md
+- src/lingtai/tools/system/ANATOMY.md
+- src/lingtai/tools/system/schema.py
+- tests/test_system_declared_plugin.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -132,6 +136,39 @@ The router table is the routing authority; this list is the inventory.
 | Daemon lifecycle/inspection/debugging | `daemon-manual` |
 | Avatar spawning/management/escalation | `avatar-manual` |
 | Kernel architecture/code truth | `lingtai-kernel-anatomy`, then cited code |
+
+## System tool call contract
+
+When operating the model-facing `system` family, use the exact LTP v2 envelope:
+
+```json
+{
+  "action": "<one action from the installed schema>",
+  "input": {"<fields for that action only>": "..."},
+  "reasoning": "<short purpose>",
+  "summarize": false
+}
+```
+
+The root is closed: `action`, `input`, and `reasoning` are required, `summarize`
+is the optional root result-control, and no other root keys are accepted. Each
+action has its own closed `input`; do not move `address`, `preset`, `force`, or
+`content` between branches. `system(action="summarize")` is not a supported
+action: context hygiene belongs to `context(action="summarize")` and
+`context(action="rebuild")`.
+
+`presets` can return a large allowed-only catalog, so use the root
+`summarize=true` only when exact entries are unnecessary. Refresh, sleep, lull,
+suspend, cpr, interrupt, clear, nirvana, both name actions, and errors return
+short receipts; leave `summarize=false` and read them exactly. The `manual`
+action itself must always use `summarize=false`, otherwise the operating
+procedure you requested may be summarized away before you can follow it.
+
+System has no `settings/system.json` and no per-action settings file. Runtime
+configuration comes from the agent's `init.json`/manifest and the corresponding
+provider or capability owners; live identity is maintained by the identity
+operations. Do not invent or edit a System settings path. Use `presets` and the
+refresh pre-check route before any authorized preset swap or refresh.
 
 ## How to choose between resident prompt, this router, and references
 

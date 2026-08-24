@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any, Protocol
 
 from lingtai.kernel.agent_presence import (
     AgentPresenceStorePort,
@@ -18,6 +19,111 @@ from lingtai.kernel.handshake import resolve_address
 
 _KARMA_ACTIONS = {"interrupt", "lull", "suspend", "cpr", "clear"}
 _NIRVANA_ACTIONS = {"nirvana"}
+
+
+class SystemSleepPort(Protocol):
+    """Narrow effects/evidence needed by the System sleep use case.
+
+    The policy belongs to System; a host adapter supplies only the current
+    attention evidence and the irreversible state-transition effects.  Keeping
+    this protocol here prevents the mounted bridge from growing an
+    Agent-shaped callback or a second sleep decision tree.
+    """
+
+    @property
+    def language(self) -> str: ...
+
+    def sleep_attention_fingerprints(
+        self,
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]: ...
+
+    def log(self, event: str, **fields: Any) -> None: ...
+
+    def transition_to_asleep(self) -> None: ...
+
+
+def sleep_use_case(
+    port: SystemSleepPort, *, reason: str = "", force: bool = False
+) -> dict:
+    """Apply System's one self-sleep policy through a narrow port.
+
+    ``pending`` and ``committed`` are attention fingerprints, not raw queue
+    contents.  A mismatch refuses the transition unless the caller explicitly
+    supplies ``force=True``; all logging, receipts, and state effects stay in
+    this single System-owned use case.
+    """
+    from lingtai.kernel.i18n import t
+
+    pending_fp, committed_fp = port.sleep_attention_fingerprints()
+    has_pending = pending_fp != committed_fp
+    if has_pending and not force:
+        port.log(
+            "sleep_refused_pending_notifications",
+            reason=reason,
+            pending_fp=list(pending_fp),
+            committed_fp=list(committed_fp or ()),
+        )
+        return {
+            "status": "ok",
+            "message": t(
+                port.language,
+                "system_tool.sleep_refused_pending_notifications",
+            ),
+        }
+
+    if has_pending and force:
+        port.log(
+            "sleep_forced_with_pending_notifications",
+            reason=reason,
+            pending_fp=list(pending_fp),
+        )
+
+    port.log("self_sleep", reason=reason)
+    port.transition_to_asleep()
+    return {
+        "status": "ok",
+        "message": t(port.language, "system_tool.sleep_message"),
+    }
+
+
+class _DirectSleepPort:
+    """Compatibility-only port over the historical direct Agent surface."""
+
+    __slots__ = ("_agent",)
+
+    def __init__(self, agent: Any) -> None:
+        self._agent = agent
+
+    @property
+    def language(self) -> str:
+        return self._agent._config.language
+
+    def sleep_attention_fingerprints(
+        self,
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+        from lingtai.kernel.notifications import (
+            _workdir_key,
+            attention_fingerprint,
+            is_channel_allowed,
+        )
+
+        workdir = _workdir_key(self._agent)
+        pending = attention_fingerprint(
+            self._agent._notification_store,
+            lambda channel: is_channel_allowed(channel, workdir=workdir),
+            workdir,
+        )
+        return pending, tuple(self._agent._notification_fp or ())
+
+    def log(self, event: str, **fields: Any) -> None:
+        self._agent._log(event, **fields)
+
+    def transition_to_asleep(self) -> None:
+        from lingtai.kernel.state import AgentState
+
+        self._agent._set_state(AgentState.ASLEEP, reason="self-sleep")
+        self._agent._asleep.set()
+        self._agent._cancel_event.set()
 
 
 def _presence_for(target) -> AgentPresenceStorePort:
@@ -67,79 +173,29 @@ def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
 
 
 def _sleep(agent, args: dict) -> dict:
-    """Self-sleep — any agent can put itself to sleep, no karma needed.
+    """Self-sleep through System's single semantic use case.
 
-    Sleep is idempotent against the notification queue: if `.notification/`
-    has an unprocessed payload on disk (fingerprint diverges from the
-    agent's last-committed fingerprint), we refuse the transition rather
-    than going ASLEEP with mail already waiting. This handles the race
-    where mail arrives during the same ACTIVE turn that decides to sleep —
-    the LLM's "no unread mail, sleep" decision was made against the
-    pre-call snapshot, but by the time the tool fires the queue has
-    changed. Without this guard the first email looks dropped to the
-    human (only a SECOND email wakes the agent). See lingtai-kernel#112.
-
-    `force=True` overrides the guard — escape hatch for the rare case
-    where the agent explicitly wants to sleep anyway.
+    The direct Agent-like route uses ``_DirectSleepPort``.  A serialized
+    integration will expose the same ``SystemSleepPort`` evidence/effects on
+    ``SystemRuntimePort``; the exact-head mounted adapter still provides its
+    historical ``_system_sleep`` compatibility callback until that shared seam
+    is reconciled.
     """
-    from lingtai.kernel.i18n import t
-    from lingtai.kernel.state import AgentState
-    from lingtai.kernel.notifications import (
-        _workdir_key,
-        attention_fingerprint,
-        is_channel_allowed,
-    )
+    reason = str(args.get("reason", ""))
+    force = bool(args.get("force", False))
+
+    port = getattr(agent, "_system_sleep_port", None)
+    if port is not None:
+        return sleep_use_case(port, reason=reason, force=force)
 
     runtime_sleep = getattr(agent, "_system_sleep", None)
     if callable(runtime_sleep):
-        # Official declared-host binding reaches the live state machine only
-        # through SystemRuntimePort. Direct legacy callers retain the fallback
-        # below for source compatibility.
+        # Current reviewed-head bridge compatibility. The serialized host
+        # repair must replace this callback with ``sleep_use_case`` over the
+        # SystemSleepPort; this fallback is intentionally not a second policy.
         return runtime_sleep(args)
 
-    reason = args.get("reason", "")
-    force = bool(args.get("force", False))
-
-    store = agent._notification_store
-    # Masked, like the committed fingerprint: a below-threshold daemon batch is
-    # readable state, not pending attention, so it must not refuse sleep.
-    pending_fp = attention_fingerprint(
-        store,
-        lambda ch: is_channel_allowed(ch, workdir=_workdir_key(agent)),
-        _workdir_key(agent),
-    )
-    has_pending = pending_fp != agent._notification_fp
-
-    if has_pending and not force:
-        agent._log(
-            "sleep_refused_pending_notifications",
-            reason=reason,
-            pending_fp=list(pending_fp),
-            committed_fp=list(agent._notification_fp or ()),
-        )
-        return {
-            "status": "ok",
-            "message": t(
-                agent._config.language,
-                "system_tool.sleep_refused_pending_notifications",
-            ),
-        }
-
-    if has_pending and force:
-        agent._log(
-            "sleep_forced_with_pending_notifications",
-            reason=reason,
-            pending_fp=list(pending_fp),
-        )
-
-    agent._log("self_sleep", reason=reason)
-    agent._set_state(AgentState.ASLEEP, reason="self-sleep")
-    agent._asleep.set()
-    agent._cancel_event.set()
-    return {
-        "status": "ok",
-        "message": t(agent._config.language, "system_tool.sleep_message"),
-    }
+    return sleep_use_case(_DirectSleepPort(agent), reason=reason, force=force)
 
 
 def _lull(agent, args: dict) -> dict:
