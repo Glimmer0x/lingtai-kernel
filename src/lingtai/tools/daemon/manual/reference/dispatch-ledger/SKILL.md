@@ -39,16 +39,16 @@ terminal-notification work for startup recovery.
 `daemon(list)` warnings are advisory and include a checked range/scope, count,
 bounded examples where relevant, and this manual path. They never repair files.
 
-| Code | Meaning | Next safe step |
-|---|---|---|
-| `dispatch_ledger_empty` | No records in the checked tail (new/cutover agent or absent ledger). | Check a known run id explicitly if needed; do not backfill automatically. |
-| `dispatch_ledger_invalid_record` | JSON/schema was invalid in this checked range. | Preserve evidence and ask the owner how to diagnose it. |
-| `dispatch_ledger_sequence_non_monotonic` | The checked records have a gap, reversal, or non-contiguous sequence. | Do not reorder or rewrite; inspect the exact ledger/run ids deliberately. |
-| `dispatch_ledger_duplicate_run_id` | A run id repeats in the checked range. | Treat `daemon.json` as status truth; escalate rather than deduplicating history. |
-| `dispatch_ledger_daemon_state_unreadable` | A selected run's `daemon.json` was missing/corrupt/unreadable. | Use exact `check`/forensics and let the owner decide recovery. |
+| Code | What the observation means |
+|---|---|
+| `dispatch_ledger_empty` | No records exist in the checked tail. This is expected for a new/cutover agent, but it can also mean that the ledger is absent. |
+| `dispatch_ledger_invalid_record` | JSON or the four-field ledger schema is invalid in the checked range. |
+| `dispatch_ledger_sequence_non_monotonic` | File order in the checked range contains a sequence gap, reversal, or non-contiguous value. Timestamps are informational and do not define order. |
+| `dispatch_ledger_duplicate_run_id` | One accepted run id appears more than once in the checked range. |
+| `dispatch_ledger_daemon_state_unreadable` | A ledger-selected run's authoritative `daemon.json` is missing, corrupt, or unreadable. |
 
 A malformed final ledger record is stricter than a read warning: future
 acceptance refuses before launch because the next sequence cannot be proven. No
 runtime path truncates, repairs, sorts, migrates, or rebuilds the ledger. The
-agent/human decides whether and how to repair evidence outside this automatic
-path.
+manual describes these mechanics and observations only; the agent/human reasons
+separately about whether any intervention is appropriate.
