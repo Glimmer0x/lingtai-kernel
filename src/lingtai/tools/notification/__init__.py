@@ -1,222 +1,79 @@
-"""Notification intrinsic — the standalone notification surface.
+"""Notification's declared official host-plugin slice.
 
-This intrinsic owns the notification-facing verbs: reading the live
-notification surface and clearing notification mirrors.  It is the **only**
-agent-callable home for those operations — the ``system`` tool no longer
-exposes any notification verb (no ``notification``/``dismiss`` compatibility
-alias).  ``system`` retains ``summarize`` (and the lifecycle/karma actions);
-``summarize`` is *not* a notification verb and stays under ``system``.
+``notification`` remains the sole model-facing surface for reading notification
+mirrors, atomically dismissing a mirror target, managing hook registrations,
+and applying consumer-only delay.  This module owns only the LTP family and its
+small input/result adaptations.  Notification Core continues to own real
+producer, dismissal, delay, and Store state; the declared plugin receives those
+operations through one narrow ``notification_state`` host port rather than a
+whole Agent.
 
-The tool is an LTP v2 family (``../CONTRACT.md``): the model-facing root is
-the closed ``action`` + ``input`` + ``reasoning`` + ``summarize`` envelope,
-and each action's arguments live in its own strict ``input`` object composed
-by the generic ``ToolFamily`` infra (``lingtai.tools.tool_family``) from the
-per-action schemas in :mod:`.schema`.  ``action`` values are unchanged, and
-the public tool name stays ``notification``.
-
-Dismissal is **atomic**: there is no single kitchen-sink ``dismiss``.  Each
-removal target has its own action so the API expresses exactly what is being
-cleared:
-
-Actions:
-    check          — voluntary read of the live notification surface.  Returns
-                     a placeholder dict; the turn loop's meta-block post-hook
-                     stamps the canonical ``_meta.agent_meta.notifications.attention`` +
-                     ``_meta.agent_meta.guidance.transient`` payload onto this same result.
-    dismiss_channel — clear one ``.notification/<channel>.json`` surface whole.
-                     Rejects ``event_id``/``ref_id`` (those are atomic-event
-                     verbs).  Producer-owned state is never touched; guarded
-                     mirrors refuse without ``force``.
-    dismiss_event  — remove a single ``system`` event by ``event_id`` from
-                     ``.notification/system.json``.
-    dismiss_ref    — remove ``system`` event(s) by ``ref_id`` from
-                     ``.notification/system.json``.
-    delay          — temporarily suppress consumer delivery for one allowed
-                     channel (0 cancels); producer state is never touched and
-                     expiry raises a delay-alarm mirror.
-    manual         — return the installed notification manual body. Read-only;
-                     notification and producer state are not touched.
-
-All three dismiss verbs delegate to the single canonical
-:func:`lingtai.kernel.notifications.dismiss_channel` with
-``invoked_by="notification"``.  The decision logic (allowlist, ``post-molt``
-ack-reason, protected channels, generic-dismiss guard, and stale-channel-version
-refusal) lives there, so every guard holds through this tool by construction.
-Legacy ``large_tool_result`` reminders — the kernel no longer raises these
-(large results are ranked under ``_meta.agent_meta.agent_state.current_tool_result_chars``
-and compacted via ``context(action="summarize")``) — but any event still present
-from before this change (or a pre-molt session) may be dismissed as an escape
-hatch; doing so acknowledges the ref_id.  Summarization via
-``context(action="summarize")`` still auto-clears any such matching reminder.
+The public tool name, nine operational actions, reserved ``manual`` action,
+strict per-action input schemas, result shapes, and Core authorization gates are
+unchanged.  The difference is composition only: a static declaration is bound
+to the least-privilege host facade and mounted by the kernel registrar.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-# Schema data — canonical per-action input schemas and registration prose.
-# ``get_schema`` is composed below from ``INPUT_SCHEMAS``; ``schema.py``
-# deliberately defines no second one.
-from .schema import (  # noqa: F401
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
+
+from .schema import (
     ACTION_ENUM_DESCRIPTION,
-    ACTION_ORDER,
-    INPUT_SCHEMAS,
-    get_description,
+    DECLARED_INPUT_SCHEMAS,
+    NOTIFICATION_DECLARED_ACTIONS,
+    get_description as _schema_description,
 )
 from ..tool_family import ChildTool, ToolFamily
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
-# Single-source delegate — the canonical dismissal helper.  No notification
-# logic is reimplemented here.
-from lingtai.kernel.notifications import delay_notification_channel, dismiss_channel
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import NotificationStatePort, ToolPluginHost
 
 
-# Placeholder returned by ``check`` — the live payload (``_meta.agent_meta.notifications.attention``
-# + ``_meta.agent_meta.guidance.transient``) is stamped onto this same result dict by
-# ``attach_active_notifications`` in the turn loop.  Returning a dict (not a
-# string) is what makes that stamp possible: the meta-block walks backward for
-# the freshest *dict-shaped* tool result.
+# Placeholder returned by ``check``.  The turn loop stamps canonical live
+# attention/guidance state onto this same dict; this family never rebuilds a
+# competing snapshot from disk.
 _CHECK_PLACEHOLDER_MESSAGE = (
     "Voluntary notification(action=check) read. The live notification payload "
-    "is delivered via the kernel meta-block under the `_meta.agent_meta.notifications.attention` and "
-    "`_meta.agent_meta.guidance.transient` keys on this same result. If those keys are "
-    "absent, no notifications are active."
+    "is delivered via the kernel meta-block under the "
+    "`_meta.agent_meta.notifications.attention` and "
+    "`_meta.agent_meta.guidance.transient` keys on this same result. If those "
+    "keys are absent, no notifications are active."
 )
 
 
-# The exact degraded-manual sentence pinned by ``CONTRACT.md`` Port. Kept
-# verbatim across the ToolFamily migration — see ``_adapt_manual_result``.
-_MANUAL_MISSING_ERROR = (
-    "notification manual missing — initializer may have failed or "
-    "capability not installed correctly"
-)
-
-# The installed intrinsic-skill directory ``manual`` reads. This is the
-# ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "notification-manual"
-
-
-def _schema_only_family() -> ToolFamily:
-    """Build the module-level ``ToolFamily`` used only to compose the schema.
-
-    Notification is an *intrinsic*: the kernel imports this module once and
-    calls ``get_schema()``/``handle(agent, args)`` on the module itself, so
-    unlike ``web`` there is no per-Agent manager instance to hang a family
-    off.  The real handlers need an ``agent``, which only arrives per call,
-    so :func:`handle` builds a per-call family with bound handlers and this
-    module-level one never dispatches.  Constructing it at import time is
-    still load-bearing: it proves the fixed ten-child registry has no
-    duplicate and no reserved-name collision on ``manual``
-    (``ToolFamilyError`` raises here, at import, rather than shipping
-    silently).
-    """
-
-    def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
-        raise AssertionError("the module-level schema-only ToolFamily never dispatches")
-
-    return ToolFamily(
-        "notification",
-        [
-            ChildTool(action, INPUT_SCHEMAS[action], _unused, title=f"{action} input")
-            for action in ACTION_ORDER
-        ],
-    )
-
-
-_FAMILY = _schema_only_family()
-
-
-def get_schema(lang: str = "en") -> dict[str, Any]:
-    """Return the composed model-facing ``notification`` family schema.
-
-    Composed by the generic ``ToolFamily`` infra from each action's own
-    canonical ``input_schema`` in :mod:`.schema`, rather than hand-assembled.
-    ``lang`` is accepted for source compatibility and ignored: schema prose is
-    canonical English and language-independent.
-    """
-    schema = _FAMILY.build_schema()
-    # The generic composer writes a neutral "Required operation within the
-    # notification family." description. Notification's own per-action prose
-    # (behavioral contracts, the channel defaults, the legacy large_tool_result
-    # escape hatch) is the model's only in-schema guide to *which* action to
-    # pick, so it replaces that placeholder here rather than being lost.
-    schema["properties"]["action"]["description"] = ACTION_ENUM_DESCRIPTION
-    return schema
-
-
-def _strip_nulls(action_input: Mapping[str, Any]) -> dict:
-    """Drop explicit ``null``s so absent-vs-null defaulting is preserved.
-
-    Strict provider schemas express an optional field as a required nullable
-    property, so the model sends ``{"channel": null}`` for "no channel".  The
-    pre-existing handlers below distinguish absent from present via
-    ``args.get("channel", "system")`` and ``args.get("channel") is None``, so
-    null must become *absent* before they run — otherwise ``dismiss_event``
-    would pass ``channel=None`` to Core instead of defaulting to ``system``.
-    """
+def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
+    """Restore absence semantics for strict-schema nullable optionals."""
     return {key: value for key, value in action_input.items() if value is not None}
 
 
-def _check(agent, args: dict) -> dict:
-    """Voluntary read of the notification surface — returns a placeholder."""
+def _check(_state: "NotificationStatePort", _args: dict[str, Any]) -> dict[str, Any]:
+    """Return the deliberate check placeholder without touching notification state."""
     return {
         "_notification_placeholder": True,
         "message": _CHECK_PLACEHOLDER_MESSAGE,
     }
 
 
-def _adapt_manual_result(mcp_result: dict) -> dict:
-    """Flatten the ManualTool child's canonical result to notification's shape.
-
-    ``ToolFamily.handle()`` has already dispatched to the registered ``manual``
-    child (``tool_family.manual.build_manual_child``) and returned its
-    canonical result *verbatim* (no double wrap) — full body at
-    ``content[0].text``, host-local path at
-    ``structuredContent.manual_path``.  Notification's own public result shape
-    predates that generic contract and is pinned by
-    ``notification/CONTRACT.md`` Port to exactly ``status`` /
-    ``notification_manual`` / ``manual_path`` (+ ``error`` when degraded), so
-    this Host-owned adapter runs strictly *after* dispatch, in :func:`handle`
-    — never inside a registered child.
-
-    The degraded ``error`` sentence is restated here rather than forwarded.
-    The shared loader builds it as ``f"{skill_name} manual missing — ..."``
-    from the *installed directory* name, which for this family is
-    ``notification-manual`` — so forwarding it verbatim would silently change
-    the contract-pinned sentence from "notification manual missing" to
-    "notification-manual manual missing". Restating the exact pinned text is
-    Host presentation of an unchanged fact (the manual is absent), not a
-    rewrite of the child's canonical result, which stays canonical and
-    untouched. The alternative — renaming the loader's argument or its
-    message — would change every other family's error text, which no evidence
-    supports.
-    """
+def _adapt_manual_result(mcp_result: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the dispatched manual child to notification's pinned public shape."""
     flat: dict[str, Any] = {
         "status": mcp_result.get("status", "ok"),
         "notification_manual": mcp_result["content"][0]["text"],
         "manual_path": mcp_result["structuredContent"]["manual_path"],
     }
     if "error" in mcp_result:
-        flat["error"] = _MANUAL_MISSING_ERROR
+        flat["error"] = mcp_result["error"]
     return flat
 
 
-def _dismiss_channel(agent, args: dict) -> dict:
-    """Clear one notification channel whole.
-
-    Atomic event verbs (``event_id``/``ref_id``) are not accepted here; use
-    ``dismiss_event`` / ``dismiss_ref`` for targeted removal.
-
-    Under LTP v2 those two keys are absent from this action's own
-    ``input_schema``, so ``ToolFamily.handle()`` rejects them before this
-    handler ever runs — a cross-action smuggle now fails earlier, and with no
-    notification I/O.  The explicit check below is retained as the inner layer
-    of that pair: it still holds for a direct in-process call that bypasses
-    the envelope, and removing it would leave the rejection resting on schema
-    dispatch alone.
-    """
+def _dismiss_channel(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a whole-channel dismissal; Core owns every policy decision."""
     channel = args.get("channel")
     if channel is None:
-        agent._log("notification_dismiss_missing_channel")
+        state.log("notification_dismiss_missing_channel")
         return {
             "status": "error",
             "reason": "missing_channel",
@@ -236,20 +93,18 @@ def _dismiss_channel(agent, args: dict) -> dict:
                 "system event."
             ),
         }
-    return dismiss_channel(
-        agent,
+    return state.dismiss(
         channel,
-        invoked_by="notification",
         force=bool(args.get("force", False)),
         reason=args.get("reason"),
     )
 
 
-def _dismiss_event(agent, args: dict) -> dict:
-    """Remove a single ``system`` event by ``event_id``."""
+def _dismiss_event(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a targeted system event dismissal; Core owns target policy."""
     event_id = args.get("event_id")
     if not event_id:
-        agent._log("notification_dismiss_missing_event_id")
+        state.log("notification_dismiss_missing_event_id")
         return {
             "status": "error",
             "reason": "missing_event_id",
@@ -258,21 +113,19 @@ def _dismiss_event(agent, args: dict) -> dict:
                 "input={'event_id': '<id>', ...}."
             ),
         }
-    return dismiss_channel(
-        agent,
+    return state.dismiss(
         args.get("channel", "system"),
-        invoked_by="notification",
         force=bool(args.get("force", False)),
         reason=args.get("reason"),
         event_id=event_id,
     )
 
 
-def _dismiss_ref(agent, args: dict) -> dict:
-    """Remove ``system`` event(s) by ``ref_id``."""
+def _dismiss_ref(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a targeted system ref dismissal; Core owns target policy."""
     ref_id = args.get("ref_id")
     if not ref_id:
-        agent._log("notification_dismiss_missing_ref_id")
+        state.log("notification_dismiss_missing_ref_id")
         return {
             "status": "error",
             "reason": "missing_ref_id",
@@ -281,25 +134,21 @@ def _dismiss_ref(agent, args: dict) -> dict:
                 "input={'ref_id': '<id>', ...}."
             ),
         }
-    return dismiss_channel(
-        agent,
+    return state.dismiss(
         args.get("channel", "system"),
-        invoked_by="notification",
         force=bool(args.get("force", False)),
         reason=args.get("reason"),
         ref_id=ref_id,
     )
 
 
-def _delay(agent, args: dict) -> dict:
-    """Delay one allowed channel's consumer delivery without touching its producer."""
-    return delay_notification_channel(agent, args.get("channel"), args.get("seconds"))
+def _delay(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Apply consumer delay through Core without changing producer state."""
+    return state.delay(args.get("channel"), args.get("seconds"))
 
 
-def _add_hook(agent, args: dict) -> dict:
-    """Register an external hook manifest (notification add)."""
-    from lingtai.kernel.notifications import add_hook
-
+def _add_hook(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Validate presentation arguments and delegate hook registration to Core."""
     try:
         manifest = {
             "name": args["name"],
@@ -312,7 +161,7 @@ def _add_hook(agent, args: dict) -> dict:
         }
         if args.get("instructions"):
             manifest["instructions"] = args["instructions"]
-        return add_hook(agent, manifest)
+        return state.add_hook(manifest)
     except (KeyError, ValueError) as exc:
         return {
             "status": "error",
@@ -321,12 +170,10 @@ def _add_hook(agent, args: dict) -> dict:
         }
 
 
-def _drop_hook(agent, args: dict) -> dict:
-    """Unregister a hook by name (notification drop)."""
-    from lingtai.kernel.notifications import drop_hook
-
+def _drop_hook(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Delegate hook removal to Core's persisted registry."""
     try:
-        return drop_hook(agent, args["name"])
+        return state.drop_hook(args["name"])
     except (KeyError, ValueError) as exc:
         return {
             "status": "error",
@@ -335,18 +182,12 @@ def _drop_hook(agent, args: dict) -> dict:
         }
 
 
-def _edit_hook(agent, args: dict) -> dict:
-    """Update a hook's fields by name (notification edit)."""
-    from lingtai.kernel.notifications import edit_hook
-
+def _edit_hook(state: "NotificationStatePort", args: dict[str, Any]) -> dict[str, Any]:
+    """Delegate hook update to Core's persisted registry."""
     try:
         name = args["name"]
-        fields = {
-            key: value
-            for key, value in args.items()
-            if key != "name" and value is not None
-        }
-        return edit_hook(agent, name, fields)
+        fields = {key: value for key, value in args.items() if key != "name" and value is not None}
+        return state.edit_hook(name, fields)
     except (KeyError, ValueError) as exc:
         return {
             "status": "error",
@@ -355,106 +196,133 @@ def _edit_hook(agent, args: dict) -> dict:
         }
 
 
-def _list_hooks(agent, args: dict) -> dict:
-    """Return the registered hook manifests (notification list)."""
-    from lingtai.kernel.notifications import list_hooks
-
-    result = list_hooks(agent)
+def _list_hooks(state: "NotificationStatePort", _args: dict[str, Any]) -> dict[str, Any]:
+    """Read registered hook manifests without bypassing Core's error shape."""
+    result = state.list_hooks()
     if isinstance(result, dict) and result.get("status") == "error":
-        # A corrupt hooks.json surfaces as a structured error instead of
-        # masquerading as an empty registry.
         return result
     return {"status": "ok", "hooks": result}
 
 
-def _build_family(agent) -> ToolFamily:
-    """Build the per-call dispatching family with handlers bound to *agent*.
+def _build_family(host: "ToolPluginHost | None") -> ToolFamily:
+    """Build the schema-only or bound family from the static declaration."""
+    if host is None:
+        def _unused(_input: Mapping[str, Any]) -> dict[str, Any]:
+            raise AssertionError("the module-level schema-only ToolFamily never dispatches")
 
-    Notification is an intrinsic with a module-level ``handle(agent, args)``
-    entry point, so ``agent`` is only available per call — there is no
-    per-Agent manager to cache a family on, as ``web`` has. Construction is
-    cheap (five ``ChildTool`` dataclasses and a name check), and building it
-    per call keeps ``agent`` out of module state, which matters because one
-    process may serve several agents.
+        children = [
+            ChildTool(
+                action,
+                DECLARATION.input_schemas[action],
+                _unused,
+                title=f"{action} input",
+            )
+            for action in DECLARATION.actions
+        ]
+        children.append(
+            ChildTool("manual", DECLARATION.manual_input_schema, _unused, title="manual input")
+        )
+        return ToolFamily(DECLARATION.name, children)
 
-    The reserved ``manual`` child is registered directly and unwrapped, per
-    ``tool_family/CONTRACT.md``: ``ToolFamily.handle()`` returns its canonical
-    ``content``/``structuredContent`` result verbatim, and
-    :func:`_adapt_manual_result` reshapes it afterwards in :func:`handle`.
-    """
-    dismiss_handlers = {
+    state = host.notification_state
+    handlers: dict[str, Callable[["NotificationStatePort", dict[str, Any]], dict[str, Any]]] = {
+        "check": _check,
+        "dismiss_channel": _dismiss_channel,
+        "dismiss_event": _dismiss_event,
+        "dismiss_ref": _dismiss_ref,
         "add": _add_hook,
         "drop": _drop_hook,
         "edit": _edit_hook,
         "list": _list_hooks,
         "delay": _delay,
-        "check": _check,
-        "dismiss_channel": _dismiss_channel,
-        "dismiss_event": _dismiss_event,
-        "dismiss_ref": _dismiss_ref,
     }
 
-    def _bind(action: str):
-        handler = dismiss_handlers[action]
+    def _dispatch(action: str) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+        handler = handlers[action]
 
-        def _dispatch(action_input: Mapping[str, Any]) -> dict:
-            return handler(agent, _strip_nulls(action_input))
+        def bound(action_input: Mapping[str, Any]) -> dict[str, Any]:
+            return handler(state, _strip_nulls(action_input))
 
-        return _dispatch
+        return bound
 
-    children = []
-    for action in ACTION_ORDER:
-        if action == "manual":
-            children.append(build_manual_child(agent, _MANUAL_SKILL_NAME))
-        else:
-            children.append(
-                ChildTool(
-                    action,
-                    INPUT_SCHEMAS[action],
-                    _bind(action),
-                    title=f"{action} input",
-                )
-            )
-    return ToolFamily("notification", children)
+    children = [
+        ChildTool(
+            action,
+            DECLARATION.input_schemas[action],
+            _dispatch(action),
+            title=f"{action} input",
+        )
+        for action in DECLARATION.actions
+    ]
+    children.append(build_manual_child(host.workdir, DECLARATION.manual))
+    return ToolFamily(DECLARATION.name, children)
 
 
-def handle(agent, args: dict) -> dict:
-    """Handle the standalone ``notification`` tool.
+def get_description(lang: str = "en") -> str:
+    """Return the canonical language-independent notification description."""
+    return _schema_description(lang)
 
-    The generic ``ToolFamily`` dispatcher validates ``action``, type-checks and
-    strips root ``summarize``, rejects unknown root fields, and — crucially for
-    a mutating family — rejects ``input`` keys outside the selected action's
-    own declared schema *before* any handler runs.  That is what makes a
-    cross-action smuggle such as ``action='check', input={'channel': 'goal'}``
-    fail with no notification I/O at all, rather than being silently ignored
-    downstream.
 
-    ``_tc_id`` is stripped first.  ``base_agent.tools._dispatch_tool`` injects
-    it into **every** intrinsic's args (only ``psyche`` molt consumes it), so
-    it is kernel plumbing that predates and is invisible to the LTP v2
-    envelope.  ``web``, a capability rather than an intrinsic, never sees it —
-    which is why the generic ``_ROOT_FIELDS`` set does not admit it and why
-    stripping belongs here, at the one boundary where an intrinsic adopts the
-    generic dispatcher, rather than in shared infrastructure on the strength
-    of a single family's need.
+def get_schema(lang: str = "en") -> dict[str, Any]:
+    """Return the declaration-derived composed public notification schema."""
+    schema = _FAMILY.build_schema()
+    schema["properties"]["action"]["description"] = ACTION_ENUM_DESCRIPTION
+    return schema
 
-    Unknown/absent actions keep the pre-migration public result exactly
-    (``{status: "error", message: "Unknown notification action: <x>"}``), which
-    ``CONTRACT.md`` Port pins, so the generic dispatcher's own
-    ``ACTION_REQUIRED`` envelope error is normalized here rather than by
-    changing that dispatcher's canonical shape — the same seam ``web`` uses.
-    """
-    raw = dict(args or {})
-    raw.pop("_tc_id", None)
-    action = raw.get("action")
 
-    result = _build_family(agent).handle(raw)
+def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
+    """Compose notification against its exact declared narrow host facade."""
+    family = _build_family(host)
 
-    if action == "manual" and "content" in result:
-        return _adapt_manual_result(result)
-    if result.get("error_code") == "ACTION_REQUIRED":
-        return {
-            "status": "error",
-            "message": f"Unknown notification action: {action}",
-        }
-    return result
+    def handle_notification(args: dict[str, Any]) -> dict[str, Any]:
+        # `_tc_id` is old intrinsic plumbing and is never part of the closed
+        # public LTP envelope.  Removing it preserves compatibility with a
+        # synthesized historic notification call copied into the live surface.
+        raw = dict(args or {})
+        raw.pop("_tc_id", None)
+        action = raw.get("action")
+        result = family.handle(raw)
+        if action == "manual" and "content" in result:
+            return _adapt_manual_result(result)
+        if result.get("error_code") == "ACTION_REQUIRED":
+            return {"status": "error", "message": f"Unknown notification action: {action}"}
+        return result
+
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=handle_notification,
+        description=get_description(),
+        glossary_package=__package__,
+    )
+
+
+#: Static official declaration, created before any Agent exists.  Every public
+#: identity consumed by the family is read back from this one object.
+DECLARATION = ToolPluginDeclaration(
+    name="notification",
+    actions=NOTIFICATION_DECLARED_ACTIONS,
+    input_schemas=DECLARED_INPUT_SCHEMAS,
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="notification",
+    description=_schema_description(),
+    binder=_bind,
+    requires=("workdir", "notification_state"),
+    glossary_package=__package__,
+)
+
+# Public compatibility views derived from the declaration.  `manual` is present
+# once and last, but is not an operational declaration action.
+ACTION_ORDER = DECLARATION.public_actions
+INPUT_SCHEMAS = DECLARATION.public_input_schemas()
+
+# Import-time schema-only composition catches duplicate action/reserved-manual
+# defects before boot.  Its children never dispatch.
+_FAMILY = _build_family(None)
+
+
+def setup(agent, **_ignored) -> None:
+    """Mount notification through the kernel's official-plugin registrar."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(agent, [DECLARATION])

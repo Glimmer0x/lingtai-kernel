@@ -41,9 +41,23 @@ class SystemSleepPort(Protocol):
 
     def transition_to_asleep(self) -> None: ...
 
+    def sleep_alarm_lock(self) -> Any: ...
+
+    def arm_sleep_alarm(self, delay_seconds: Any) -> str: ...
+
+
+#: Sentinel distinguishing "no delay requested" from an explicit (possibly
+#: invalid) delay value, so direct callers keep the exact pre-use-case
+#: semantics of ``"delay" in args``.
+_NO_DELAY = object()
+
 
 def sleep_use_case(
-    port: SystemSleepPort, *, reason: str = "", force: bool = False
+    port: SystemSleepPort,
+    *,
+    reason: str = "",
+    force: bool = False,
+    delay: Any = _NO_DELAY,
 ) -> dict:
     """Apply System's one self-sleep policy through a narrow port.
 
@@ -51,8 +65,22 @@ def sleep_use_case(
     contents.  A mismatch refuses the transition unless the caller explicitly
     supplies ``force=True``; all logging, receipts, and state effects stay in
     this single System-owned use case.
+
+    ``delay`` is the raw public JSON value for the optional one-shot sleep
+    alarm.  Validation, the arm-failure receipt, and the arm-before-ASLEEP
+    ordering under the port's heartbeat-shared lock are policy and live here;
+    the port only persists the alarm and performs the transition.
     """
     from lingtai.kernel.i18n import t
+
+    delay_seconds = None
+    if delay is not _NO_DELAY:
+        from lingtai.kernel.base_agent.lifecycle import _sleep_alarm_delay_decimal
+
+        try:
+            delay_seconds = _sleep_alarm_delay_decimal(delay)
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
 
     pending_fp, committed_fp = port.sleep_attention_fingerprints()
     has_pending = pending_fp != committed_fp
@@ -78,8 +106,26 @@ def sleep_use_case(
             pending_fp=list(pending_fp),
         )
 
-    port.log("self_sleep", reason=reason)
-    port.transition_to_asleep()
+    if delay_seconds is not None:
+        # The heartbeat shares this narrow lock. Persist first so an ASLEEP
+        # transition can never expose an unarmed requested alarm, and so an
+        # expiry cannot delete an alarm that a later sleep call overwrote.
+        with port.sleep_alarm_lock():
+            try:
+                alarm_deadline = port.arm_sleep_alarm(delay_seconds)
+            except Exception as exc:
+                port.log("sleep_alarm_arm_failed", error=str(exc)[:200])
+                return {
+                    "status": "error",
+                    "message": "Could not arm sleep alarm; staying awake",
+                }
+            port.log("self_sleep", reason=reason, alarm_deadline=alarm_deadline)
+            port.transition_to_asleep()
+    else:
+        # Keep the no-delay path byte-for-byte compatible, including leaving an
+        # already-armed alarm untouched.
+        port.log("self_sleep", reason=reason)
+        port.transition_to_asleep()
     return {
         "status": "ok",
         "message": t(port.language, "system_tool.sleep_message"),
@@ -124,6 +170,16 @@ class _DirectSleepPort:
         self._agent._set_state(AgentState.ASLEEP, reason="self-sleep")
         self._agent._asleep.set()
         self._agent._cancel_event.set()
+
+    def sleep_alarm_lock(self) -> Any:
+        from lingtai.kernel.base_agent.lifecycle import _sleep_alarm_lock
+
+        return _sleep_alarm_lock(self._agent)
+
+    def arm_sleep_alarm(self, delay_seconds: Any) -> str:
+        from lingtai.kernel.base_agent.lifecycle import _arm_sleep_alarm
+
+        return _arm_sleep_alarm(self._agent, delay_seconds)
 
 
 def _presence_for(target) -> AgentPresenceStorePort:
@@ -175,27 +231,20 @@ def _check_karma_gate(agent, action: str, args: dict) -> dict | None:
 def _sleep(agent, args: dict) -> dict:
     """Self-sleep through System's single semantic use case.
 
-    The direct Agent-like route uses ``_DirectSleepPort``.  A serialized
-    integration will expose the same ``SystemSleepPort`` evidence/effects on
-    ``SystemRuntimePort``; the exact-head mounted adapter still provides its
-    historical ``_system_sleep`` compatibility callback until that shared seam
-    is reconciled.
+    ``agent`` is either the mounted ``_SystemHandlerHost`` bridge, which
+    exposes its granted ``SystemRuntimePort`` as ``_system_sleep_port``, or a
+    historical direct Agent-like subject wrapped by the translation-only
+    ``_DirectSleepPort``.  Both routes run the same ``sleep_use_case`` policy;
+    this function only maps the public args onto it.
     """
     reason = str(args.get("reason", ""))
     force = bool(args.get("force", False))
+    delay = args["delay"] if "delay" in args else _NO_DELAY
 
     port = getattr(agent, "_system_sleep_port", None)
-    if port is not None:
-        return sleep_use_case(port, reason=reason, force=force)
-
-    runtime_sleep = getattr(agent, "_system_sleep", None)
-    if callable(runtime_sleep):
-        # Current reviewed-head bridge compatibility. The serialized host
-        # repair must replace this callback with ``sleep_use_case`` over the
-        # SystemSleepPort; this fallback is intentionally not a second policy.
-        return runtime_sleep(args)
-
-    return sleep_use_case(_DirectSleepPort(agent), reason=reason, force=force)
+    if port is None:
+        port = _DirectSleepPort(agent)
+    return sleep_use_case(port, reason=reason, force=force, delay=delay)
 
 
 def _lull(agent, args: dict) -> dict:

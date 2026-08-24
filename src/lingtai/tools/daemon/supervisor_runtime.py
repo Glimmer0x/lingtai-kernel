@@ -614,8 +614,22 @@ def _publish_daemon_notification(
         return payload, True, event_id
 
     try:
-        result = store.compare_update_channel(DAEMON_CHANNEL, UNCONDITIONAL, _mutator)
-    except Exception:
+        result = store.compare_update_channel(
+            DAEMON_CHANNEL, UNCONDITIONAL, _mutator, owner=em_id
+        )
+    except Exception as exc:
+        # The terminal receipt remains retryable, but never make a Store/control
+        # or Core-mutator contract violation look like a quiet failed enqueue.
+        # The parent-visible durable run state records bounded typed evidence.
+        try:
+            run_dir.append_event(
+                "daemon_notification_error",
+                kind="daemon_notification_error",
+                error_type=type(exc).__name__,
+                retryable=True,
+            )
+        except Exception:
+            pass
         return False
     applied_event_id = result.value if isinstance(result.value, str) else ""
     return bool(applied_event_id)

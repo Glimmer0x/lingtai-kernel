@@ -4,20 +4,23 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.13.0
-last_changed_at: "2026-08-23T18:47:00Z"
-tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
+version: 1.15.0
+last_changed_at: "2026-08-24T12:00:00Z"
+tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, alarm, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
-- src/lingtai/kernel/nudge/ANATOMY.md
-- src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
-- src/lingtai/llm/_register.py
-- src/lingtai/llm/openai/adapter.py
+- src/lingtai/kernel/base_agent/lifecycle.py
+- src/lingtai/tools/system/karma.py
+- src/lingtai/tools/system/schema.py
 - src/lingtai/tools/system/CONTRACT.md
 - src/lingtai/tools/system/ANATOMY.md
-- src/lingtai/tools/system/schema.py
 - tests/test_system_declared_plugin.py
+- src/lingtai/kernel/nudge/ANATOMY.md
+- src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
+- src/lingtai/llm/_register.py
+- src/lingtai/llm/openai/adapter.py
 maintenance: |
   Tracks the routed source/resources it summarizes; update when the underlying capability or its sub-references change.
 ---
@@ -46,8 +49,9 @@ The router table is the routing authority; this list is the inventory.
   location: reference/substrate-manual/SKILL.md
   description: |
     Expanded substrate/runtime model: body/extensions, lifecycle states,
-    `system` actions, memory layers, MCP/addon ownership, preset tiers, and
-    (§11) `init.json` composition and the preset runtime model.
+    `system` actions (including last-resort `system.sleep(delay=...)` alarms),
+    memory layers, MCP/addon ownership, preset tiers, and (§11) `init.json`
+    composition and the preset runtime model.
 - name: procedures-manual
   location: reference/procedures-manual/SKILL.md
   description: |
@@ -108,13 +112,20 @@ The router table is the routing authority; this list is the inventory.
     Built-in LLM adapters: named adapter inventory, per-provider
     configuration/dispatch, the Codex REST vs WebSocket transport opt-in and
     its environment variables, and provider special behaviors.
+- name: external-attach-diagnostic
+  location: reference/external-attach-diagnostic/SKILL.md
+  description: |
+    Guarded macOS-only external attach: exact agent-dir/PID incarnation
+    verification, bounded `/usr/bin/sample` stacks, content-free runtime facts,
+    and an exceptional controlled external `mcp.*` burst that does not exercise
+    Store locking.
 ```
 
 ## Router table
 
 | Need / keywords | Read |
 |---|---|
-| Expanded substrate; body/extensions; shell vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/STUCK/ASLEEP/SUSPENDED; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
+| Expanded substrate; body/extensions; shell vs daemon vs avatar vs MCP; lifecycle states; ACTIVE/IDLE/STUCK/ASLEEP/SUSPENDED; `system.sleep(delay=...)` last-resort alarm; same-channel communication; basic notifications; memory layers; molt model; idle/soul; preset tiers; `system` operations | `reference/substrate-manual/SKILL.md` |
 | `init.json` composition/owner map; preset runtime model; raw vs resolved `system/manifest.resolved.json`; preset identity/path; TUI/library discovery vs `system(action="presets")` allowed-only catalog; main-agent swap/revert/refresh; daemon `tasks[].preset` explicit/omitted path; external CLI backend preset skip | `reference/substrate-manual/SKILL.md` §11 |
 | Expanded procedures; progressive disclosure; writing skills/knowledge; action discipline; responsiveness; skill routing; HTML deliverables; artifact sharing; issue reporting; when to read which manual | `reference/procedures-manual/SKILL.md` |
 | Tool-result summarization; large-result ranking via agent_meta; progressive disclosure of raw outputs; original-result recovery; summarize vs molt | `context-manual` → `reference/summarize-manual/SKILL.md` |
@@ -127,6 +138,7 @@ The router table is the routing authority; this list is the inventory.
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
+| Authorized external attach; macOS `/usr/bin/sample`; exact PID/agent-dir incarnation verification; bounded content-free stacks; guarded controlled external `mcp.*` burst; diagnostic privacy | `reference/external-attach-diagnostic/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |
@@ -155,7 +167,9 @@ is the optional root result-control, and no other root keys are accepted. Each
 action has its own closed `input`; do not move `address`, `preset`, `force`, or
 `content` between branches. `system(action="summarize")` is not a supported
 action: context hygiene belongs to `context(action="summarize")` and
-`context(action="rebuild")`.
+`context(action="rebuild")`. The `sleep` input additionally carries the
+required-nullable `delay` field for the last-resort one-shot alarm documented
+in the substrate manual; pass `null` unless that exceptional route applies.
 
 `presets` can return a large allowed-only catalog, so use the root
 `summarize=true` only when exact entries are unnecessary. Refresh, sleep, lull,

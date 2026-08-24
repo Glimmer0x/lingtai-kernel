@@ -158,6 +158,17 @@ def _write_daemon_json(tmp_path, run_id, **overrides):
     return daemon_json
 
 
+def _append_test_dispatch(agent, run_dir) -> None:
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+
+    state = run_dir.state_snapshot()
+    append_dispatch(
+        agent._working_dir,
+        run_id=run_dir.run_id,
+        created_at=state.get("started_at") or "2026-08-24T00:00:00Z",
+    )
+
+
 def test_daemon_registers_tool(tmp_path):
     agent = _make_agent(tmp_path, ["daemon"])
     tool_names = {s.name for s in agent._tool_schemas}
@@ -384,6 +395,8 @@ def test_daemon_setup_reaps_dead_parent_running_record(tmp_path, monkeypatch):
         "em-dead-20260101-000000-abcdef",
         parent_pid=stale_pid,
     )
+    from lingtai.kernel.daemon_dispatch import mark_running
+    mark_running(tmp_path / "daemon-agent", "em-dead-20260101-000000-abcdef")
 
     calls = []
 
@@ -450,8 +463,9 @@ def test_daemon_setup_keeps_current_and_live_parent_records(tmp_path, monkeypatc
     assert live_data["state"] == "running"
     assert live_data["current_tool"] == "read"
     assert live_data["error"] is None
-    assert (current_pid, 0) not in calls
-    assert (live_pid, 0) in calls
+    # Unmarked legacy runs are not probed at startup; marker-only recovery is
+    # the explicit cutover boundary.
+    assert calls == []
     assert mgr._emanations == {}
 
 
@@ -2388,8 +2402,10 @@ def test_handle_list_shows_status(tmp_path):
     assert statuses["em-2"] == "running"
 
 
-def test_handle_list_defaults_to_newest_1000_and_materializes_only_page(tmp_path, monkeypatch):
-    """The bounded default limits entry reads, while explicit larger pages work."""
+def test_handle_list_defaults_to_newest_1000_and_materializes_only_ledger_page(tmp_path, monkeypatch):
+    """Default list tails append order and never enumerates daemon folders."""
+    from lingtai.kernel.daemon_dispatch import append_dispatch
+
     agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
     total = 1005
@@ -2397,28 +2413,22 @@ def test_handle_list_defaults_to_newest_1000_and_materializes_only_page(tmp_path
         run_id = f"em-history-{i:04d}"
         run_path = agent._working_dir / "daemons" / run_id
         run_path.mkdir(parents=True)
-        (run_path / "daemon.json").write_text(
-            json.dumps(
-                {
-                    "data_version": DaemonRunDir.DATA_VERSION,
-                    "handle": run_id,
-                    "run_id": run_id,
-                    "state": "done",
-                    "started_at": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}Z",
-                }
-            ),
-            encoding="utf-8",
-        )
+        (run_path / "daemon.json").write_text(json.dumps({
+            "handle": run_id, "run_id": run_id, "state": "done",
+            "started_at": "2026-01-01T00:00:00Z",
+        }), encoding="utf-8")
+        append_dispatch(agent._working_dir, run_id=run_id, created_at="2026-01-01T00:00:00Z")
 
     materialized: list[str] = []
-
     def record_materialization(state, run_path, **_kwargs):
         materialized.append(state["run_id"])
-        return {"run_id": state["run_id"]}
-
+        return {"run_id": state["run_id"], "status": state["state"]}
     monkeypatch.setattr(mgr, "_daemon_list_entry_from_state", record_materialization)
+    # The list action must rely on ledger paths, not directory enumeration.
+    monkeypatch.setattr(Path, "iterdir", lambda *_args: pytest.fail("history directory scan"))
 
     default_listing = mgr._handle_list()
+    assert default_listing["index"] == "dispatch_ledger"
     assert default_listing["showing"] == 1000
     assert len(materialized) == 1000
     assert default_listing["emanations"][0]["run_id"] == "em-history-1004"
@@ -2431,204 +2441,57 @@ def test_handle_list_defaults_to_newest_1000_and_materializes_only_page(tmp_path
     assert expanded_listing["emanations"][0]["run_id"] == "em-history-1004"
 
 
-def test_handle_list_includes_historical_done_run_dirs(tmp_path):
-    """list scans daemon run dirs so completed daemons remain discoverable."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    mgr = agent.get_capability("daemon")
-    rd = _make_run_dir(
-        agent,
-        em_id="em-history",
-        task="summarize alpha history",
-        tools=["file", "bash"],
-        system_prompt="custom system prompt alpha",
-        call_parameters={
-            "task": "summarize alpha history",
-            "tools": ["file", "bash"],
-            "skills": ["daemon-manual"],
-            "mcp": [{"name": "docs", "transport": "stdio", "env": {"TOKEN": "<redacted>"}}],
-            "system_prompt": "custom system prompt alpha",
-        },
-    )
-    rd.mark_done("needle result with artifact path reports/alpha.md")
-
-    # Simulate a later manager/session: no live _emanations, only run-dir files.
-    listing = mgr._handle_list()
-    matches = [e for e in listing["emanations"] if e.get("run_id") == rd.run_id]
-    assert len(matches) == 1
-    em = matches[0]
-    assert listing["history_included"] is True
-    assert listing["index"] == "daemon_run_dirs"
-    assert em["id"] == "em-history"
-    assert em["status"] == "done"
-    assert em["path"].endswith(rd.run_id)
-    assert em["result_path"].endswith("result.txt")
-    assert "needle result" in em["result_preview"]
-    assert em["system_prompt_path"].endswith(".prompt")
-    assert "custom system prompt alpha" in em["system_prompt_preview"]
-    assert em["call_parameters"]["skills"] == ["daemon-manual"]
-    assert em["call_parameters"]["mcp"][0]["env"] == {"TOKEN": "<redacted>"}
-
-
-def test_handle_list_filters_history_by_contains_status_and_last(tmp_path):
-    """list supports lightweight progressive-disclosure search over run metadata."""
+def test_handle_list_uses_only_ledger_history_and_explicit_filters(tmp_path):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
     alpha = _make_run_dir(agent, em_id="em-alpha", task="alpha task")
     alpha.mark_done("alpha result contains unique-needle")
+    _append_test_dispatch(agent, alpha)
     beta = _make_run_dir(agent, em_id="em-beta", task="beta task")
     beta.mark_failed(RuntimeError("beta failed unique-needle"))
+    _append_test_dispatch(agent, beta)
+    # Legacy history with no ledger line is intentionally not listed.
+    legacy = _make_run_dir(agent, em_id="em-legacy", task="legacy task")
+    legacy.mark_done("legacy unique-needle")
 
     done_listing = mgr._handle_list(contains="unique-needle", status_filter="done")
     assert done_listing["total_matches"] == 1
     assert done_listing["emanations"][0]["run_id"] == alpha.run_id
-
     failed_listing = mgr._handle_list(contains="unique-needle", status_filter="failed", limit=1)
     assert failed_listing["total_matches"] == 1
-    assert failed_listing["showing"] == 1
     assert failed_listing["emanations"][0]["run_id"] == beta.run_id
     assert "beta failed" in str(failed_listing["emanations"][0]["error"])
-
     hidden_history = mgr._handle_list(include_done=False)
-    assert all(e.get("run_id") not in {alpha.run_id, beta.run_id} for e in hidden_history["emanations"])
-    assert hidden_history["history_included"] is False
+    assert hidden_history["showing"] == 0
 
 
-def test_daemon_run_dir_writes_current_data_version(tmp_path):
-    """New daemon.json records carry a version for future lazy migration."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    rd = _make_run_dir(agent, em_id="em-version")
-    state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
-    from lingtai.tools.daemon.run_dir import DaemonRunDir
-    assert state["data_version"] == DaemonRunDir.DATA_VERSION
+def test_handle_list_warns_for_selected_missing_state_without_repair(tmp_path):
+    from lingtai.kernel.daemon_dispatch import append_dispatch
 
-
-def test_handle_list_rebuilds_missing_daemon_json_best_effort(tmp_path):
-    """list lazily rebuilds a minimal daemon.json when a run folder lost it."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
+    agent = _make_agent(tmp_path, ["daemon"])
     mgr = agent.get_capability("daemon")
-    run_path = agent._working_dir / "daemons" / "em-7-20260102-030405-abcdef"
-    (run_path / "logs").mkdir(parents=True)
-    (run_path / "history").mkdir()
-    (run_path / ".prompt").write_text(
-        "daemon prompt\n\nYour task:\nrecover missing daemon json task",
-        encoding="utf-8",
-    )
-    (run_path / "result.txt").write_text("recovered result body", encoding="utf-8")
-    (run_path / "logs" / "events.jsonl").write_text(
-        json.dumps({"event": "daemon_done", "ts": "2026-01-02T03:05:00Z"}) + "\n",
-        encoding="utf-8",
-    )
-
-    listing = mgr._handle_list(contains="recover missing")
-    assert listing["total_matches"] == 1
-    em = listing["emanations"][0]
-    assert em["run_id"] == "em-7-20260102-030405-abcdef"
-    assert em["id"] == "em-7"
-    assert em["status"] == "done"
-    assert em["task"] == "recover missing daemon json task"
-    assert em["data_version"] == 1
-    assert em["migration"]["reason"] == "daemon_json_missing"
-    assert "recovered result" in em["result_preview"]
-
-    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    from lingtai.tools.daemon.run_dir import DaemonRunDir
-    assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
-    assert rebuilt["migration"]["reason"] == "daemon_json_missing"
-    assert rebuilt["task"] == "recover missing daemon json task"
-    assert rebuilt["result_path"].endswith("result.txt")
+    append_dispatch(agent._working_dir, run_id="em-missing", created_at="2026-01-01T00:00:00Z")
+    listing = mgr._handle_list()
+    assert listing["emanations"] == []
+    assert [warning["code"] for warning in listing["warnings"]] == ["dispatch_ledger_daemon_state_unreadable"]
+    assert not (agent._working_dir / "daemons" / "em-missing" / "daemon.json").exists()
 
 
-def test_handle_list_rebuilds_invalid_daemon_json_best_effort(tmp_path):
-    """list also rebuilds corrupt daemon.json files instead of dropping the run."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    mgr = agent.get_capability("daemon")
-    run_path = agent._working_dir / "daemons" / "em-8-20260102-030405-fedcba"
-    (run_path / "logs").mkdir(parents=True)
-    (run_path / "history").mkdir()
-    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nrecover corrupt json task", encoding="utf-8")
-    (run_path / "daemon.json").write_text("{not-json", encoding="utf-8")
-
-    listing = mgr._handle_list(contains="corrupt json")
-    assert listing["total_matches"] == 1
-    em = listing["emanations"][0]
-    assert em["run_id"] == "em-8-20260102-030405-fedcba"
-    assert em["migration"]["reason"] == "daemon_json_invalid"
-
-    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    assert rebuilt["task"] == "recover corrupt json task"
-    assert rebuilt["migration"]["reason"] == "daemon_json_invalid"
-
-
-def test_handle_list_rebuilds_non_utf8_daemon_json(tmp_path):
-    """A non-UTF-8 daemon.json is treated as invalid and rebuilt best-effort."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    mgr = agent.get_capability("daemon")
-    run_path = agent._working_dir / "daemons" / "em-9-20260102-030405-a1b2c3"
-    (run_path / "logs").mkdir(parents=True)
-    (run_path / "history").mkdir()
-    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nrecover non utf daemon json", encoding="utf-8")
-    (run_path / "result.txt").write_text("non utf rebuilt result", encoding="utf-8")
-    (run_path / "daemon.json").write_bytes(b"\xff\xfe\x00bad-json")
-
-    listing = mgr._handle_list(contains="non utf")
-    assert listing["total_matches"] == 1
-    em = listing["emanations"][0]
-    assert em["status"] == "done"
-    assert em["migration"]["reason"] == "daemon_json_invalid"
-
-    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    assert rebuilt["task"] == "recover non utf daemon json"
-    assert rebuilt["migration"]["reason"] == "daemon_json_invalid"
-
-
-def test_handle_list_rebuild_reads_only_events_tail(tmp_path):
-    """Best-effort rebuild can infer terminal state from the tail of a large event log."""
-    agent = _make_agent(tmp_path, ["file", "daemon"])
-    mgr = agent.get_capability("daemon")
-    run_path = agent._working_dir / "daemons" / "em-10-20260102-030405-1a2b3c"
-    (run_path / "logs").mkdir(parents=True)
-    (run_path / "history").mkdir()
-    (run_path / ".prompt").write_text("daemon prompt\n\nYour task:\nlarge events tail task", encoding="utf-8")
-    events_path = run_path / "logs" / "events.jsonl"
-    padding = json.dumps({"event": "cli_output", "text": "x" * 2000}) + "\n"
-    events_path.write_text(padding * 40 + json.dumps({"event": "daemon_timeout", "ts": "2026-01-02T03:06:00Z"}) + "\n", encoding="utf-8")
-
-    listing = mgr._handle_list(contains="large events tail")
-    assert listing["total_matches"] == 1
-    em = listing["emanations"][0]
-    assert em["status"] == "timeout"
-    assert em["migration"]["reason"] == "daemon_json_missing"
-
-    rebuilt = json.loads((run_path / "daemon.json").read_text(encoding="utf-8"))
-    assert rebuilt["state"] == "timeout"
-    assert rebuilt["finished_at"] == "2026-01-02T03:06:00Z"
-
-
-def test_handle_list_rebuilds_stale_daemon_json_version(tmp_path):
-    """list upgrades stale daemon.json records and preserves backend extras."""
+def test_handle_list_never_rebuilds_stale_daemon_json(tmp_path):
     agent = _make_agent(tmp_path, ["file", "daemon"])
     mgr = agent.get_capability("daemon")
     rd = _make_run_dir(agent, em_id="em-stale", task="stale version task")
     rd.mark_done("stale version result")
     state = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
     state["data_version"] = -1
-    state["backend_options"] = {"search": True}
-    state["future_backend_field"] = {"preserve": True}
     rd.daemon_json_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    before = rd.daemon_json_path.read_bytes()
+    _append_test_dispatch(agent, rd)
 
     listing = mgr._handle_list(contains="stale version", status_filter="done")
     assert listing["total_matches"] == 1
-    em = listing["emanations"][0]
-    assert em["run_id"] == rd.run_id
-    assert em["status"] == "done"
-
-    rebuilt = json.loads(rd.daemon_json_path.read_text(encoding="utf-8"))
-    from lingtai.tools.daemon.run_dir import DaemonRunDir
-    assert rebuilt["data_version"] == DaemonRunDir.DATA_VERSION
-    assert rebuilt["migration"]["reason"] == "daemon_json_data_version_mismatch"
-    assert rebuilt["backend_options"] == {"search": True}
-    assert rebuilt["future_backend_field"] == {"preserve": True}
-
+    assert listing["emanations"][0]["run_id"] == rd.run_id
+    assert rd.daemon_json_path.read_bytes() == before
 
 def test_handle_list_rejects_non_positive_last(tmp_path):
     """list reuses last as a positive limit, not a zero/negative slice."""
@@ -2851,6 +2714,8 @@ def test_daemon_startup_retries_unpublished_terminal_notification(tmp_path):
         },
     )
 
+    from lingtai.kernel.daemon_dispatch import mark_pending_terminal_notification
+    mark_pending_terminal_notification(tmp_path / "daemon-agent", "em-restart")
     agent = _make_agent(tmp_path, ["daemon"])
 
     state = json.loads(daemon_json.read_text(encoding="utf-8"))
@@ -3156,7 +3021,7 @@ def test_emanate_creates_folder_on_disk(tmp_path):
 
         daemons_dir = agent._working_dir / "daemons"
         assert daemons_dir.is_dir()
-        children = list(daemons_dir.iterdir())
+        children = [path for path in daemons_dir.iterdir() if path.name == em_id]
         assert len(children) == 1
         folder = children[0]
         # New daemon ids are compact and identical to the folder/run id.
@@ -3216,11 +3081,11 @@ def test_reclaim_preserves_folders(tmp_path):
     mgr.handle({"action": "emanate", "tasks": [{"task": "a", "tools": ["file"]}]})
     time.sleep(0.5)
     daemons_dir = agent._working_dir / "daemons"
-    folders_before = list(daemons_dir.iterdir())
+    folders_before = [path for path in daemons_dir.iterdir() if path.is_dir() and not path.name.startswith(".")]
     assert len(folders_before) == 1
 
     mgr.handle({"action": "reclaim"})
-    folders_after = list(daemons_dir.iterdir())
+    folders_after = [path for path in daemons_dir.iterdir() if path.is_dir() and not path.name.startswith(".")]
     assert folders_after == folders_before  # same folder still there
 
 
@@ -3719,7 +3584,7 @@ def test_emanate_with_preset_passes_through(tmp_path, monkeypatch):
 
     # Check daemon.json records preset metadata
     daemons_dir = agent._working_dir / "daemons"
-    folders = list(daemons_dir.iterdir())
+    folders = [path for path in daemons_dir.iterdir() if path.is_dir() and not path.name.startswith(".")]
     assert len(folders) == 1
     data = json.loads((folders[0] / "daemon.json").read_text())
     assert data.get("preset_name") == preset_path
@@ -3797,7 +3662,7 @@ def test_emanate_without_preset_inherits_parent(tmp_path, monkeypatch):
 
     # daemon.json has no preset_name (None)
     daemons_dir = agent._working_dir / "daemons"
-    folders = list(daemons_dir.iterdir())
+    folders = [path for path in daemons_dir.iterdir() if path.is_dir() and not path.name.startswith(".")]
     assert len(folders) == 1
     data = json.loads((folders[0] / "daemon.json").read_text())
     assert data.get("preset_name") is None

@@ -53,12 +53,14 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration, ToolPluginHost
+
 # --- Re-exports from sub-modules for backward compatibility ---
 
 # Snapshots (used by consultation, inquiry, etc.)
 from ._snapshots import SNAPSHOT_SCHEMA_VERSION, _write_molt_snapshot, _write_molt_summary  # noqa: F401
 
-# Molt (the public surface)
+# Molt (the public surface and kernel-facing forced-molt hook)
 from ._molt import _context_molt, context_forget  # noqa: F401
 from .._manual import load_installed_manual  # noqa: F401
 from ..tool_family import (
@@ -67,15 +69,11 @@ from ..tool_family import (
     DiagnosticDescriptor,
     ToolFamily,
 )
-from ..tool_family.manual import build_manual_child
+from ..tool_family.manual import MANUAL_INPUT_SCHEMA, build_manual_child
 
-# The summarize/rebuild engine. It stays in ``system/summarize.py`` — moving
-# the ~700-line engine and its marker constants is not required to move public
-# ownership, and ``kernel``/adapters already import ``SUMMARIZE_MARKER`` and
-# ``mark_pending_summaries_done`` from there for the forced-rebuild path. This
-# family owns the public actions; that module remains the private engine.
+# The summarize/rebuild engine remains private implementation. The official
+# plugin binds only the narrow context-runtime port that invokes it.
 from ..system.summarize import _summarize as _summarize_engine
-
 
 # ---------------------------------------------------------------------------
 # Canonical child input schemas — one strict, closed object per action.
@@ -221,24 +219,17 @@ _REBUILD_INPUT_SCHEMA: dict[str, Any] = {
 
 
 def _summarize_action(agent, args: dict) -> dict:
-    """``context(action='summarize')`` — record only, never rebuild.
-
-    Delegates to the shared private engine with the rebuild discriminator
-    pinned off. The engine's item validation, per-item results, pending
-    markers, raw-log recovery hints, partial/error behavior, and diagnostics
-    are used verbatim; this wrapper only fixes which mode is requested, so the
-    public action cannot silently rebuild.
-    """
+    """Record Context summaries through the unchanged private engine."""
     return _summarize_engine(agent, {**args, "rebuild": False})
 
 
 def _rebuild_action(agent, args: dict) -> dict:
-    """Perform the one active full context reconstruction operation.
+    """Perform the contractually ordered active full reconstruction.
 
-    Ordering is contractual: first re-read/recompose every canonical prompt
-    source through Agent's shared refresh/molt path, then let the summary engine
-    record/apply pending or newly supplied summaries, then request provider
-    history replay. A bare input remains meaningful with zero pending summaries.
+    This remains the one place that translates a reconstruction failure into the
+    established Context result vocabulary. The declared plugin never receives the
+    Agent: the production context-runtime adapter calls this function through its
+    narrow ``rebuild(args)`` operation.
     """
     reconstruct = getattr(agent, "_reconstruct_context", None)
     if not callable(reconstruct):
@@ -270,104 +261,85 @@ def _rebuild_action(agent, args: dict) -> dict:
     return result
 
 
-# The one canonical child registry: name, canonical input schema, and the
-# underlying ``(agent, args)`` handler. Declaring names, order, schemas, and
-# handlers in a single place is what makes schema-vs-dispatch drift
-# structurally impossible — there is no second list to forget to update, so a
-# child can never be schema-advertised but dispatch-rejected.
-#
-# Order here is the model-facing ``action`` enum order and the ``input.oneOf``
-# branch order: the lifecycle operation first, then the two context-hygiene
-# operations in the order they are used (record, then apply).
-#
-# ``manual`` is absent: ``build_manual_child`` owns that child's schema and
-# handler, and :func:`_build_children` appends it last.
+# The action/schema inventory is the declaration's source data. Runtime
+# operations are deliberately *not* stored beside it: the binder receives the
+# host's ContextRuntimePort and maps these action names to that port's three
+# narrow operations, so the family cannot reach a live Agent body directly.
 _CHILD_SPECS: tuple[tuple[str, dict[str, Any], Any], ...] = (
     ("molt", _MOLT_INPUT_SCHEMA, _context_molt),
     ("summarize", _SUMMARIZE_INPUT_SCHEMA, _summarize_action),
     ("rebuild", _REBUILD_INPUT_SCHEMA, _rebuild_action),
 )
 
-#: Public action order, derived from the one registry (``manual`` last).
-ACTION_ORDER: tuple[str, ...] = tuple(name for name, _s, _h in _CHILD_SPECS) + ("manual",)
-
-#: The installed intrinsic-skill directory ``manual`` reads. This is the
-#: ``load_installed_manual`` skill name, not the family name.
-_MANUAL_SKILL_NAME = "context-manual"
-
-#: Envelope metadata the family threads to a handler out-of-band rather than
-#: as action ``input``. ``_tc_id`` is the wire tool_use_id
-#: ``base_agent._dispatch_tool`` injects into every intrinsic's args; ``molt``
-#: is the one operation that genuinely *consumes* it (it locates the molt's own
-#: ToolCallBlock in the live interface to replay it), so — unlike ``soul``/
-#: ``notification``/``system``, which merely drop it — this family strips it
-#: from the closed root and hands it to that one handler directly. Root
-#: ``reasoning``/``_reasoning`` is threaded the same way for the post-molt
-#: reminder, exactly as ``avatar`` threads its spawn mission brief.
+# The one Context-only transport boundary. ``_tc_id`` remains metadata injected
+# by BaseAgent, never a public root or action-input field; only the molt port
+# receives it because replay requires the precise live ToolCallBlock.
 _MOLT_ENVELOPE_KEYS = ("_tc_id", "_reasoning", "reasoning", "_initiator")
 
 
 def _strip_nulls(action_input: Mapping[str, Any]) -> dict[str, Any]:
-    """Drop explicit nulls so "absent" and "null" mean the same downstream.
-
-    Strict provider schemas express an optional field as a REQUIRED nullable
-    property, so the model sends ``{"keep_tool_calls": null, "keep_last": null}``
-    for a plain molt. ``rebuild.items`` is the one field this package leaves
-    genuinely optional (a bare ``{}`` is its ordinary call), but a provider that
-    materializes every declared property may still send ``{"items": null}``. The
-    handlers key off ``args.get(...)`` / ``"x" not in args``, so stripping nulls
-    here makes absent and null identical downstream — including ``rebuild``'s
-    no-new-items path — without touching the handlers themselves.
-    """
+    """Keep the established absent/null equivalence for Context operations."""
     return {key: value for key, value in action_input.items() if value is not None}
 
 
-def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
-    """Build the four children from the one canonical registry.
+def _build_family(
+    host: ToolPluginHost | None,
+    envelope: Mapping[str, Any] | None = None,
+) -> ToolFamily:
+    """Compose Context from its declaration and a least-privilege host.
 
-    ``agent`` may be ``None`` for the module-level schema-only family, whose
-    children are never dispatched — only their schemas are read.
-
-    ``envelope`` carries the out-of-band metadata keys in
-    :data:`_MOLT_ENVELOPE_KEYS`. ``ToolFamily`` correctly passes no envelope
-    field to any child, so the one handler that consumes transport metadata
-    (``molt``, which needs ``_tc_id`` to locate and replay its own
-    ToolCallBlock) receives it here, merged beneath the validated ``input``
-    rather than smuggled through it.
+    ``None`` builds only the import-time schema family. A real host contributes
+    two earned capabilities: a read-only workdir for the installed manual and a
+    ContextRuntimePort with exactly ``molt``, ``summarize``, and ``rebuild``.
+    No child closes over, receives, or reaches for the Agent.
     """
+    if host is None:
+        def _unused(_input: Mapping[str, Any]) -> dict:
+            raise AssertionError("the module-level schema-only Context family never dispatches")
+
+        children = [
+            ChildTool(
+                name,
+                schema,
+                _unused,
+                title=f"{name} input",
+                diagnostics=_CHILD_DIAGNOSTICS.get(name),
+            )
+            for name, schema, _handler in _CHILD_SPECS
+        ]
+        children.append(ChildTool("manual", MANUAL_INPUT_SCHEMA, _unused, title="manual input"))
+        return ToolFamily(DECLARATION.name, children)
+
+    runtime = host.context_runtime
     extra = dict(envelope or {})
+    operations = {
+        "molt": runtime.molt,
+        "summarize": runtime.summarize,
+        "rebuild": runtime.rebuild,
+    }
 
-    def _bind(handler, name: str):
-        def _dispatch(action_input: Mapping[str, Any]) -> dict:
-            args = _strip_nulls(action_input)
-            if name == "molt":
-                # Envelope metadata never overwrites validated action input.
-                for key, value in extra.items():
-                    args.setdefault(key, value)
-            return handler(agent, args)
+    def _dispatch(name: str, action_input: Mapping[str, Any]) -> dict:
+        args = _strip_nulls(action_input)
+        if name == "molt":
+            # Metadata cannot overwrite the strict, validated input object.
+            for key, value in extra.items():
+                args.setdefault(key, value)
+        return operations[name](args)
 
-        return _dispatch
-
-    return [
+    children = [
         ChildTool(
             name,
             schema,
-            _bind(handler, name),
+            lambda action_input, _name=name: _dispatch(_name, action_input),
             title=f"{name} input",
             diagnostics=_CHILD_DIAGNOSTICS.get(name),
         )
-        for name, schema, handler in _CHILD_SPECS
-    ] + [build_manual_child(agent, _MANUAL_SKILL_NAME)]
-
-
-# Composes the model-facing schema. Building it at import time is also the
-# registry's duplicate/reserved-name collision check: a collision raises
-# ``ToolFamilyError`` here rather than shipping silently. It never dispatches —
-# ``context`` is an intrinsic *module*, not a per-Agent manager object, so
-# there is no instance to hang a family off; ``handle()`` binds one to the
-# passed agent per call from this same registry.
-_FAMILY = ToolFamily("context", _build_children(None))
-
+        for name, schema, _handler in _CHILD_SPECS
+    ]
+    # The manual reads the installed copy from the workdir port. Its destination
+    # is declaration-owned, so package/manual/ and runtime mount cannot drift.
+    children.append(build_manual_child(host.workdir, DECLARATION.manual))
+    return ToolFamily(DECLARATION.name, children)
 
 # ---------------------------------------------------------------------------
 # Schema / description
@@ -414,21 +386,12 @@ def get_schema(lang: str = "en") -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Dispatch
+# Declared host-plugin binding and dispatch
 # ---------------------------------------------------------------------------
 
 
 def _adapt_manual_result(mcp_result: dict) -> dict:
-    """Flatten the reserved ``manual`` child's canonical result to this family's shape.
-
-    The reserved child is registered unwrapped, so ``ToolFamily.handle()``
-    returns its canonical ``content``/``structuredContent`` result verbatim.
-    The public manual result predates that generic contract and must stay the
-    flat ``load_installed_manual`` shape (``status``, ``manual``,
-    ``manual_path``, plus ``error`` when degraded), so this Host-owned adapter
-    runs strictly *after* dispatch — never inside the child, and never as a
-    second envelope around it.
-    """
+    """Keep Context's historical flat manual result after generic dispatch."""
     flat: dict[str, Any] = {
         "status": mcp_result.get("status", "ok"),
         "manual": mcp_result["content"][0]["text"],
@@ -439,43 +402,150 @@ def _adapt_manual_result(mcp_result: dict) -> dict:
     return flat
 
 
-def handle(agent, args: dict) -> dict:
-    """Handle the ``context`` family root — validate the envelope, dispatch one action.
+def _bind(host: ToolPluginHost) -> BoundToolPlugin:
+    """Bind Context to its granted ports; composition itself has no side effect."""
+    def handle_context(args: dict) -> dict:
+        raw = dict(args or {})
+        envelope = {key: raw.pop(key) for key in _MOLT_ENVELOPE_KEYS if key in raw}
+        # The generic family accepts the public root reasoning spelling. The molt
+        # operation additionally receives its private metadata copy through the
+        # ContextRuntimePort, never through child input.
+        for key in ("reasoning", "_reasoning"):
+            if key in envelope:
+                raw[key] = envelope[key]
 
-    Envelope validation and cross-action rejection belong to the generic
-    dispatcher (``tool_family/CONTRACT.md``). This function owns only what is
-    context-specific: lifting the intrinsic transport/audit metadata out of the
-    closed root, and the two post-dispatch presentation adaptations below.
+        action = raw.get("action")
+        result = _build_family(host, envelope).handle(raw)
+        if action == "manual" and "content" in result:
+            return _adapt_manual_result(result)
+        if result.get("error_code") == "ACTION_REQUIRED":
+            return {
+                "error": (
+                    f"Unknown {DECLARATION.name} action: "
+                    f"{action if action is not None else ''}. "
+                    f"Must be one of: {', '.join(DECLARATION.public_actions)}."
+                )
+            }
+        return result
 
-    ``_tc_id`` is transport metadata ``base_agent._dispatch_tool`` injects into
-    EVERY intrinsic's args (capabilities like ``web`` never see it). This is
-    the one family that genuinely *consumes* it — ``molt`` locates the molt's
-    own ToolCallBlock by that wire id to replay it into the fresh session — so
-    it is stripped here, at this family's own Host boundary, and threaded to
-    that single handler out-of-band. The shared ``_ROOT_FIELDS`` set is not
-    widened for it, and no other action can observe it.
+    return BoundToolPlugin(
+        name=DECLARATION.name,
+        schema=get_schema(),
+        handler=handle_context,
+        description=get_description(),
+        glossary_package=__package__,
+    )
+
+
+#: Static official declaration. The three operational schemas, root identity,
+#: and installed manual destination below are then read back by the composed
+#: family; ``manual`` remains reserved and is appended exactly once by this
+#: declaration rather than being independently declared by Context.
+DECLARATION = ToolPluginDeclaration(
+    name="context",
+    actions=tuple(name for name, _schema, _handler in _CHILD_SPECS),
+    input_schemas={name: schema for name, schema, _handler in _CHILD_SPECS},
+    manual_input_schema=MANUAL_INPUT_SCHEMA,
+    manual="context-manual",
+    description=get_description(),
+    binder=_bind,
+    requires=("workdir", "context_runtime"),
+    glossary_package=__package__,
+)
+
+#: Import-time schema-only composition catches a bad child registry before any
+#: Agent exists. The kernel separately verifies this public action inventory at
+#: every official bind.
+_FAMILY = _build_family(None)
+
+#: Public order comes only from the declaration (operational actions + manual).
+ACTION_ORDER: tuple[str, ...] = DECLARATION.public_actions
+_MANUAL_SKILL_NAME = DECLARATION.manual
+
+
+def _runtime_port(agent):
+    """Compose the production ContextRuntimePort from narrow bound callbacks.
+
+    This is composition wiring, not a plugin API: each callback preserves the
+    existing live-Agent engine intact while the bound family receives only the
+    adapter's three operation methods.
     """
-    raw = dict(args or {})
-    envelope = {key: raw.pop(key) for key in _MOLT_ENVELOPE_KEYS if key in raw}
-    # ``reasoning``/``_reasoning`` remain admitted root fields for the generic
-    # dispatcher, so put back the public spelling it knows about; only the
-    # molt handler sees the copy in ``envelope``.
-    for key in ("reasoning", "_reasoning"):
-        if key in envelope:
-            raw[key] = envelope[key]
+    from lingtai.adapters.tool_plugin_host import AgentContextRuntimeAdapter
 
-    action = raw.get("action")
-    result = ToolFamily("context", _build_children(agent, envelope)).handle(raw)
+    def invoke(action: str, args: dict) -> dict:
+        # Look up at call time: Context's narrow focused tests can replace one
+        # implementation operation without bypassing the declared host route.
+        for name, _schema, operation in _CHILD_SPECS:
+            if name == action:
+                return operation(agent, args)
+        raise AssertionError(f"unknown Context runtime action: {action}")
 
-    if action == "manual" and "content" in result:
-        return _adapt_manual_result(result)
-    if result.get("error_code") == "ACTION_REQUIRED":
-        # Preserve a context-shaped unknown-action error rather than the
-        # generic envelope failure.
-        return {
-            "error": (
-                f"Unknown context action: {action if action is not None else ''}. "
-                f"Must be one of: {', '.join(ACTION_ORDER)}."
-            )
-        }
-    return result
+    return AgentContextRuntimeAdapter(
+        molt=lambda args: invoke("molt", args),
+        summarize=lambda args: invoke("summarize", args),
+        rebuild=lambda args: invoke("rebuild", args),
+    )
+
+
+def _build_children(agent, envelope: Mapping[str, Any] | None = None) -> list[ChildTool]:
+    """Compatibility child-list view for direct in-process family tests.
+
+    Normal Agent dispatch never uses this view; it is the declared family bound
+    to the same production adapters, returned as children for legacy callers
+    that construct their own ``ToolFamily`` around Context.
+    """
+    from lingtai.adapters.tool_plugin_host import AgentWorkdirAdapter
+
+    host = ToolPluginHost.grant(
+        DECLARATION,
+        {
+            "workdir": AgentWorkdirAdapter(
+                lambda: agent.working_dir if hasattr(agent, "working_dir") else agent._working_dir
+            ),
+            "context_runtime": _runtime_port(agent),
+        },
+    )
+    return list(_build_family(host, envelope)._children.values())
+
+
+def setup(agent) -> None:
+    """Register the mandatory Context family through the official host route."""
+    from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
+    register_agent_tool_plugins(
+        agent,
+        [DECLARATION],
+        extra_ports={"context_runtime": _runtime_port(agent)},
+    )
+
+
+# Context is mandatory rather than manifest-gated. BaseAgent invokes ``boot``
+# after it has a SessionManager and again through its generic official-intrinsic
+# refresh hook; ``setup`` remains the sole registrar wiring.
+boot = setup
+
+
+def handle(agent, args: dict) -> dict:
+    """Compatibility dispatch for direct in-process callers.
+
+    A live Agent has already mounted the official handler, so this merely routes
+    to it. Narrow test doubles that exercise the historic direct function get the
+    same declared family through production adapters; neither path hands the
+    bound plugin the Agent itself.
+    """
+    mounted = getattr(agent, "_tool_handlers", {}).get(DECLARATION.name)
+    if mounted is not None:
+        return mounted(args)
+
+    from lingtai.adapters.tool_plugin_host import AgentWorkdirAdapter
+
+    host = ToolPluginHost.grant(
+        DECLARATION,
+        {
+            "workdir": AgentWorkdirAdapter(
+                lambda: agent.working_dir if hasattr(agent, "working_dir") else agent._working_dir
+            ),
+            "context_runtime": _runtime_port(agent),
+        },
+    )
+    return _bind(host).handler(args)

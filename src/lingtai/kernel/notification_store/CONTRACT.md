@@ -1,10 +1,11 @@
 ---
 name: notification-store
-contract_version: 3
+contract_version: 4
 root_contract: CONTRACT.md
 related_files:
   - src/lingtai/kernel/notification_store/ANATOMY.md
   - src/lingtai/kernel/base_agent/CONTRACT.md
+  - src/lingtai/kernel/refresh_watcher/CONTRACT.md
   - src/lingtai/kernel/notification_store/__init__.py
   - src/lingtai/kernel/notification_store/_mutation_lock.py
   - src/lingtai/adapters/notification_store_lock.py
@@ -18,6 +19,7 @@ related_files:
   - src/lingtai/mcp_servers/telegram/manager.py
   - src/lingtai/mcp_servers/telegram/server.py
   - src/lingtai/tools/daemon/supervisor_runtime.py
+  - src/lingtai/kernel/refresh_watcher/watcher_program.py
   - tests/_notification_store_helpers.py
   - tests/test_notification_store.py
 maintenance: |
@@ -55,14 +57,25 @@ channel is the sole exception: producers persist independent mini-channels at
 one aggregate `daemon` channel. The sibling `.notification/daemon.json` is a
 report containing only mini-file-derived run/state statistics; it is not a
 channel event source. Non-force dismiss conflicts remain stale refusals, and
-event/ref daemon dismissal deletes the matching mini-file only. A daemon channel
+event/ref daemon dismissal removes only matching event keys from a mini-file,
+deleting that mini-file only when no sibling events remain. A daemon channel
 dismissal must compare the delivered aggregate version before unlinking any
 mini-file, so a mini-file arriving after delivery is preserved. Existing root
 event facts may be retained only under report migration metadata and MUST NOT
 be delivered. Daemon append routing uses the existing typed channel mutator
-payload and does not add a Store operation. They MUST NOT add a nullable/no-op
-Store, Path-or-Port overload, locator, hidden Core construction, ninth operation
-family, or caller-held transaction lock.
+payload and does not add a Store operation. The optional `owner` argument on
+`compare_update_channel` is daemon-only: it routes one unconditional append to
+one mini-file and is not a general resource key. The
+`.notification/daemon/.tombstone` control record linearizes aggregate
+clear/dismiss/CAS and records process-crash-safe append pending state; committed
+clear/dismiss visibility cuts are fsync-durable. It is Store state, never an
+agent-visible channel. A malformed or unreadable control record MUST remain fail-closed on daemon
+writes/mutations. Snapshot and fingerprint instead expose one bounded,
+content-free high-priority daemon control-error payload directing the agent to
+`lingtai-doctor`, while all unrelated channels remain deliverable.
+They MUST NOT add a nullable/no-op Store, Path-or-Port overload, locator, hidden
+Core construction, ninth operation family, generic event database, or
+caller-held transaction lock.
 
 ## Port
 
@@ -89,39 +102,56 @@ fingerprint tuple means the exact delivered version. Channel mutators return
 
 ## Adapters
 
-`PosixNotificationStoreAdapter` is the production filesystem adapter. Each
-instance owns an in-process mutex and composes the selected native
-`NotificationMutationLockPort`; together they serialize channel, acknowledgement,
-and hook-manifest mutations across threads and independently composed processes.
-The selector provides `flock` on POSIX and byte-range locking on Windows. Agent,
-CLI, daemon supervisor, and Telegram server composition roots construct the Store
+`PosixNotificationStoreAdapter` is the production filesystem adapter. The
+Store-private lock vocabulary maps canonical channel, acknowledgement, hook,
+delay, daemon-run, and daemon-control resources to bounded sanitized-plus-hash
+filenames under `.notification/.locks/`. A process-wide RLock keyed by that
+canonical path closes `flock`'s same-process/open-description gap; native locks
+then serialize only that resource across independently composed processes.
+The POSIX selector takes an exclusive scoped `flock` plus a **shared** legacy
+`.store.lock` bridge for one compatibility release. Windows uses scoped
+byte-range locks but cannot express that shared bridge: old global writers and
+new scoped writers require a documented quiesced cutover, not false parity.
+Lock files are never deleted as part of normal Store operation. Agent, CLI,
+daemon supervisor, and Telegram server composition roots construct the Store
 adapter. External LICC/direct `mcp.*` producers keep the same filesystem path and
 envelope. The POSIX adapter stores daemon events in per-id mini-files under
-`.notification/daemon/`; its aggregate snapshot and synthetic aggregate
-fingerprint cover only those mini-files, including additions, removals, and
-appends. It writes the sibling `.notification/daemon.json` as a derived report
-of run/state statistics; the report is excluded from snapshot, fingerprint, and
-dismissal, and old root facts are migration metadata only.
+`.notification/daemon/`; ordinary owner append does not scan the aggregate or
+rebuild a report. Snapshot/fingerprint derive an aggregate only on read; the
+sibling `.notification/daemon.json` is a non-authoritative compatibility report,
+excluded from snapshot, fingerprint, dismissal, and the heartbeat hot path.
 
 ## Contract rules
 
-- Snapshot and fingerprint skip missing, malformed, or unreadable entries and
-  apply the live Core allow-predicate; fingerprints are sorted SHA-256 entries of
-  filename, byte size, and bytes, not mtime. For daemon, the single aggregate
-  fingerprint is derived from every nested mini-file's name and bytes, so a
-  mini-file addition, removal, or same-file append changes the aggregate version;
-  `.notification/daemon.json` never changes it. New per-run appends carry their
-  daemon id in the pure payload marker consumed by the adapter; the marker is
-  not included in the aggregate projection.
+- Snapshot and fingerprint are read-only: they take no native mutation lock,
+  write no daemon report, and skip missing, malformed, or unreadable ordinary
+  entries while applying the live Core allow-predicate. Fingerprints are sorted
+  SHA-256 entries of filename, byte size, and bytes, not mtime. For daemon, the
+  single aggregate fingerprint is derived from every logical nested mini-file's
+  name and bytes, so a mini-file addition, removal, or same-file append changes
+  the aggregate version; `.notification/daemon.json` never changes it. An
+  unreadable/corrupt daemon control/tombstone is exceptional Store authority:
+  daemon mutation paths raise `DaemonControlError` with no payload-body echo,
+  while snapshot/fingerprint substitute the same bounded content-free,
+  high-priority daemon control-error projection and continue unrelated channels.
+  It is never treated as an empty aggregate. New per-run appends carry their daemon id in
+  the pure payload marker consumed by the adapter; the marker is not included in
+  the aggregate projection.
 - Publish is atomic sibling-temp replacement. Publish and clear hold the Store's
   in-process and cross-process mutation locks. Clear returns `False` only for
   absence; other clear and write errors propagate unless a Core best-effort
   wrapper explicitly preserves legacy suppression.
-- Compare-update reads payload and version under the same whole-transaction
-  cross-process Store serialization. Only
-  `FileNotFoundError` is absence; every other read error propagates. Readable
-  malformed/non-dict JSON retains its version and presents `{}` to Core, so it
-  cannot satisfy expected absence.
+- Compare-update reads payload and version under the same complete-transaction
+  **resource** serialization. Ordinary channel/ack/hook/delay resources do not
+  block unrelated resources. The daemon owner hot path holds only its run scope
+  plus daemon-control scope; it appends one mini-file with a durable pending
+  receipt, then commits batch state without scanning the aggregate or rebuilding
+  the report. Aggregate clear/dismiss/CAS is linearized under daemon-control;
+  it commits a durable tombstone visibility cut before best-effort physical
+  compaction, so a crash after the cut cannot resurrect cleared events. Only
+  `FileNotFoundError` is absence; every other ordinary read error propagates.
+  Readable malformed/non-dict JSON retains its version and presents `{}` to
+  Core, so it cannot satisfy expected absence.
 - A compare conflict does not call the mutator and carries no policy value. A
   matched guard runs the mutator once. `changed=False` performs no write;
   `payload=None` clears; a dict publishes atomically. Operational result fields
@@ -161,14 +191,21 @@ dismissal, and old root facts are migration metadata only.
 - Core acknowledgement union and purge MUST use family 7, never split family 6
   read from a later write. System, nudge, Telegram, and daemon-terminal mutations
   decide from the current payload inside compare-update; daemon event/ref removal
-  removes the matching mini-file rather than rewriting another daemon's file.
+  tombstones only matching event keys, preserves same-run siblings, and never
+  rewrites another daemon's file.
   Force uses
   `UNCONDITIONAL`, while non-force dismiss uses the delivered fingerprint entry
   including explicit absence.
-- `.notification/.store.lock` is coordination metadata, not notification state or
-  authority. POSIX and Windows adapters MUST use native OS locks whose ownership,
-  not file existence, defines exclusion and whose release follows process death.
-  Snapshot and fingerprint continue to expose only allowed JSON channel files.
+- `.notification/.store.lock` is compatibility coordination metadata, not
+  notification state or authority. POSIX scoped writers acquire it shared for one
+  release while legacy writers retain their old exclusive whole-store lock; this
+  prevents mixed-version lost updates without reintroducing new-to-new global
+  serialization. Windows cannot provide shared byte-range parity and therefore
+  requires a quiesced legacy-writer cutover. Scoped `.locks/*.lock` files and
+  legacy `.store.lock` files are never deleted by live Store code. Native lock
+  ownership, not file existence, defines exclusion and release follows process
+  death. Snapshot and fingerprint continue to expose only allowed JSON channel
+  files.
 
 ## Contract tests
 
@@ -176,13 +213,36 @@ Shared conformance covers the eight-family surface, expected absence versus
 unconditional updates, malformed/unreadable/error behavior, typed policy values,
 atomic same-process and spawned-process channel updates, atomic acknowledgement
 union/purge, atomic hook-manifest append/clear, required injection, outer
-composition, stale dismiss refusal,
-unrelated-event survival,
-daemon mini-channel isolation/append, aggregate fingerprint changes, targeted
-mini-file deletion, and late-file stale-CAS preservation, nudge updates, and
-Telegram current-mirror clearing. Production adapter tests
-must use only an explicitly authorized persistent scratch path when deletion is
-separately authorized.
+composition, stale dismiss refusal, unrelated-event survival, daemon mini-channel
+isolation/append, aggregate fingerprint changes, targeted mini-file deletion,
+late-file stale-CAS preservation, nudge updates, and Telegram current-mirror
+clearing. Production evidence additionally uses real native cross-process lock
+paths: an unrelated `email` reader/writer proceeds while a `system` or daemon
+scope is held; forty same-run publishers preserve idempotency/no loss;
+clear/dismiss overlap, crash-after-tombstone-before-compaction, corrupt
+control-record failure, no-delay zero-native-lock heartbeat, snapshot no-write,
+and POSIX legacy bridge behavior are covered. Windows certification either proves
+its scoped native locks or explicitly asserts the quiesced legacy-cutover gate.
+Production adapter tests must use only an explicitly authorized persistent
+scratch path when deletion is separately authorized.
+
+## Migration and rollback
+
+This release keeps the old POSIX `.store.lock` file as a one-release shared-lock
+bridge: an old exclusive writer and a new scoped writer exclude each other, while
+two new unrelated resources do not serialize. The scoped `.locks/` files are
+coordination metadata and remain harmless across a normal code rollback; no live
+code deletes either kind of lock file. Windows upgrades must quiesce all legacy
+writers before selecting the scoped adapter.
+
+Daemon aggregate authority adds `.notification/daemon/.tombstone`. New readers
+validate it: a corrupt control record becomes a bounded daemon-only error
+projection pointing to `lingtai-doctor`, while daemon mutations still refuse.
+A rollback after aggregate clear/dismiss
+has committed a tombstone visibility cut is **not** an automatic compatibility
+operation: quiesce writers, inspect/repair or explicitly migrate that control
+state, then select the legacy reader. A legacy reader cannot be allowed to
+reinterpret a tombstoned-but-not-yet-compacted mini-file as a resurrected event.
 
 ## Maintenance
 

@@ -11,6 +11,7 @@ related_files:
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/name.py
   - src/lingtai/tools/system/summarize.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/system/ANATOMY.md
   - src/lingtai/tools/system/BEHAVIORS.md
   - src/lingtai/tools/CONTRACT.md
@@ -19,6 +20,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files, including the
@@ -92,15 +94,19 @@ manual path.
 ### Single sleep use case
 
 `karma.py::sleep_use_case` is the sole System semantic owner for self-sleep:
-it reads attention fingerprints, applies the pending-notification refusal and
-explicit `force` escape hatch, emits the refusal/force/sleep audit events,
-returns the localized receipt, and performs the ASLEEP transition through the
-narrow `SystemSleepPort` (`karma.py:24-86`). `_DirectSleepPort` is only the
-legacy direct-entry translation (`karma.py:89-126`). On this pre-serialized
-head, the mounted host still exposes its historical callback so the packet
-remains runnable; serialized integration MUST add the same evidence/effects
-operations to the shared `SystemRuntimePort`, invoke `sleep_use_case`, and
-remove the adapter's duplicated policy. Mounted and direct refusal/force parity
+it validates the optional one-shot `delay`, reads attention fingerprints,
+applies the pending-notification refusal and explicit `force` escape hatch,
+emits the refusal/force/sleep/arm-failure audit events, returns the localized
+receipt, orders alarm arming before the transition under the port's
+heartbeat-shared lock, and performs the ASLEEP transition through the narrow
+`SystemSleepPort` (`karma.py:24-132`). `_DirectSleepPort` is only the
+legacy direct-entry translation (`karma.py:135-182`). The mounted route runs
+the same use case over the granted `SystemRuntimePort`, whose
+`sleep_attention_fingerprints` / `transition_to_asleep` / `sleep_alarm_lock` /
+`arm_sleep_alarm` members are translation-only: neither the kernel port nor
+`AgentSystemRuntimeAdapter` owns any fingerprint comparison, refusal/force
+branch, receipt, or duplicate sleep policy, and no `runtime.sleep(reason,
+force)` callback exists. Mounted and direct refusal/force parity
 is guarded by [B008](BEHAVIORS.md#behavior-b008) and pinned by
 `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity`.
 
@@ -152,7 +158,7 @@ siblings.
 | Action | Required inputs | Optional inputs | Success output | Error shapes |
 |---|---|---|---|---|
 | `refresh` | — | `reason`, `preset`, `revert_preset` | `{status: "ok", message}` | `{status: "error", message}` on preset/revert conflict, unauthorized preset, oversize context, or activation failure |
-| `sleep` | — | `reason`, `force` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`) | — |
+| `sleep` | — | `reason`, `force`, `delay` | `{status: "ok", message}` (self-sleep; refuses with an ok+message when notifications pending and not `force`; a finite positive `delay` arms the last-resort alarm) | `{status: "error", message}` for a non-number, bool, non-finite, zero, or negative `delay` |
 | `lull` | `address` | `reason` | `{status: "asleep", address}` | `{error: True, message}` (no karma, no/invalid address, self-target, target not running) |
 | `suspend` | `address` | `reason` | `{status: "suspended", address}` | `{error: True, message}` (as above) |
 | `cpr` | `address` | `reason` | `{status: "resuscitated", address}` | `{error: True, message}` (target already running, CPR unsupported, or observed child exit before a fresh heartbeat) |
@@ -195,6 +201,13 @@ of the pre-migration *schema*:
   but was never advertised. A strict child `input` must declare every key its
   handler accepts, so it is now declared. This surfaces existing behavior; it
   grants no new capability.
+- `sleep.delay` is a required-nullable optional property in the strict branch:
+  `null` is stripped before the handler, exactly like the other optional fields.
+  A supplied value must be a finite positive JSON number; bool, zero, negative,
+  NaN, and infinity are rejected by the handler. There is no maximum. It is a
+  last-resort one-shot alarm only for async work lacking reliable producer
+  completion notification; ordinary waiting remains IDLE. An early wake does
+  not cancel it, a later delayed sleep replaces it, and plain sleep leaves it.
 - `notification_threshold_chars` is declared by no action here (nor by any
   `context` action) — the threshold is config-only
   (`manifest.summarize_notification_threshold` + refresh). The private engine's
@@ -241,6 +254,19 @@ target `working_dir`:
 <target>/.clear      — written by clear; its contents become the recovery `source`
 ```
 
+A self `system.sleep(delay=...)` owns exactly one additional root artifact:
+`<workdir>/.alarm`. Its entire UTF-8 content is one parseable absolute
+wall-clock deadline. The handler atomically overwrites it only after the
+existing pending-notification/force gate passes and before ASLEEP; the
+heartbeat holds the same capability-local lock, publishes one ordinary
+`system.sleep_alarm` system event at/after the deadline with a stable ref hash
+derived from that stored text, and removes the file only after publish succeeds.
+A failed publish or consume retains the file for retry; Store ref/idempotency
+deduplication suppresses duplicate retries. Malformed/unreadable state stays in
+place and emits at most one `sleep_alarm_malformed` event per unchanged problem
+per process. No queue, cancellation action, scheduler, timer service, or
+configuration is part of this capability.
+
 `nirvana` writes `.suspend`, waits up to ~10s for shutdown, then
 `shutil.rmtree`s the whole target directory. `refresh`/preset swaps persist
 `manifest.preset.default` into the agent's own `<workdir>/init.json`.
@@ -269,6 +295,7 @@ drive it are `context`'s.
 |---|---|---|
 | `system` is a wired intrinsic | `src/lingtai/tools/system/__init__.py` | `tests/test_system.py::test_system_in_all_intrinsics`, `tests/test_system.py::test_system_wired_in_agent` |
 | `sleep` applies one pending-attention/refusal/force use case and transitions the agent to ASLEEP (self, no karma) | `src/lingtai/tools/system/karma.py:sleep_use_case` | `tests/test_system.py::test_system_self_sleep`, `tests/test_system_declared_plugin.py::test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity` |
+| `sleep(delay)` atomically persists one deadline, and heartbeat publishes/consumes its idempotent ordinary system event | `src/lingtai/tools/system/karma.py:sleep_use_case`, `src/lingtai/kernel/base_agent/lifecycle.py:_fire_sleep_alarm_if_due` | `tests/test_system_sleep_alarm.py` |
 | Unknown/legacy actions return the unknown-action error | `src/lingtai/tools/system/__init__.py:handle` | `tests/test_system.py::test_system_rejects_unknown_and_retired_actions` |
 | `refresh` with an unauthorized preset is refused | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_with_unauthorized_preset_returns_error` |
 | `refresh` cannot combine `preset` and `revert_preset` | `src/lingtai/tools/system/preset.py:_refresh` | `tests/test_system.py::test_refresh_revert_preset_with_preset_arg_errors` |

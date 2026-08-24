@@ -83,12 +83,14 @@ def test_public_model_facing_name_is_shell_with_the_family_schema(tmp_path):
     retained implementation package), and the registered schema is now the
     action-separated family envelope, not the legacy flat shape."""
     agent = MagicMock()
-    agent._working_dir = Path(tmp_path)
+    agent.official_tool_plugins = {}
+    agent.working_dir = Path(tmp_path)
 
     setup(agent, yolo=True)
 
-    assert agent.add_tool.call_args.args[0] == "shell"
-    schema = agent.add_tool.call_args.kwargs["schema"]
+    transaction = agent._mount_official_tool.call_args.args[0]
+    assert transaction.plugin.name == "shell"
+    schema = transaction.plugin.schema
     assert schema == get_schema()
     # The legacy flat run-only fields are gone from the public root.
     assert set(schema["properties"]) == {"action", "input", "reasoning", "summarize"}
@@ -100,10 +102,11 @@ def test_registered_description_documents_the_action_separated_call_shape(tmp_pa
     """The model-facing description must teach the shape actually registered —
     ``input.async`` / ``input={'job_id': ...}``, not the legacy flat fields."""
     agent = MagicMock()
-    agent._working_dir = Path(tmp_path)
+    agent.official_tool_plugins = {}
+    agent.working_dir = Path(tmp_path)
 
     setup(agent, yolo=True)
-    description = agent.add_tool.call_args.kwargs["description"]
+    description = agent._mount_official_tool.call_args.args[0].plugin.description
 
     for action in _ACTIONS:
         assert f"shell(action='{action}'" in description

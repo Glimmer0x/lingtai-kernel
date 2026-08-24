@@ -104,6 +104,60 @@ def test_system_sleep_direct_and_mounted_routes_have_refusal_force_parity(
         agent.stop(timeout=1.0)
 
 
+def test_system_is_remounted_once_on_live_refresh(tmp_path):
+    """Refresh clears and rebuilds the official surface with one System mount."""
+    workdir = tmp_path / "agent"
+    agent = Agent(
+        service=make_gemini_mock_service(),
+        agent_name="system-refresh-remount",
+        working_dir=workdir,
+        capabilities={},
+    )
+    try:
+        manifest = {
+            "agent_name": "system-refresh-remount",
+            "language": "en",
+            "llm": {
+                "provider": "gemini",
+                "model": "gemini-test",
+                "api_key": "test-key",
+                "base_url": None,
+            },
+            "capabilities": {},
+            "soul": {"delay": 60},
+            "stamina": 3600,
+            "context_limit": None,
+            "molt_pressure": 0.8,
+            "molt_prompt": "",
+            "max_turns": 100,
+            "admin": {},
+            "streaming": False,
+        }
+        (workdir / "init.json").write_text(
+            json.dumps(
+                {
+                    "manifest": manifest,
+                    "principle": "",
+                    "covenant": "",
+                    "pad": "",
+                    "lingtai": "",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        agent._setup_from_init()
+
+        assert agent.official_tool_plugins["system"] is DECLARATION
+        assert [schema.name for schema in agent._tool_schemas].count("system") == 1
+        presets = agent._tool_handlers["system"](
+            {"action": "presets", "input": {}, "reasoning": "live refresh"}
+        )
+        assert presets["status"] == "ok"
+    finally:
+        agent.stop(timeout=1.0)
+
+
 def test_system_manual_contains_declared_ltp_profile_and_no_settings_statement():
     """The canonical source manual teaches the obligations its schema advertises."""
     manual_path = (

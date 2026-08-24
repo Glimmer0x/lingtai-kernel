@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DECLARATION", "SYSTEM_DECLARED_ACTIONS", "ACTION_ORDER", "INPUT_SCHEMAS",
-    "get_description", "get_schema", "handle", "setup", "SUMMARIZE_MARKER",
+    "get_description", "get_schema", "handle", "boot", "setup", "SUMMARIZE_MARKER",
     "_summarize", "publish_notification", "clear_notification",
 ]
 
@@ -123,19 +123,13 @@ class _SystemHandlerHost:
     def _cpr_agent(self, address: str):
         return self._runtime.resuscitate(address)
 
-    def _system_sleep(self, args: Mapping[str, Any]) -> dict:
-        reason = str(args.get("reason", ""))
-        force = bool(args.get("force", False))
-        # The final host seam will expose SystemSleepPort evidence/effects on
-        # SystemRuntimePort. Keep the reviewed-head callback as a compatibility
-        # fallback so this local packet remains runnable before serialized
-        # kernel/adapter reconciliation.
-        if all(
-            callable(getattr(self._runtime, name, None))
-            for name in ("sleep_attention_fingerprints", "transition_to_asleep")
-        ) and callable(getattr(self._runtime, "log", None)):
-            return sleep_use_case(self._runtime, reason=reason, force=force)
-        return self._runtime.sleep(reason, force=force)
+    @property
+    def _system_sleep_port(self):
+        # The granted SystemRuntimePort carries exactly the SystemSleepPort
+        # evidence/effects vocabulary; ``karma._sleep`` runs the one
+        # System-owned ``sleep_use_case`` over it. No sleep policy lives on
+        # this bridge or in the host adapter.
+        return self._runtime
 
     def set_name(self, name: str) -> None:
         self._identity.set_name(name)
@@ -245,7 +239,21 @@ def handle(agent: Any, args: dict) -> dict:
     return _dispatch(_build_family(agent, agent), args)
 
 
-def setup(agent: "BaseAgent", **_ignored: Any) -> None:
-    """Register the static System declaration through the controlled host path."""
+def boot(agent: "BaseAgent") -> None:
+    """Register the static System declaration through the controlled host path.
+
+    ``BaseAgent._boot_official_intrinsics`` invokes this on construction and
+    on every refresh because the injected intrinsic registry marks ``system``
+    with ``official_plugin``.  A minimal test double without the official
+    claim surface is left untouched, mirroring the other official families.
+    """
+    if not hasattr(agent, "official_tool_plugins"):
+        return
     from lingtai.adapters.tool_plugin_host import register_agent_tool_plugins
+
     register_agent_tool_plugins(agent, [DECLARATION])
+
+
+def setup(agent: "BaseAgent", **_ignored: Any) -> None:
+    """Compatibility alias for direct callers; the official route is ``boot``."""
+    boot(agent)

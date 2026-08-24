@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Standalone docs-governance validator (not itself a hosted CI workflow —
-kernel-windows-pr.yml and shell-windows-pr.yml already run pytest on every
-pull request; this script is runnable locally/anywhere and imported by
-tests/test_docs_governance.py so pytest exercises identical logic.
+kernel-windows-pr.yml and shell-windows-pr.yml run their expensive native
+pytest tiers only on published releases; this script stays runnable locally
+and is imported by tests/test_docs_governance.py so pytest exercises identical logic.
 
 docs.yaml is mechanically authoritative. related_files.target_policy is
 owner_validated_relative_link: this checker validates syntax (non-empty,

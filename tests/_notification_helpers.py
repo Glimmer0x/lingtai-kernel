@@ -26,6 +26,11 @@ class StubAgent:
     def __post_init__(self) -> None:
         self._notification_store = notification_store_for(self._working_dir)
 
+    @property
+    def working_dir(self) -> Path:
+        """Public workdir surface required by declared host-port dispatch."""
+        return self._working_dir
+
     def _log(self, event_type: str, **fields: Any) -> None:
         self._logs.append((event_type, fields))
 

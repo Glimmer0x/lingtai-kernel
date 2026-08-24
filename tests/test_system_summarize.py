@@ -1302,7 +1302,8 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     """End-to-end: notification dismiss now succeeds as an escape hatch (issue #425),
     and system summarize also clears the reminder. Dismissal is an alternative
     to summarize, not blocked. Summarize stays on the system tool."""
-    from lingtai.tools import notification as notif_intrinsic
+    from tests._tool_plugin_helpers import dispatch_declared_tool
+    from lingtai.tools.notification import DECLARATION as NOTIFICATION_DECLARATION
     from tests._notification_store_helpers import snapshot_notifications, fingerprint_notifications
 
     iface = ChatInterface()
@@ -1312,7 +1313,7 @@ def test_summarize_then_dismiss_is_unnecessary_end_to_end(tmp_path):
     agent._notification_fp = fingerprint_notifications(agent._working_dir)
 
     # Dismiss now succeeds — large_tool_result reminders are dismissable as escape hatch.
-    dismissed = notif_intrinsic.handle(
+    dismissed = dispatch_declared_tool(NOTIFICATION_DECLARATION,
         agent,
         {
             "action": "dismiss_channel",

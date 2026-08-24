@@ -6,6 +6,12 @@ voice profiles to system prompts.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lingtai.kernel.tool_plugin import SoulRuntimePort
+
+
 # Lower bound on agent-set soul delay. Below this, the consultation cost
 # (M parallel LLM calls per fire) dominates the agent's own turns.
 SOUL_DELAY_MIN_SECONDS = 30.0
@@ -24,7 +30,7 @@ SOUL_VOICE_BUILTINS = ("inner", "observer")
 SOUL_VOICE_PROMPT_MAX = 4000
 
 
-def _handle_config(agent, args: dict) -> dict:
+def _handle_config(runtime: "SoulRuntimePort", args: dict) -> dict:
     """Handle action='config' — adjust soul flow knobs.
 
     Accepts any subset of: delay_seconds, consultation_past_count.
@@ -65,8 +71,8 @@ def _handle_config(agent, args: dict) -> dict:
                     "the main agent loop."
                 ),
             }
-        old_values["delay_seconds"] = float(agent._soul_delay)
-        agent._soul_delay = v
+        old_values["delay_seconds"] = float(runtime.soul_delay)
+        runtime.soul_delay = v
         new_values["delay_seconds"] = v
 
     if "consultation_past_count" in provided:
@@ -84,8 +90,8 @@ def _handle_config(agent, args: dict) -> dict:
                     "fan-out cost and chat-history bloat."
                 ),
             }
-        old_values["consultation_past_count"] = int(getattr(agent._config, "consultation_past_count", 2))
-        agent._config.consultation_past_count = v
+        old_values["consultation_past_count"] = int(getattr(runtime.config, "consultation_past_count", 2))
+        runtime.config.consultation_past_count = v
         new_values["consultation_past_count"] = v
 
     # Restart the wall-clock timer if delay changed (or if any change
@@ -93,17 +99,17 @@ def _handle_config(agent, args: dict) -> dict:
     # sync without surprising drift; cheap operation).
     if "delay_seconds" in new_values:
         try:
-            if not agent._shutdown.is_set():
-                agent._start_soul_timer()
+            if not runtime.shutdown.is_set():
+                runtime.restart_soul_timer()
         except Exception as e:
-            agent._log("soul_config_restart_failed", error=str(e)[:200])
+            runtime.log("soul_config_restart_failed", error=str(e)[:200])
 
-    persist_error = _persist_soul_config(agent, new_values)
+    persist_error = _persist_soul_config(runtime, new_values)
 
     log_kw: dict = {"old": old_values, "new": new_values}
     if persist_error:
         log_kw["persist_error"] = persist_error
-    agent._log("soul_config", **log_kw)
+    runtime.log("soul_config", **log_kw)
 
     result: dict = {
         "status": "ok",
@@ -127,7 +133,7 @@ def _handle_config(agent, args: dict) -> dict:
     return result
 
 
-def _handle_voice(agent, args: dict) -> dict:
+def _handle_voice(runtime: "SoulRuntimePort", args: dict) -> dict:
     """Handle action='voice' — read, switch preset, or set a custom soul
     voice prompt. The agent owns this — it chooses how its own inner
     voice sounds in soul-flow consultations.
@@ -146,13 +152,13 @@ def _handle_voice(agent, args: dict) -> dict:
     restart.
     """
     set_to = args.get("set")
-    current_voice = getattr(agent._config, "soul_voice", "inner") or "inner"
-    current_prompt = getattr(agent._config, "soul_voice_prompt", "") or ""
+    current_voice = getattr(runtime.config, "soul_voice", "inner") or "inner"
+    current_prompt = getattr(runtime.config, "soul_voice_prompt", "") or ""
 
     # ---- Read mode ----------------------------------------------------
     if set_to is None:
         try:
-            resolved = _build_soul_system_prompt(agent, kind="insights")
+            resolved = _build_soul_system_prompt(runtime, kind="insights")
         except Exception as e:
             resolved = f"<resolution failed: {e!s}>"
         return {
@@ -208,14 +214,14 @@ def _handle_voice(agent, args: dict) -> dict:
     # ---- Apply --------------------------------------------------------
     old_voice = current_voice
     old_prompt = current_prompt
-    agent._config.soul_voice = set_to
+    runtime.config.soul_voice = set_to
     # Switching away from custom clears the stored custom prompt so it
     # does not silently re-activate later. Switching INTO custom stores
     # the new prompt; switching between built-in presets clears.
-    agent._config.soul_voice_prompt = new_prompt if set_to == "custom" else ""
+    runtime.config.soul_voice_prompt = new_prompt if set_to == "custom" else ""
 
     persist_error = _persist_soul_voice(
-        agent, voice=set_to, voice_prompt=agent._config.soul_voice_prompt,
+        runtime, voice=set_to, voice_prompt=runtime.config.soul_voice_prompt,
     )
 
     log_kw: dict = {"old_voice": old_voice, "new_voice": set_to}
@@ -226,7 +232,7 @@ def _handle_voice(agent, args: dict) -> dict:
         log_kw["new_prompt_chars"] = len(new_prompt)
     if persist_error:
         log_kw["persist_error"] = persist_error
-    agent._log("soul_voice", **log_kw)
+    runtime.log("soul_voice", **log_kw)
 
     return {
         "status": "ok",
@@ -235,7 +241,7 @@ def _handle_voice(agent, args: dict) -> dict:
     }
 
 
-def _persist_soul_config(agent, new_values: dict) -> str | None:
+def _persist_soul_config(runtime: "SoulRuntimePort", new_values: dict) -> str | None:
     """Write changed soul knobs into manifest.soul.* in init.json.
 
     Maps:
@@ -249,7 +255,7 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
     import json
     from pathlib import Path
 
-    init_path: Path = agent._working_dir / "init.json"
+    init_path: Path = runtime.working_dir / "init.json"
     try:
         with init_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
@@ -276,7 +282,7 @@ def _persist_soul_config(agent, new_values: dict) -> str | None:
     return _atomic_write_init(init_path, data)
 
 
-def _persist_soul_voice(agent, *, voice: str, voice_prompt: str) -> str | None:
+def _persist_soul_voice(runtime: "SoulRuntimePort", *, voice: str, voice_prompt: str) -> str | None:
     """Write soul voice profile + (optional) custom prompt into
     manifest.soul in init.json.
 
@@ -293,7 +299,7 @@ def _persist_soul_voice(agent, *, voice: str, voice_prompt: str) -> str | None:
     import json
     from pathlib import Path
 
-    init_path: Path = agent._working_dir / "init.json"
+    init_path: Path = runtime.working_dir / "init.json"
     try:
         with init_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
@@ -343,7 +349,7 @@ def _atomic_write_init(init_path, data) -> str | None:
         return f"failed to write init.json: {e!s}"[:200]
 
 
-def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
+def _build_soul_system_prompt(runtime: "SoulRuntimePort", kind: str = "inquiry") -> str:
     """Build the soul session's system prompt.
 
     kind:
@@ -364,14 +370,14 @@ def _build_soul_system_prompt(agent, kind: str = "inquiry") -> str:
     """
     from lingtai.kernel.i18n import t
     if kind == "inquiry":
-        return t(agent._config.language, "soul.system_prompt")
+        return t(runtime.config.language, "soul.system_prompt")
 
-    voice = getattr(agent._config, "soul_voice", "inner") or "inner"
+    voice = getattr(runtime.config, "soul_voice", "inner") or "inner"
     if voice == "custom":
-        prompt = getattr(agent._config, "soul_voice_prompt", "") or ""
+        prompt = getattr(runtime.config, "soul_voice_prompt", "") or ""
         if prompt.strip():
             return prompt
         # Empty custom prompt → fall back to inner so the agent never
         # runs a consultation with no system prompt at all.
         voice = "inner"
-    return t(agent._config.language, f"soul.voice.{voice}.prompt")
+    return t(runtime.config.language, f"soul.voice.{voice}.prompt")

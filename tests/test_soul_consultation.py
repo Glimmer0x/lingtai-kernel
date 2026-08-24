@@ -1993,10 +1993,8 @@ def test_consultation_prompt_has_no_removed_codex_tool_call(tmp_path):
     """The resolved consultation system prompt (and its refusal echo) must
     not suggest a removed `codex(...)` tool call.
     """
-    from lingtai.tools.soul.config import _build_soul_system_prompt
-    from lingtai.tools.soul.consultation import (
-        _build_consultation_tool_refusal,
-    )
+    from lingtai.tools.soul import _build_soul_system_prompt
+    from lingtai.tools.soul.consultation import _build_consultation_tool_refusal
 
     agent = _FakeAgent(tmp_path)
     system_prompt = _build_soul_system_prompt(agent, kind="insights")

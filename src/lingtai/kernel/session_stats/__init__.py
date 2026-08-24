@@ -20,11 +20,11 @@ Ownership split, mirroring the existing ``_build_manifest`` override pattern:
   knows nothing about MCP registries or specific integrations (Telegram,
   etc.), so it never imports them.
 
-Daemons write a separate, much smaller self-record (see
-``build_daemon_record``/``write_daemon_record``) on every daemon turn. The
-owning agent's record aggregates ONLY present daemon self-records, newest
-``LINGTAI_SESSION_STATS_DAEMON_LIMIT`` first; a daemon without a self-record is
-silently ignored — never backfilled, never inferred, never shown as zero.
+The owning agent aggregates only daemon states selected by its append-only
+dispatch ledger, newest ``LINGTAI_SESSION_STATS_DAEMON_LIMIT`` first.  The
+ledger determines membership and append order; each selected ``daemon.json``
+remains lifecycle and usage truth.  A small single-flight refresher performs
+that bounded read outside the heartbeat thread.
 
 Never serialize: API keys/tokens/passwords, environment or config values, raw
 prompts/messages/tool payloads, working-directory/host/user paths, shell
@@ -34,9 +34,11 @@ owner/clock.
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -54,14 +56,6 @@ from ..config import HEARTBEAT_LIVENESS_SECONDS
 AGENT_RECORD_SCHEMA = "lingtai.agent_record/v1"
 AGENT_RECORD_VERSION = 1
 AGENT_RECORD_RELATIVE_PATH = "system/agent_record.json"
-
-#: One compact daemon self-record, written beside ``daemon.json`` in the
-#: daemon's own run directory on every daemon turn.
-DAEMON_RECORD_SCHEMA = "lingtai.daemon_record/v1"
-DAEMON_RECORD_VERSION = 1
-DAEMON_RECORD_FILENAME = "session_stats.json"
-
-_DAEMONS_DIRNAME = "daemons"
 
 # ---------------------------------------------------------------------------
 # Environment configuration — validated with safe fallback, documented in
@@ -154,7 +148,7 @@ def agent_record_path(working_dir: Path | str) -> Path:
     return Path(working_dir) / AGENT_RECORD_RELATIVE_PATH
 
 
-def build_agent_record(agent, *, sequence: int = 0) -> dict:
+def build_agent_record(agent, *, sequence: int = 0, daemon_summary: dict | None = None) -> dict:
     """Build the redacted, versioned Agent record for *agent*.
 
     Reads only fields Core already owns (mirrors the allowlisted subset of
@@ -255,7 +249,11 @@ def build_agent_record(agent, *, sequence: int = 0) -> dict:
             "context_tools_tokens": _safe_int(usage.get("ctx_tools_tokens")),
             "context_history_tokens": _safe_int(usage.get("ctx_history_tokens")),
         },
-        "daemons": aggregate_daemon_records(getattr(agent, "_working_dir", None)),
+        # BaseAgent passes an already-built background snapshot so this
+        # projector never blocks a heartbeat on daemon history I/O.  Keeping a
+        # synchronous fallback makes this pure public builder useful to
+        # explicit callers/tests without making that fallback a heartbeat path.
+        "daemons": daemon_summary if isinstance(daemon_summary, dict) else aggregate_daemon_records(getattr(agent, "_working_dir", None)),
     }
 
     extra_provider = getattr(agent, "_build_agent_record_extra", None)
@@ -365,152 +363,133 @@ def query_published_agent_liveness(
 
 
 # ---------------------------------------------------------------------------
-# Daemon self-record — written by DaemonRunDir on every daemon turn
+# Ledger-selected daemon aggregation and asynchronous snapshot owner
 # ---------------------------------------------------------------------------
 
 
-def daemon_record_path(run_dir: Path | str) -> Path:
-    return Path(run_dir) / DAEMON_RECORD_FILENAME
-
-
-def build_daemon_record(state: dict) -> dict:
-    """Build the compact, redacted daemon self-record from live ``daemon.json`` state.
-
-    Only bounded identity/lifecycle/usage fields cross this boundary — never
-    the task text, tool arguments, error messages, or any path. ``tokens``
-    (kernel-ledger-feeding) and ``cli_tokens`` (external-CLI display-only, see
-    ``DaemonRunDir.record_cli_tokens``) are kept distinct, matching the
-    source's own separation between billed ledger usage and UI-only CLI
-    usage; aggregation combines them for display only (see
-    ``aggregate_daemon_records``).
-    """
-    tokens = state.get("tokens") if isinstance(state.get("tokens"), dict) else {}
-    cli_tokens = state.get("cli_tokens") if isinstance(state.get("cli_tokens"), dict) else {}
-    run_id = state.get("run_id")
-    handle = state.get("handle")
-    group_id = state.get("group_id")
-    backend = state.get("backend")
-    daemon_state = state.get("state")
+def _empty_daemon_summary(limit: int) -> dict:
     return {
-        "schema": DAEMON_RECORD_SCHEMA,
-        "schema_version": DAEMON_RECORD_VERSION,
-        "generated_at": _utc_now_iso(),
-        "run_id": run_id if isinstance(run_id, str) else None,
-        "handle": handle if isinstance(handle, str) else None,
-        "group_id": group_id if isinstance(group_id, str) else None,
-        "backend": backend if isinstance(backend, str) else None,
-        "state": daemon_state if isinstance(daemon_state, str) else None,
-        "started_at": state.get("started_at") if isinstance(state.get("started_at"), str) else None,
-        "finished_at": state.get("finished_at") if isinstance(state.get("finished_at"), str) else None,
-        "turn": _safe_int(state.get("turn")),
-        "tool_call_count": _safe_int(state.get("tool_call_count")),
-        "tokens": {
-            "input": _safe_int(tokens.get("input")),
-            "output": _safe_int(tokens.get("output")),
-            "thinking": _safe_int(tokens.get("thinking")),
-            "cached": _safe_int(tokens.get("cached")),
+        "source": "dispatch_ledger",
+        "present": 0,
+        "scanned": 0,
+        "limit": limit,
+        "counts_by_state": {},
+        "usage": _empty_daemon_usage_totals(),
+        "checked": {
+            "source": "tail",
+            "requested_limit": limit,
+            "records_read": 0,
+            "sequence_from": None,
+            "sequence_to": None,
         },
-        "cli_tokens": {
-            "input": _safe_int(cli_tokens.get("input")),
-            "output": _safe_int(cli_tokens.get("output")),
-            "thinking": _safe_int(cli_tokens.get("thinking")),
-            "cached": _safe_int(cli_tokens.get("cached")),
-            "calls": _safe_int(cli_tokens.get("calls")),
-        },
+        "warnings": [],
     }
 
 
-def write_daemon_record(run_dir: Path | str, state: dict) -> Path:
-    """Atomically publish this daemon's compact self-record.
-
-    Called on every daemon turn (every write of ``daemon.json``'s live
-    state) — see ``DaemonRunDir._persist_daemon_state``.
-    """
-    record = build_daemon_record(state)
-    path = daemon_record_path(run_dir)
-    atomic_write_json(path, record, ensure_ascii=False, indent=2)
-    return path
-
-
-# ---------------------------------------------------------------------------
-# Bounded aggregation — newest-N PRESENT daemon self-records only. A daemon
-# without this record is ignored: no legacy daemon.json scan, no inferred
-# result, no fake zero, no partial backward-compat representation.
-# ---------------------------------------------------------------------------
-
-
-def _iter_daemon_record_paths(working_dir: Path | str) -> list[Path]:
-    daemons_dir = Path(working_dir) / _DAEMONS_DIRNAME
-    if not daemons_dir.is_dir():
-        return []
-    paths: list[Path] = []
-    try:
-        entries = list(daemons_dir.iterdir())
-    except OSError:
-        return []
-    for run_dir in entries:
-        if not run_dir.is_dir() or run_dir.name.startswith("_"):
-            continue
-        candidate = run_dir / DAEMON_RECORD_FILENAME
-        if candidate.is_file():
-            paths.append(candidate)
-    return paths
-
-
 def aggregate_daemon_records(working_dir: Path | str | None, *, limit: int | None = None) -> dict:
-    """Aggregate the newest ``limit`` PRESENT daemon self-records.
+    """Aggregate only daemon states selected by the ledger's newest tail.
 
-    Returns ``present`` (how many daemon self-records exist at all),
-    ``scanned`` (how many were actually read, bounded by *limit*), the
-    resolved ``limit``, per-state counts, and combined usage totals. A
-    missing ``working_dir`` (e.g. a bare test stub) returns an empty,
-    honestly-zero aggregate rather than raising.
+    ``present`` is intentionally the number of ledger records in this checked
+    window, not a claimed lifetime total.  Discovering a lifetime total would
+    require the history scan this component is specifically forbidden to do.
+    Missing/corrupt referenced state files remain visible as bounded warning
+    diagnostics and are excluded from ``scanned`` and usage totals.
     """
     resolved_limit = limit if limit is not None else session_stats_daemon_limit()
+    summary = _empty_daemon_summary(resolved_limit)
     if not working_dir:
-        return {
-            "present": 0, "scanned": 0, "limit": resolved_limit,
-            "counts_by_state": {}, "usage": _empty_daemon_usage_totals(),
-        }
+        return summary
 
-    paths = _iter_daemon_record_paths(working_dir)
-    present = len(paths)
-    try:
-        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        pass
-    scanned_paths = paths[:resolved_limit]
+    from ..daemon_dispatch import read_recent_daemon_states
+
+    read, rows, warnings = read_recent_daemon_states(working_dir, limit=resolved_limit)
+    summary["present"] = len(read.records)
+    summary["checked"] = dict(read.checked)
+    # An absent ledger is normal for an agent without new-mechanism dispatches;
+    # retain its diagnostic for an explicit caller but avoid making it a fake
+    # daemon result or falling back to legacy directory enumeration.
+    summary["warnings"] = [dict(item) for item in warnings]
 
     counts_by_state: dict[str, int] = {}
     totals = _empty_daemon_usage_totals()
-    scanned = 0
-    for path in scanned_paths:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            continue
-        if not isinstance(data, dict) or data.get("schema") != DAEMON_RECORD_SCHEMA:
-            continue
-        scanned += 1
-        state = data.get("state")
-        if isinstance(state, str) and state:
-            counts_by_state[state] = counts_by_state.get(state, 0) + 1
-        tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
-        cli_tokens = data.get("cli_tokens") if isinstance(data.get("cli_tokens"), dict) else {}
+    for _, _, state in rows:
+        summary["scanned"] += 1
+        daemon_state = state.get("state")
+        if isinstance(daemon_state, str) and daemon_state:
+            counts_by_state[daemon_state] = counts_by_state.get(daemon_state, 0) + 1
+        tokens = state.get("tokens") if isinstance(state.get("tokens"), dict) else {}
+        cli_tokens = state.get("cli_tokens") if isinstance(state.get("cli_tokens"), dict) else {}
         totals["input_tokens"] += _safe_int(tokens.get("input")) + _safe_int(cli_tokens.get("input"))
         totals["output_tokens"] += _safe_int(tokens.get("output")) + _safe_int(cli_tokens.get("output"))
         totals["thinking_tokens"] += _safe_int(tokens.get("thinking")) + _safe_int(cli_tokens.get("thinking"))
         totals["cached_tokens"] += _safe_int(tokens.get("cached")) + _safe_int(cli_tokens.get("cached"))
-        totals["api_calls"] += _safe_int(cli_tokens.get("calls"))
+        # LingTai's existing daemon token ledger records API calls in tokens;
+        # external CLI records carry them in cli_tokens.  Combining both keeps
+        # this display summary faithful to the established record shape.
+        totals["api_calls"] += _safe_int(tokens.get("calls")) + _safe_int(cli_tokens.get("calls"))
 
-    return {
-        "present": present,
-        "scanned": scanned,
-        "limit": resolved_limit,
-        "counts_by_state": counts_by_state,
-        "usage": totals,
-    }
+    summary["counts_by_state"] = counts_by_state
+    summary["usage"] = totals
+    return summary
 
+
+class RecentDaemonSnapshot:
+    """One named, per-agent single-flight owner for daemon summary I/O.
+
+    Scheduling is nonblocking and coalesces while a read is in flight.  The
+    heartbeat reads only the last completed compact snapshot; no executor,
+    queue, or generic task framework is introduced for this one boundary.
+    """
+
+    def __init__(self, working_dir: Path | str, *, limit: int | None = None) -> None:
+        self._working_dir = Path(working_dir)
+        self._limit = limit
+        resolved_limit = limit if limit is not None else session_stats_daemon_limit()
+        self._snapshot = _empty_daemon_summary(resolved_limit)
+        self._snapshot["refreshing"] = False
+        self._lock = threading.Lock()
+        self._refreshing = False
+
+    def schedule(self) -> bool:
+        """Start one refresh if idle; return ``False`` when it was coalesced."""
+        with self._lock:
+            if self._refreshing:
+                return False
+            self._refreshing = True
+            self._snapshot["refreshing"] = True
+        try:
+            thread = threading.Thread(
+                target=self._refresh,
+                name="lingtai-daemon-stats",
+                daemon=True,
+            )
+            thread.start()
+        except Exception:
+            with self._lock:
+                self._refreshing = False
+                self._snapshot["refreshing"] = False
+            return False
+        return True
+
+    def snapshot(self) -> dict:
+        """Return a detached copy of the last completed/current compact view."""
+        with self._lock:
+            return copy.deepcopy(self._snapshot)
+
+    def _refresh(self) -> None:
+        try:
+            fresh = aggregate_daemon_records(self._working_dir, limit=self._limit)
+        except Exception:
+            # The writer remains best-effort.  Keep the last known snapshot
+            # rather than publishing invented zeros after an unexpected error.
+            fresh = None
+        with self._lock:
+            if isinstance(fresh, dict):
+                fresh["refreshing"] = False
+                self._snapshot = fresh
+            else:
+                self._snapshot["refreshing"] = False
+            self._refreshing = False
 
 def _empty_daemon_usage_totals() -> dict:
     return {
@@ -521,13 +500,11 @@ def _empty_daemon_usage_totals() -> dict:
 
 __all__ = [
     "AGENT_RECORD_SCHEMA", "AGENT_RECORD_VERSION", "AGENT_RECORD_RELATIVE_PATH",
-    "DAEMON_RECORD_SCHEMA", "DAEMON_RECORD_VERSION", "DAEMON_RECORD_FILENAME",
     "REFRESH_SECONDS_ENV", "DEFAULT_REFRESH_SECONDS",
     "DAEMON_LIMIT_ENV", "DEFAULT_DAEMON_LIMIT",
     "session_stats_refresh_seconds", "session_stats_daemon_limit",
     "should_refresh_agent_record",
     "agent_record_path", "build_agent_record", "write_agent_record", "read_agent_record",
     "classify_published_agent_record", "query_published_agent_liveness",
-    "daemon_record_path", "build_daemon_record", "write_daemon_record",
-    "aggregate_daemon_records",
+    "aggregate_daemon_records", "RecentDaemonSnapshot",
 ]

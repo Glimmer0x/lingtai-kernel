@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/tools/system/schema.py
   - src/lingtai/tools/system/summarize.py
   - src/lingtai/tools/system/name.py
+  - src/lingtai/kernel/base_agent/lifecycle.py
   - src/lingtai/tools/context/ANATOMY.md
   - src/lingtai/tools/context/CONTRACT.md
   - src/lingtai/tools/system/glossary-en.md
@@ -23,6 +24,7 @@ related_files:
   - src/lingtai/kernel/tool_result_summary.py
   - src/lingtai/intrinsic_skills/system-manual/SKILL.md
   - tests/test_tool_family_system_migration.py
+  - tests/test_system_sleep_alarm.py
   - tests/test_system_declared_plugin.py
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -45,13 +47,18 @@ normal mounted path is `_bind(host)`: it creates `_SystemHandlerHost(host)` from
 the granted ports, passes that bridge plus `host.workdir` to `_build_family()`,
 and captures the resulting family in the registrar-mounted
 `BoundToolPlugin.handler`; no Agent enters that family. `karma.py::sleep_use_case`
-owns the pending-attention/refusal/force policy, receipt, audit events, and
-ASLEEP transition through a narrow `SystemSleepPort`. The runtime adapter in
-`adapters/tool_plugin_host.py` is currently a reviewed-head compatibility
-callback; serialized integration must expose that same evidence/effects port and
-invoke this use case rather than repeating the policy.
-`Agent._setup_declared_intrinsic_tool_plugins()` uses the kernel registrar to
-claim/mount System once. The retained direct `handle(agent, args)` path is
+owns the pending-attention/refusal/force policy, receipt, audit events, the
+one-shot `delay` alarm ordering, and the ASLEEP transition through a narrow
+`SystemSleepPort`. `AgentSystemRuntimeAdapter` in
+`adapters/tool_plugin_host.py` exposes exactly that evidence/effects vocabulary
+(`sleep_attention_fingerprints`, `transition_to_asleep`, `sleep_alarm_lock`,
+`arm_sleep_alarm`, `language`, `log`) and repeats no policy; the mounted bridge
+hands it to the use case as `_system_sleep_port`, and the direct route wraps
+its Agent-like subject in the translation-only `_DirectSleepPort`.
+`system` is registered with `official_plugin` in `tools/registry.py`, so
+`BaseAgent._boot_official_intrinsics()` calls this module's `boot(agent)` to
+claim/mount System once on construction and on every refresh.
+The retained direct `handle(agent, args)` path is
 compatibility-only: it passes the Agent-like subject directly to
 `_build_family()` and dispatches immediately; normal Agent model dispatch never
 uses it. `tests/test_system_declared_plugin.py` is the compact vertical proof
@@ -87,20 +94,25 @@ of declaration, mount, identity, mounted runtime sleep, and packaged manual.
 
 - `karma.py` — Karma-gated lifecycle actions.
   - `_KARMA_ACTIONS` / `_NIRVANA_ACTIONS` (`karma.py:20-21`) — gate mapping sets.
-  - `_check_karma_gate()` (`karma.py:155-172`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
-  - `SystemSleepPort` / `sleep_use_case()` (`karma.py:24-86`) — the single
-  System-owned pending-attention/refusal/force decision, receipt, audit, and
-  ASLEEP transition; `_DirectSleepPort` (`karma.py:89-126`) is compatibility
-  translation only.
-  - `_sleep()` (`karma.py:175-198`) — selects the SystemSleepPort use case for
-  direct/port-capable callers and retains the reviewed-head runtime callback
-  only until serialized host integration.
-  - `_lull()` (`karma.py:201-212`) — put another agent to sleep.
-  - `_suspend()` (`karma.py:215-226`) — suspend another agent.
-  - `_cpr()` (`karma.py:229-247`) — resuscitate a suspended agent.
-  - `_interrupt()` (`karma.py:250-261`) — interrupt a running agent's current turn.
-  - `_clear()` (`karma.py:264-286`) — force a full molt on another agent.
-  - `_nirvana()` (`karma.py:289-309`) — permanently destroy an agent's working directory.
+  - `_check_karma_gate()` (`karma.py:211-228`) — authorization gate: validates karma/nirvana admin flags, resolves target address, rejects self-targeting.
+  - `SystemSleepPort` / `sleep_use_case()` (`karma.py:24-132`) — the single
+  System-owned pending-attention/refusal/force decision, receipt, audit,
+  one-shot `delay` alarm ordering, and ASLEEP transition; a supplied finite
+  positive `delay` is validated first and armed only after the refusal/force
+  gate, under the port's heartbeat-shared lock, atomically replacing
+  `<workdir>/.alarm` before ASLEEP; omitted/null delay retains the prior
+  plain-sleep behavior and leaves any alarm untouched. `_DirectSleepPort`
+  (`karma.py:135-182`) is compatibility translation only.
+  - `_sleep()` (`karma.py:231-247`) — maps the public args onto
+  `sleep_use_case`, selecting the mounted bridge's granted
+  `_system_sleep_port` or wrapping a direct Agent-like subject in
+  `_DirectSleepPort`.
+  - `_lull()` (`karma.py:250-261`) — put another agent to sleep.
+  - `_suspend()` (`karma.py:264-275`) — suspend another agent.
+  - `_cpr()` (`karma.py:278-296`) — resuscitate a suspended agent.
+  - `_interrupt()` (`karma.py:299-309`) — interrupt a running agent's current turn.
+  - `_clear()` (`karma.py:312-331`) — force a full molt on another agent.
+  - `_nirvana()` (`karma.py:334-358`) — permanently destroy an agent's working directory.
 
 - *(removed)* `notification.py` — the agent-facing generic dismiss submodule was **deleted**. Its `_dismiss` verb (and the voluntary notification-read fast path) moved to the standalone `notification` tool (sibling package `tools/notification/`), whose atomic actions `dismiss_channel`/`dismiss_event`/`dismiss_ref` delegate to the kernel-root `notifications.dismiss_channel`. There are **no** `system` compatibility aliases. `system/__init__.py` no longer imports or re-exports `_dismiss`.
   - Producer-side notification submission still lives in `notifications.py` at the kernel root and is re-exported by this package's `__init__.py` as `publish_notification` / `clear_notification`. See root `ANATOMY.md` "Notifications" for the full architecture and dismissal taxonomy.
@@ -118,22 +130,22 @@ of declaration, mount, identity, mounted runtime sleep, and packaged manual.
 
 - `schema.py` — Schema **data** only. It deliberately defines no `get_schema()`: the model-facing schema is composed from the data below by `__init__.py`, next to the child registry it is generated from.
   - `ACTION_ORDER` (`schema.py:48-52`) — the single source for the `action` enum order, the `input.oneOf`/`allOf` branch order, and the child registration order. Exactly `("refresh", "sleep", "lull", "interrupt", "suspend", "cpr", "clear", "nirvana", "presets", "name_set", "name_nickname", "manual")` — every lifecycle/preset action keeps its pre-migration position; `summarize` was removed (it left for `context`) and the two name actions were appended before the reserved `manual`. No `notification`/`dismiss`.
-  - `INPUT_SCHEMAS` (`schema.py:180-195`) — each action's own strict closed `input_schema`. The surviving pre-migration flat sibling fields live in the actions that actually read them: `reason` (refresh/sleep and the six address verbs), `address` (the six address verbs), `preset`/`revert_preset` (refresh), and `content` (the two name actions); `presets` and `manual` take the canonical strict-empty input. `items`/`rebuild` are declared by **no** action here — they left with the summarize action and are now `context`'s. Optional fields use the provider-compatible nullable representation, which `__init__.py::_strip_nulls` reverses before the handlers run. `manual` references the exported `tool_family.manual.MANUAL_INPUT_SCHEMA` literal rather than restating it, so the schema-only and dispatching families cannot drift.
+  - `INPUT_SCHEMAS` (`schema.py:191-207`) — each action's own strict closed `input_schema`. The surviving pre-migration flat sibling fields live in the actions that actually read them: `reason` (refresh/sleep and the six address verbs), `address` (the six address verbs), `preset`/`revert_preset` (refresh), and `content` (the two name actions); `presets` and `manual` take the canonical strict-empty input. `sleep.delay` is the provider-compatible required-nullable optional number with `exclusiveMinimum: 0` and no maximum; `_strip_nulls` makes null ordinary sleep while the handler rejects bool/nonfinite/nonpositive direct values. `items`/`rebuild` are declared by **no** action here — they left with the summarize action and are now `context`'s. Optional fields use the provider-compatible nullable representation, which `__init__.py::_strip_nulls` reverses before the handlers run. `manual` references the exported `tool_family.manual.MANUAL_INPUT_SCHEMA` literal rather than restating it, so the schema-only and dispatching families cannot drift.
   - `_address_input_schema()` (`schema.py:90-109`) — generates the identical two-field shape the six address-taking verbs share, returning a fresh dict per call so no two children share a mutable schema container.
-  - `ACTION_ENUM_DESCRIPTION` (`schema.py:201-225`) — the per-action prose the model reads to choose an action, carried over from the pre-migration flat enum description with argument references restated in their `input` shape.
-  - `get_description()` (`schema.py:228-254`) — the tool registration prose: the three privilege classes, the envelope call shape, the notification-tool and `context`-hygiene pointers, and the root-`summarize` guidance profile.
+  - `ACTION_ENUM_DESCRIPTION` (`schema.py:212-239`) — the per-action prose the model reads to choose an action, carried over from the pre-migration flat enum description with argument references restated in their `input` shape.
+  - `get_description()` (`schema.py:242-268`) — the tool registration prose: the three privilege classes, the envelope call shape, the notification-tool and `context`-hygiene pointers, and the root-`summarize` guidance profile.
   - Two fields are **not** a straight carry-over of the pre-migration *schema*: `sleep.force` was always read by `karma._sleep` (the kernel#112 escape hatch) but never advertised, and a strict child input must declare every key its handler accepts or dispatch would reject a call that succeeds today — declaring it surfaces existing behavior rather than adding any. `notification_threshold_chars` stays absent at both envelope levels (threshold is config-only via init.json + refresh); the private `summarize._summarize` engine's loud runtime-mutation refusal is retained as the inner layer for direct in-process callers that bypass the envelope.
 
 ## Connections
 
 - **Inbound:** Normal tool dispatch (via `base_agent._dispatch_tool`) invokes the registrar-mounted `BoundToolPlugin.handler` created by `_bind()`, which closes over `_build_family(bridge, host.workdir)` and reaches `_dispatch()` through the port-only bridge. The dispatcher injects the transport-only `_tc_id` into every intrinsic's args; `_dispatch()` drops it at this package's Host boundary rather than widening the generic envelope's admitted root fields. `handle(agent, args)` remains only for direct in-process compatibility callers and instead constructs `_build_family(agent, agent)`.
-- **Outbound (composition):** `__init__.py` imports the generic `ChildTool`/`ToolFamily` infra and `build_manual_child` from `tools/tool_family/` to compose the model-facing schema and to dispatch. System is that package's eleventh consumer and its third intrinsic (after `soul` and `notification`), following the same module-level shape: a schema-only family at import time, a port-bridge family retained per mounted registration, and a direct Agent-like family built per compatibility call. Adopting the infra is optional and partial adoption is conforming — see `src/lingtai/tools/tool_family/CONTRACT.md`.
+- **Outbound (composition):** `__init__.py` imports the generic `ChildTool`/`ToolFamily` infra and `build_manual_child` from `tools/tool_family/` to compose the model-facing schema and to dispatch. System is that package's eleventh consumer and its second intrinsic (after `soul`); Notification is a declared official family rather than an intrinsic. System follows the same module-level shape: a schema-only family at import time, a port-bridge family retained per mounted registration, and a direct Agent-like family built per compatibility call. Adopting the infra is optional and partial adoption is conforming — see `src/lingtai/tools/tool_family/CONTRACT.md`.
 - **Outbound (kernel allowlist):** `kernel/tool_result_summary.py::_LTP_V2_MIGRATED_FAMILIES` lists `system`, so the root `summarize` boolean this family advertises to the model is actually honored by the central summarizer. A family adopting the envelope without joining that allowlist would advertise a control the kernel silently ignores.
 - **Inbound (cross-module):** `base_agent/messaging.py` writes system events through the injected `NotificationStorePort.compare_update_channel` and consumes policy evidence from the result. The generic dismiss verb lives on the standalone `notification` tool (delegating to kernel-root `notifications.dismiss_channel`); `system` does not expose it. `summarize.py:SUMMARIZE_MARKER` and `_is_already_summarized` are re-exported from `__init__.py` for external callers.
 - **Tool-result metadata**: Tool result metadata is the umbrella for formal blocks nested under a single `_meta` envelope: immutable per-result `_meta.tool_meta` plus one complete current `_meta.agent_meta` final-carrier snapshot containing nested `agent_state`, `notifications`, and `guidance`; only the newest holder is current/actionable, while older payload copies remain historical traces. The old `_tool_result_metadata` compatibility block is intentionally removed; large-result follow-up is surfaced through `_meta.agent_meta.agent_state.current_tool_result_chars` (a ranked summarize-candidate list, see below) rather than a provider-visible metadata field or a pushed notification.
 - **Large-result ranking (replaces the removed `large_tool_result` notification):** Large tool results no longer raise a `large_tool_result` system notification. The two former producers — `base_agent/__init__.py:_maybe_notify_large_tool_result()` (per-result hook) and `base_agent/messaging.py:_rescan_large_tool_results()` (turn-boundary rescan) — are retained as inert no-ops (the hook seam and the turn-boundary housekeeping trio are unchanged; the total-length gate, the `_pending_large_result_*` helpers, and `LARGE_RESULT_TOTAL_LEN_GATE` were deleted). Instead, `meta_block.current_tool_result_chars()` ranks the largest formal results in live context and stamps them onto `_meta.agent_meta.agent_state.current_tool_result_chars` (on the complete current `_meta.agent_meta` snapshot attached to the eligible final carrier): `total_chars`, `threshold` (the `_summarize_notification_threshold` hint size, default 3000, config-only via `manifest.summarize_notification_threshold` in init.json + refresh), `over_threshold_count`, and `top_results` (id, tool_name, chars; top 5 over 1000 chars, no preview). `_meta`/notification/guidance scaffolding is excluded by `formal_tool_result_visible_len`. The agent reads `top_results`, digests what it needs, then calls `context(action="summarize")` for the chosen `tool_call_id`s. The threshold still drives the `tool_meta.comment.overflow` hint in `ToolExecutor` and is config-only (passing `notification_threshold_chars` to `context(action="summarize")` returns an error). **Legacy compatibility:** any `large_tool_result` event persisted before this change (or pre-molt) is still dismissible via the `notification` tool, and a successful `context(action="summarize")` of its `tool_call_id` still auto-clears it via `notifications.clear_large_result_reminders`.
 - **Outbound:** Depends on `...notifications` for Core submit/clear/dismiss policy and on the agent’s required Notification Store for snapshots/fingerprints; also uses `...i18n`, `...handshake`, `...state`, `...presets`, and `...preset_connectivity`.
-- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. Preset swap reads/writes `init.json` manifest. The `publish_notification` re-export writes `.notification/*.json` via `tmp + rename` (voluntary reads of that state now live on the standalone `notification` tool, not `system`). `summarize` mutates `ToolResultBlock.content` in the live `ChatInterface._entries` and calls `_save_chat_history(ledger_source="summarize")`; the original payload is never touched in `logs/events.jsonl`.
+- **Data flow:** Karma actions write signal files (`.sleep`, `.suspend`, `.interrupt`, `.clear`) into target agent working directories. A self delayed sleep atomically writes the single root `<workdir>/.alarm` absolute deadline; `base_agent/lifecycle.py` reads it on heartbeat under the same per-agent lock and calls the existing `_enqueue_system_notification` producer when due, so the next ordinary notification sync owns any wake. Preset swap reads/writes `init.json` manifest. The `publish_notification` re-export writes `.notification/*.json` via `tmp + rename` (voluntary reads of that state now live on the standalone `notification` tool, not `system`). `summarize` mutates `ToolResultBlock.content` in the live `ChatInterface._entries` and calls `_save_chat_history(ledger_source="summarize")`; the original payload is never touched in `logs/events.jsonl`.
 
 ## Key invariants
 
