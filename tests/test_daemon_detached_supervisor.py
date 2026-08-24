@@ -140,6 +140,31 @@ def _spawn_lingtai_supervisor(run_dir: DaemonRunDir, *, task="say hi", timeout_s
     return proc
 
 
+def test_supervisor_terminal_store_error_records_typed_retryable_evidence(tmp_path, monkeypatch):
+    from lingtai.tools.daemon import supervisor_runtime
+
+    run_dir = _make_run_dir(tmp_path)
+    manifest = {"parent_working_dir": str(run_dir.path.parent.parent)}
+
+    def fail_control(*_args, **_kwargs):
+        raise ValueError("daemon caller payload violated Store contract")
+
+    monkeypatch.setattr(PosixNotificationStoreAdapter, "compare_update_channel", fail_control)
+    published = supervisor_runtime._publish_daemon_notification(
+        run_dir,
+        manifest,
+        status="done",
+        state={"state": "done"},
+        idempotency_key="daemon-terminal:em-test",
+    )
+
+    assert published is False
+    event = json.loads(run_dir.events_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert (event["event"], event["kind"], event["error_type"], event["retryable"]) == (
+        "daemon_notification_error", "daemon_notification_error", "ValueError", True
+    )
+
+
 def test_posix_adapter_spawns_real_detached_process(tmp_path):
     """The production Port/adapter actually launches a real OS process."""
     run_dir = _make_run_dir(tmp_path, task="say hi", timeout_s=30.0)

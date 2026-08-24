@@ -135,11 +135,10 @@ def test_root_report_is_not_a_daemon_event_source(tmp_path):
 
     snapshot = snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]
     assert [event["ref_id"] for event in snapshot["data"]["events"]] == ["new-run"]
-    report = json.loads(root_path.read_text(encoding="utf-8"))
-    assert report["kind"] == "daemon_report"
-    assert report["stats"]["run_count"] == 1
-    assert report["stats"]["event_count"] == 1
-    assert report["migration"]["legacy_root"]["data"]["events"][0]["ref_id"] == "legacy-run"
+    # The compatibility report is non-authoritative and deliberately not
+    # rebuilt on the per-run append hot path. A pre-existing legacy report is
+    # ignored for delivery rather than rewritten by a reader or every writer.
+    assert json.loads(root_path.read_text(encoding="utf-8")) == legacy
     assert (agent._working_dir / ".notification" / "daemon" / "new-run.json").is_file()
 
 
@@ -163,7 +162,9 @@ def test_root_report_cannot_reinject_legacy_events_after_mini_dismissal(tmp_path
 
     assert result["status"] == "ok" and result["removed"] == 1
     assert DAEMON_CHANNEL not in snapshot_notifications(agent._working_dir)
-    assert json.loads(root_path.read_text(encoding="utf-8"))["stats"]["run_count"] == 0
+    # A stale legacy report cannot reinject events and is not rewritten by the
+    # aggregate dismiss path merely to make its statistics look current.
+    assert json.loads(root_path.read_text(encoding="utf-8"))["data"]["events"][0]["ref_id"] == "legacy-run"
 
 
 def test_daemon_publish_without_id_never_falls_back_to_root_report(tmp_path):
@@ -919,14 +920,10 @@ def test_daemon_ids_use_independent_mini_channels_and_aggregate_without_overwrit
     assert {path.name for path in mini_dir.glob("*.json")} == {"em-1.json", "em-2.json"}
     events = snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]["data"]["events"]
     assert {event["ref_id"] for event in events} == {"em-1", "em-2"}
-    report = json.loads(
-        (agent._working_dir / ".notification" / "daemon.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert report["kind"] == "daemon_report"
-    assert report["stats"]["run_count"] == 2
-    assert report["stats"]["event_count"] == 2
+    # Owner appends do not scan/rebuild a root aggregate report. Snapshot is
+    # the authoritative derived daemon view; the compatibility report may be
+    # absent or stale until a rare aggregate-administration compaction.
+    assert not (agent._working_dir / ".notification" / "daemon.json").exists()
 
 
 def test_same_daemon_checkpoint_and_terminal_append_to_one_mini_file(tmp_path):
@@ -997,6 +994,95 @@ def test_daemon_event_or_ref_dismiss_deletes_only_matching_mini_file(tmp_path):
     assert not (mini_dir / "em-remove.json").exists()
     assert (mini_dir / "em-keep.json").exists()
     assert first
+
+
+@pytest.mark.parametrize("same_run", (True, False), ids=("same-run-sibling", "other-run"))
+def test_targeted_daemon_event_dismiss_preserves_only_the_selected_event(
+    tmp_path, monkeypatch, same_run
+):
+    from lingtai.kernel.meta_block import _commit_notification_fp
+    from lingtai.kernel.notifications import dismiss_channel
+
+    agent = make_daemon_agent(tmp_path)
+    removed_event_id = _publish(agent, "em-target")
+    if same_run:
+        surviving_event_id = agent._enqueue_system_notification(
+            source="daemon", ref_id="em-target", body="same run sibling",
+            idempotency_key="daemon-checkpoint:em-target:sibling",
+            skip_if_idempotency_key_exists=True, channel=DAEMON_CHANNEL,
+        )
+    else:
+        surviving_event_id = _publish(agent, "em-other")
+    _commit_notification_fp(agent)
+    store = agent._notification_store
+    fingerprints = {}
+    if same_run:
+        original_compact = store._compact_daemon_tombstone
+
+        def compact_with_fingerprint_guard():
+            fingerprints["before"] = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+            original_compact()
+            fingerprints["after"] = store.fingerprint(lambda channel: channel == DAEMON_CHANNEL)
+
+        monkeypatch.setattr(store, "_compact_daemon_tombstone", compact_with_fingerprint_guard)
+    result = dismiss_channel(
+        agent, DAEMON_CHANNEL, invoked_by="notification", event_id=removed_event_id
+    )
+
+    assert result["status"] == "ok" and result["removed"] == 1
+    mini_dir = agent._working_dir / ".notification" / "daemon"
+    if same_run:
+        mini = mini_dir / "em-target.json"
+        assert mini.exists()
+        events = json.loads(mini.read_text(encoding="utf-8"))["data"]["events"]
+        assert [event["event_id"] for event in events] == [surviving_event_id]
+        assert fingerprints["before"] == fingerprints["after"]
+    else:
+        assert not (mini_dir / "em-target.json").exists()
+        assert (mini_dir / "em-other.json").exists()
+        events = snapshot_notifications(agent._working_dir)[DAEMON_CHANNEL]["data"]["events"]
+        assert [event["event_id"] for event in events] == [surviving_event_id]
+
+
+def test_daemon_clear_and_targeted_dismiss_overlap_cannot_resurrect_events(tmp_path):
+    from lingtai.kernel.meta_block import _commit_notification_fp
+    from lingtai.kernel.notifications import dismiss_channel
+
+    agent = make_daemon_agent(tmp_path)
+    event_id = _publish(agent, "em-overlap")
+    _publish(agent, "em-other")
+    _commit_notification_fp(agent)
+    barrier = threading.Barrier(3)
+    clear_results = []
+    dismiss_results = []
+
+    def clear() -> None:
+        barrier.wait()
+        clear_results.append(agent._notification_store.clear(DAEMON_CHANNEL))
+
+    def dismiss() -> None:
+        barrier.wait()
+        dismiss_results.append(
+            dismiss_channel(
+                agent,
+                DAEMON_CHANNEL,
+                invoked_by="notification",
+                force=True,
+                event_id=event_id,
+            )
+        )
+
+    clear_thread = threading.Thread(target=clear)
+    dismiss_thread = threading.Thread(target=dismiss)
+    clear_thread.start()
+    dismiss_thread.start()
+    barrier.wait()
+    clear_thread.join(timeout=10)
+    dismiss_thread.join(timeout=10)
+    assert not clear_thread.is_alive() and not dismiss_thread.is_alive()
+    assert clear_results == [True]
+    assert dismiss_results[0]["status"] == "ok"
+    assert DAEMON_CHANNEL not in snapshot_notifications(agent._working_dir)
 
 
 def test_daemon_channel_dismiss_refuses_to_delete_late_mini_file(tmp_path):

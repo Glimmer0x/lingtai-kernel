@@ -335,8 +335,14 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "name: runtime-update-checks" in system_manual_body
         assert "name: refresh-precheck" in system_manual_body
         assert "name: trajectory-mining" in system_manual_body
+        assert "name: external-attach-diagnostic" in system_manual_body
+        assert "reference/external-attach-diagnostic/SKILL.md" in system_manual_body
         assert "Nested reference catalog" in system_manual_body
         assert "location: reference/notification-manual/SKILL.md" not in system_manual_body
+        external_attach = workdir / ".library" / "intrinsic" / "capabilities" / "system-manual"
+        external_attach = external_attach / "reference" / "external-attach-diagnostic"
+        assert (external_attach / "SKILL.md").is_file()
+        assert (external_attach / "scripts" / "external_attach_diagnostic.py").is_file()
 
         notification_manual_md = (
             workdir
@@ -415,6 +421,33 @@ def test_skills_setup_hard_copies_standalone_intrinsic_skills(tmp_path):
         assert "assets/molt-template.md" in context_manual_body
         assert "9-section summary scaffold" in context_manual_body
         assert "9. **Context Status**" not in context_manual_body
+
+        file_manual_md = (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "file-manual"
+            / "SKILL.md"
+        )
+        assert file_manual_md.is_file()
+        file_manual_body = file_manual_md.read_text(encoding="utf-8")
+        package_file_manual = Path("src/lingtai/tools/file/manual/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        redirect_marker = Path(
+            "src/lingtai/intrinsic_skills/file-manual/SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert file_manual_body == package_file_manual
+        assert file_manual_body != redirect_marker
+        assert "# File Manual" in file_manual_body
+        assert not (
+            workdir
+            / ".library"
+            / "intrinsic"
+            / "capabilities"
+            / "file"
+        ).exists()
 
         molt_template_asset = context_manual_md.parent / "assets" / "molt-template.md"
         assert molt_template_asset.is_file()
@@ -1129,7 +1162,7 @@ def test_skills_manual_documents_external_skill_intake_default():
 def test_context_manual_routes_skill_sharing_through_custom_by_default():
     manual = (
         Path(__file__).resolve().parents[1]
-        / "src/lingtai/intrinsic_skills/context-manual/SKILL.md"
+        / "src/lingtai/tools/context/manual/SKILL.md"
     ).read_text(encoding="utf-8")
     assert "peers install it into their own `.library/custom/<name>/`" in manual
     assert "explicit opt-in local-network shared root" in manual

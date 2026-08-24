@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from ..browser.port import BrowserPort
 
 # MiniMax and Zhipu are no longer built-in `web` providers (see
-# src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md for the
+# src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md for the
 # skill-owned MCP route). Anthropic and Gemini are explicit opt-in only,
 # gated on canonical backend identity — never an implicit built-in default.
 PROVIDERS = {
@@ -836,7 +836,7 @@ def _specs_from_kwargs(
         raise RetiredProviderError(
             f"provider {(default_engine or provider)!r} is retired from built-in web search admission; "
             "wire it as a third-party MCP server instead (see "
-            "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+            "src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md)"
         )
     if default_engine in _BACKEND_GATED_ENGINES or provider in _BACKEND_GATED_ENGINES:
         # Anthropic/Gemini are active, fully-admitted canonical providers —
@@ -863,7 +863,7 @@ def _specs_from_kwargs(
                 raise RetiredProviderError(
                     f"provider {explicit_provider!r} is retired from built-in web search admission; "
                     "wire it as a third-party MCP server instead (see "
-                    "src/lingtai/tools/mcp/manual/reference/third-party-and-legacy.md)"
+                    "src/lingtai/tools/mcp/skills/mcp-manual/reference/third-party-and-legacy.md)"
                 )
             if explicit_provider not in PROVIDERS["providers"]:
                 # Retain the pre-existing legacy_fallback_from behavior for a

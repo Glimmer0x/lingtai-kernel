@@ -16,7 +16,7 @@ related_files:
 - src/lingtai/intrinsic_skills/system-manual/reference/substrate-manual/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/runtime-update-checks/SKILL.md
 - src/lingtai/intrinsic_skills/system-manual/reference/environment-variables/SKILL.md
-- src/lingtai/intrinsic_skills/context-manual/SKILL.md
+- src/lingtai/tools/context/manual/SKILL.md
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
 - src/lingtai/tools/system/schema.py

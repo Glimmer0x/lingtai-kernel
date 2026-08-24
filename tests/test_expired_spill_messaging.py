@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -226,7 +227,10 @@ def test_generic_missing_file_still_generic(tmp_path):
 
     mock_agent._file_io.read = fake_read
 
-    handler = build_read(mock_agent)
+    handler = build_read(
+        SimpleNamespace(path=tmp_path),
+        SimpleNamespace(read=fake_read, max_result_chars=None),
+    )
 
     # Generic missing file — not under tmp/tool-results/
     result = handler({"file_path": str(tmp_path / "nonexistent.txt")})
@@ -490,7 +494,10 @@ def test_read_tool_path_traversal_not_classified_as_spill(tmp_path):
 
     mock_agent._file_io.read = fake_read
 
-    handler = build_read(mock_agent)
+    handler = build_read(
+        SimpleNamespace(path=tmp_path),
+        SimpleNamespace(read=fake_read, max_result_chars=None),
+    )
 
     # Path traverses out of tmp/tool-results/ via ".."
     traversal_path = str(tmp_path / "tmp" / "tool-results" / ".." / "not-a-spill.txt")

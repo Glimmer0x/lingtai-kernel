@@ -4,14 +4,15 @@ description: >
   Second-layer router for LingTai's progressive-disclosure operating manuals.
   Read this when resident substrate/procedures are too compact and you need the
   right lower reference; route from the table, then open that node.
-version: 1.12.0
-last_changed_at: "2026-08-09T00:00:00Z"
+version: 1.13.0
+last_changed_at: "2026-08-24T02:20:00Z"
 tags: [lingtai, agent, runtime, procedures, substrate, system, lifecycle, memory, communication, skills, molt, summarize, nudge, updates, runtime-checks, refresh, preset, llm, adapters, codex, websocket]
 related_files:
 - src/lingtai/prompts/substrate/substrate.md
 - src/lingtai/prompts/procedures/procedures.md
 - src/lingtai/kernel/nudge/ANATOMY.md
 - src/lingtai/intrinsic_skills/system-manual/reference/llm-adapters/SKILL.md
+- src/lingtai/intrinsic_skills/system-manual/reference/external-attach-diagnostic/SKILL.md
 - src/lingtai/llm/_register.py
 - src/lingtai/llm/openai/adapter.py
 maintenance: |
@@ -104,6 +105,13 @@ The router table is the routing authority; this list is the inventory.
     Built-in LLM adapters: named adapter inventory, per-provider
     configuration/dispatch, the Codex REST vs WebSocket transport opt-in and
     its environment variables, and provider special behaviors.
+- name: external-attach-diagnostic
+  location: reference/external-attach-diagnostic/SKILL.md
+  description: |
+    Guarded macOS-only external attach: exact agent-dir/PID incarnation
+    verification, bounded `/usr/bin/sample` stacks, content-free runtime facts,
+    and an exceptional controlled external `mcp.*` burst that does not exercise
+    Store locking.
 ```
 
 ## Router table
@@ -123,6 +131,7 @@ The router table is the routing authority; this list is the inventory.
 | Goal notifications; `.notification/goal.json`; active goal source of truth; goal `instructions`; idle goal reminder; cancel/complete goal | `reference/goal-manual/SKILL.md` |
 | Change an agent workdir basename/address; POSIX suspend → no-replace rename → resume; preserve `agent_id` and true name | `reference/how-to-change-name/SKILL.md` |
 | LLM adapters; named adapter inventory; provider configuration; Codex REST vs WebSocket transport; `LINGTAI_CODEX_TRANSPORT` / `LINGTAI_CODEX_WS` opt-in; provider special behaviors | `reference/llm-adapters/SKILL.md` |
+| Authorized external attach; macOS `/usr/bin/sample`; exact PID/agent-dir incarnation verification; bounded content-free stacks; guarded controlled external `mcp.*` burst; diagnostic privacy | `reference/external-attach-diagnostic/SKILL.md` |
 | Molt mechanics, pad tending, session journals, post-wipe recovery | `context-manual` |
 | Soul tool; soul flow opt-in (`LINGTAI_SOUL_FLOW_ENABLED`); disabled-flow behavior; `delay_seconds` as cadence-not-off-switch; inquiry/config/voice/dismiss; privacy/cost rationale | `soul-manual` |
 | Authoring/publishing skills or changing skill catalog behavior | `skills-manual` |

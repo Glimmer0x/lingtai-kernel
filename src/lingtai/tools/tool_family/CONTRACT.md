@@ -412,10 +412,12 @@ own final child inventories independently.
 
 `plugin/__init__.py` (`../plugin/CONTRACT.md`) is the newest Adapter/consumer,
 and the first that was *born* on this package rather than migrated onto it. It
-is deliberately a copy of `mcp`'s minimal shape, not a variation on it: one
-`_build_family(agent | None, paths)` registering an `info` child and
-`build_manual_child(agent, "plugin")` directly and unwrapped, both declaring the
-exported `MANUAL_INPUT_SCHEMA` strict-empty `input`; an import-time `agent=None`
+is deliberately a copy of `mcp`'s minimal shape, not a variation on it, and it
+now consumes the same host-bound builder `mcp` does: one
+`_build_family(host: ToolPluginHost | None)` registering an `info` child and
+`build_manual_child(host.workdir, DECLARATION.manual)` directly and unwrapped,
+both declaring the per-action strict-empty `input` schemas read back out of
+`DECLARATION`; an import-time `host=None`
 instance backing `get_schema()` whose construction is the registry's
 duplicate/reserved-name collision check; a post-dispatch `_flatten_manual_result`
 producing the family's own flat `plugin_manual` public shape; and an outer
