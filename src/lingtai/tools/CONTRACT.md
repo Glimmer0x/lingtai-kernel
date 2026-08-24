@@ -65,8 +65,8 @@ maintenance: |
   tool; changing either choice is a normative change, so move
   `src/lingtai/mcp_servers/_plugin.py`, `telegram/plugin.py`, and
   `src/lingtai/mcp_catalog.json` in related_files with it. `mcp`, `avatar`,
-  `context`, and `daemon` are the declared families today; do not widen that claim without another
-  family's own evidence.
+  `context`, `daemon`, and `email` are the declared families today; do not widen
+  that claim without another family's own evidence.
 ---
 # LingTai Tool Protocol (LTP)
 
@@ -634,10 +634,9 @@ Not evidenced, and therefore stated above only as a target: a declaration for
 any family beyond `mcp`, `avatar`, `context`, `daemon`, and `email`; any family registered through
 `src/lingtai/tools/registry.py` shipping as an MCP plugin package
 (`registry.py` imports no plugin packaging); a `CuratedMcpPlugin` descriptor or
-packaged `SKILL.md` for the built-in daemon MCP families; the retention,
+packaged `SKILL.md` for the built-in daemon MCP families; and the retention,
 dispatch, host-lifecycle, and manual clauses above proven for every family,
-curated ones included; and fail-closed collision behavior for a *third-party*
-MCP tool colliding with a reserved official name at mount time.
+curated ones included.
 
 ### Relationship to current runtime
 
