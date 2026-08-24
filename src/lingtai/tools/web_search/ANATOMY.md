@@ -13,6 +13,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/ANATOMY.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - src/lingtai/tools/browser/ANATOMY.md
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
@@ -70,11 +71,11 @@ action implementations, settings, and diagnostics.
 
 ## Components
 
-- `DECLARATION`, `_WebRuntime`, `_bind()`, `WebManager`, and `setup()` — static
+- `DECLARATION`, `WebCompositionPort`, `WebComposition`, `_bind()`, `WebManager`, and `setup()` — static
   official `web` identity plus explicit per-bind search/browser runtime.
-  `setup()` retains lazy engine/browser composition but delegates reservation and
-  mount to `register_agent_tool_plugins`; `_bind()` receives only workdir,
-  runtime, and canonical provider-identity ports, constructs a per-instance
+  `setup()` retains lazy engine/browser composition but delegates registration to
+  `register_agent_tool_plugins`; `_bind()` receives only workdir, the typed Web
+  composition value, and canonical provider-identity ports, constructs a per-instance
   `ToolFamily` (`lingtai.tools.tool_family`) with `search`/`browse` handlers and
   a `manual` child from `tool_family.manual.build_manual_child`, and returns the
   bound handler. `handle()` delegates envelope validation/dispatch and stamps

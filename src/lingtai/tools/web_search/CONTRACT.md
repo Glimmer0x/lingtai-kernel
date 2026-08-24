@@ -12,6 +12,7 @@ related_files:
   - src/lingtai/kernel/tool_plugin/CONTRACT.md
   - src/lingtai/adapters/tool_plugin_host.py
   - tests/test_web_official_plugin.py
+  - tests/test_web_composition_port.py
   - src/lingtai/tools/browser/core.py
   - src/lingtai/tools/browser/port.py
   - src/lingtai/adapters/browser_transport.py
@@ -92,10 +93,13 @@ Search uses the existing internal `SearchService.search(query)` boundary.
 Browse uses the existing Core-owned `BrowserPort` implemented by the pinned
 transport adapter. The public dispatcher never invokes search from browse or
 browser transport from search. The declared host plugin additionally receives
-only `WorkdirPort` (settings, artifacts, and installed manual), `RuntimePort`
-(the explicit precomposed browser/spec configuration), and `ProviderIdentityPort`
+only `WorkdirPort` (settings, artifacts, and installed manual), the typed
+`WebCompositionPort` (browser transport, immutable engine specs, default
+provenance, and one manager-publication operation), and `ProviderIdentityPort`
 (the one canonical label needed for Anthropic/Gemini eligibility); it never
-receives the Agent or its LLM service/credentials.
+receives the Agent or its LLM service/credentials. The candidate still carries
+this value through the stale shared runtime carrier until serialized integration
+grants `web_runtime` through `extra_ports_for`.
 
 ## Provider ownership and routing
 

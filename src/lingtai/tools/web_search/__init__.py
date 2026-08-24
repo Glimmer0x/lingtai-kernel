@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Protocol, runtime_checkable
 
 from lingtai.kernel.tool_plugin import BoundToolPlugin, ToolPluginDeclaration
 
@@ -960,8 +960,36 @@ def _specs_from_kwargs(
     return specs, chosen, source, legacy_fallback_from
 
 
+@runtime_checkable
+class WebCompositionPort(Protocol):
+    """The narrow, Web-owned setup boundary for one official bind.
+
+    The serialized host seam grants this value to Web. It names only the
+    browser transport and immutable engine composition Web consumes, plus the
+    one publication operation needed to retain setup -> WebManager compatibility.
+    It never exposes an Agent or provider credentials.
+    """
+
+    @property
+    def browser_port(self) -> "BrowserPort": ...
+
+    @property
+    def specs(self) -> Mapping[str, _EngineSpec]: ...
+
+    @property
+    def default_engine(self) -> str | None: ...
+
+    @property
+    def default_source(self) -> str: ...
+
+    @property
+    def legacy_fallback_from(self) -> str | None: ...
+
+    def publish_manager(self, manager: WebManager) -> None: ...
+
+
 @dataclass(slots=True)
-class _WebRuntime:
+class WebComposition:
     """Explicit per-bind Web dependencies, supplied by capability setup only."""
 
     browser_port: "BrowserPort"
@@ -971,12 +999,27 @@ class _WebRuntime:
     legacy_fallback_from: str | None
     manager: WebManager | None = None
 
+    def publish_manager(self, manager: WebManager) -> None:
+        if self.manager is not None and self.manager is not manager:
+            raise RuntimeError("web composition manager was published twice")
+        self.manager = manager
+
+
+# Kept only for candidate-local compatibility; the domain name is WebComposition.
+_WebRuntime = WebComposition
+
 
 def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
     """Compose Web against only its granted host ports; mount nothing."""
-    runtime = host.runtime.value
+    try:
+        runtime = host.web_runtime  # type: ignore[attr-defined]
+    except AttributeError:
+        try:
+            runtime = host.runtime.value
+        except AttributeError as exc:
+            raise TypeError("web plugin requires a granted WebCompositionPort") from exc
     if not isinstance(runtime, _WebRuntime):
-        raise TypeError("web plugin requires its explicit _WebRuntime")
+        raise TypeError("web plugin requires a typed WebCompositionPort")
     manager = WebManager(
         host.workdir,
         host.provider_identity,
@@ -986,7 +1029,7 @@ def _bind(host: "ToolPluginHost") -> BoundToolPlugin:
         default_source=runtime.default_source,
         legacy_fallback_from=runtime.legacy_fallback_from,
     )
-    runtime.manager = manager
+    runtime.publish_manager(manager)
     return BoundToolPlugin(
         name=DECLARATION.name,
         schema=get_schema(),
